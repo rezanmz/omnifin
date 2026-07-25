@@ -46,8 +46,7 @@ RUN mkdir -p apps/web/public \
     && pnpm --filter @omnifin/gateway deploy --prod --legacy /out/gateway \
     && better_sqlite_dir="$(node -e "const path = require('node:path'); process.stdout.write(path.dirname(require.resolve('better-sqlite3/package.json', { paths: ['/out/gateway'] })))")" \
     && case "$better_sqlite_dir" in /out/gateway/node_modules/*/better-sqlite3) ;; *) exit 70 ;; esac \
-    && cd "$better_sqlite_dir" \
-    && npm run build-release \
+    && npm run build-release --prefix "$better_sqlite_dir" \
     && rm -rf "$better_sqlite_dir/prebuilds" \
     && install --directory --mode=0700 \
        /workspace/apps/web/.next/standalone/.next/cache \

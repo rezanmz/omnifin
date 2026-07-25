@@ -54,6 +54,26 @@ describe("gateway application", () => {
     expect(() => database.sqlite.prepare("select 1").get()).toThrow(/not open/i);
   });
 
+  it("keeps the database open for requests and closes it exactly once during shutdown", async () => {
+    const database = openDatabase(":memory:");
+    const close = vi.fn(database.close);
+    database.close = close;
+    const app = await createApp({ config: testConfig(), database });
+
+    const health = await app.inject({ method: "GET", url: "/healthz" });
+    const providers = await app.inject({ method: "GET", url: "/v1/auth/providers" });
+
+    expect(health.statusCode).toBe(200);
+    expect(providers.statusCode).toBe(200);
+    expect(close).not.toHaveBeenCalled();
+
+    await app.close();
+    await app.close();
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(() => database.sqlite.prepare("select 1").get()).toThrow(/not open/i);
+  });
+
   it("reports liveness and database readiness without leaking details", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });
@@ -356,6 +376,22 @@ describe("gateway application", () => {
       url: "/v1/auth/providers",
     });
     expect(otherClient.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("applies the global fallback limit to routes without a stricter override", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    app.get("/v1/unconfigured-limit", async () => ({ accepted: true }));
+
+    for (let requestNumber = 0; requestNumber < 300; requestNumber += 1) {
+      const response = await app.inject({ method: "GET", url: "/v1/unconfigured-limit" });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const limited = await app.inject({ method: "GET", url: "/v1/unconfigured-limit" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers["retry-after"]).toBeTruthy();
+    expect(apiErrorSchema.parse(limited.json()).error.code).toBe("request_failed");
     await app.close();
   });
 });
