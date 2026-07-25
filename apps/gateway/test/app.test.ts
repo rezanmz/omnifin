@@ -142,6 +142,42 @@ describe("gateway application", () => {
     await app.close();
   });
 
+  it("revokes recovery access on startup even when a pre-migrated deployment skips migrations", async () => {
+    const database = openDatabase(":memory:");
+    database.migrate();
+    database.sqlite.exec(`
+      insert into sessions (
+        id, token_hash, auth_method, csrf_token_hash, encrypted_csrf_token,
+        created_at, last_rotated_at, last_seen_at, expires_at, absolute_expires_at
+      ) values (
+        'pre-migrated-recovery', '${"r".repeat(43)}', 'recovery', '${"c".repeat(43)}',
+        'v2.fixture-csrf', 1000, 1000, 1000, 2000, 3000
+      )
+    `);
+
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      migrate: false,
+      sessionDependencies: { clock: () => new Date(2_000) },
+    });
+    expect(
+      database.sqlite
+        .prepare("select revoked_at as revokedAt from sessions where id = 'pre-migrated-recovery'")
+        .get(),
+    ).toEqual({ revokedAt: expect.any(Number) });
+    expect(
+      database.sqlite
+        .prepare(
+          `select event_type as eventType
+           from audit_events
+           where target_id = 'pre-migrated-recovery'`,
+        )
+        .get(),
+    ).toEqual({ eventType: "auth.recovery_session.revoked" });
+    await app.close();
+  });
+
   it("rejects readiness when required schema is missing", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });

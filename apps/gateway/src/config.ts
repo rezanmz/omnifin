@@ -220,9 +220,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
         parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED,
       )
     : undefined;
+  const baseUrl = canonicalBaseUrl(parsed.OMNIFIN_BASE_URL, parsed.NODE_ENV);
+  const secureCookies =
+    parsed.OMNIFIN_SECURE_COOKIES ||
+    parsed.NODE_ENV === "production" ||
+    baseUrl.protocol === "https:";
+  if (!secureCookies && !isLoopbackHostname(baseUrl.hostname)) {
+    throw new StartupError("base_url_invalid");
+  }
 
   return {
-    baseUrl: canonicalBaseUrl(parsed.OMNIFIN_BASE_URL, parsed.NODE_ENV),
+    baseUrl,
     databaseUrl: parsed.OMNIFIN_DATABASE_URL,
     encryptionKey: decodeEncryptionKey(encryptionKey),
     environment: parsed.NODE_ENV,
@@ -232,7 +240,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     logLevel: parsed.OMNIFIN_LOG_LEVEL,
     port: parsed.OMNIFIN_PORT,
     ...(recoverySecretDigest ? { recoverySecretDigest } : {}),
-    secureCookies: parsed.OMNIFIN_SECURE_COOKIES || parsed.NODE_ENV === "production",
+    secureCookies,
     session: {
       absoluteTtlMs: 30 * 24 * 60 * 60 * 1_000,
       inactivityTtlMs: 12 * 60 * 60 * 1_000,

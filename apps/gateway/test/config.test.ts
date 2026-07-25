@@ -199,6 +199,31 @@ describe("loadConfig", () => {
     ).toBe("http://127.0.0.1:3000/preview");
   });
 
+  it("limits the insecure development cookie fallback to loopback HTTP", () => {
+    const encryptionKey = Buffer.alloc(32, 7).toString("base64");
+    expect(
+      loadConfig({
+        NODE_ENV: "development",
+        OMNIFIN_BASE_URL: "http://localhost:3000",
+        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      }).secureCookies,
+    ).toBe(false);
+    expect(
+      loadConfig({
+        NODE_ENV: "development",
+        OMNIFIN_BASE_URL: "https://omnifin.example",
+        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      }).secureCookies,
+    ).toBe(true);
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "development",
+        OMNIFIN_BASE_URL: "http://omnifin.example",
+        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      }),
+    ).toThrow(/base url/i);
+  });
+
   it("accepts only policy-safe Jellyfin URLs and requires explicit approval for plain HTTP", () => {
     const encryptionKey = Buffer.alloc(32, 7).toString("base64");
     const unset = loadConfig({

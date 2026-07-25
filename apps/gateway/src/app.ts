@@ -9,6 +9,13 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
+import { SESSION_CSRF_HEADER, sessionCookieName } from "./auth/session-cookie.js";
+import { sessionRoutes } from "./auth/session-routes.js";
+import {
+  SessionService,
+  type SessionServiceDependencies,
+  type ValidatedSession,
+} from "./auth/session-service.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import { type DatabaseHandle, openDatabase } from "./db/client.js";
 import { healthRoutes } from "./health.js";
@@ -21,6 +28,11 @@ declare module "fastify" {
   interface FastifyInstance {
     appConfig: AppConfig;
     database: DatabaseHandle;
+    sessionService: SessionService;
+  }
+
+  interface FastifyRequest {
+    validatedSession: ValidatedSession | null;
   }
 }
 
@@ -28,6 +40,7 @@ export interface CreateAppOptions {
   config?: AppConfig;
   database?: DatabaseHandle;
   migrate?: boolean;
+  sessionDependencies?: SessionServiceDependencies;
 }
 
 function requestId(incomingId: string | undefined) {
@@ -59,6 +72,18 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       } catch (error) {
         throw asStartupError(error, "database_migration_failed");
       }
+    }
+    let sessionsTableExists: boolean;
+    try {
+      sessionsTableExists = Boolean(
+        database.sqlite
+          .prepare("select 1 from sqlite_master where type = 'table' and name = 'sessions'")
+          .get(),
+      );
+    } catch (error) {
+      throw asStartupError(error, "database_initialization_failed");
+    }
+    if (options.migrate !== false || sessionsTableExists) {
       try {
         revokeRecoverySessionsOnStartup(database);
       } catch (error) {
@@ -76,6 +101,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     app.decorate("appConfig", config);
     app.decorate("database", database);
+    const sessionService = new SessionService(database, config, options.sessionDependencies);
+    app.decorate("sessionService", sessionService);
+    app.decorateRequest("validatedSession", null);
 
     app.addHook("onRequest", async (request, reply) => {
       reply.header("x-request-id", request.id);
@@ -110,7 +138,18 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       referrerPolicy: { policy: "no-referrer" },
     });
 
-    installRequestPolicy(app, { allowedOrigin: config.baseUrl.origin });
+    installRequestPolicy(app, {
+      allowedOrigin: config.baseUrl.origin,
+      validateSessionCsrf: (request) => {
+        const validatedSession = sessionService.validateSessionCsrf(
+          request.cookies[sessionCookieName(config)],
+          request.headers[SESSION_CSRF_HEADER],
+          { ipAddress: request.ip, requestId: request.id },
+        );
+        request.validatedSession = validatedSession;
+        return validatedSession !== null;
+      },
+    });
 
     app.setErrorHandler(async (error, request, reply) => {
       const handledError = error as Error & {
@@ -180,6 +219,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(sessionRoutes);
     return app;
   } catch (initializationError) {
     const cleanupErrors: unknown[] = [];
