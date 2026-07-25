@@ -1,0 +1,115 @@
+name: Connector fixture integration
+
+on:
+  merge_group:
+    types:
+      - checks_requested
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixture-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.9.0"
+
+jobs:
+  detect:
+    name: Select affected connector fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select affected connector fixtures
+        id: matrix
+        env:
+          OMNIFIN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OMNIFIN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci/connector-matrix.mjs
+
+  integration:
+    name: Fixture integration (${{ matrix.service }})
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run strict fixture integration gate
+        env:
+          OMNIFIN_INTEGRATION_SERVICE: ${{ matrix.service }}
+        run: >-
+          pnpm test:integration --service "$OMNIFIN_INTEGRATION_SERVICE"
+          --mode fixture --strict
+          --output "artifacts/integration/${OMNIFIN_INTEGRATION_SERVICE}/report.json"
+      - name: Upload redacted fixture diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fixture-integration-${{ matrix.service }}-diagnostics
+          path: |
+            artifacts/integration/${{ matrix.service }}
+            test-results/integration/${{ matrix.service }}
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Tear down fixture environment
+        if: always()
+        env:
+          OMNIFIN_INTEGRATION_SERVICE: ${{ matrix.service }}
+        run: |
+          if [ -f compose.integration.yml ]; then
+            docker compose --project-name "omnifin-${OMNIFIN_INTEGRATION_SERVICE}" --file compose.integration.yml down --volumes --remove-orphans
+          fi
+
+  gate:
+    name: Connector integration
+    if: always()
+    needs:
+      - detect
+      - integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require connector selection and fixture integration
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e '
+            const jobs = JSON.parse(process.env.JOB_RESULTS);
+            const failed = Object.entries(jobs).filter(([, job]) => job.result !== "success");
+            if (failed.length > 0) {
+              console.error("Unsuccessful jobs: " + failed.map(([name, job]) => name + "=" + job.result).join(", "));
+              process.exit(1);
+            }
+          '

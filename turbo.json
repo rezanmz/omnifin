@@ -1,0 +1,55 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["NODE_ENV"],
+  "globalPassThroughEnv": ["CI", "TURBO_TELEMETRY_DISABLED"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "env": [
+        "NEXT_TELEMETRY_DISABLED",
+        "OMNIFIN_BASE_URL",
+        "OMNIFIN_BUILD_STANDALONE",
+        "OMNIFIN_GATEWAY_URL"
+      ],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "passThroughEnv": [
+        "NEXT_TELEMETRY_DISABLED",
+        "STORYBOOK_DISABLE_TELEMETRY",
+        "OMNIFIN_BASE_URL",
+        "OMNIFIN_DATABASE_URL",
+        "OMNIFIN_DEMO_MODE",
+        "OMNIFIN_DISPLAY_PROFILE",
+        "OMNIFIN_ENCRYPTION_KEY",
+        "OMNIFIN_ENCRYPTION_KEY_FILE",
+        "OMNIFIN_GATEWAY_URL",
+        "OMNIFIN_HOST",
+        "OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED",
+        "OMNIFIN_JELLYFIN_URL",
+        "OMNIFIN_LOG_LEVEL",
+        "OMNIFIN_PORT",
+        "OMNIFIN_RECOVERY_SECRET",
+        "OMNIFIN_RECOVERY_SECRET_FILE",
+        "OMNIFIN_SECURE_COOKIES",
+        "OMNIFIN_TEST_MODE",
+        "OMNIFIN_TRUST_PROXY_HOPS"
+      ],
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    }
+  }
+}

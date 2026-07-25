@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "selectedProfile": "phase0",
+  "profiles": {
+    "phase0": {
+      "fixture": [
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": []
+    },
+    "phase1": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": ["oidc", "authentik", "jellyfin"]
+    },
+    "phase2": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": ["oidc", "authentik", "jellyfin"]
+    },
+    "phase3": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ]
+    },
+    "phase4": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ]
+    },
+    "phase5": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ]
+    },
+    "v1": {
+      "fixture": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ],
+      "live": [
+        "oidc",
+        "authentik",
+        "jellyfin",
+        "seerr",
+        "radarr",
+        "sonarr",
+        "prowlarr",
+        "bazarr",
+        "qbittorrent",
+        "sabnzbd"
+      ]
+    }
+  }
+}

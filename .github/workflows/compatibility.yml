@@ -1,0 +1,187 @@
+name: Compatibility canary
+
+on:
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-canary
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.9.0"
+
+jobs:
+  prerequisite:
+    name: Integration environment status
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report canary readiness
+        env:
+          LIVE_INTEGRATION_ENABLED: ${{ vars.OMNIFIN_LIVE_INTEGRATION_ENABLED }}
+        run: |
+          if [ "$LIVE_INTEGRATION_ENABLED" = "true" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::The protected compatibility environment may only be used from main."
+              exit 1
+            fi
+            echo "The isolated latest-stable compatibility environment is enabled."
+          else
+            echo "The compatibility canary is pending its isolated, protected upstream environment."
+          fi
+
+  canary:
+    name: Latest upstream compatibility
+    if: github.ref == 'refs/heads/main' && vars.OMNIFIN_LIVE_INTEGRATION_ENABLED == 'true'
+    needs: prerequisite
+    environment: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Exercise latest stable upstream releases
+        id: compatibility
+        continue-on-error: true
+        env:
+          OMNIFIN_AUTHENTIK_ISSUER_URL: ${{ vars.OMNIFIN_AUTHENTIK_ISSUER_URL }}
+          OMNIFIN_BAZARR_API_KEY: ${{ secrets.OMNIFIN_BAZARR_API_KEY }}
+          OMNIFIN_BAZARR_URL: ${{ vars.OMNIFIN_BAZARR_URL }}
+          OMNIFIN_INTEGRATION_ALLOW_HTTP: ${{ vars.OMNIFIN_INTEGRATION_ALLOW_HTTP }}
+          OMNIFIN_JELLYFIN_URL: ${{ vars.OMNIFIN_JELLYFIN_URL }}
+          OMNIFIN_OIDC_ISSUER_URL: ${{ vars.OMNIFIN_OIDC_ISSUER_URL }}
+          OMNIFIN_PROWLARR_API_KEY: ${{ secrets.OMNIFIN_PROWLARR_API_KEY }}
+          OMNIFIN_PROWLARR_URL: ${{ vars.OMNIFIN_PROWLARR_URL }}
+          OMNIFIN_QBITTORRENT_PASSWORD: ${{ secrets.OMNIFIN_QBITTORRENT_PASSWORD }}
+          OMNIFIN_QBITTORRENT_URL: ${{ vars.OMNIFIN_QBITTORRENT_URL }}
+          OMNIFIN_QBITTORRENT_USERNAME: ${{ secrets.OMNIFIN_QBITTORRENT_USERNAME }}
+          OMNIFIN_RADARR_API_KEY: ${{ secrets.OMNIFIN_RADARR_API_KEY }}
+          OMNIFIN_RADARR_URL: ${{ vars.OMNIFIN_RADARR_URL }}
+          OMNIFIN_SABNZBD_API_KEY: ${{ secrets.OMNIFIN_SABNZBD_API_KEY }}
+          OMNIFIN_SABNZBD_URL: ${{ vars.OMNIFIN_SABNZBD_URL }}
+          OMNIFIN_SEERR_API_KEY: ${{ secrets.OMNIFIN_SEERR_API_KEY }}
+          OMNIFIN_SEERR_URL: ${{ vars.OMNIFIN_SEERR_URL }}
+          OMNIFIN_SONARR_API_KEY: ${{ secrets.OMNIFIN_SONARR_API_KEY }}
+          OMNIFIN_SONARR_URL: ${{ vars.OMNIFIN_SONARR_URL }}
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          pnpm test:compatibility --strict --output artifacts/compatibility.json 2>&1 \
+            | tee artifacts/compatibility.log
+      - name: Upload sanitized compatibility report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compatibility-canary-${{ github.run_id }}
+          path: |
+            artifacts/compatibility.json
+            artifacts/compatibility.log
+          if-no-files-found: error
+          retention-days: 30
+      - name: Open, update, or resolve compatibility issue
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CANARY_OUTCOME: ${{ steps.compatibility.outcome }}
+        with:
+          script: |
+            const title = "Compatibility canary regression";
+            const label = "compatibility";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: "7A5AF8",
+                description: "Upstream service compatibility",
+              });
+            }
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "all",
+              labels: label,
+              per_page: 100,
+            });
+            const matching = issues.find((issue) => issue.title === title && !issue.pull_request);
+            const failed = process.env.CANARY_OUTCOME !== "success";
+
+            if (failed) {
+              const body = [
+                "The weekly latest-stable compatibility canary detected a regression.",
+                "",
+                `- Commit: \`${context.sha}\``,
+                `- Workflow run: ${runUrl}`,
+                "- Diagnostics: download the sanitized compatibility artifact from the workflow run",
+                "",
+                "The report contains service versions, status, and error categories only.",
+              ].join("\n");
+
+              if (matching?.state === "open") {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: matching.number,
+                  body,
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title,
+                  body,
+                  labels: [label],
+                });
+              }
+            } else if (matching?.state === "open") {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: matching.number,
+                body: `The compatibility canary is green again. Verified by ${runUrl}.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: matching.number,
+                state: "closed",
+                state_reason: "completed",
+              });
+            }
+      - name: Enforce compatibility result
+        if: steps.compatibility.outcome == 'failure'
+        run: exit 1

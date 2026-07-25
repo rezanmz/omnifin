@@ -1,0 +1,64 @@
+name: Compatibility regression
+description: Report an upstream version or capability that no longer works
+title: "[Compatibility]: "
+labels:
+  - compatibility
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic data and sanitize diagnostics. Never post API keys, cookies, OIDC assertions, private hostnames, media paths, users, or viewing history.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I reviewed the current compatibility matrix.
+          required: true
+        - label: I reproduced this on an isolated or non-destructive test setup.
+          required: true
+        - label: This report contains no secrets or private media information.
+          required: true
+  - type: input
+    id: omnifin
+    attributes:
+      label: Omnifin version and image digest
+    validations:
+      required: true
+  - type: input
+    id: service
+    attributes:
+      label: Upstream product and exact version
+      placeholder: Prowlarr 2.x.y
+    validations:
+      required: true
+  - type: input
+    id: capability
+    attributes:
+      label: Failing capability
+      placeholder: Indexer statistics / queue polling / authentication
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized gateway diagnostics
+      description: Include relevant timestamps, correlation identifiers, status codes, and capability snapshots.
+      render: text

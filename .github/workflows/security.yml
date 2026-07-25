@@ -1,0 +1,323 @@
+name: Security
+
+on:
+  merge_group:
+    types:
+      - checks_requested
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "31 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.9.0"
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended,security-and-quality
+      - name: Analyze source
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: /language:javascript-typescript
+          upload: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && 'never' || 'always' }}
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          retry-on-snapshot-warnings: true
+          show-openssf-scorecard: true
+          show-patched-versions: true
+
+  supply-chain:
+    name: Dependency, license, and SBOM policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Audit dependencies
+        run: pnpm security:audit
+      - name: Enforce dependency license policy
+        run: pnpm license:check
+
+  source-scan:
+    name: Source, secret, and IaC scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report all source findings
+        id: trivy-source-report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: "false"
+          exit-code: "0"
+          format: sarif
+          limit-severities-for-sarif: "false"
+          output: trivy-source.sarif
+          timeout: 10m
+          version: v0.70.0
+      - name: Upload source scan results
+        if: always() && hashFiles('trivy-source.sarif') != '' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'))
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: trivy-source.sarif
+          category: trivy-source
+      - name: Enforce fixable source vulnerabilities
+        id: trivy-source-vulnerabilities
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "true"
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 10m
+          version: v0.70.0
+      - name: Enforce source secret and IaC policy
+        id: trivy-source-policy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 10m
+          version: v0.70.0
+      - name: Enforce source scan policy
+        if: always() && (steps.trivy-source-vulnerabilities.outcome == 'failure' || steps.trivy-source-policy.outcome == 'failure')
+        run: exit 1
+
+  container-scan:
+    name: Container scan and SPDX SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Verify pinned distroless runtime signature
+        run: |
+          set -euo pipefail
+          mapfile -t runtime_lines < <(grep --extended-regexp '^ARG RUNTIME_IMAGE=' Dockerfile || true)
+          if (( ${#runtime_lines[@]} != 1 )); then
+            echo "::error::Dockerfile must declare exactly one RUNTIME_IMAGE build argument."
+            exit 1
+          fi
+
+          runtime_image="${runtime_lines[0]#ARG RUNTIME_IMAGE=}"
+          if [[ ! "$runtime_image" =~ ^gcr\.io/distroless/nodejs24-debian13:nonroot@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::RUNTIME_IMAGE must be the digest-pinned distroless Node.js 24 nonroot image."
+            exit 1
+          fi
+
+          cosign verify \
+            --certificate-identity keyless@distroless.iam.gserviceaccount.com \
+            --certificate-oidc-issuer https://accounts.google.com \
+            "$runtime_image" >/dev/null
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build scan target
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: omnifin:security-scan
+          cache-from: type=gha,scope=security-container
+          cache-to: type=gha,mode=max,scope=security-container
+      - name: Report all application image findings
+        id: trivy-container-report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: omnifin:security-scan
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: "false"
+          exit-code: "0"
+          format: sarif
+          limit-severities-for-sarif: "false"
+          output: trivy-container.sarif
+          timeout: 10m
+          version: v0.70.0
+      - name: Upload container scan results
+        if: always() && hashFiles('trivy-container.sarif') != '' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'))
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: trivy-container.sarif
+          category: trivy-container
+      - name: Enforce fixable application image vulnerabilities
+        id: trivy-container-vulnerabilities
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: omnifin:security-scan
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "true"
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 10m
+          version: v0.70.0
+      - name: Enforce application image secret and IaC policy
+        id: trivy-container-policy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: omnifin:security-scan
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 10m
+          version: v0.70.0
+      - name: Prepare SBOM output directory
+        run: mkdir --parents artifacts
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: omnifin:security-scan
+          format: spdx-json
+          output-file: artifacts/sbom.spdx.json
+          syft-version: v1.49.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate generated SBOM
+        env:
+          OMNIFIN_SBOM_PATH: artifacts/sbom.spdx.json
+        run: pnpm sbom:check
+      - name: Upload SPDX SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omnifin-security-sbom
+          path: artifacts/sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce container scan policy
+        if: always() && (steps.trivy-container-vulnerabilities.outcome == 'failure' || steps.trivy-container-policy.outcome == 'failure')
+        run: exit 1
+
+  gate:
+    name: Security
+    if: always()
+    needs:
+      - codeql
+      - dependency-review
+      - supply-chain
+      - source-scan
+      - container-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every applicable security job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e '
+            const jobs = JSON.parse(process.env.JOB_RESULTS);
+            const failed = Object.entries(jobs).filter(
+              ([name, job]) => job.result !== "success" && !(name === "dependency-review" && job.result === "skipped"),
+            );
+            if (failed.length > 0) {
+              console.error("Unsuccessful jobs: " + failed.map(([name, job]) => name + "=" + job.result).join(", "));
+              process.exit(1);
+            }
+          '

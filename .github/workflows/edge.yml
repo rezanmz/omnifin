@@ -1,0 +1,395 @@
+name: Edge image
+
+on:
+  workflow_run:
+    workflows:
+      - Security
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-main
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_TAG: edge-candidate-${{ github.event.workflow_run.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  NODE_VERSION: "24"
+  ORAS_VERSION: "1.3.3"
+
+jobs:
+  prerequisite:
+    name: Edge source eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.source.outputs.eligible }}
+    steps:
+      - name: Accept only a successful protected-main Security push
+        id: source
+        env:
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_CONCLUSION" = "success" ] && [ "$SOURCE_EVENT" = "push" ] && \
+             [ "$SOURCE_BRANCH" = "main" ] && [ "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "eligible=false" >> "$GITHUB_OUTPUT"
+          echo "No edge publication: this is not a successful protected-main Security push run."
+
+  verify-main-gates:
+    name: Verify exact current-main gates
+    if: needs.prerequisite.outputs.eligible == 'true'
+    needs: prerequisite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the exact protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Require CI and Security for the exact current main SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/verify-main-gates.mjs
+          --sha "${{ github.event.workflow_run.head_sha }}"
+          --require-main-tip --wait-seconds 900
+
+  build-candidate:
+    name: Build immutable edge candidate
+    needs: verify-main-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out verified main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Derive candidate metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: type=raw,value=${{ env.CANDIDATE_TAG }}
+          labels: |
+            org.opencontainers.image.title=Omnifin
+            org.opencontainers.image.description=Self-hosted media control plane
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+      - name: Build and push candidate without edge aliases
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          annotations: ${{ steps.metadata.outputs.annotations }}
+          cache-from: type=gha,scope=edge
+          cache-to: type=gha,mode=max,scope=edge
+          context: .
+          file: Dockerfile
+          labels: ${{ steps.metadata.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          pull: true
+          push: true
+          sbom: true
+          tags: ${{ steps.metadata.outputs.tags }}
+      - name: Validate candidate digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The edge candidate did not produce a valid digest."
+            exit 1
+          fi
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  attest-candidate:
+    name: Sign and attest edge candidate
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Attest edge candidate provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          push-to-registry: true
+          subject-digest: ${{ needs.build-candidate.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+      - name: Sign edge candidate digest
+        env:
+          IMAGE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  scan-candidate:
+    name: Scan public edge candidate (${{ matrix.target.platform }})
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - platform: linux/amd64
+            suffix: linux-amd64
+          - platform: linux/arm64
+            suffix: linux-arm64
+    steps:
+      - name: Report all published candidate findings
+        id: trivy-candidate-report
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.build-candidate.outputs.digest }}
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: "false"
+          exit-code: "0"
+          format: sarif
+          limit-severities-for-sarif: "false"
+          output: trivy-edge-candidate-${{ matrix.target.suffix }}.sarif
+          timeout: 15m
+          version: v0.70.0
+      - name: Retain complete candidate scan report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omnifin-edge-candidate-scan-${{ matrix.target.suffix }}
+          path: trivy-edge-candidate-${{ matrix.target.suffix }}.sarif
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce fixable candidate vulnerabilities
+        id: trivy-candidate-vulnerabilities
+        continue-on-error: true
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.build-candidate.outputs.digest }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "true"
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 15m
+          version: v0.70.0
+      - name: Enforce candidate secret and IaC policy
+        id: trivy-candidate-policy
+        continue-on-error: true
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.build-candidate.outputs.digest }}
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 15m
+          version: v0.70.0
+      - name: Enforce published candidate scan policy
+        if: always() && (steps.trivy-candidate-vulnerabilities.outcome == 'failure' || steps.trivy-candidate-policy.outcome == 'failure')
+        run: exit 1
+
+  verify-candidate:
+    name: Verify and smoke-test public edge candidate
+    needs:
+      - build-candidate
+      - attest-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable smoke harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Pull, verify, and exercise candidate anonymously
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          IMAGE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG"
+          image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+          test "$(oras resolve "${IMAGE_NAME}:${CANDIDATE_TAG}")" = "$IMAGE_DIGEST"
+          manifest=$(docker buildx imagetools inspect "$image_ref" --format '{{json .Manifest}}')
+          printf '%s' "$manifest" \
+            | jq --exit-status \
+              '[.manifests[].platform | "\(.os)/\(.architecture)"] | contains(["linux/amd64", "linux/arm64"])' \
+              >/dev/null
+          docker pull "$image_ref"
+          cosign verify \
+            --certificate-identity-regexp \
+              "^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/edge\\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$image_ref" >/dev/null
+          node scripts/container-smoke.mjs --image "$image_ref"
+
+  promote:
+    name: Promote verified digest to edge aliases
+    needs:
+      - build-candidate
+      - scan-candidate
+      - verify-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the verified gate and promotion source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Preserve immutable SHA identity and promote exact digest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          sha_ref="${IMAGE_NAME}:sha-${VERIFIED_SHA}"
+
+          set +e
+          existing_output=$(oras resolve "$sha_ref" 2>&1)
+          existing_status=$?
+          set -e
+          if (( existing_status == 0 )); then
+            if [ "$existing_output" != "$IMAGE_DIGEST" ]; then
+              echo "::error::Immutable SHA tag already points to a different digest."
+              exit 1
+            fi
+          elif ! grep --extended-regexp --ignore-case --quiet \
+            'not found|manifest unknown|manifest_unknown|name unknown|name_unknown' <<<"$existing_output"; then
+            echo "::error::The registry did not prove that the immutable SHA tag is absent."
+            exit 1
+          fi
+
+          node scripts/ci/verify-main-gates.mjs --sha "$VERIFIED_SHA" --require-main-tip --wait-seconds 0
+          oras cp "${IMAGE_NAME}@${IMAGE_DIGEST}" \
+            "${IMAGE_NAME}:sha-${VERIFIED_SHA},edge"
+          test "$(oras resolve "${IMAGE_NAME}:sha-${VERIFIED_SHA}")" = "$IMAGE_DIGEST"
+          test "$(oras resolve "${IMAGE_NAME}:edge")" = "$IMAGE_DIGEST"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  verify-promoted:
+    name: Verify public edge aliases
+    needs:
+      - build-candidate
+      - promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Pull promoted aliases anonymously
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          IMAGE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG"
+          test "$(oras resolve "${IMAGE_NAME}:sha-${VERIFIED_SHA}")" = "$IMAGE_DIGEST"
+          test "$(oras resolve "${IMAGE_NAME}:edge")" = "$IMAGE_DIGEST"
+          docker pull "${IMAGE_NAME}:sha-${VERIFIED_SHA}"
+          docker image inspect "${IMAGE_NAME}:sha-${VERIFIED_SHA}" --format '{{json .RepoDigests}}' \
+            | grep --fixed-strings "$IMAGE_DIGEST"

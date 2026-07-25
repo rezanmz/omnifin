@@ -1,0 +1,51 @@
+{
+  "name": "@omnifin/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/main.ts --format esm --dts --clean",
+    "clean": "rm -rf coverage dist",
+    "db:check": "drizzle-kit check",
+    "db:generate": "drizzle-kit generate",
+    "dev": "tsx watch src/main.ts",
+    "lint": "eslint --max-warnings=0 src scripts test drizzle.config.ts vitest.config.ts",
+    "migration:smoke": "tsx scripts/migration-smoke.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.2",
+    "@fastify/formbody": "8.0.2",
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/sensible": "6.0.4",
+    "@omnifin/connectors": "workspace:*",
+    "@omnifin/contracts": "workspace:*",
+    "better-sqlite3": "13.0.1",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.10.0",
+    "fastify-plugin": "6.0.0",
+    "openid-client": "6.8.4",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "26.1.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "drizzle-kit": "0.31.10",
+    "tsup": "8.5.1",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}
