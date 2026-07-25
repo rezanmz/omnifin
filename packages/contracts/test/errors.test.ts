@@ -31,6 +31,16 @@ describe("API boundary contracts", () => {
     });
 
     expect(error.error).not.toHaveProperty("stack");
+    expect(
+      apiErrorSchema.safeParse({
+        error: {
+          code: "connector_unavailable",
+          details: { nested: { secret: "private" } },
+          message: "The configured connector is unavailable.",
+          requestId: "req_fixture",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("constructs the same error envelope used by gateway response schemas", () => {

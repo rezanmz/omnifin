@@ -26,6 +26,11 @@ export const users = sqliteTable(
     role: text("role", { enum: ["viewer", "requester", "operator", "admin"] })
       .notNull()
       .default("viewer"),
+    roleSource: text("role_source", {
+      enum: ["default", "oidc_mapping", "manual", "recovery_bootstrap"],
+    })
+      .notNull()
+      .default("default"),
     status: text("status", { enum: ["active", "pending_link", "disabled"] })
       .notNull()
       .default("pending_link"),
@@ -34,6 +39,10 @@ export const users = sqliteTable(
   (table) => [
     index("users_status_idx").on(table.status),
     check("users_role_check", sql`${table.role} in ('viewer', 'requester', 'operator', 'admin')`),
+    check(
+      "users_role_source_check",
+      sql`${table.roleSource} in ('default', 'oidc_mapping', 'manual', 'recovery_bootstrap')`,
+    ),
     check("users_status_check", sql`${table.status} in ('active', 'pending_link', 'disabled')`),
   ],
 );
@@ -149,122 +158,6 @@ export const roleMappings = sqliteTable(
   ],
 );
 
-export const serviceIdentityLinks = sqliteTable(
-  "service_identity_links",
-  {
-    id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    service: text("service", { enum: ["jellyfin"] }).notNull(),
-    externalUserId: text("external_user_id").notNull(),
-    externalUsername: text("external_username").notNull(),
-    encryptedAccessToken: text("encrypted_access_token").notNull(),
-    healthState: text("health_state", {
-      enum: ["healthy", "degraded", "revoked", "unreachable"],
-    })
-      .notNull()
-      .default("healthy"),
-    lastVerifiedAt: integer("last_verified_at", { mode: "timestamp_ms" }),
-    ...timestamps,
-  },
-  (table) => [
-    uniqueIndex("service_identity_links_user_service_unique").on(table.userId, table.service),
-    uniqueIndex("service_identity_links_external_unique").on(table.service, table.externalUserId),
-    check("service_identity_links_service_check", sql`${table.service} = 'jellyfin'`),
-    check(
-      "service_identity_links_health_state_check",
-      sql`${table.healthState} in ('healthy', 'degraded', 'revoked', 'unreachable')`,
-    ),
-  ],
-);
-
-export const sessions = sqliteTable(
-  "sessions",
-  {
-    id: text("id").primaryKey(),
-    tokenHash: text("token_hash").notNull(),
-    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
-    authMethod: text("auth_method", { enum: ["oidc", "jellyfin", "recovery"] }).notNull(),
-    oidcProviderId: text("oidc_provider_id"),
-    externalIdentityId: text("external_identity_id"),
-    oidcSessionIdHash: text("oidc_session_id_hash"),
-    csrfTokenHash: text("csrf_token_hash").notNull(),
-    ipHash: text("ip_hash"),
-    userAgentHash: text("user_agent_hash"),
-    lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-    absoluteExpiresAt: integer("absolute_expires_at", { mode: "timestamp_ms" }).notNull(),
-    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
-    createdAt: timestamps.createdAt,
-  },
-  (table) => [
-    uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
-    index("sessions_user_idx").on(table.userId),
-    index("sessions_expiry_idx").on(table.expiresAt),
-    index("sessions_external_identity_idx").on(table.externalIdentityId),
-    index("sessions_oidc_sid_idx").on(table.oidcProviderId, table.oidcSessionIdHash),
-    foreignKey({
-      columns: [table.externalIdentityId, table.userId, table.oidcProviderId],
-      foreignColumns: [
-        externalIdentities.id,
-        externalIdentities.userId,
-        externalIdentities.providerId,
-      ],
-      name: "sessions_oidc_identity_fk",
-    }).onDelete("cascade"),
-    check(
-      "sessions_auth_method_check",
-      sql`${table.authMethod} in ('oidc', 'jellyfin', 'recovery')`,
-    ),
-    check(
-      "sessions_auth_attribution_check",
-      sql`(
-        ${table.authMethod} = 'oidc'
-        and ${table.userId} is not null
-        and ${table.oidcProviderId} is not null
-        and ${table.externalIdentityId} is not null
-      ) or (
-        ${table.authMethod} = 'jellyfin'
-        and ${table.userId} is not null
-        and ${table.oidcProviderId} is null
-        and ${table.externalIdentityId} is null
-        and ${table.oidcSessionIdHash} is null
-      ) or (
-        ${table.authMethod} = 'recovery'
-        and ${table.oidcProviderId} is null
-        and ${table.externalIdentityId} is null
-        and ${table.oidcSessionIdHash} is null
-      )`,
-    ),
-    check(
-      "sessions_oidc_sid_hash_length_check",
-      sql`${table.oidcSessionIdHash} is null or length(${table.oidcSessionIdHash}) between 16 and 128`,
-    ),
-  ],
-);
-
-export const authTransactions = sqliteTable(
-  "auth_transactions",
-  {
-    id: text("id").primaryKey(),
-    stateHash: text("state_hash").notNull(),
-    providerId: text("provider_id")
-      .notNull()
-      .references(() => oidcProviders.id, { onDelete: "cascade" }),
-    encryptedCodeVerifier: text("encrypted_code_verifier").notNull(),
-    encryptedNonce: text("encrypted_nonce").notNull(),
-    returnPath: text("return_path").notNull().default("/"),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
-    createdAt: timestamps.createdAt,
-  },
-  (table) => [
-    uniqueIndex("auth_transactions_state_hash_unique").on(table.stateHash),
-    index("auth_transactions_expiry_idx").on(table.expiresAt),
-  ],
-);
-
 export const connectorConfigs = sqliteTable(
   "connector_configs",
   {
@@ -298,6 +191,7 @@ export const connectorConfigs = sqliteTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("connector_configs_id_type_unique").on(table.id, table.type),
     index("connector_configs_type_idx").on(table.type),
     check(
       "connector_configs_type_check",
@@ -323,27 +217,283 @@ export const connectorConfigs = sqliteTable(
   ],
 );
 
+export const serviceIdentityLinks = sqliteTable(
+  "service_identity_links",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    service: text("service", { enum: ["jellyfin"] }).notNull(),
+    connectorId: text("connector_id"),
+    externalServerId: text("external_server_id").notNull(),
+    externalUserId: text("external_user_id").notNull(),
+    externalUsername: text("external_username").notNull(),
+    externalDisplayName: text("external_display_name").notNull(),
+    encryptedAccessToken: text("encrypted_access_token"),
+    deviceId: text("device_id").notNull(),
+    tokenCreatedAt: integer("token_created_at", { mode: "timestamp_ms" }),
+    healthState: text("health_state", {
+      enum: ["linked", "unavailable", "relink_required", "revoked"],
+    })
+      .notNull()
+      .default("relink_required"),
+    lastVerifiedAt: integer("last_verified_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    revision: integer("revision").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("service_identity_links_user_service_unique").on(table.userId, table.service),
+    uniqueIndex("service_identity_links_session_binding_unique").on(table.id, table.userId),
+    uniqueIndex("service_identity_links_external_unique").on(
+      table.connectorId,
+      table.externalServerId,
+      table.externalUserId,
+    ),
+    index("service_identity_links_connector_idx").on(table.connectorId),
+    foreignKey({
+      columns: [table.connectorId, table.service],
+      foreignColumns: [connectorConfigs.id, connectorConfigs.type],
+      name: "service_identity_links_connector_type_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check("service_identity_links_service_check", sql`${table.service} = 'jellyfin'`),
+    check(
+      "service_identity_links_health_state_check",
+      sql`${table.healthState} in ('linked', 'unavailable', 'relink_required', 'revoked')`,
+    ),
+    check(
+      "service_identity_links_health_attribution_check",
+      sql`(
+          ${table.healthState} in ('linked', 'unavailable')
+          and ${table.connectorId} is not null
+          and ${table.encryptedAccessToken} is not null
+          and ${table.tokenCreatedAt} is not null
+          and ${table.revokedAt} is null
+        ) or (
+          ${table.healthState} = 'relink_required'
+          and ${table.encryptedAccessToken} is null
+          and ${table.tokenCreatedAt} is null
+          and ${table.revokedAt} is null
+        ) or (
+          ${table.healthState} = 'revoked'
+          and ${table.encryptedAccessToken} is null
+          and ${table.revokedAt} is not null
+        )`,
+    ),
+    check("service_identity_links_revision_check", sql`${table.revision} between 0 and 2147483647`),
+    check(
+      "service_identity_links_timestamp_order_check",
+      sql`${table.revokedAt} is null or ${table.revokedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    authMethod: text("auth_method", { enum: ["oidc", "jellyfin", "recovery"] }).notNull(),
+    oidcProviderId: text("oidc_provider_id"),
+    externalIdentityId: text("external_identity_id"),
+    serviceIdentityLinkId: text("service_identity_link_id"),
+    oidcSessionIdHash: text("oidc_session_id_hash"),
+    encryptedIdTokenHint: text("encrypted_id_token_hint"),
+    csrfTokenHash: text("csrf_token_hash").notNull(),
+    encryptedCsrfToken: text("encrypted_csrf_token").notNull(),
+    ipHash: text("ip_hash"),
+    userAgentHash: text("user_agent_hash"),
+    lastRotatedAt: integer("last_rotated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch('subsec') * 1000)`),
+    lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    absoluteExpiresAt: integer("absolute_expires_at", { mode: "timestamp_ms" }).notNull(),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [
+    uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
+    index("sessions_user_idx").on(table.userId),
+    index("sessions_expiry_idx").on(table.expiresAt),
+    index("sessions_external_identity_idx").on(table.externalIdentityId),
+    index("sessions_service_identity_link_idx").on(table.serviceIdentityLinkId),
+    index("sessions_oidc_sid_idx").on(table.oidcProviderId, table.oidcSessionIdHash),
+    foreignKey({
+      columns: [table.externalIdentityId, table.userId, table.oidcProviderId],
+      foreignColumns: [
+        externalIdentities.id,
+        externalIdentities.userId,
+        externalIdentities.providerId,
+      ],
+      name: "sessions_oidc_identity_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "sessions_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "sessions_auth_method_check",
+      sql`${table.authMethod} in ('oidc', 'jellyfin', 'recovery')`,
+    ),
+    check(
+      "sessions_auth_attribution_check",
+      sql`(
+        ${table.authMethod} = 'oidc'
+        and ${table.userId} is not null
+        and ${table.oidcProviderId} is not null
+        and ${table.externalIdentityId} is not null
+      ) or (
+        ${table.authMethod} = 'jellyfin'
+        and ${table.userId} is not null
+        and ${table.oidcProviderId} is null
+        and ${table.externalIdentityId} is null
+        and ${table.serviceIdentityLinkId} is not null
+        and ${table.oidcSessionIdHash} is null
+        and ${table.encryptedIdTokenHint} is null
+      ) or (
+        ${table.authMethod} = 'recovery'
+        and ${table.userId} is null
+        and ${table.oidcProviderId} is null
+        and ${table.externalIdentityId} is null
+        and ${table.serviceIdentityLinkId} is null
+        and ${table.oidcSessionIdHash} is null
+        and ${table.encryptedIdTokenHint} is null
+      )`,
+    ),
+    check(
+      "sessions_token_hash_check",
+      sql`length(${table.tokenHash}) = 43 and ${table.tokenHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "sessions_csrf_hash_check",
+      sql`length(${table.csrfTokenHash}) = 43
+        and ${table.csrfTokenHash} not glob '*[^A-Za-z0-9_-]*'
+        and length(${table.encryptedCsrfToken}) between 1 and 8192`,
+    ),
+    check(
+      "sessions_privacy_hashes_check",
+      sql`(${table.oidcSessionIdHash} is null or (
+          length(${table.oidcSessionIdHash}) = 22
+          and ${table.oidcSessionIdHash} not glob '*[^A-Za-z0-9_-]*'
+        )) and (${table.ipHash} is null or (
+          length(${table.ipHash}) = 22
+          and ${table.ipHash} not glob '*[^A-Za-z0-9_-]*'
+        )) and (${table.userAgentHash} is null or (
+          length(${table.userAgentHash}) = 22
+          and ${table.userAgentHash} not glob '*[^A-Za-z0-9_-]*'
+        ))`,
+    ),
+    check(
+      "sessions_timestamp_order_check",
+      sql`${table.createdAt} <= ${table.lastRotatedAt}
+        and ${table.lastRotatedAt} <= ${table.lastSeenAt}
+        and ${table.lastSeenAt} <= ${table.expiresAt}
+        and ${table.expiresAt} <= ${table.absoluteExpiresAt}
+        and (${table.revokedAt} is null or ${table.revokedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const authTransactions = sqliteTable(
+  "auth_transactions",
+  {
+    id: text("id").primaryKey(),
+    stateHash: text("state_hash").notNull(),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => oidcProviders.id, { onDelete: "cascade" }),
+    browserBindingHash: text("browser_binding_hash").notNull(),
+    encryptedCodeVerifier: text("encrypted_code_verifier").notNull(),
+    encryptedNonce: text("encrypted_nonce").notNull(),
+    redirectUri: text("redirect_uri").notNull(),
+    returnPath: text("return_path").notNull().default("/"),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [
+    uniqueIndex("auth_transactions_state_hash_unique").on(table.stateHash),
+    index("auth_transactions_expiry_idx").on(table.expiresAt),
+    check(
+      "auth_transactions_hashes_check",
+      sql`length(${table.stateHash}) = 43
+        and ${table.stateHash} not glob '*[^A-Za-z0-9_-]*'
+        and length(${table.browserBindingHash}) = 43
+        and ${table.browserBindingHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "auth_transactions_redirect_uri_check",
+      sql`length(${table.redirectUri}) between 8 and 2048
+        and (${table.redirectUri} like 'https://%' or ${table.redirectUri} like 'http://%')
+        and instr(${table.redirectUri}, '#') = 0`,
+    ),
+    check(
+      "auth_transactions_return_path_check",
+      sql`length(${table.returnPath}) between 1 and 2048
+        and substr(${table.returnPath}, 1, 1) = '/'
+        and substr(${table.returnPath}, 1, 2) <> '//'
+        and instr(${table.returnPath}, char(92)) = 0`,
+    ),
+    check(
+      "auth_transactions_timestamp_order_check",
+      sql`${table.createdAt} < ${table.expiresAt}
+        and (${table.consumedAt} is null or (
+          ${table.consumedAt} >= ${table.createdAt}
+          and ${table.consumedAt} <= ${table.expiresAt}
+        ))`,
+    ),
+  ],
+);
+
 export const auditEvents = sqliteTable(
   "audit_events",
   {
     id: text("id").primaryKey(),
     actorUserId: text("actor_user_id").references(() => users.id, { onDelete: "set null" }),
     sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    actorSessionId: text("actor_session_id"),
+    actorAuthMethod: text("actor_auth_method", {
+      enum: ["oidc", "jellyfin", "recovery"],
+    }),
     eventType: text("event_type").notNull(),
     outcome: text("outcome", { enum: ["success", "denied", "failure"] }).notNull(),
     targetType: text("target_type"),
     targetId: text("target_id"),
+    requestId: text("request_id"),
     metadataJson: text("metadata_json").notNull().default("{}"),
     ipHash: text("ip_hash"),
     createdAt: timestamps.createdAt,
   },
   (table) => [
     index("audit_events_actor_idx").on(table.actorUserId),
+    index("audit_events_actor_session_idx").on(table.actorSessionId, table.actorAuthMethod),
     index("audit_events_type_created_idx").on(table.eventType, table.createdAt),
+    index("audit_events_request_idx").on(table.requestId),
     check("audit_events_outcome_check", sql`${table.outcome} in ('success', 'denied', 'failure')`),
     check(
       "audit_events_metadata_json_check",
       sql`json_valid(${table.metadataJson}) and json_type(${table.metadataJson}) = 'object'`,
+    ),
+    check(
+      "audit_events_request_id_check",
+      sql`${table.requestId} is null or length(${table.requestId}) between 1 and 128`,
+    ),
+    check(
+      "audit_events_actor_session_check",
+      sql`(
+          ${table.actorSessionId} is null
+          and ${table.actorAuthMethod} is null
+        ) or (
+          ${table.actorSessionId} is not null
+          and ${table.actorAuthMethod} is not null
+          and ${table.actorAuthMethod} in ('oidc', 'jellyfin', 'recovery')
+        )`,
     ),
   ],
 );

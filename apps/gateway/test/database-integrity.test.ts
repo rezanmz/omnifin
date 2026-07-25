@@ -33,6 +33,12 @@ function openSeededDatabase(): DatabaseHandle {
 
 const enumConstraintCases = [
   {
+    constraint: "users_role_source_check",
+    name: "user role sources",
+    statement:
+      "insert into users (id, display_name, role, role_source, status) values ('invalid-user-role-source', 'Invalid', 'viewer', 'saml', 'active')",
+  },
+  {
     constraint: "users_role_check",
     name: "user roles",
     statement:
@@ -60,19 +66,18 @@ const enumConstraintCases = [
     constraint: "service_identity_links_service_check",
     name: "linked services",
     statement:
-      "insert into service_identity_links (id, user_id, service, external_user_id, external_username, encrypted_access_token, health_state) values ('invalid-service', 'user-1', 'plex', 'external-1', 'riley', 'encrypted', 'healthy')",
+      "insert into service_identity_links (id, user_id, service, external_server_id, external_user_id, external_username, external_display_name, device_id, health_state) values ('invalid-service', 'user-1', 'plex', 'server-1', 'external-1', 'riley', 'Riley', 'device-1', 'relink_required')",
   },
   {
     constraint: "service_identity_links_health_state_check",
     name: "service-link health states",
     statement:
-      "insert into service_identity_links (id, user_id, service, external_user_id, external_username, encrypted_access_token, health_state) values ('invalid-link-health', 'user-1', 'jellyfin', 'external-1', 'riley', 'encrypted', 'unknown')",
+      "insert into service_identity_links (id, user_id, service, external_server_id, external_user_id, external_username, external_display_name, device_id, health_state) values ('invalid-link-health', 'user-1', 'jellyfin', 'server-1', 'external-1', 'riley', 'Riley', 'device-1', 'unknown')",
   },
   {
     constraint: "sessions_auth_method_check",
     name: "session authentication methods",
-    statement:
-      "insert into sessions (id, token_hash, auth_method, csrf_token_hash, last_seen_at, expires_at, absolute_expires_at) values ('invalid-auth-method', 'token-hash', 'password', 'csrf-hash', 1, 2, 3)",
+    statement: `insert into sessions (id, token_hash, auth_method, csrf_token_hash, encrypted_csrf_token, created_at, last_rotated_at, last_seen_at, expires_at, absolute_expires_at) values ('invalid-auth-method', '${"t".repeat(43)}', 'password', '${"c".repeat(43)}', 'encrypted', 1, 1, 1, 2, 3)`,
   },
   {
     constraint: "connector_configs_type_check",
@@ -247,46 +252,6 @@ describe("database integrity constraints", () => {
           1
         );
 
-        insert into service_identity_links (
-          id,
-          user_id,
-          service,
-          external_user_id,
-          external_username,
-          encrypted_access_token,
-          health_state,
-          last_verified_at
-        ) values (
-          'jellyfin-link',
-          'user-1',
-          'jellyfin',
-          'jellyfin-user-1',
-          'riley',
-          'encrypted',
-          'healthy',
-          null
-        );
-
-        insert into sessions (
-          id,
-          token_hash,
-          user_id,
-          auth_method,
-          csrf_token_hash,
-          last_seen_at,
-          expires_at,
-          absolute_expires_at
-        ) values (
-          'recovery-session',
-          'recovery-token-hash',
-          null,
-          'recovery',
-          'csrf-hash',
-          1,
-          2,
-          3
-        );
-
         insert into connector_configs (
           id,
           type,
@@ -309,6 +274,66 @@ describe("database integrity constraints", () => {
           '{"version":"10.11.0"}',
           'healthy',
           1
+        );
+
+        insert into service_identity_links (
+          id,
+          user_id,
+          service,
+          connector_id,
+          external_server_id,
+          external_user_id,
+          external_username,
+          external_display_name,
+          encrypted_access_token,
+          device_id,
+          token_created_at,
+          health_state,
+          last_verified_at,
+          created_at,
+          updated_at
+        ) values (
+          'jellyfin-link',
+          'user-1',
+          'jellyfin',
+          'jellyfin',
+          'jellyfin-server-1',
+          'jellyfin-user-1',
+          'riley',
+          'Riley',
+          'encrypted',
+          'device-1',
+          1,
+          'linked',
+          null,
+          1,
+          1
+        );
+
+        insert into sessions (
+          id,
+          token_hash,
+          user_id,
+          auth_method,
+          csrf_token_hash,
+          encrypted_csrf_token,
+          created_at,
+          last_rotated_at,
+          last_seen_at,
+          expires_at,
+          absolute_expires_at
+        ) values (
+          'recovery-session',
+          '${"r".repeat(43)}',
+          null,
+          'recovery',
+          '${"c".repeat(43)}',
+          'encrypted',
+          1,
+          1,
+          1,
+          2,
+          3
         );
 
         insert into audit_events (

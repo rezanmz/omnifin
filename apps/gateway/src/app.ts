@@ -8,11 +8,14 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
+import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import { type DatabaseHandle, openDatabase } from "./db/client.js";
 import { healthRoutes } from "./health.js";
+import { isSafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
 import { asStartupError } from "./startup-error.js";
+import { installRequestPolicy } from "./security/request-policy.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -32,8 +35,10 @@ function requestId(incomingId: string | undefined) {
   return randomUUID();
 }
 
-function isMutation(method: string) {
-  return !["GET", "HEAD", "OPTIONS"].includes(method);
+function frameworkErrorStatus(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599
+    ? value
+    : 500;
 }
 
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
@@ -54,6 +59,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       } catch (error) {
         throw asStartupError(error, "database_migration_failed");
       }
+      try {
+        revokeRecoverySessionsOnStartup(database);
+      } catch (error) {
+        throw asStartupError(error, "database_initialization_failed");
+      }
     }
 
     app = Fastify({
@@ -66,6 +76,14 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     app.decorate("appConfig", config);
     app.decorate("database", database);
+
+    app.addHook("onRequest", async (request, reply) => {
+      reply.header("x-request-id", request.id);
+      reply.header(
+        "permissions-policy",
+        "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+      );
+    });
 
     await app.register(cookie, { hook: "onRequest" });
     await app.register(formBody, { bodyLimit: 64 * 1_024 });
@@ -92,26 +110,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       referrerPolicy: { policy: "no-referrer" },
     });
 
-    app.addHook("onRequest", async (request, reply) => {
-      reply.header("x-request-id", request.id);
-      reply.header(
-        "permissions-policy",
-        "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
-      );
-      if (!isMutation(request.method) || request.url.startsWith("/v1/auth/oidc/backchannel/"))
-        return;
-
-      const origin = request.headers.origin;
-      if (!origin || origin !== config.baseUrl.origin) {
-        await reply.status(403).send({
-          ...createApiError({
-            code: "origin_denied",
-            message: "The request origin is not allowed.",
-            requestId: request.id,
-          }),
-        });
-      }
-    });
+    installRequestPolicy(app, { allowedOrigin: config.baseUrl.origin });
 
     app.setErrorHandler(async (error, request, reply) => {
       const handledError = error as Error & {
@@ -120,7 +119,24 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         validation?: unknown;
       };
       const validationFailure = handledError.validation || handledError instanceof ZodError;
-      const statusCode = validationFailure ? 400 : (handledError.statusCode ?? 500);
+      const safeHttpError = isSafeHttpError(error) ? error : undefined;
+      const statusCode = validationFailure
+        ? 400
+        : (safeHttpError?.statusCode ?? frameworkErrorStatus(handledError.statusCode));
+      const publicCode = safeHttpError
+        ? safeHttpError.code
+        : validationFailure
+          ? "invalid_request"
+          : statusCode >= 500
+            ? "internal_error"
+            : "request_failed";
+      const publicMessage = safeHttpError
+        ? safeHttpError.message
+        : statusCode >= 500
+          ? "The gateway could not complete the request."
+          : validationFailure
+            ? "The request did not match the expected shape."
+            : "The gateway rejected the request.";
       if (statusCode >= 500) {
         request.log.error(
           { err: handledError, operation: "http.request", requestId: request.id },
@@ -128,25 +144,22 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         );
       } else {
         request.log.warn(
-          { code: handledError.code, operation: "http.request", requestId: request.id, statusCode },
+          {
+            errorCode: publicCode,
+            operation: "http.request",
+            requestId: request.id,
+            statusCode,
+          },
           "Request rejected",
         );
       }
 
       await reply.status(statusCode).send(
         createApiError({
-          code: validationFailure
-            ? "invalid_request"
-            : statusCode >= 500
-              ? "internal_error"
-              : "request_failed",
-          message:
-            statusCode >= 500
-              ? "The gateway could not complete the request."
-              : validationFailure
-                ? "The request did not match the expected shape."
-                : "The gateway rejected the request.",
+          code: publicCode,
+          message: publicMessage,
           requestId: request.id,
+          ...(safeHttpError?.details === undefined ? {} : { details: safeHttpError.details }),
         }),
       );
     });

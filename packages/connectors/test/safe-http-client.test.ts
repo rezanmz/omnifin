@@ -111,6 +111,29 @@ describe("SafeHttpClient", () => {
     expect(mock.requests).toHaveLength(0);
   });
 
+  it("does not forward credentials through whitespace-disguised absolute paths", async () => {
+    const mock = createMockTransport([]);
+    const client = clientWith(mock.transport, {
+      baseUrl: "https://radarr.example.test/api/",
+      headers: { "X-Api-Key": "api-key-super-secret" },
+    });
+
+    for (const path of [
+      " https://radarr.example.test:9999/secret",
+      "\thttps://radarr.example.test:9999/secret",
+      "\u0000https://radarr.example.test:9999/secret",
+      "\u00a0https://radarr.example.test:9999/secret",
+      "\u200bhttps://radarr.example.test:9999/secret",
+      "../secret",
+    ]) {
+      await expect(client.requestText(path, { operation: "probe" })).rejects.toMatchObject({
+        code: "destination_blocked",
+      });
+    }
+
+    expect(mock.requests).toHaveLength(0);
+  });
+
   it("blocks hop-by-hop and host header overrides", async () => {
     const mock = createMockTransport([]);
     const client = clientWith(mock.transport);

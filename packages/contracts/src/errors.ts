@@ -1,12 +1,22 @@
 import { z } from "zod";
 
-const safeDetailValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const safeDetailKeySchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
+const safeDetailValueSchema = z.union([
+  z.string().max(512),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+
+export const apiErrorDetailsSchema = z
+  .record(safeDetailKeySchema, safeDetailValueSchema)
+  .refine((details) => Object.keys(details).length <= 32, "API errors support at most 32 details");
 
 export const apiErrorSchema = z.object({
   error: z.object({
     code: z.string().regex(/^[a-z][a-z0-9_]{2,63}$/),
     message: z.string().trim().min(1).max(300),
-    details: z.record(z.string(), safeDetailValueSchema).optional(),
+    details: apiErrorDetailsSchema.optional(),
     requestId: z.string().trim().min(1).max(128),
   }),
 });

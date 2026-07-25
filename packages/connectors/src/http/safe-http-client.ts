@@ -139,6 +139,18 @@ function hasTraversalSegment(path: string): boolean {
   });
 }
 
+const UNSAFE_REQUEST_PATH_CHARACTER = /[\p{Cc}\p{Cf}\p{White_Space}]/u;
+
+function unsafeRequestPath(service: ConnectorService, operation: string): SafeConnectorError {
+  return new SafeConnectorError({
+    service,
+    operation,
+    code: "destination_blocked",
+    message: "The connector request path is not a safe relative path.",
+    retryable: false,
+  });
+}
+
 const BLOCKED_REQUEST_HEADERS = [
   "connection",
   "host",
@@ -270,6 +282,7 @@ export class SafeHttpClient {
   async requestText(path: string, options: SafeRequestOptions): Promise<SafeTextResponse> {
     if (
       !path ||
+      UNSAFE_REQUEST_PATH_CHARACTER.test(path) ||
       path.startsWith("/") ||
       path.startsWith("//") ||
       path.includes("\\") ||
@@ -278,16 +291,18 @@ export class SafeHttpClient {
       hasTraversalSegment(path) ||
       /^[a-z][a-z\d+.-]*:/i.test(path)
     ) {
-      throw new SafeConnectorError({
-        service: this.service,
-        operation: options.operation,
-        code: "destination_blocked",
-        message: "The connector request path is not a safe relative path.",
-        retryable: false,
-      });
+      throw unsafeRequestPath(this.service, options.operation);
     }
 
-    const url = new URL(path, this.#baseUrl);
+    let url: URL;
+    try {
+      url = new URL(path, this.#baseUrl);
+    } catch {
+      throw unsafeRequestPath(this.service, options.operation);
+    }
+    if (url.origin !== this.#baseUrl.origin || !url.pathname.startsWith(this.#baseUrl.pathname)) {
+      throw unsafeRequestPath(this.service, options.operation);
+    }
     if (options.query) {
       const query =
         options.query instanceof URLSearchParams

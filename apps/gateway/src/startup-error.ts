@@ -16,6 +16,7 @@ const startupFailureDefinitions = {
   jellyfin_configuration_invalid: { category: "configuration" },
   recovery_secret_conflict: { category: "secrets" },
   recovery_secret_file_unreadable: { category: "secrets" },
+  recovery_secret_invalid: { category: "secrets" },
   server_listen_failed: { category: "listener" },
   unexpected_startup_failure: { category: "unexpected" },
 } as const;
@@ -46,6 +47,8 @@ const startupFailureMessages: Record<StartupFailureCode, string> = {
   recovery_secret_conflict:
     "OMNIFIN_RECOVERY_SECRET must be provided as a value or file, not both.",
   recovery_secret_file_unreadable: "The configured recovery-secret file could not be read.",
+  recovery_secret_invalid:
+    "OMNIFIN_RECOVERY_SECRET must be canonical base64 encoding of 32 to 128 bytes.",
   server_listen_failed: "The gateway could not bind its configured listener.",
   unexpected_startup_failure: "The gateway encountered an unexpected startup failure.",
 };

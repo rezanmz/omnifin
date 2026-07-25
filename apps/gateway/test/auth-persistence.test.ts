@@ -10,6 +10,11 @@ import {
 } from "../src/db/schema.js";
 import { privacyHash } from "../src/security/crypto.js";
 
+const tokenHash = "t".repeat(43);
+const csrfTokenHash = "c".repeat(43);
+const encryptedCsrfToken = "v1.fixture-csrf-token";
+const sessionCreatedAt = new Date("2026-07-25T12:00:00.000Z");
+
 describe("authentication persistence invariants", () => {
   it("round-trips the complete role-mapping contract without losing claim semantics", () => {
     const database = openDatabase(":memory:");
@@ -94,14 +99,17 @@ describe("authentication persistence invariants", () => {
       .insert(sessions)
       .values({
         id: "session-1",
-        tokenHash: "token-hash",
+        tokenHash,
         userId: "user-1",
         authMethod: "oidc",
         oidcProviderId: "oidc-home",
         externalIdentityId: "identity-1",
         oidcSessionIdHash: sidHash,
-        csrfTokenHash: "csrf-hash",
-        lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+        csrfTokenHash,
+        encryptedCsrfToken,
+        createdAt: sessionCreatedAt,
+        lastRotatedAt: sessionCreatedAt,
+        lastSeenAt: sessionCreatedAt,
         expiresAt: new Date("2026-07-25T13:00:00.000Z"),
         absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
       })
@@ -160,13 +168,16 @@ describe("authentication persistence invariants", () => {
         .insert(sessions)
         .values({
           id: "session-1",
-          tokenHash: "token-hash",
+          tokenHash,
           userId: "user-1",
           authMethod: "oidc",
           oidcProviderId: "oidc-work",
           externalIdentityId: "identity-1",
-          csrfTokenHash: "csrf-hash",
-          lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+          csrfTokenHash,
+          encryptedCsrfToken,
+          createdAt: sessionCreatedAt,
+          lastRotatedAt: sessionCreatedAt,
+          lastSeenAt: sessionCreatedAt,
           expiresAt: new Date("2026-07-25T13:00:00.000Z"),
           absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
         })
@@ -275,13 +286,16 @@ describe("authentication persistence invariants", () => {
         .insert(sessions)
         .values({
           id: "session-1",
-          tokenHash: "token-hash",
+          tokenHash,
           userId: "user-1",
           authMethod: "jellyfin",
           oidcProviderId: "oidc-home",
           externalIdentityId: "identity-1",
-          csrfTokenHash: "csrf-hash",
-          lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+          csrfTokenHash,
+          encryptedCsrfToken,
+          createdAt: sessionCreatedAt,
+          lastRotatedAt: sessionCreatedAt,
+          lastSeenAt: sessionCreatedAt,
           expiresAt: new Date("2026-07-25T13:00:00.000Z"),
           absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
         })
