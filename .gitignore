@@ -1,0 +1,37 @@
+# Dependencies and package manager state
+node_modules/
+.pnpm-store/
+
+# Build and test output
+.next/
+.turbo/
+dist/
+coverage/
+storybook-static/
+playwright-report/
+test-results/
+.lighthouseci/
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# Tooling and operating-system files
+.DS_Store
+*.log
+*.tsbuildinfo
+.idea/
+.vscode/

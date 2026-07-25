@@ -1,0 +1,188 @@
+# Architecture
+
+This document gives operators and contributors the system model needed to assess a
+deployment, trace a request, or change a subsystem without weakening its boundaries.
+It describes the target architecture for the current pre-release implementation;
+the roadmap records when each area has passed its verification gate.
+
+> [!IMPORTANT]
+> Phase 0 implements the process topology, SQLite migrations, health and readiness,
+> security headers and origin checks, browser-safe provider discovery, connector
+> contracts and probes, secret-handling primitives, and the interface shell. It does
+> not implement sign-in, sessions, application authorization, identity linking,
+> connector administration, audit writes, live upstream workflows, or media proxying.
+> Unless a section says “current Phase 0,” it describes a required later-phase boundary.
+
+## Current Phase 0 foundation
+
+The current browser can render the foundation preview, reach the web process's own
+liveness endpoint, and reach the versioned provider-discovery endpoint through the
+same-origin web process. Gateway liveness and storage readiness remain private to the
+Compose network. The gateway migrates SQLite, validates public configuration, and
+redacts structured logs; the repository also provides isolated connector fixture and
+probe tooling. Configured provider metadata is deliberately reported as unavailable
+because no login flow is registered yet.
+
+## Target system shape
+
+Omnifin is a TypeScript monorepo with three kinds of module:
+
+1. A **Next.js web application** renders the interface and serves browser assets.
+2. A **Fastify gateway** is the only process allowed to handle credentials, sessions,
+   authorization decisions, connector traffic, media proxying, and audit writes.
+3. **Shared packages** define validated contracts, connector capabilities, and the
+   design system used by both applications.
+
+The intended release image contains both application entry points. Docker Compose
+starts a stateless web service and a stateful gateway service from the same image
+digest. The gateway owns the SQLite volume. This keeps the default deployment simple
+while ensuring the two processes cannot drift between versions.
+
+The production stage is a digest-pinned distroless Node image. It runs as the numeric
+non-root identity `65532:65532` and contains neither a shell nor a package manager;
+build tools and npm remain confined to disposable build stages. Health checks and the
+two application roles execute Node through absolute paths, so the hardened runtime
+does not depend on shell interpretation.
+
+```mermaid
+flowchart LR
+    User["Browser or TV-style client"] -->|"same-origin HTTPS"| Web["Next.js web"]
+    Web -->|"versioned normalized API"| Gateway["Fastify gateway"]
+    Gateway --> DB[("SQLite + encrypted values")]
+    Gateway --> IdP["OIDC provider"]
+    Gateway --> Media["Jellyfin"]
+    Gateway --> Request["Seerr"]
+    Gateway --> Arr["Radarr · Sonarr · Bazarr · Prowlarr"]
+    Gateway --> Download["qBittorrent · SABnzbd"]
+```
+
+## Required trust boundaries
+
+### Browser boundary
+
+The browser is untrusted. It receives normalized, role-filtered data and opaque
+session state, never upstream API keys, Jellyfin access tokens, OIDC assertions, or
+raw connector responses. Every mutation is independently authorized by the gateway;
+hiding a control in the interface is not an authorization decision.
+
+### Gateway boundary
+
+The gateway is the security boundary. It validates input with shared schemas,
+checks the request origin and CSRF token, loads the server-side session, applies
+local permissions, calls an approved connector destination, normalizes the result,
+and records sensitive actions. Logs are structured and redact secrets, assertions,
+cookies, tokens, and media paths.
+
+### Connector boundary
+
+Each upstream service is independently fallible and may expose version-specific
+behavior. A connector advertises discovered capabilities rather than assuming that
+every endpoint exists. Timeouts, invalid credentials, permission errors, and
+unsupported capabilities are typed outcomes. One failed service must not collapse an
+otherwise useful dashboard.
+
+Connector destinations are administrator-approved. URL validation rejects embedded
+credentials, unexpected redirects, and loopback, link-local, or cloud-metadata
+targets unless a narrowly scoped local-network policy explicitly permits the target.
+Insecure HTTP and untrusted certificates require a visible administrative opt-in.
+
+## Required authenticated request lifecycle
+
+A typical authenticated request follows this sequence:
+
+1. The browser sends an opaque session cookie. A state-changing request also sends a
+   CSRF token and an expected same-origin header.
+2. The gateway resolves the session by a one-way token digest and applies inactivity
+   and absolute expiry.
+3. The route checks a named local permission derived from the principal's role and
+   linked-service state.
+4. The connector layer selects only capabilities verified for the configured
+   service version.
+5. The upstream response is parsed and transformed into a versioned Omnifin
+   contract. Unknown upstream fields do not cross the gateway boundary.
+6. Security-relevant decisions and mutations produce an audit record with a request
+   correlation identifier.
+
+Live data uses server-sent events or bounded polling behind the same session and
+authorization checks. Clients reconcile updates through normalized query keys; they
+do not open connections directly to upstream services.
+
+## Planned Phase 1 identity and authorization
+
+Phase 1 must support configured OIDC issuers and direct Jellyfin authentication. OIDC
+identities must be keyed by immutable issuer and subject. Media access must require a
+separately proven Jellyfin account link; matching email addresses is never sufficient
+proof. The full required flow and recovery model are documented in
+[Authentication](authentication.md).
+
+The shared contract defines `viewer`, `requester`, `operator`, and `admin` roles. Phase
+1 permission evaluation must remain local to Omnifin because most upstream service
+keys are effectively administrative. Connector credentials must not determine the
+signed-in user's authority.
+
+## Persistence schema and target secrets
+
+The Phase 0 SQLite schema reserves storage for:
+
+- users, external identities, service identity links, and role mappings;
+- opaque session digests and short-lived authentication transactions;
+- connector configuration and capability snapshots;
+- encrypted Jellyfin tokens and connector credentials;
+- durable audit records and persisted failure state; and
+- schema migration history.
+
+Phase 0 exercises the schema and migration history but does not yet create authenticated
+users, identity links, sessions, connector configuration, encrypted upstream tokens,
+or audit events through product workflows.
+
+When product workflows begin writing sensitive values, they must use authenticated
+encryption with a deployment-provided master key. The key must never be stored in the
+database. Changing it requires an explicit key-rotation procedure; losing it makes
+encrypted connector credentials unrecoverable.
+
+SQLite has a single writer. The gateway owns migrations and serialized writes, uses
+WAL mode where supported, and reports readiness only after storage and migrations are
+healthy. Horizontal gateway scaling is intentionally outside the first deployment
+profile.
+
+## Current shell and target frontend architecture
+
+Phase 0 provides server-rendered route shells, deterministic preview data, responsive
+navigation, and selected intentional transitions. As live workflows arrive, TanStack
+Query will own remote data and invalidation, while Zustand remains limited to ephemeral
+interface state such as an open drawer or command-palette context. Motion is reserved
+for purposeful, interruptible transitions; reduced-motion users receive stable state
+changes without decorative movement.
+
+Heavy surfaces—the theater player, manual release workbench, expanded calendar, and
+administrative tools—will be loaded on demand when implemented. Reusable components
+are exercised in Storybook across normal, loading, empty, offline, error, denied, and
+responsive states before route assembly.
+
+## Required partial failure model
+
+An upstream outage is expected operating state, not an exceptional blank screen.
+Each connector reports health and last successful contact independently. The gateway
+returns useful data alongside typed degraded-service information where safe. The
+interface preserves the last known view only when its age and provenance are clear,
+and disables actions whose outcome cannot be guaranteed.
+
+Later-phase failures that require intervention must be persisted with timestamps,
+affected service, correlation identifier, safe diagnostics, retry state, and
+resolution. Each process has a `/healthz` liveness endpoint. The gateway's private
+`/readyz` endpoint additionally reports storage and migration readiness. Neither
+gateway endpoint returns secrets or private service details, and the web process does
+not proxy storage readiness to the public network.
+
+## Required deployment invariants
+
+- Production traffic terminates TLS before reaching the web service.
+- The gateway is not exposed directly to untrusted networks.
+- One release uses one immutable image digest for both services.
+- The SQLite database and master key are backed up separately and restored together.
+- Telemetry is disabled by default; Omnifin makes no analytics or phone-home requests.
+- The interactive interface exposes the running version, license notice, and a
+  corresponding-source link for the deployed version.
+- An upgrade begins with a verified backup and uses versioned migrations.
+- A rollback selects a previously verified version or digest; published artifacts
+  are never overwritten.

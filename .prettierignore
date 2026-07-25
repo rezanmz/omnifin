@@ -1,0 +1,11 @@
+.next
+.turbo
+.dockerignore
+Dockerfile
+coverage
+dist
+node_modules
+playwright-report
+pnpm-lock.yaml
+storybook-static
+test-results

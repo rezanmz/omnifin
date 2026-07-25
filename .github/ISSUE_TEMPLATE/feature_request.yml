@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose a focused user outcome or integration capability
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem before the implementation. Large architectural proposals are easier to shape in Discussions first.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched issues, discussions, and the roadmap for related work.
+          required: true
+        - label: I can describe a complete user workflow, not only an upstream endpoint.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who encounters the problem, in what context, and what must they do today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable workflow and what success looks like.
+    validations:
+      required: true
+  - type: textarea
+    id: states
+    attributes:
+      label: Important states and permissions
+      description: Cover loading, empty, offline, error, denied, unsupported, responsive, and destructive behavior where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: upstream
+    attributes:
+      label: Upstream capability
+      description: Link authoritative API documentation and name known versions if this requires a connector.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain workarounds or smaller scopes that were considered.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Security, privacy, migration, and compatibility risks

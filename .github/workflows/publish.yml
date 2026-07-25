@@ -1,0 +1,912 @@
+name: Publish image
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag, including the v prefix
+        required: true
+        type: string
+      version:
+        description: Stable SemVer version without the v prefix
+        required: true
+        type: string
+      release_sha:
+        description: Full immutable source commit for the release
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag, including the v prefix
+        required: true
+        type: string
+      version:
+        description: Stable SemVer version without the v prefix
+        required: true
+        type: string
+      release_sha:
+        description: Full immutable source commit referenced by the tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-stable-release
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  NODE_VERSION: "24"
+  ORAS_VERSION: "1.3.3"
+  PNPM_VERSION: "11.9.0"
+  SYFT_VERSION: "v1.49.0"
+
+jobs:
+  verify-main-gates:
+    name: Verify exact release-source gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the protected gate verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: refs/heads/main
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Require successful CI and Security push runs for the exact source SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/verify-main-gates.mjs
+          --sha "${{ inputs.release_sha }}"
+
+  validate-release-metadata:
+    name: Validate protected release metadata
+    needs: verify-main-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      candidate_tag: ${{ steps.release-inputs.outputs.candidate_tag }}
+      major: ${{ steps.release-inputs.outputs.major }}
+      minor: ${{ steps.release-inputs.outputs.minor }}
+    steps:
+      - name: Bind release inputs to protected main
+        id: release-inputs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const version = process.env.RELEASE_VERSION;
+            const releaseSha = process.env.RELEASE_SHA;
+            const stableTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const fullSha = /^[0-9a-f]{40}$/;
+
+            if (context.ref !== "refs/heads/main") {
+              throw new Error("Stable releases must run from the main workflow definition.");
+            }
+            const match = tag.match(stableTag);
+            if (!match || tag !== `v${version}`) {
+              throw new Error("tag and version must identify the same stable SemVer release.");
+            }
+            if (!fullSha.test(releaseSha)) {
+              throw new Error("release_sha must be a full lowercase commit SHA.");
+            }
+
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: "main",
+            });
+            if (!branch.data.protected) {
+              throw new Error("The main branch must be protected before publishing.");
+            }
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find((candidate) => candidate.tag_name === tag);
+            if (!release?.draft || release.prerelease) {
+              throw new Error(`Expected a non-prerelease draft for ${tag}.`);
+            }
+
+            const asParts = (candidateTag) => {
+              const candidateMatch = candidateTag.match(stableTag);
+              return candidateMatch ? candidateMatch.slice(1).map((part) => BigInt(part)) : null;
+            };
+            const compare = (left, right) => {
+              for (let index = 0; index < 3; index += 1) {
+                if (left[index] > right[index]) return 1;
+                if (left[index] < right[index]) return -1;
+              }
+              return 0;
+            };
+            const requested = asParts(tag);
+            const published = releases
+              .filter((candidate) => !candidate.draft && !candidate.prerelease)
+              .map((candidate) => ({ tag: candidate.tag_name, parts: asParts(candidate.tag_name) }))
+              .filter((candidate) => candidate.parts);
+            for (const candidate of published) {
+              if (compare(requested, candidate.parts) <= 0) {
+                throw new Error(
+                  `${tag} would roll stable aliases back from published ${candidate.tag}.`,
+                );
+              }
+            }
+
+            const candidateTag =
+              `candidate-${version}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+            if (candidateTag.length > 128) {
+              throw new Error("The release version is too long for an immutable OCI candidate tag.");
+            }
+            core.setOutput("major", match[1]);
+            core.setOutput("minor", match[2]);
+            core.setOutput("candidate_tag", candidateTag);
+
+  release-coverage:
+    name: Resolve reviewed release coverage
+    needs: validate-release-metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      live_required: ${{ steps.coverage.outputs.live_required }}
+      profile: ${{ steps.coverage.outputs.profile }}
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate phase profile, readiness, and version policy
+        id: coverage
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: >-
+          node scripts/integration/release-coverage.mjs
+          --version "$RELEASE_VERSION" --github-output "$GITHUB_OUTPUT"
+
+  validate-source:
+    name: Validate release source and fixture gates
+    needs: release-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Verify tag, source versions, and main ancestry
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
+
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main
+          test "$(jq --raw-output '.version' package.json)" = "$RELEASE_VERSION"
+          test "$(jq --raw-output '.["."]' .release-please-manifest.json)" = "$RELEASE_VERSION"
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify connector contracts
+        run: pnpm test:contracts
+      - name: Rehearse database migrations
+        run: pnpm migration:smoke
+      - name: Run required strict release fixtures
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: >-
+          node scripts/integration/release-gate.mjs
+          --version "$RELEASE_VERSION" --mode fixture
+          --output artifacts/release-integration/fixture.json
+      - name: Upload sanitized fixture release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: ignore
+          name: release-fixture-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release-integration/fixture.json
+          retention-days: 30
+
+  validate-live-source:
+    name: Validate required protected live coverage
+    if: needs.release-coverage.outputs.live_required == 'true'
+    needs:
+      - release-coverage
+      - validate-source
+    environment: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Run required strict live release matrix
+        env:
+          OMNIFIN_AUTHENTIK_ISSUER_URL: ${{ vars.OMNIFIN_AUTHENTIK_ISSUER_URL }}
+          OMNIFIN_BAZARR_API_KEY: ${{ secrets.OMNIFIN_BAZARR_API_KEY }}
+          OMNIFIN_BAZARR_URL: ${{ vars.OMNIFIN_BAZARR_URL }}
+          OMNIFIN_INTEGRATION_ALLOW_HTTP: ${{ vars.OMNIFIN_INTEGRATION_ALLOW_HTTP }}
+          OMNIFIN_JELLYFIN_URL: ${{ vars.OMNIFIN_JELLYFIN_URL }}
+          OMNIFIN_OIDC_ISSUER_URL: ${{ vars.OMNIFIN_OIDC_ISSUER_URL }}
+          OMNIFIN_PROWLARR_API_KEY: ${{ secrets.OMNIFIN_PROWLARR_API_KEY }}
+          OMNIFIN_PROWLARR_URL: ${{ vars.OMNIFIN_PROWLARR_URL }}
+          OMNIFIN_QBITTORRENT_PASSWORD: ${{ secrets.OMNIFIN_QBITTORRENT_PASSWORD }}
+          OMNIFIN_QBITTORRENT_URL: ${{ vars.OMNIFIN_QBITTORRENT_URL }}
+          OMNIFIN_QBITTORRENT_USERNAME: ${{ secrets.OMNIFIN_QBITTORRENT_USERNAME }}
+          OMNIFIN_RADARR_API_KEY: ${{ secrets.OMNIFIN_RADARR_API_KEY }}
+          OMNIFIN_RADARR_URL: ${{ vars.OMNIFIN_RADARR_URL }}
+          OMNIFIN_SABNZBD_API_KEY: ${{ secrets.OMNIFIN_SABNZBD_API_KEY }}
+          OMNIFIN_SABNZBD_URL: ${{ vars.OMNIFIN_SABNZBD_URL }}
+          OMNIFIN_SEERR_API_KEY: ${{ secrets.OMNIFIN_SEERR_API_KEY }}
+          OMNIFIN_SEERR_URL: ${{ vars.OMNIFIN_SEERR_URL }}
+          OMNIFIN_SONARR_API_KEY: ${{ secrets.OMNIFIN_SONARR_API_KEY }}
+          OMNIFIN_SONARR_URL: ${{ vars.OMNIFIN_SONARR_URL }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: >-
+          node scripts/integration/release-gate.mjs
+          --version "$RELEASE_VERSION" --mode live
+          --output artifacts/release-integration/live.json
+      - name: Upload sanitized live release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: release-live-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release-integration/live.json
+          retention-days: 30
+
+  source-gate:
+    name: Release source coverage
+    if: always()
+    needs:
+      - release-coverage
+      - validate-source
+      - validate-live-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require the reviewed phase coverage
+        env:
+          COVERAGE_RESULT: ${{ needs.release-coverage.result }}
+          FIXTURE_RESULT: ${{ needs.validate-source.result }}
+          LIVE_REQUIRED: ${{ needs.release-coverage.outputs.live_required }}
+          LIVE_RESULT: ${{ needs.validate-live-source.result }}
+          RELEASE_PROFILE: ${{ needs.release-coverage.outputs.profile }}
+        run: |
+          set -euo pipefail
+          if [ "$COVERAGE_RESULT" != "success" ] || [ "$FIXTURE_RESULT" != "success" ]; then
+            echo "::error::Release coverage metadata or fixture gates failed."
+            exit 1
+          fi
+          if [ "$LIVE_REQUIRED" = "true" ] && [ "$LIVE_RESULT" != "success" ]; then
+            echo "::error::The selected release profile requires successful protected live coverage."
+            exit 1
+          fi
+          if [ "$LIVE_REQUIRED" != "true" ] && [ "$LIVE_RESULT" != "skipped" ]; then
+            echo "::error::A release profile without live requirements unexpectedly ran live probes."
+            exit 1
+          fi
+          echo "Release source satisfies the reviewed ${RELEASE_PROFILE} coverage profile."
+
+  build-candidate:
+    name: Build unprivileged candidate archive
+    needs:
+      - release-coverage
+      - source-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Prepare release artifact directory
+        run: mkdir --parents "${RUNNER_TEMP}/release-artifacts"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Derive candidate metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: omnifin
+          tags: type=raw,value=${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.title=Omnifin
+            org.opencontainers.image.description=Self-hosted media control plane
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ inputs.release_sha }}
+            io.github.omnifin.release-profile=${{ needs.release-coverage.outputs.profile }}
+      - name: Build multi-architecture OCI candidate
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          annotations: ${{ steps.metadata.outputs.annotations }}
+          context: .
+          file: Dockerfile
+          labels: ${{ steps.metadata.outputs.labels }}
+          outputs: type=oci,dest=${{ runner.temp }}/release-artifacts/candidate.oci.tar
+          platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          pull: true
+          sbom: true
+          tags: ${{ steps.metadata.outputs.tags }}
+      - name: Install Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+      - name: Generate and validate portable SPDX SBOM
+        env:
+          OMNIFIN_SBOM_PATH: ${{ runner.temp }}/release-artifacts/sbom.spdx.json
+          OCI_ARCHIVE: ${{ runner.temp }}/release-artifacts/candidate.oci.tar
+          SYFT_COMMAND: ${{ steps.syft.outputs.cmd }}
+        run: |
+          set -euo pipefail
+          "$SYFT_COMMAND" scan "oci-archive:${OCI_ARCHIVE}" \
+            --output "spdx-json=${OMNIFIN_SBOM_PATH}"
+          node scripts/check-sbom.mjs
+      - name: Record candidate checksums
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/release-artifacts
+        run: |
+          set -euo pipefail
+          cd "$ARTIFACT_DIRECTORY"
+          sha256sum candidate.oci.tar sbom.spdx.json > SHA256SUMS
+          sha256sum sbom.spdx.json > SBOM_SHA256SUMS
+      - name: Upload candidate bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          compression-level: 0
+          if-no-files-found: error
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-artifacts
+          retention-days: 2
+      - name: Retain release SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}-spdx-sbom
+          path: |
+            ${{ runner.temp }}/release-artifacts/sbom.spdx.json
+            ${{ runner.temp }}/release-artifacts/SBOM_SHA256SUMS
+          retention-days: 90
+
+  publish-candidate:
+    name: Publish immutable candidate digest
+    needs:
+      - validate-release-metadata
+      - source-gate
+      - build-candidate
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Download candidate bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-artifacts
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Verify candidate bundle
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          sha256sum --check SHA256SUMS
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          password: ${{ github.token }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - name: Push candidate without stable tags
+        id: publish
+        env:
+          BUILD_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+          CANDIDATE_TAG: ${{ needs.validate-release-metadata.outputs.candidate_tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          assert_absent() {
+            local output
+            local status
+            set +e
+            output=$(oras resolve "$1" 2>&1)
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              echo "::error::Refusing to overwrite existing registry reference $1."
+              exit 1
+            fi
+            if ! grep --extended-regexp --ignore-case --quiet \
+              'not found|manifest unknown|manifest_unknown|name unknown|name_unknown' <<<"$output"; then
+              echo "::error::The registry did not prove that $1 is absent."
+              exit 1
+            fi
+          }
+
+          assert_absent "${IMAGE_NAME}:${RELEASE_VERSION}"
+          assert_absent "${IMAGE_NAME}:${CANDIDATE_TAG}"
+          oras cp --from-oci-layout \
+            "release-artifacts/candidate.oci.tar:${RELEASE_VERSION}" \
+            "${IMAGE_NAME}:${CANDIDATE_TAG}"
+
+          digest=$(oras resolve "${IMAGE_NAME}:${CANDIDATE_TAG}")
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::GHCR returned an invalid candidate digest."
+            exit 1
+          fi
+          if [[ "$digest" != "$BUILD_DIGEST" ]]; then
+            echo "::error::Published candidate digest differs from the built OCI archive."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  attest-candidate:
+    name: Sign and attest candidate digest
+    needs:
+      - build-candidate
+      - publish-candidate
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Download validated SPDX SBOM
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}-spdx-sbom
+          path: release-evidence
+      - name: Verify SBOM checksum
+        run: |
+          set -euo pipefail
+          cd release-evidence
+          sha256sum --check SBOM_SHA256SUMS
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          password: ${{ github.token }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          push-to-registry: true
+          subject-digest: ${{ needs.publish-candidate.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+      - name: Attest SPDX SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          push-to-registry: true
+          sbom-path: release-evidence/sbom.spdx.json
+          subject-digest: ${{ needs.publish-candidate.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+      - name: Sign image digest with keyless identity
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  scan-candidate:
+    name: Scan public release candidate (${{ matrix.target.platform }})
+    needs: publish-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - platform: linux/amd64
+            suffix: linux-amd64
+          - platform: linux/arm64
+            suffix: linux-arm64
+    steps:
+      - name: Report all published candidate findings
+        id: trivy-candidate-report
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.publish-candidate.outputs.digest }}
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: "false"
+          exit-code: "0"
+          format: sarif
+          limit-severities-for-sarif: "false"
+          output: trivy-release-candidate-${{ matrix.target.suffix }}.sarif
+          timeout: 15m
+          version: v0.70.0
+      - name: Retain complete candidate scan report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-candidate-scan-${{ matrix.target.suffix }}
+          path: trivy-release-candidate-${{ matrix.target.suffix }}.sarif
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce fixable candidate vulnerabilities
+        id: trivy-candidate-vulnerabilities
+        continue-on-error: true
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.publish-candidate.outputs.digest }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "true"
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 15m
+          version: v0.70.0
+      - name: Enforce candidate secret and IaC policy
+        id: trivy-candidate-policy
+        continue-on-error: true
+        env:
+          TRIVY_PLATFORM: ${{ matrix.target.platform }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}@${{ needs.publish-candidate.outputs.digest }}
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          skip-setup-trivy: "true"
+          timeout: 15m
+          version: v0.70.0
+      - name: Enforce published candidate scan policy
+        if: always() && (steps.trivy-candidate-vulnerabilities.outcome == 'failure' || steps.trivy-candidate-policy.outcome == 'failure')
+        run: exit 1
+
+  verify-candidate:
+    name: Verify public candidate by digest
+    needs:
+      - validate-release-metadata
+      - publish-candidate
+      - attest-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable smoke harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Pull, verify, and exercise candidate anonymously
+        env:
+          CANDIDATE_TAG: ${{ needs.validate-release-metadata.outputs.candidate_tag }}
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG"
+          image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
+
+          test "$(oras resolve "${IMAGE_NAME}:${CANDIDATE_TAG}")" = "$IMAGE_DIGEST"
+          manifest=$(docker buildx imagetools inspect "$image_ref" --format '{{json .Manifest}}')
+          printf '%s' "$manifest" \
+            | jq --exit-status \
+              '[.manifests[].platform | "\(.os)/\(.architecture)"] | contains(["linux/amd64", "linux/arm64"])' \
+              >/dev/null
+          docker pull "$image_ref"
+          docker image inspect "$image_ref" --format '{{json .RepoDigests}}' \
+            | grep --fixed-strings "$IMAGE_DIGEST"
+
+          cosign verify \
+            --certificate-identity-regexp \
+              "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/(publish|release-please)\\.yml@refs/heads/main$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$image_ref" >/dev/null
+          node scripts/container-smoke.mjs --image "$image_ref"
+
+  promote-stable:
+    name: Promote verified digest to stable tags
+    needs:
+      - validate-release-metadata
+      - publish-candidate
+      - scan-candidate
+      - verify-candidate
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Recheck draft and monotonic release order
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const stableTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const requested = process.env.RELEASE_TAG.match(stableTag).slice(1).map(BigInt);
+            const compare = (left, right) => {
+              for (let index = 0; index < 3; index += 1) {
+                if (left[index] > right[index]) return 1;
+                if (left[index] < right[index]) return -1;
+              }
+              return 0;
+            };
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const requestedRelease = releases.find(
+              (release) => release.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!requestedRelease?.draft || requestedRelease.prerelease) {
+              throw new Error(
+                `Expected ${process.env.RELEASE_TAG} to remain an unpublished, non-prerelease draft.`,
+              );
+            }
+            for (const release of releases) {
+              if (release.draft || release.prerelease) continue;
+              const match = release.tag_name.match(stableTag);
+              if (match && compare(requested, match.slice(1).map(BigInt)) <= 0) {
+                throw new Error(
+                  `${process.env.RELEASE_TAG} would roll stable aliases back from ${release.tag_name}.`,
+                );
+              }
+            }
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Authenticate to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          password: ${{ github.token }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - name: Refuse a registry version rollback
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # The single-quoted argument contains JavaScript template literals.
+          # shellcheck disable=SC2016
+          oras repo tags "$IMAGE_NAME" --format json \
+            | REQUESTED_VERSION="$RELEASE_VERSION" node --input-type=module --eval '
+                let source = "";
+                for await (const chunk of process.stdin) source += chunk;
+                const payload = JSON.parse(source);
+                if (!Array.isArray(payload.tags)) throw new Error("GHCR returned an invalid tag list.");
+
+                const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+                const parts = (version) => version.match(stable)?.slice(1).map(BigInt);
+                const requested = parts(process.env.REQUESTED_VERSION);
+                if (!requested) throw new Error("Requested version is not stable SemVer.");
+                const compare = (left, right) => {
+                  for (let index = 0; index < 3; index += 1) {
+                    if (left[index] > right[index]) return 1;
+                    if (left[index] < right[index]) return -1;
+                  }
+                  return 0;
+                };
+
+                for (const tag of payload.tags) {
+                  const existing = parts(tag);
+                  if (existing && compare(requested, existing) <= 0) {
+                    console.error(
+                      `::error::${process.env.REQUESTED_VERSION} would roll registry aliases back from ${tag}.`,
+                    );
+                    process.exit(1);
+                  }
+                }
+              '
+      - name: Promote exact verified digest
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          MAJOR_VERSION: ${{ needs.validate-release-metadata.outputs.major }}
+          MINOR_VERSION: ${{ needs.validate-release-metadata.outputs.minor }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          resolve_output=$(oras resolve "${IMAGE_NAME}:${RELEASE_VERSION}" 2>&1)
+          resolve_status=$?
+          set -e
+          if (( resolve_status == 0 )); then
+            echo "::error::Refusing to overwrite immutable ${IMAGE_NAME}:${RELEASE_VERSION}."
+            exit 1
+          fi
+          if ! grep --extended-regexp --ignore-case --quiet \
+            'not found|manifest unknown|manifest_unknown|name unknown|name_unknown' <<<"$resolve_output"; then
+            echo "::error::The registry did not prove that the version tag is absent."
+            exit 1
+          fi
+
+          minor_tag="${MAJOR_VERSION}.${MINOR_VERSION}"
+          oras cp "${IMAGE_NAME}@${IMAGE_DIGEST}" \
+            "${IMAGE_NAME}:${RELEASE_VERSION},${minor_tag},${MAJOR_VERSION},latest"
+
+          for tag in "$RELEASE_VERSION" "$minor_tag" "$MAJOR_VERSION" latest; do
+            if [[ "$(oras resolve "${IMAGE_NAME}:${tag}")" != "$IMAGE_DIGEST" ]]; then
+              echo "::error::Stable tag ${tag} does not resolve to the verified candidate digest."
+              exit 1
+            fi
+          done
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+  verify-stable:
+    name: Verify public stable tags
+    needs:
+      - validate-release-metadata
+      - publish-candidate
+      - promote-stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Pull stable image anonymously
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          MAJOR_VERSION: ${{ needs.validate-release-metadata.outputs.major }}
+          MINOR_VERSION: ${{ needs.validate-release-metadata.outputs.minor }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG"
+          minor_tag="${MAJOR_VERSION}.${MINOR_VERSION}"
+          for tag in "$RELEASE_VERSION" "$minor_tag" "$MAJOR_VERSION" latest; do
+            test "$(oras resolve "${IMAGE_NAME}:${tag}")" = "$IMAGE_DIGEST"
+          done
+          docker pull "${IMAGE_NAME}:${RELEASE_VERSION}"
+          docker image inspect "${IMAGE_NAME}:${RELEASE_VERSION}" --format '{{json .RepoDigests}}' \
+            | grep --fixed-strings "$IMAGE_DIGEST"
+
+  finalize:
+    name: Publish verified GitHub release
+    needs:
+      - publish-candidate
+      - release-coverage
+      - verify-stable
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft after stable digest verification
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          RELEASE_PROFILE: ${{ needs.release-coverage.outputs.profile }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find(
+              (candidate) => candidate.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!release?.draft) {
+              throw new Error(`Expected an unpublished release draft for ${process.env.RELEASE_TAG}.`);
+            }
+
+            const digestLine = `Container digest: \`${process.env.IMAGE_DIGEST}\``;
+            const profileLine = `Release coverage profile: \`${process.env.RELEASE_PROFILE}\``;
+            const evidenceLines = [digestLine, profileLine].filter(
+              (line) => !release.body?.includes(line),
+            );
+            const body = `${release.body || ""}\n\n${evidenceLines.join("\n")}`.trim();
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body,
+              draft: false,
+              make_latest: "true",
+            });

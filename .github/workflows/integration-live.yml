@@ -1,0 +1,151 @@
+name: Live connector integration
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-connector-integration
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.9.0"
+
+jobs:
+  prerequisite:
+    name: Live integration readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.status.outputs.enabled }}
+    steps:
+      - name: Report protected environment status
+        id: status
+        env:
+          LIVE_INTEGRATION_ENABLED: ${{ vars.OMNIFIN_LIVE_INTEGRATION_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$LIVE_INTEGRATION_ENABLED" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Live integration is pending its isolated, protected environment."
+            exit 0
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Live integration may only consume protected configuration from main."
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "The protected live integration environment is enabled; the readiness ledger remains authoritative."
+
+  integration:
+    name: Live integration (${{ matrix.service }})
+    if: needs.prerequisite.outputs.enabled == 'true'
+    needs: prerequisite
+    environment: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        service:
+          - oidc
+          - authentik
+          - jellyfin
+          - seerr
+          - radarr
+          - sonarr
+          - bazarr
+          - prowlarr
+          - qbittorrent
+          - sabnzbd
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run strict live integration gate
+        env:
+          OMNIFIN_AUTHENTIK_ISSUER_URL: ${{ matrix.service == 'authentik' && vars.OMNIFIN_AUTHENTIK_ISSUER_URL || '' }}
+          OMNIFIN_BAZARR_API_KEY: ${{ matrix.service == 'bazarr' && secrets.OMNIFIN_BAZARR_API_KEY || '' }}
+          OMNIFIN_BAZARR_URL: ${{ matrix.service == 'bazarr' && vars.OMNIFIN_BAZARR_URL || '' }}
+          OMNIFIN_INTEGRATION_ALLOW_HTTP: ${{ vars.OMNIFIN_INTEGRATION_ALLOW_HTTP }}
+          OMNIFIN_INTEGRATION_SERVICE: ${{ matrix.service }}
+          OMNIFIN_JELLYFIN_URL: ${{ matrix.service == 'jellyfin' && vars.OMNIFIN_JELLYFIN_URL || '' }}
+          OMNIFIN_OIDC_ISSUER_URL: ${{ matrix.service == 'oidc' && vars.OMNIFIN_OIDC_ISSUER_URL || '' }}
+          OMNIFIN_PROWLARR_API_KEY: ${{ matrix.service == 'prowlarr' && secrets.OMNIFIN_PROWLARR_API_KEY || '' }}
+          OMNIFIN_PROWLARR_URL: ${{ matrix.service == 'prowlarr' && vars.OMNIFIN_PROWLARR_URL || '' }}
+          OMNIFIN_QBITTORRENT_PASSWORD: ${{ matrix.service == 'qbittorrent' && secrets.OMNIFIN_QBITTORRENT_PASSWORD || '' }}
+          OMNIFIN_QBITTORRENT_URL: ${{ matrix.service == 'qbittorrent' && vars.OMNIFIN_QBITTORRENT_URL || '' }}
+          OMNIFIN_QBITTORRENT_USERNAME: ${{ matrix.service == 'qbittorrent' && secrets.OMNIFIN_QBITTORRENT_USERNAME || '' }}
+          OMNIFIN_RADARR_API_KEY: ${{ matrix.service == 'radarr' && secrets.OMNIFIN_RADARR_API_KEY || '' }}
+          OMNIFIN_RADARR_URL: ${{ matrix.service == 'radarr' && vars.OMNIFIN_RADARR_URL || '' }}
+          OMNIFIN_SABNZBD_API_KEY: ${{ matrix.service == 'sabnzbd' && secrets.OMNIFIN_SABNZBD_API_KEY || '' }}
+          OMNIFIN_SABNZBD_URL: ${{ matrix.service == 'sabnzbd' && vars.OMNIFIN_SABNZBD_URL || '' }}
+          OMNIFIN_SEERR_API_KEY: ${{ matrix.service == 'seerr' && secrets.OMNIFIN_SEERR_API_KEY || '' }}
+          OMNIFIN_SEERR_URL: ${{ matrix.service == 'seerr' && vars.OMNIFIN_SEERR_URL || '' }}
+          OMNIFIN_SONARR_API_KEY: ${{ matrix.service == 'sonarr' && secrets.OMNIFIN_SONARR_API_KEY || '' }}
+          OMNIFIN_SONARR_URL: ${{ matrix.service == 'sonarr' && vars.OMNIFIN_SONARR_URL || '' }}
+        run: >-
+          pnpm test:integration --service "$OMNIFIN_INTEGRATION_SERVICE"
+          --mode live --strict
+          --output "artifacts/integration/${OMNIFIN_INTEGRATION_SERVICE}/report.json"
+      - name: Upload redacted live diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-integration-${{ matrix.service }}-diagnostics
+          path: artifacts/integration/${{ matrix.service }}
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Live connector integration
+    if: always()
+    needs:
+      - prerequisite
+      - integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce enabled coverage or report pending status
+        env:
+          ENABLED: ${{ needs.prerequisite.outputs.enabled }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          PREREQUISITE_RESULT: ${{ needs.prerequisite.result }}
+        run: |
+          set -euo pipefail
+          if [ "$PREREQUISITE_RESULT" != "success" ]; then
+            echo "::error::Live integration prerequisite failed."
+            exit 1
+          fi
+          if [ "$ENABLED" != "true" ]; then
+            if [ "$INTEGRATION_RESULT" != "skipped" ]; then
+              echo "::error::Disabled live integration unexpectedly ran."
+              exit 1
+            fi
+            echo "Live integration remains pending; no protected variables or secrets were consumed."
+            exit 0
+          fi
+          if [ "$INTEGRATION_RESULT" != "success" ]; then
+            echo "::error::Strict live integration did not succeed."
+            exit 1
+          fi

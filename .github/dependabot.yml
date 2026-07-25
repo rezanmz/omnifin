@@ -1,0 +1,65 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:15"
+      timezone: America/Toronto
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    versioning-strategy: increase-if-necessary
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps)"
+    labels:
+      - dependencies
+    groups:
+      production-minor-and-patch:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development-minor-and-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:45"
+      timezone: America/Toronto
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencies
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:15"
+      timezone: America/Toronto
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+    groups:
+      container-base-images:
+        patterns:
+          - "*"

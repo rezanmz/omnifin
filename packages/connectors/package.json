@@ -1,0 +1,72 @@
+{
+  "name": "@omnifin/connectors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./http/safe-http-client": {
+      "types": "./dist/http/safe-http-client.d.ts",
+      "default": "./dist/http/safe-http-client.js"
+    },
+    "./security/destination": {
+      "types": "./dist/security/destination.d.ts",
+      "default": "./dist/security/destination.js"
+    },
+    "./adapters/jellyfin": {
+      "types": "./dist/adapters/jellyfin.d.ts",
+      "default": "./dist/adapters/jellyfin.js"
+    },
+    "./adapters/seerr": {
+      "types": "./dist/adapters/seerr.d.ts",
+      "default": "./dist/adapters/seerr.js"
+    },
+    "./adapters/radarr": {
+      "types": "./dist/adapters/radarr.d.ts",
+      "default": "./dist/adapters/radarr.js"
+    },
+    "./adapters/sonarr": {
+      "types": "./dist/adapters/sonarr.d.ts",
+      "default": "./dist/adapters/sonarr.js"
+    },
+    "./adapters/prowlarr": {
+      "types": "./dist/adapters/prowlarr.d.ts",
+      "default": "./dist/adapters/prowlarr.js"
+    },
+    "./adapters/bazarr": {
+      "types": "./dist/adapters/bazarr.d.ts",
+      "default": "./dist/adapters/bazarr.js"
+    },
+    "./adapters/qbittorrent": {
+      "types": "./dist/adapters/qbittorrent.d.ts",
+      "default": "./dist/adapters/qbittorrent.js"
+    },
+    "./adapters/sabnzbd": {
+      "types": "./dist/adapters/sabnzbd.d.ts",
+      "default": "./dist/adapters/sabnzbd.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint --max-warnings=0 src test vitest.config.ts",
+    "test": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@omnifin/contracts": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

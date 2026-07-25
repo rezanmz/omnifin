@@ -1,0 +1,51 @@
+{
+  "name": "omnifin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A cinematic, secure control plane for the self-hosted media stack.",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "build": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run build",
+    "container:smoke": "node scripts/container-smoke.mjs",
+    "clean": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run clean && rm -rf .turbo coverage",
+    "dev": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run dev --parallel",
+    "docs:check": "node scripts/check-doc-links.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "license:check": "node scripts/check-licenses.mjs",
+    "lighthouse": "pnpm --filter @omnifin/web lighthouse",
+    "lint": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run lint && pnpm lint:root",
+    "lint:root": "eslint --max-warnings=0 scripts docker/*.mjs *.config.mjs",
+    "migration:smoke": "pnpm --filter @omnifin/gateway migration:smoke",
+    "sbom:check": "node scripts/check-sbom.mjs",
+    "security:audit": "pnpm audit --audit-level low",
+    "test": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run test",
+    "test:a11y": "pnpm --filter @omnifin/web test:a11y",
+    "test:contracts": "pnpm --filter @omnifin/contracts test && pnpm --filter @omnifin/connectors test",
+    "test:e2e": "pnpm --filter @omnifin/web test:e2e",
+    "test:storybook": "pnpm --filter @omnifin/web test:storybook",
+    "test:compatibility": "node scripts/integration/compatibility.mjs",
+    "test:integration": "node scripts/integration/run.mjs",
+    "test:visual": "pnpm --filter @omnifin/web test:visual",
+    "typecheck": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm docs:check"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.1",
+    "@commitlint/config-conventional": "21.2.0",
+    "cross-env": "10.1.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.11",
+    "prettier": "3.9.6",
+    "prettier-plugin-tailwindcss": "0.8.1",
+    "turbo": "2.10.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.65.0",
+    "yaml": "2.9.0"
+  }
+}

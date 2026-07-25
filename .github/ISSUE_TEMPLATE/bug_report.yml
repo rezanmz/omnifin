@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem in Omnifin
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a defect. Remove secrets, private hostnames, media paths, viewing history, and personal artwork before submitting. Security issues belong in a private advisory, not here.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched open and closed issues for this problem.
+          required: true
+        - label: I read the compatibility matrix and support policy.
+          required: true
+        - label: This report contains no secrets or private media information.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Omnifin version
+      description: Provide the release version and image digest, or the exact source commit.
+      placeholder: v0.2.1 / sha256:… / commit …
+    validations:
+      required: true
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment and browser
+      placeholder: Docker Compose on Debian 13; Firefox 140
+    validations:
+      required: true
+  - type: input
+    id: upstream
+    attributes:
+      label: Affected upstream service
+      description: Include the exact product version, or write “none”.
+      placeholder: Jellyfin 10.x
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use an isolated or non-destructive test case.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Include timestamps and correlation IDs where useful. Redact tokens, cookies, usernames, hostnames, paths, titles, and artwork.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized screenshots or details about offline, permission, reduced-motion, responsive, or recovery behavior.

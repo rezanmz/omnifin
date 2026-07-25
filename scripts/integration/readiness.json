@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "services": {
+    "oidc": { "fixture": "pending", "live": "pending" },
+    "authentik": { "fixture": "pending", "live": "pending" },
+    "jellyfin": { "fixture": "ready", "live": "pending" },
+    "seerr": { "fixture": "ready", "live": "pending" },
+    "radarr": { "fixture": "ready", "live": "pending" },
+    "sonarr": { "fixture": "ready", "live": "pending" },
+    "bazarr": { "fixture": "ready", "live": "pending" },
+    "prowlarr": { "fixture": "ready", "live": "pending" },
+    "qbittorrent": { "fixture": "ready", "live": "pending" },
+    "sabnzbd": { "fixture": "ready", "live": "pending" }
+  }
+}

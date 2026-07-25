@@ -1,0 +1,95 @@
+name: omnifin
+
+x-omnifin-service: &omnifin-service
+  image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}
+  build:
+    context: .
+    target: runtime
+    args:
+      OMNIFIN_GATEWAY_URL: http://gateway:4000
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  stop_grace_period: 30s
+
+services:
+  gateway:
+    <<: *omnifin-service
+    command:
+      - gateway
+    environment:
+      NODE_ENV: production
+      OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
+      OMNIFIN_DATABASE_URL: /data/omnifin.db
+      OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key
+      OMNIFIN_HOST: 0.0.0.0
+      OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: ${OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED:-false}
+      OMNIFIN_JELLYFIN_URL: ${OMNIFIN_JELLYFIN_URL:-}
+      OMNIFIN_LOG_LEVEL: ${OMNIFIN_LOG_LEVEL:-info}
+      OMNIFIN_PORT: 4000
+      OMNIFIN_RECOVERY_SECRET_FILE: /run/secrets/omnifin_recovery_secret
+      OMNIFIN_SECURE_COOKIES: ${OMNIFIN_SECURE_COOKIES:-false}
+      # The gateway is private and receives requests through exactly one web hop.
+      OMNIFIN_TRUST_PROXY_HOPS: 1
+    secrets:
+      - omnifin_encryption_key
+      - omnifin_recovery_secret
+    volumes:
+      - omnifin_data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - /opt/omnifin/bin/healthcheck.mjs
+        - http://127.0.0.1:4000/healthz
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  web:
+    <<: *omnifin-service
+    command:
+      - web
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
+      OMNIFIN_DISPLAY_PROFILE: ${OMNIFIN_DISPLAY_PROFILE:-standard}
+      OMNIFIN_GATEWAY_URL: http://gateway:4000
+      PORT: 3000
+    ports:
+      - 127.0.0.1:${OMNIFIN_WEB_PORT:-3000}:3000
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /opt/omnifin/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700
+      - /opt/omnifin/web/apps/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - /opt/omnifin/bin/healthcheck.mjs
+        - http://127.0.0.1:3000/healthz
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+secrets:
+  omnifin_encryption_key:
+    environment: OMNIFIN_ENCRYPTION_KEY
+  omnifin_recovery_secret:
+    environment: OMNIFIN_RECOVERY_SECRET
+
+volumes:
+  omnifin_data:
