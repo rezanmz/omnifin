@@ -31,11 +31,14 @@ payloads are never included.
 `readiness.json` is the reviewed coverage ledger. It must contain exactly every
 known service, both `fixture` and `live` profiles, and only the states `pending`
 or `ready`. Pull requests run `.github/workflows/integration.yml` with fixture
-data and no secrets. They exercise services marked fixture-ready; a change that
-selects an identity service also selects its pending suite, so OIDC or Authentik
-work cannot pass until its fixture coverage and readiness transition land
-together. The one-time empty-repository foundation PR is limited to the already
-ready fixture services.
+data and no secrets. They execute affected services marked fixture-ready with
+strict enforcement. Affected pending suites are reported separately and are
+not counted as verified coverage, allowing their implementation to land in
+reviewed increments. The pull request that changes a suite from `pending` to
+`ready` places it in the strict matrix immediately, so that transition cannot
+pass with missing, skipped, or failing tests. A pending-only change still runs
+the established ready fixture baseline. The one-time empty-repository
+foundation PR is limited to the already ready fixture services.
 
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter

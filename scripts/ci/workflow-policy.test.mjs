@@ -241,6 +241,26 @@ test("each live integration matrix job receives only its service configuration",
   }
 });
 
+test("fixture integration reports pending work without weakening the strict ready gate", () => {
+  const document = workflowDocument("integration.yml");
+  const detect = document.jobs.detect;
+  const integration = document.jobs.integration;
+  const gate = document.jobs.gate;
+
+  assert.equal(detect.outputs.deferred, "${{ steps.matrix.outputs.deferred }}");
+  const report = namedStep(detect.steps, "Report fixture coverage still under development");
+  assert.equal(report.if, "steps.matrix.outputs.deferred != '[]'");
+  assert.equal(report.env.DEFERRED_SERVICES, "${{ steps.matrix.outputs.deferred }}");
+  assert.match(report.run, /not part of this integration claim/u);
+
+  const strict = namedStep(integration.steps, "Run strict fixture integration gate");
+  assert.match(strict.run, /--mode fixture --strict/u);
+  assert.equal(strict["continue-on-error"], undefined);
+
+  const aggregate = namedStep(gate.steps, "Require connector selection and fixture integration");
+  assert.match(aggregate.run, /job\.result !== "success"/u);
+});
+
 test("edge promotion revalidates protected main immediately before moving aliases", () => {
   const source = workflow("edge.yml");
   const promotionStart = source.indexOf("- name: Preserve immutable SHA identity");

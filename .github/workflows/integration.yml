@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      deferred: ${{ steps.matrix.outputs.deferred }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Check out repository history
@@ -39,6 +40,13 @@ jobs:
           OMNIFIN_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           OMNIFIN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/ci/connector-matrix.mjs
+      - name: Report fixture coverage still under development
+        if: steps.matrix.outputs.deferred != '[]'
+        env:
+          DEFERRED_SERVICES: ${{ steps.matrix.outputs.deferred }}
+        run: >-
+          node -e 'process.stdout.write("Pending fixture coverage is not part of this
+          integration claim: " + JSON.parse(process.env.DEFERRED_SERVICES).join(", ") + "\n")'
 
   integration:
     name: Fixture integration (${{ matrix.service }})
