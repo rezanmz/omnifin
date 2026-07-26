@@ -557,6 +557,51 @@ describe("recovery access route", () => {
     }
   });
 
+  it("acquires the immediate write lock before recovery session issuance begins", () => {
+    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "omnifin-recovery-lock-"));
+    const databasePath = path.join(temporaryDirectory, "gateway.sqlite");
+    const lockOwner = openDatabase(databasePath);
+    const contender = openDatabase(databasePath);
+    let sessionClockCalls = 0;
+    try {
+      lockOwner.migrate();
+      contender.sqlite.pragma("busy_timeout = 0");
+      const config = testConfig({ databaseUrl: databasePath });
+      const dependencies = sessionDependencies();
+      const sessionService = new SessionService(contender, config, {
+        ...dependencies,
+        clock: () => {
+          sessionClockCalls += 1;
+          return new Date(initialTime);
+        },
+      });
+      const access = new RecoveryAccessService(contender, sessionService, config);
+      lockOwner.sqlite.exec("begin immediate");
+
+      expect(() =>
+        access.authenticate({
+          denialReason: "credential_mismatch",
+          secret: recoverySecret,
+        }),
+      ).toThrow(/database is locked/i);
+      expect(sessionClockCalls).toBe(0);
+      expect(lockOwner.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        lockOwner.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
+      ).toEqual({ count: 0 });
+      expect(lockOwner.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      if (lockOwner.sqlite.inTransaction) lockOwner.sqlite.exec("rollback");
+      contender.close();
+      lockOwner.close();
+      rmSync(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("preserves an existing valid session when recovery is not configured", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({
@@ -647,6 +692,9 @@ describe("recovery access route", () => {
       expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
         count: 1,
       });
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
+      ).toEqual({ count: 2 });
       expect(
         database.sqlite
           .prepare("select revoked_at as revokedAt from sessions where id = ?")

@@ -13,6 +13,8 @@ const REQUIRED_TABLES = [
   "operational_failures",
   "role_mappings",
   "service_identity_links",
+  "session_rotation_aliases",
+  "session_secret_reservations",
   "sessions",
   "users",
 ] as const;
@@ -37,6 +39,16 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, oidc_provider_id, external_identity_id, oidc_session_id_hash from sessions limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select token_hash, purpose, state, session_id, valid_from, expires_at from session_rotation_aliases limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select secret_hash, purpose, origin_session_id, reserved_at from session_secret_reservations limit 0",
       )
       .all();
     database.sqlite

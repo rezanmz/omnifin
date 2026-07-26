@@ -31,6 +31,39 @@ function openSeededDatabase(): DatabaseHandle {
   return database;
 }
 
+function insertRecoverySession(
+  database: DatabaseHandle,
+  input: { csrfTokenHash: string; id: string; tokenHash: string },
+) {
+  database.sqlite
+    .prepare(
+      `insert into sessions (
+        id,
+        token_hash,
+        auth_method,
+        csrf_token_hash,
+        encrypted_csrf_token,
+        created_at,
+        last_rotated_at,
+        last_seen_at,
+        expires_at,
+        absolute_expires_at
+      ) values (
+        @id,
+        @tokenHash,
+        'recovery',
+        @csrfTokenHash,
+        'v1.fixture-csrf-token',
+        1000,
+        1000,
+        1000,
+        30000,
+        40000
+      )`,
+    )
+    .run(input);
+}
+
 const enumConstraintCases = [
   {
     constraint: "users_role_source_check",
@@ -96,6 +129,21 @@ const enumConstraintCases = [
     constraint: "sessions_auth_method_check",
     name: "session authentication methods",
     statement: `insert into sessions (id, token_hash, auth_method, csrf_token_hash, encrypted_csrf_token, created_at, last_rotated_at, last_seen_at, expires_at, absolute_expires_at) values ('invalid-auth-method', '${"t".repeat(43)}', 'password', '${"c".repeat(43)}', 'encrypted', 1, 1, 1, 2, 3)`,
+  },
+  {
+    constraint: "session_secret_reservations_purpose_check",
+    name: "session secret reservation purposes",
+    statement: `insert into session_secret_reservations (secret_hash, purpose, origin_session_id, reserved_at) values ('${"r".repeat(43)}', 'password', 'session-1', 1)`,
+  },
+  {
+    constraint: "session_rotation_aliases_purpose_check",
+    name: "session rotation alias purposes",
+    statement: `insert into session_rotation_aliases (token_hash, purpose, state, session_id, valid_from, expires_at) values ('${"a".repeat(43)}', 'csrf', 'rotation_grace', 'session-1', 1, 2)`,
+  },
+  {
+    constraint: "session_rotation_aliases_state_check",
+    name: "session rotation alias states",
+    statement: `insert into session_rotation_aliases (token_hash, purpose, state, session_id, valid_from, expires_at) values ('${"a".repeat(43)}', 'bearer', 'active', 'session-1', 1, 2)`,
   },
   {
     constraint: "connector_configs_type_check",
@@ -240,6 +288,142 @@ describe("database integrity constraints", () => {
       "insert into audit_events (id, event_type, outcome, metadata_json) values ('invalid-audit-shape', 'auth.login', 'success', '[]')",
       "audit_events_metadata_json_check",
     );
+  });
+
+  it("rejects malformed reservation hashes and unsafe alias lifetimes", () => {
+    expectConstraintFailure(
+      "insert into session_secret_reservations (secret_hash, purpose, origin_session_id, reserved_at) values ('short', 'bearer', 'session-1', 1)",
+      "session_secret_reservations_secret_hash_check",
+    );
+    expectConstraintFailure(
+      `insert into session_secret_reservations (secret_hash, purpose, origin_session_id, reserved_at) values ('${"r".repeat(43)}', 'csrf', 'session-1', -1)`,
+      "session_secret_reservations_reserved_at_check",
+    );
+    expectConstraintFailure(
+      `insert into session_secret_reservations (secret_hash, purpose, origin_session_id, reserved_at) values ('${"s".repeat(43)}', 'csrf', 'unsafe/session', 1)`,
+      "session_secret_reservations_origin_session_id_check",
+    );
+    expectConstraintFailure(
+      `insert into session_secret_reservations (secret_hash, purpose, origin_session_id, reserved_at) values ('${"t".repeat(43)}', 'csrf', '${"s".repeat(129)}', 1)`,
+      "session_secret_reservations_origin_session_id_check",
+    );
+    expectConstraintFailure(
+      "insert into session_rotation_aliases (token_hash, session_id, valid_from, expires_at) values ('short', 'session-1', 1, 2)",
+      "session_rotation_aliases_token_hash_check",
+    );
+    expectConstraintFailure(
+      `insert into session_rotation_aliases (token_hash, session_id, valid_from, expires_at) values ('${"a".repeat(43)}', 'session-1', 1, 1)`,
+      "session_rotation_aliases_timestamp_order_check",
+    );
+    expectConstraintFailure(
+      `insert into session_rotation_aliases (token_hash, session_id, valid_from, expires_at) values ('${"a".repeat(43)}', 'session-1', 1, 10002)`,
+      "session_rotation_aliases_timestamp_order_check",
+    );
+  });
+
+  it("binds every rotation alias to a bearer reservation from the same session", () => {
+    const database = openSeededDatabase();
+    try {
+      insertRecoverySession(database, {
+        csrfTokenHash: "c".repeat(43),
+        id: "session-one",
+        tokenHash: "a".repeat(43),
+      });
+      insertRecoverySession(database, {
+        csrfTokenHash: "d".repeat(43),
+        id: "session-two",
+        tokenHash: "b".repeat(43),
+      });
+
+      expect(() =>
+        database.sqlite
+          .prepare(
+            `insert into session_rotation_aliases (
+              token_hash, session_id, valid_from, expires_at
+            ) values (?, 'session-two', 2000, 3000)`,
+          )
+          .run("a".repeat(43)),
+      ).toThrow(/foreign key/i);
+      expect(() =>
+        database.sqlite
+          .prepare(
+            `insert into session_rotation_aliases (
+              token_hash, session_id, valid_from, expires_at
+            ) values (?, 'session-one', 2000, 3000)`,
+          )
+          .run("c".repeat(43)),
+      ).toThrow(/foreign key/i);
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rolls session writes back with one exact reservation collision error", () => {
+    const database = openSeededDatabase();
+    try {
+      insertRecoverySession(database, {
+        csrfTokenHash: "c".repeat(43),
+        id: "session-one",
+        tokenHash: "a".repeat(43),
+      });
+      database.sqlite.exec(`
+        insert into session_secret_reservations (
+          secret_hash, purpose, origin_session_id, reserved_at
+        ) values
+          ('${"x".repeat(43)}', 'csrf', 'retired-session', 0),
+          ('${"y".repeat(43)}', 'bearer', 'retired-session', 0),
+          ('${"z".repeat(43)}', 'csrf', 'retired-session', 0);
+      `);
+
+      expect(() =>
+        insertRecoverySession(database, {
+          csrfTokenHash: "z".repeat(43),
+          id: "session-two",
+          tokenHash: "b".repeat(43),
+        }),
+      ).toThrow(/^session_secret_reservation_collision$/);
+      expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 1,
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from session_secret_reservations where secret_hash = ?",
+          )
+          .get("b".repeat(43)),
+      ).toEqual({ count: 0 });
+
+      expect(() =>
+        database.sqlite
+          .prepare(
+            `update sessions
+            set token_hash = ?, last_rotated_at = 2000, last_seen_at = 2000
+            where id = 'session-one'`,
+          )
+          .run("x".repeat(43)),
+      ).toThrow(/^session_secret_reservation_collision$/);
+      expect(() =>
+        database.sqlite
+          .prepare("update sessions set csrf_token_hash = ? where id = 'session-one'")
+          .run("y".repeat(43)),
+      ).toThrow(/^session_secret_reservation_collision$/);
+
+      expect(
+        database.sqlite
+          .prepare(
+            `select token_hash as tokenHash, csrf_token_hash as csrfTokenHash
+            from sessions where id = 'session-one'`,
+          )
+          .get(),
+      ).toEqual({ csrfTokenHash: "c".repeat(43), tokenHash: "a".repeat(43) });
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_rotation_aliases").get(),
+      ).toEqual({ count: 0 });
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
   });
 
   it("binds OIDC client secrets to the configured token endpoint authentication method", () => {

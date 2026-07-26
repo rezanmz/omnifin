@@ -89,24 +89,26 @@ export class RecoveryAccessService {
       return null;
     }
 
-    return this.#database.sqlite.transaction(() => {
-      const session = this.#sessionService.createSession({
-        attribution: { authMethod: "recovery" },
-        ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
-        ...(context.requestId ? { requestId: context.requestId } : {}),
-        ...(context.userAgent ? { userAgent: context.userAgent } : {}),
-      });
-
-      if (input.currentSessionToken !== undefined) {
-        this.#sessionService.revokeSession(input.currentSessionToken, {
+    return this.#database.sqlite
+      .transaction(() => {
+        const session = this.#sessionService.createSession({
+          attribution: { authMethod: "recovery" },
           ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
           ...(context.requestId ? { requestId: context.requestId } : {}),
+          ...(context.userAgent ? { userAgent: context.userAgent } : {}),
         });
-      }
 
-      this.#recordAttempt("success", context, session.principal.sessionId);
-      return session;
-    })();
+        if (input.currentSessionToken !== undefined) {
+          this.#sessionService.revokeSession(input.currentSessionToken, {
+            ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
+            ...(context.requestId ? { requestId: context.requestId } : {}),
+          });
+        }
+
+        this.#recordAttempt("success", context, session.principal.sessionId);
+        return session;
+      })
+      .immediate();
   }
 
   public recordDeniedAttempt(

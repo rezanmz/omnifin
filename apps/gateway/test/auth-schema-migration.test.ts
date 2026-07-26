@@ -14,6 +14,55 @@ function applyMigration(database: Database.Database, filename: string) {
   }
 }
 
+function applyPreReservationMigrations(database: Database.Database) {
+  applyMigration(database, "0000_foundation.sql");
+  applyMigration(database, "0001_auth_security_foundation.sql");
+  database.transaction(() => applyMigration(database, "0002_oidc_runtime_security.sql"))();
+}
+
+function insertPreReservationSession(
+  database: Database.Database,
+  input: {
+    createdAt: number;
+    csrfTokenHash: string;
+    id: string;
+    lastRotatedAt: number;
+    tokenHash: string;
+  },
+) {
+  database
+    .prepare(
+      `insert into sessions (
+        id,
+        token_hash,
+        auth_method,
+        csrf_token_hash,
+        encrypted_csrf_token,
+        created_at,
+        last_rotated_at,
+        last_seen_at,
+        expires_at,
+        absolute_expires_at
+      ) values (
+        @id,
+        @tokenHash,
+        'recovery',
+        @csrfTokenHash,
+        'v1.fixture-csrf-token',
+        @createdAt,
+        @lastRotatedAt,
+        @lastRotatedAt,
+        @expiresAt,
+        @absoluteExpiresAt
+      )`,
+    )
+    .run({
+      ...input,
+      absoluteExpiresAt: input.lastRotatedAt + 20_000,
+      expiresAt: input.lastRotatedAt + 10_000,
+    });
+}
+
 const sessionTokenHash = "t".repeat(43);
 const csrfTokenHash = "c".repeat(43);
 
@@ -161,6 +210,169 @@ function insertLinkedIdentity(database: ReturnType<typeof openDatabase>) {
 }
 
 describe("authentication schema upgrades", () => {
+  it("backfills every existing bearer and CSRF hash with immutable origin attribution", () => {
+    const database = new Database(":memory:");
+    try {
+      database.pragma("foreign_keys = ON");
+      applyPreReservationMigrations(database);
+      insertPreReservationSession(database, {
+        createdAt: 1_000,
+        csrfTokenHash: "c".repeat(43),
+        id: "session-one",
+        lastRotatedAt: 1_500,
+        tokenHash: "a".repeat(43),
+      });
+      insertPreReservationSession(database, {
+        createdAt: 2_000,
+        csrfTokenHash: "d".repeat(43),
+        id: "session-two",
+        lastRotatedAt: 2_500,
+        tokenHash: "b".repeat(43),
+      });
+
+      database.transaction(() =>
+        applyMigration(database, "0003_session_secret_reservations.sql"),
+      )();
+
+      expect(
+        database
+          .prepare(
+            `select
+              secret_hash as secretHash,
+              purpose,
+              origin_session_id as originSessionId,
+              reserved_at as reservedAt
+            from session_secret_reservations
+            order by origin_session_id, purpose`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          originSessionId: "session-one",
+          purpose: "bearer",
+          reservedAt: 1_500,
+          secretHash: "a".repeat(43),
+        },
+        {
+          originSessionId: "session-one",
+          purpose: "csrf",
+          reservedAt: 1_000,
+          secretHash: "c".repeat(43),
+        },
+        {
+          originSessionId: "session-two",
+          purpose: "bearer",
+          reservedAt: 2_500,
+          secretHash: "b".repeat(43),
+        },
+        {
+          originSessionId: "session-two",
+          purpose: "csrf",
+          reservedAt: 2_000,
+          secretHash: "d".repeat(43),
+        },
+      ]);
+      expect(
+        database.prepare("select count(*) as count from session_rotation_aliases").get(),
+      ).toEqual({ count: 0 });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    {
+      configure: (database: Database.Database) => {
+        insertPreReservationSession(database, {
+          createdAt: 1_000,
+          csrfTokenHash: "c".repeat(43),
+          id: "session-one",
+          lastRotatedAt: 1_000,
+          tokenHash: "a".repeat(43),
+        });
+        insertPreReservationSession(database, {
+          createdAt: 2_000,
+          csrfTokenHash: "a".repeat(43),
+          id: "session-two",
+          lastRotatedAt: 2_000,
+          tokenHash: "b".repeat(43),
+        });
+      },
+      name: "cross-purpose reuse",
+    },
+    {
+      configure: (database: Database.Database) => {
+        insertPreReservationSession(database, {
+          createdAt: 1_000,
+          csrfTokenHash: "c".repeat(43),
+          id: "session-one",
+          lastRotatedAt: 1_000,
+          tokenHash: "a".repeat(43),
+        });
+        insertPreReservationSession(database, {
+          createdAt: 2_000,
+          csrfTokenHash: "c".repeat(43),
+          id: "session-two",
+          lastRotatedAt: 2_000,
+          tokenHash: "b".repeat(43),
+        });
+      },
+      name: "duplicate CSRF hashes",
+    },
+    {
+      configure: (database: Database.Database) => {
+        database.exec("drop index sessions_token_hash_unique");
+        insertPreReservationSession(database, {
+          createdAt: 1_000,
+          csrfTokenHash: "c".repeat(43),
+          id: "session-one",
+          lastRotatedAt: 1_000,
+          tokenHash: "a".repeat(43),
+        });
+        insertPreReservationSession(database, {
+          createdAt: 2_000,
+          csrfTokenHash: "d".repeat(43),
+          id: "session-two",
+          lastRotatedAt: 2_000,
+          tokenHash: "a".repeat(43),
+        });
+      },
+      name: "duplicate bearer hashes in permissive legacy schemas",
+    },
+  ])("rolls the whole migration back for $name", ({ configure }) => {
+    const database = new Database(":memory:");
+    try {
+      database.pragma("foreign_keys = ON");
+      applyPreReservationMigrations(database);
+      configure(database);
+
+      expect(() =>
+        database.transaction(() =>
+          applyMigration(database, "0003_session_secret_reservations.sql"),
+        )(),
+      ).toThrow(/UNIQUE constraint failed: session_secret_reservations\.secret_hash/);
+
+      expect(
+        database
+          .prepare(
+            `select name
+            from sqlite_master
+            where type = 'table'
+              and name in ('session_secret_reservations', 'session_rotation_aliases')
+            order by name`,
+          )
+          .all(),
+      ).toEqual([]);
+      expect(database.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 2,
+      });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("invalidates legacy credentials while preserving identity and audit attribution", () => {
     const database = new Database(":memory:");
     try {
@@ -662,6 +874,8 @@ describe("authentication schema invariants", () => {
   it("loads the schema idempotently with connector-scoped links and logout replay receipts", () => {
     expect(authenticationSchema.connectorConfigs).toBeDefined();
     expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
+    expect(authenticationSchema.sessionRotationAliases).toBeDefined();
+    expect(authenticationSchema.sessionSecretReservations).toBeDefined();
     expect(authenticationSchema.serviceIdentityLinks).toBeDefined();
 
     const database = openDatabase(":memory:");
@@ -675,9 +889,11 @@ describe("authentication schema invariants", () => {
       expect(names).not.toContain("quick_connect_transactions");
       expect(names).not.toContain("logout_transactions");
       expect(names).toContain("oidc_logout_receipts");
+      expect(names).toContain("session_rotation_aliases");
+      expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 3 });
+      ).toEqual({ count: 4 });
       expect(
         database.sqlite
           .prepare(
@@ -687,8 +903,15 @@ describe("authentication schema invariants", () => {
               and name in (
                 'oidc_providers_client_secret_insert_check',
                 'oidc_providers_client_secret_update_check',
+                'session_rotation_aliases_update_immutable',
+                'session_secret_reservations_delete_immutable',
+                'session_secret_reservations_update_immutable',
+                'sessions_rotation_aliases_revoke',
                 'sessions_id_token_hint_insert_check',
-                'sessions_id_token_hint_update_check'
+                'sessions_id_token_hint_update_check',
+                'sessions_secret_reservations_bearer_update',
+                'sessions_secret_reservations_csrf_update',
+                'sessions_secret_reservations_insert'
               )
             order by name`,
           )
@@ -696,8 +919,15 @@ describe("authentication schema invariants", () => {
       ).toEqual([
         { name: "oidc_providers_client_secret_insert_check" },
         { name: "oidc_providers_client_secret_update_check" },
+        { name: "session_rotation_aliases_update_immutable" },
+        { name: "session_secret_reservations_delete_immutable" },
+        { name: "session_secret_reservations_update_immutable" },
         { name: "sessions_id_token_hint_insert_check" },
         { name: "sessions_id_token_hint_update_check" },
+        { name: "sessions_rotation_aliases_revoke" },
+        { name: "sessions_secret_reservations_bearer_update" },
+        { name: "sessions_secret_reservations_csrf_update" },
+        { name: "sessions_secret_reservations_insert" },
       ]);
 
       database.sqlite.exec(`
@@ -821,6 +1051,160 @@ describe("authentication schema invariants", () => {
     }
   });
 
+  it("durably reserves session secrets and maintains exact, capped rotation aliases", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      insertSession(database, {
+        absoluteExpiresAt: 40_000,
+        authMethod: "recovery",
+        createdAt: 1_000,
+        csrfTokenHash: "c".repeat(43),
+        expiresAt: 30_000,
+        id: "session-reserved",
+        lastRotatedAt: 1_000,
+        lastSeenAt: 1_000,
+        serviceIdentityLinkId: null,
+        tokenHash: "a".repeat(43),
+        userId: null,
+      });
+
+      database.sqlite.exec(`
+        update sessions
+        set
+          token_hash = '${"b".repeat(43)}',
+          last_rotated_at = 5000,
+          last_seen_at = 5000
+        where id = 'session-reserved';
+
+        update sessions
+        set
+          token_hash = '${"e".repeat(43)}',
+          last_rotated_at = 25000,
+          last_seen_at = 25000
+        where id = 'session-reserved';
+
+        update sessions
+        set
+          csrf_token_hash = '${"d".repeat(43)}',
+          last_seen_at = 26000
+        where id = 'session-reserved';
+      `);
+
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+              token_hash as tokenHash,
+              purpose,
+              state,
+              session_id as sessionId,
+              valid_from as validFrom,
+              expires_at as expiresAt
+            from session_rotation_aliases
+            order by valid_from`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          expiresAt: 15_000,
+          purpose: "bearer",
+          sessionId: "session-reserved",
+          state: "rotation_grace",
+          tokenHash: "a".repeat(43),
+          validFrom: 5_000,
+        },
+        {
+          expiresAt: 30_000,
+          purpose: "bearer",
+          sessionId: "session-reserved",
+          state: "rotation_grace",
+          tokenHash: "b".repeat(43),
+          validFrom: 25_000,
+        },
+      ]);
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+              secret_hash as secretHash,
+              purpose,
+              origin_session_id as originSessionId,
+              reserved_at as reservedAt
+            from session_secret_reservations
+            order by reserved_at, purpose, secret_hash`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          originSessionId: "session-reserved",
+          purpose: "bearer",
+          reservedAt: 1_000,
+          secretHash: "a".repeat(43),
+        },
+        {
+          originSessionId: "session-reserved",
+          purpose: "csrf",
+          reservedAt: 1_000,
+          secretHash: "c".repeat(43),
+        },
+        {
+          originSessionId: "session-reserved",
+          purpose: "bearer",
+          reservedAt: 5_000,
+          secretHash: "b".repeat(43),
+        },
+        {
+          originSessionId: "session-reserved",
+          purpose: "bearer",
+          reservedAt: 25_000,
+          secretHash: "e".repeat(43),
+        },
+        {
+          originSessionId: "session-reserved",
+          purpose: "csrf",
+          reservedAt: 26_000,
+          secretHash: "d".repeat(43),
+        },
+      ]);
+
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update session_secret_reservations set reserved_at = 9999 where secret_hash = ?",
+          )
+          .run("a".repeat(43)),
+      ).toThrow(/session_secret_reservations_immutable/);
+      expect(() =>
+        database.sqlite
+          .prepare("delete from session_secret_reservations where secret_hash = ?")
+          .run("a".repeat(43)),
+      ).toThrow(/session_secret_reservations_immutable/);
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update session_rotation_aliases set expires_at = expires_at - 1 where token_hash = ?",
+          )
+          .run("a".repeat(43)),
+      ).toThrow(/session_rotation_aliases_immutable/);
+
+      database.sqlite.exec(`
+        update sessions set revoked_at = 27000 where id = 'session-reserved';
+      `);
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_rotation_aliases").get(),
+      ).toEqual({ count: 0 });
+
+      database.sqlite.exec("delete from sessions where id = 'session-reserved'");
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
+      ).toEqual({ count: 5 });
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("requires a direct Jellyfin session to identify the matching user's persistent link", () => {
     const database = openDatabase(":memory:");
     try {
@@ -839,6 +1223,7 @@ describe("authentication schema invariants", () => {
 
       expect(() =>
         insertSession(database, {
+          csrfTokenHash: "n".repeat(43),
           id: "session-missing-link",
           serviceIdentityLinkId: null,
           tokenHash: "m".repeat(43),
@@ -846,6 +1231,7 @@ describe("authentication schema invariants", () => {
       ).toThrow(/sessions_auth_attribution_check/);
       expect(() =>
         insertSession(database, {
+          csrfTokenHash: "y".repeat(43),
           id: "session-mismatched-link",
           tokenHash: "x".repeat(43),
           userId: "user-2",
@@ -854,6 +1240,7 @@ describe("authentication schema invariants", () => {
       expect(() =>
         insertSession(database, {
           authMethod: "recovery",
+          csrfTokenHash: "s".repeat(43),
           id: "session-attributed-recovery",
           serviceIdentityLinkId: null,
           tokenHash: "r".repeat(43),

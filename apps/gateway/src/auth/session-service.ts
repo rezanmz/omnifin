@@ -16,8 +16,7 @@ const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_RECOVERY_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_TOKEN_GENERATION_ATTEMPTS = 8;
-const ROTATION_GRACE_MS = 10_000;
-const MAX_ROTATION_GRACE_ENTRIES = 10_000;
+const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
 
 type SessionAuthMethod = "jellyfin" | "oidc" | "recovery";
@@ -78,11 +77,6 @@ export interface SessionServiceDependencies {
 export interface ValidatedSession {
   readonly sessionId: string;
   readonly [VALIDATED_SESSION_BRAND]: true;
-}
-
-interface RotationGraceEntry {
-  expiresAt: number;
-  sessionId: string;
 }
 
 interface SessionJoinedRow {
@@ -284,7 +278,6 @@ export class SessionService {
   private readonly inactivityTtlMs: number;
   private readonly privacyKey: Buffer;
   private readonly recoveryAbsoluteTtlMs: number;
-  private readonly rotationGrace = new Map<string, RotationGraceEntry>();
   private readonly rotationIntervalMs: number;
 
   public constructor(
@@ -312,10 +305,18 @@ export class SessionService {
   }
 
   public createSession(input: CreateSessionInput): IssuedSession {
-    const now = this.currentTime();
+    return this.withImmediateTransaction(() =>
+      this.issueSessionInCurrentTransaction(input, new Set(), this.currentTime()),
+    );
+  }
+
+  private issueSessionInCurrentTransaction(
+    input: CreateSessionInput,
+    disallowedTokenHashes: ReadonlySet<string>,
+    now: Date,
+  ): IssuedSession {
+    this.deleteExpiredRotationAliases(now);
     const sessionId = assertIdentifier(this.createId(), "Session identifier");
-    const sessionToken = this.nextToken();
-    const csrfToken = this.nextToken(new Set([sessionToken]));
     const attribution = this.validateAttribution(input.attribution);
     const ipAddress = optionalBoundedText(input.ipAddress, 256, "IP address");
     const requestId = optionalBoundedText(input.requestId, 128, "Request identifier");
@@ -326,44 +327,57 @@ export class SessionService {
     const inactivityExpiresAt = new Date(
       Math.min(now.getTime() + this.inactivityTtlMs, absoluteExpiresAt.getTime()),
     );
-    const tokenHash = hashToken(sessionToken);
-    const csrfTokenHash = hashToken(csrfToken);
-    const encryptedCsrfToken = this.cipher.encrypt(csrfToken, csrfContext(sessionId));
+    for (
+      let reservationAttempt = 0;
+      reservationAttempt < MAX_TOKEN_GENERATION_ATTEMPTS;
+      reservationAttempt += 1
+    ) {
+      const sessionToken = this.nextUnreservedToken(disallowedTokenHashes);
+      const tokenHash = hashToken(sessionToken);
+      const csrfDisallowedHashes = new Set(disallowedTokenHashes);
+      csrfDisallowedHashes.add(tokenHash);
+      const csrfToken = this.nextUnreservedToken(csrfDisallowedHashes);
+      const csrfTokenHash = hashToken(csrfToken);
+      const encryptedCsrfToken = this.cipher.encrypt(csrfToken, csrfContext(sessionId));
 
-    return this.database.sqlite.transaction(() => {
-      this.database.db
-        .insert(sessions)
-        .values({
-          absoluteExpiresAt,
-          authMethod: attribution.authMethod,
-          createdAt: now,
-          csrfTokenHash,
-          encryptedCsrfToken,
-          encryptedIdTokenHint:
-            attribution.authMethod === "oidc" && attribution.idTokenHint
-              ? this.cipher.encrypt(attribution.idTokenHint, idTokenHintContext(sessionId))
-              : null,
-          expiresAt: inactivityExpiresAt,
-          externalIdentityId:
-            attribution.authMethod === "oidc" ? attribution.externalIdentityId : null,
-          id: sessionId,
-          ipHash: ipAddress ? privacyHash("ip_address", ipAddress, this.privacyKey) : null,
-          lastRotatedAt: now,
-          lastSeenAt: now,
-          oidcProviderId: attribution.authMethod === "oidc" ? attribution.oidcProviderId : null,
-          oidcSessionIdHash:
-            attribution.authMethod === "oidc" && attribution.oidcSessionId
-              ? privacyHash("oidc_session_id", attribution.oidcSessionId, this.privacyKey)
-              : null,
-          serviceIdentityLinkId:
-            attribution.authMethod === "recovery"
-              ? null
-              : (attribution.serviceIdentityLinkId ?? null),
-          tokenHash,
-          userAgentHash: userAgent ? privacyHash("user_agent", userAgent, this.privacyKey) : null,
-          userId: attribution.authMethod === "recovery" ? null : attribution.userId,
-        })
-        .run();
+      try {
+        this.database.db
+          .insert(sessions)
+          .values({
+            absoluteExpiresAt,
+            authMethod: attribution.authMethod,
+            createdAt: now,
+            csrfTokenHash,
+            encryptedCsrfToken,
+            encryptedIdTokenHint:
+              attribution.authMethod === "oidc" && attribution.idTokenHint
+                ? this.cipher.encrypt(attribution.idTokenHint, idTokenHintContext(sessionId))
+                : null,
+            expiresAt: inactivityExpiresAt,
+            externalIdentityId:
+              attribution.authMethod === "oidc" ? attribution.externalIdentityId : null,
+            id: sessionId,
+            ipHash: ipAddress ? privacyHash("ip_address", ipAddress, this.privacyKey) : null,
+            lastRotatedAt: now,
+            lastSeenAt: now,
+            oidcProviderId: attribution.authMethod === "oidc" ? attribution.oidcProviderId : null,
+            oidcSessionIdHash:
+              attribution.authMethod === "oidc" && attribution.oidcSessionId
+                ? privacyHash("oidc_session_id", attribution.oidcSessionId, this.privacyKey)
+                : null,
+            serviceIdentityLinkId:
+              attribution.authMethod === "recovery"
+                ? null
+                : (attribution.serviceIdentityLinkId ?? null),
+            tokenHash,
+            userAgentHash: userAgent ? privacyHash("user_agent", userAgent, this.privacyKey) : null,
+            userId: attribution.authMethod === "recovery" ? null : attribution.userId,
+          })
+          .run();
+      } catch (error) {
+        if (this.isSecretReservationCollision(error)) continue;
+        throw error;
+      }
 
       const row = this.loadJoinedSession(sessionId, tokenHash);
       const principalRecord = row && mapPrincipalRecord(row);
@@ -396,67 +410,164 @@ export class SessionService {
         principal,
         sessionToken,
       };
-    })();
+    }
+    throw new Error("A unique secure session token could not be generated.");
+  }
+
+  public replaceSession(currentSessionToken: unknown, input: CreateSessionInput): IssuedSession {
+    const disallowedTokenHashes = this.validSessionToken(currentSessionToken)
+      ? new Set([hashToken(currentSessionToken)])
+      : new Set<string>();
+    return this.withImmediateTransaction(() => {
+      const now = this.currentTime();
+      const currentSession = this.loadReplaceableSession(currentSessionToken, now);
+      const issued = this.issueSessionInCurrentTransaction(input, disallowedTokenHashes, now);
+      if (!currentSession) return issued;
+
+      const revoked = this.database.sqlite
+        .prepare(
+          `update sessions
+           set revoked_at = @now
+           where id = @sessionId
+             and revoked_at is null
+             and created_at <= @now
+             and last_rotated_at <= @now
+             and last_seen_at <= @now
+             and expires_at > @now
+             and absolute_expires_at > @now
+           returning
+             id as sessionId,
+             user_id as userId,
+             auth_method as authMethod,
+             created_at as createdAt`,
+        )
+        .get({ now: now.getTime(), sessionId: currentSession.sessionId }) as
+        RevokedSessionRow | undefined;
+      if (!revoked) throw new Error("Current session could not be replaced.");
+
+      this.insertAuditEvent(revoked, {
+        context: {
+          ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
+          ...(input.requestId ? { requestId: input.requestId } : {}),
+        },
+        eventType: "auth.session.replaced",
+        metadata: {
+          authenticationMethod: input.attribution.authMethod,
+          reason: "reauthentication",
+          replacementSessionId: issued.principal.sessionId,
+        },
+        occurredAt: now,
+        outcome: "success",
+        targetId: revoked.sessionId,
+      });
+      return issued;
+    });
   }
 
   public resolveAndRefresh(sessionToken: unknown): ResolvedSession | null {
     if (!this.validSessionToken(sessionToken)) return null;
-    const now = this.currentTime();
     const previousTokenHash = hashToken(sessionToken);
-    const rotatedSessionToken = this.nextToken(new Set([sessionToken]));
-    const rotatedTokenHash = hashToken(rotatedSessionToken);
-    const refreshed = this.database.sqlite
-      .prepare(
-        `update sessions
-         set
-           token_hash = case
-             when last_rotated_at <= @rotationCutoff then @rotatedTokenHash
-             else token_hash
-           end,
-           last_rotated_at = case
-             when last_rotated_at <= @rotationCutoff then @now
-             else last_rotated_at
-           end,
-           last_seen_at = @now,
-           expires_at = min(absolute_expires_at, @inactivityTarget)
-         where token_hash = @previousTokenHash
-           and revoked_at is null
-           and created_at <= @now
-           and last_rotated_at <= @now
-           and last_seen_at <= @now
-           and expires_at > @now
-           and absolute_expires_at > @now
-           and (
-             auth_method <> 'recovery'
-             or absolute_expires_at - created_at <= @recoveryTtlLimit
-           )
-         returning id as sessionId, token_hash as tokenHash`,
-      )
-      .get({
-        inactivityTarget: now.getTime() + this.inactivityTtlMs,
-        now: now.getTime(),
-        previousTokenHash,
-        recoveryTtlLimit: this.recoveryAbsoluteTtlMs,
-        rotatedTokenHash,
-        rotationCutoff: now.getTime() - this.rotationIntervalMs,
-      }) as RefreshedSessionRow | undefined;
-    if (!refreshed) {
-      const graceRow = this.loadRotationGraceSession(previousTokenHash, now);
-      if (graceRow) return this.resolveLoadedSession(graceRow, now);
-      const rejected = this.loadJoinedSessionByTokenHash(previousTokenHash);
-      if (rejected && !this.recoveryLifetimeIsValid(rejected)) {
-        this.invalidateSession(rejected, "recovery_ttl_invalid", now);
+    return this.withImmediateTransaction(() => {
+      const now = this.currentTime();
+      this.deleteExpiredRotationAliases(now);
+      const current = this.loadJoinedSessionByTokenHash(previousTokenHash);
+      if (!current) {
+        const graceRow = this.loadRotationGraceSession(previousTokenHash, now);
+        return graceRow ? this.resolveLoadedSession(graceRow, now) : null;
       }
-      return null;
-    }
+      if (!this.sessionLifecycleIsActive(current, now)) {
+        if (!this.recoveryLifetimeIsValid(current)) {
+          this.invalidateSession(current, "recovery_ttl_invalid", now);
+        }
+        return null;
+      }
+      if (current.lastRotatedAt <= now.getTime() - this.rotationIntervalMs) {
+        return this.rotateAndResolveSession(current, previousTokenHash, now);
+      }
 
-    const row = this.loadJoinedSession(refreshed.sessionId, refreshed.tokenHash);
-    if (!row) return null;
-    const wasRotated = refreshed.tokenHash === rotatedTokenHash;
-    if (wasRotated) {
-      this.recordRotationGrace(previousTokenHash, refreshed.sessionId, now);
+      const refreshed = this.database.sqlite
+        .prepare(
+          `update sessions
+           set
+             last_seen_at = @now,
+             expires_at = min(absolute_expires_at, @inactivityTarget)
+           where id = @sessionId
+             and token_hash = @previousTokenHash
+             and revoked_at is null
+             and created_at <= @now
+             and last_rotated_at <= @now
+             and last_seen_at <= @now
+             and expires_at > @now
+             and absolute_expires_at > @now
+             and (
+               auth_method <> 'recovery'
+               or absolute_expires_at - created_at <= @recoveryTtlLimit
+             )
+           returning id as sessionId, token_hash as tokenHash`,
+        )
+        .get({
+          inactivityTarget: now.getTime() + this.inactivityTtlMs,
+          now: now.getTime(),
+          previousTokenHash,
+          recoveryTtlLimit: this.recoveryAbsoluteTtlMs,
+          sessionId: current.sessionId,
+        }) as RefreshedSessionRow | undefined;
+      if (!refreshed) return null;
+      const row = this.loadJoinedSession(refreshed.sessionId, refreshed.tokenHash);
+      return row ? this.resolveLoadedSession(row, now) : null;
+    });
+  }
+
+  private rotateAndResolveSession(current: SessionJoinedRow, previousTokenHash: string, now: Date) {
+    for (
+      let reservationAttempt = 0;
+      reservationAttempt < MAX_TOKEN_GENERATION_ATTEMPTS;
+      reservationAttempt += 1
+    ) {
+      const rotatedSessionToken = this.nextUnreservedToken(new Set([previousTokenHash]));
+      const rotatedTokenHash = hashToken(rotatedSessionToken);
+      let refreshed: RefreshedSessionRow | undefined;
+      try {
+        refreshed = this.database.sqlite
+          .prepare(
+            `update sessions
+             set
+               token_hash = @rotatedTokenHash,
+               last_rotated_at = @now,
+               last_seen_at = @now,
+               expires_at = min(absolute_expires_at, @inactivityTarget)
+             where id = @sessionId
+               and token_hash = @previousTokenHash
+               and revoked_at is null
+               and created_at <= @now
+               and last_rotated_at <= @rotationCutoff
+               and last_seen_at <= @now
+               and expires_at > @now
+               and absolute_expires_at > @now
+               and (
+                 auth_method <> 'recovery'
+                 or absolute_expires_at - created_at <= @recoveryTtlLimit
+               )
+             returning id as sessionId, token_hash as tokenHash`,
+          )
+          .get({
+            inactivityTarget: now.getTime() + this.inactivityTtlMs,
+            now: now.getTime(),
+            previousTokenHash,
+            recoveryTtlLimit: this.recoveryAbsoluteTtlMs,
+            rotatedTokenHash,
+            rotationCutoff: now.getTime() - this.rotationIntervalMs,
+            sessionId: current.sessionId,
+          }) as RefreshedSessionRow | undefined;
+      } catch (error) {
+        if (this.isSecretReservationCollision(error)) continue;
+        throw error;
+      }
+      if (!refreshed) return null;
+      const row = this.loadJoinedSession(refreshed.sessionId, refreshed.tokenHash);
+      return row ? this.resolveLoadedSession(row, now, { rotatedSessionToken }) : null;
     }
-    return this.resolveLoadedSession(row, now, wasRotated ? { rotatedSessionToken } : undefined);
+    throw new Error("A unique secure session token could not be generated.");
   }
 
   public validateSessionCsrf(
@@ -529,12 +640,15 @@ export class SessionService {
 
   public revokeSession(sessionToken: unknown, context: SessionRequestContext = {}) {
     if (!this.validSessionToken(sessionToken)) return false;
-    const now = this.currentTime();
     const tokenHash = hashToken(sessionToken);
-    const row =
-      this.loadJoinedSessionByTokenHash(tokenHash) ?? this.loadRotationGraceSession(tokenHash, now);
-    if (!row) return false;
-    return this.revokeSessionById(row.sessionId, context, now);
+    return this.withImmediateTransaction(() => {
+      const now = this.currentTime();
+      this.deleteExpiredRotationAliases(now);
+      const row =
+        this.loadJoinedSessionByTokenHash(tokenHash) ??
+        this.loadRotationGraceSession(tokenHash, now);
+      return row ? this.revokeSessionById(row.sessionId, context, now) : false;
+    });
   }
 
   public shouldClearSessionCookie(sessionToken: unknown) {
@@ -547,8 +661,8 @@ export class SessionService {
     context: SessionRequestContext,
     operationTime?: Date,
   ) {
-    const now = operationTime ?? this.currentTime();
-    return this.database.sqlite.transaction(() => {
+    return this.withImmediateTransaction(() => {
+      const now = operationTime ?? this.currentTime();
       const revoked = this.database.sqlite
         .prepare(
           `update sessions
@@ -564,7 +678,6 @@ export class SessionService {
         )
         .get({ now: now.getTime(), sessionId }) as RevokedSessionRow | undefined;
       if (!revoked) return false;
-      this.removeRotationGraceForSession(revoked.sessionId);
       this.insertAuditEvent(revoked, {
         context,
         eventType: "auth.session.logout",
@@ -574,7 +687,7 @@ export class SessionService {
         targetId: revoked.sessionId,
       });
       return true;
-    })();
+    });
   }
 
   private auditSessionEvent(
@@ -722,7 +835,7 @@ export class SessionService {
     now: Date,
     context: SessionRequestContext = {},
   ) {
-    this.database.sqlite.transaction(() => {
+    this.withImmediateTransaction(() => {
       const result = this.database.sqlite
         .prepare(
           `update sessions
@@ -731,7 +844,6 @@ export class SessionService {
         )
         .run({ now: Math.max(now.getTime(), row.createdAt), sessionId: row.sessionId });
       if (result.changes !== 1) return;
-      this.removeRotationGraceForSession(row.sessionId);
       this.auditSessionEvent(row, {
         context,
         eventType: "auth.session.invalidated",
@@ -740,7 +852,7 @@ export class SessionService {
         outcome: "failure",
         targetId: row.sessionId,
       });
-    })();
+    });
   }
 
   private loadJoinedSession(sessionId: string, tokenHash: string) {
@@ -761,11 +873,54 @@ export class SessionService {
       .get({ sessionId }) as SessionJoinedRow | undefined;
   }
 
+  private loadReplaceableSession(sessionToken: unknown, now: Date) {
+    if (!this.validSessionToken(sessionToken)) return undefined;
+    const tokenHash = hashToken(sessionToken);
+    const row =
+      this.loadJoinedSessionByTokenHash(tokenHash) ?? this.loadRotationGraceSession(tokenHash, now);
+    if (!row) return undefined;
+    if (
+      row.revokedAt !== null ||
+      row.createdAt > now.getTime() ||
+      row.lastRotatedAt > now.getTime() ||
+      row.lastSeenAt > now.getTime() ||
+      row.expiresAt <= now.getTime() ||
+      row.absoluteExpiresAt <= now.getTime() ||
+      !this.recoveryLifetimeIsValid(row)
+    ) {
+      return undefined;
+    }
+    const principalRecord = mapPrincipalRecord(row);
+    if (!principalRecord || !buildSessionPrincipal(principalRecord, now)) return undefined;
+
+    try {
+      const csrfToken = this.cipher.decrypt(row.encryptedCsrfToken, csrfContext(row.sessionId));
+      if (
+        !csrfTokenSchema.safeParse(csrfToken).success ||
+        !constantTimeTextEqual(hashToken(csrfToken), row.csrfTokenHash)
+      ) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+    return row;
+  }
+
   private loadRotationGraceSession(tokenHash: string, now: Date) {
-    this.pruneRotationGrace(now.getTime());
-    const grace = this.rotationGrace.get(tokenHash);
-    if (!grace || grace.expiresAt <= now.getTime()) return undefined;
-    return this.loadJoinedSessionById(grace.sessionId);
+    const grace = this.database.sqlite
+      .prepare(
+        `select session_id as sessionId
+         from session_rotation_aliases
+         where token_hash = @tokenHash
+           and purpose = 'bearer'
+           and state = 'rotation_grace'
+           and valid_from <= @now
+           and expires_at > @now
+         limit 1`,
+      )
+      .get({ now: now.getTime(), tokenHash }) as { sessionId: string } | undefined;
+    return grace ? this.loadJoinedSessionById(grace.sessionId) : undefined;
   }
 
   private joinedSessionQuery(predicate: string) {
@@ -821,37 +976,52 @@ export class SessionService {
     limit 1`;
   }
 
-  private nextToken(disallowed = new Set<string>()) {
+  private nextUnreservedToken(disallowedHashes: ReadonlySet<string>) {
     for (let attempt = 0; attempt < MAX_TOKEN_GENERATION_ATTEMPTS; attempt += 1) {
       const candidate = this.createToken();
-      if (SESSION_TOKEN_PATTERN.test(candidate) && !disallowed.has(candidate)) return candidate;
+      if (!SESSION_TOKEN_PATTERN.test(candidate)) continue;
+      const candidateHash = hashToken(candidate);
+      if (disallowedHashes.has(candidateHash)) continue;
+      const reserved = this.database.sqlite
+        .prepare(
+          `select 1
+           from session_secret_reservations
+           where secret_hash = @candidateHash
+           limit 1`,
+        )
+        .get({ candidateHash });
+      if (reserved) continue;
+      return candidate;
     }
     throw new Error("A unique secure session token could not be generated.");
   }
 
-  private pruneRotationGrace(now: number) {
-    for (const [tokenHash, entry] of this.rotationGrace) {
-      if (entry.expiresAt <= now) this.rotationGrace.delete(tokenHash);
-    }
+  private deleteExpiredRotationAliases(now: Date) {
+    this.database.sqlite
+      .prepare("delete from session_rotation_aliases where expires_at <= @now")
+      .run({ now: now.getTime() });
   }
 
-  private recordRotationGrace(tokenHash: string, sessionId: string, now: Date) {
-    this.pruneRotationGrace(now.getTime());
-    while (this.rotationGrace.size >= MAX_ROTATION_GRACE_ENTRIES) {
-      const oldest = this.rotationGrace.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.rotationGrace.delete(oldest);
-    }
-    this.rotationGrace.set(tokenHash, {
-      expiresAt: now.getTime() + ROTATION_GRACE_MS,
-      sessionId,
-    });
+  private sessionLifecycleIsActive(row: SessionJoinedRow, now: Date) {
+    const operationTime = now.getTime();
+    return (
+      row.revokedAt === null &&
+      row.createdAt <= operationTime &&
+      row.lastRotatedAt <= operationTime &&
+      row.lastSeenAt <= operationTime &&
+      row.expiresAt > operationTime &&
+      row.absoluteExpiresAt > operationTime &&
+      this.recoveryLifetimeIsValid(row)
+    );
   }
 
-  private removeRotationGraceForSession(sessionId: string) {
-    for (const [tokenHash, entry] of this.rotationGrace) {
-      if (entry.sessionId === sessionId) this.rotationGrace.delete(tokenHash);
-    }
+  private isSecretReservationCollision(error: unknown) {
+    return error instanceof Error && error.message === SECRET_RESERVATION_COLLISION;
+  }
+
+  private withImmediateTransaction<T>(operation: () => T): T {
+    const transaction = this.database.sqlite.transaction(operation);
+    return this.database.sqlite.inTransaction ? transaction() : transaction.immediate();
   }
 
   private resolveLoadedSession(

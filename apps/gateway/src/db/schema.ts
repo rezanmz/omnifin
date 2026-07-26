@@ -518,6 +518,82 @@ export const sessions = sqliteTable(
   ],
 );
 
+export const sessionSecretReservations = sqliteTable(
+  "session_secret_reservations",
+  {
+    secretHash: text("secret_hash").primaryKey(),
+    purpose: text("purpose", { enum: ["bearer", "csrf"] }).notNull(),
+    originSessionId: text("origin_session_id").notNull(),
+    reservedAt: integer("reserved_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_secret_reservations_attribution_unique").on(
+      table.secretHash,
+      table.purpose,
+      table.originSessionId,
+    ),
+    index("session_secret_reservations_origin_idx").on(table.originSessionId, table.purpose),
+    check(
+      "session_secret_reservations_secret_hash_check",
+      sql`length(${table.secretHash}) = 43
+        and ${table.secretHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "session_secret_reservations_origin_session_id_check",
+      sql`length(${table.originSessionId}) between 1 and 128
+        and ${table.originSessionId} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("session_secret_reservations_purpose_check", sql`${table.purpose} in ('bearer', 'csrf')`),
+    check("session_secret_reservations_reserved_at_check", sql`${table.reservedAt} >= 0`),
+  ],
+);
+
+export const sessionRotationAliases = sqliteTable(
+  "session_rotation_aliases",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    purpose: text("purpose", { enum: ["bearer"] })
+      .notNull()
+      .default("bearer"),
+    state: text("state", { enum: ["rotation_grace"] })
+      .notNull()
+      .default("rotation_grace"),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    validFrom: integer("valid_from", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("session_rotation_aliases_session_idx").on(table.sessionId),
+    index("session_rotation_aliases_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.tokenHash, table.purpose, table.sessionId],
+      foreignColumns: [
+        sessionSecretReservations.secretHash,
+        sessionSecretReservations.purpose,
+        sessionSecretReservations.originSessionId,
+      ],
+      name: "session_rotation_aliases_reservation_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "session_rotation_aliases_token_hash_check",
+      sql`length(${table.tokenHash}) = 43
+        and ${table.tokenHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("session_rotation_aliases_purpose_check", sql`${table.purpose} = 'bearer'`),
+    check("session_rotation_aliases_state_check", sql`${table.state} = 'rotation_grace'`),
+    check(
+      "session_rotation_aliases_timestamp_order_check",
+      sql`${table.validFrom} >= 0
+        and ${table.expiresAt} > ${table.validFrom}
+        and ${table.expiresAt} <= ${table.validFrom} + 10000`,
+    ),
+  ],
+);
+
 export const authTransactions = sqliteTable(
   "auth_transactions",
   {
