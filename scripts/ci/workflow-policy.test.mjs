@@ -288,6 +288,15 @@ test("CI builds Storybook before exercising stories", () => {
   assert.ok(build >= 0 && build < testStories);
 });
 
+test("browser-backed CI builds workspace dependencies before the web application", () => {
+  const document = workflowDocument("ci.yml");
+
+  for (const jobName of ["browser", "storybook", "visual", "lighthouse"]) {
+    const build = namedStep(document.jobs[jobName].steps, "Build web application");
+    assert.equal(build.run, "pnpm build", `${jobName} must use the dependency-aware root build`);
+  }
+});
+
 test("CI rejects migration metadata and schema drift", () => {
   const source = workflow("ci.yml");
   assert.match(source, /pnpm --filter @omnifin\/gateway db:check/u);
