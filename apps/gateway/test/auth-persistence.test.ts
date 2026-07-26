@@ -122,6 +122,19 @@ describe("authentication persistence invariants", () => {
       oidcSessionIdHash: sidHash,
       userId: "user-1",
     });
+    database.sqlite
+      .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+      .run("v2.fixture-id-token-hint");
+    expect(() =>
+      database.sqlite
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+        .run(""),
+    ).toThrow(/sessions_id_token_hint_check/);
+    expect(() =>
+      database.sqlite
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+        .run("x".repeat(32769)),
+    ).toThrow(/sessions_id_token_hint_check/);
     database.close();
   });
 

@@ -15,6 +15,13 @@
       "when": 1785018255482,
       "tag": "0001_auth_security_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785023416678,
+      "tag": "0002_oidc_runtime_security",
+      "breakpoints": true
     }
   ]
 }

@@ -180,17 +180,40 @@ describe("authentication schema upgrades", () => {
           display_name,
           issuer,
           client_id,
+          encrypted_client_secret,
           created_at,
           updated_at
-        ) values (
-          'oidc-home',
-          'home',
-          'Home identity',
-          'https://id.example.test/application/o/omnifin/',
-          'omnifin',
-          1000,
-          1000
-        );
+        ) values
+          (
+            'oidc-home',
+            'home',
+            'Home identity',
+            'https://id.example.test/application/o/omnifin/',
+            'omnifin',
+            null,
+            1000,
+            1000
+          ),
+          (
+            'oidc-confidential',
+            'confidential',
+            'Confidential identity',
+            'https://confidential-id.example.test/application/o/omnifin/',
+            'omnifin-confidential',
+            'v1.fixture-client-secret',
+            1000,
+            1000
+          ),
+          (
+            'oidc-invalid-secret',
+            'invalid-secret',
+            'Invalid confidential identity',
+            'https://invalid-secret.example.test/application/o/omnifin/',
+            'omnifin-invalid-secret',
+            '',
+            1000,
+            1000
+          );
 
         insert into external_identities (
           id,
@@ -381,6 +404,77 @@ describe("authentication schema upgrades", () => {
       `);
 
       applyMigration(database, "0001_auth_security_foundation.sql");
+      database
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-oidc'")
+        .run("");
+      database.transaction(() => applyMigration(database, "0002_oidc_runtime_security.sql"))();
+
+      expect(
+        database
+          .prepare(
+            `select
+              id,
+              token_endpoint_auth_method as tokenEndpointAuthMethod,
+              id_token_signing_alg as idTokenSigningAlg,
+              approved_endpoint_origins_json as approvedEndpointOriginsJson,
+              discovery_state as discoveryState,
+              discovery_capabilities_json as discoveryCapabilitiesJson,
+              discovery_checked_at as discoveryCheckedAt,
+              encrypted_client_secret as encryptedClientSecret,
+              enabled
+            from oidc_providers
+            order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          approvedEndpointOriginsJson: "[]",
+          discoveryCapabilitiesJson: "{}",
+          discoveryCheckedAt: null,
+          discoveryState: "unchecked",
+          enabled: 0,
+          encryptedClientSecret: "v1.fixture-client-secret",
+          id: "oidc-confidential",
+          idTokenSigningAlg: "RS256",
+          tokenEndpointAuthMethod: "client_secret_basic",
+        },
+        {
+          approvedEndpointOriginsJson: "[]",
+          discoveryCapabilitiesJson: "{}",
+          discoveryCheckedAt: null,
+          discoveryState: "unchecked",
+          enabled: 0,
+          encryptedClientSecret: null,
+          id: "oidc-home",
+          idTokenSigningAlg: "RS256",
+          tokenEndpointAuthMethod: "none",
+        },
+        {
+          approvedEndpointOriginsJson: "[]",
+          discoveryCapabilitiesJson: "{}",
+          discoveryCheckedAt: null,
+          discoveryState: "unchecked",
+          enabled: 0,
+          encryptedClientSecret: null,
+          id: "oidc-invalid-secret",
+          idTokenSigningAlg: "RS256",
+          tokenEndpointAuthMethod: "none",
+        },
+      ]);
+      expect(() =>
+        database
+          .prepare(
+            "update oidc_providers set token_endpoint_auth_method = 'client_secret_post' where id = 'oidc-home'",
+          )
+          .run(),
+      ).toThrow(/oidc_providers_client_secret_check/);
+      expect(() =>
+        database
+          .prepare(
+            "update oidc_providers set token_endpoint_auth_method = 'none' where id = 'oidc-confidential'",
+          )
+          .run(),
+      ).toThrow(/oidc_providers_client_secret_check/);
 
       const links = database
         .prepare(
@@ -460,7 +554,8 @@ describe("authentication schema upgrades", () => {
             external_identity_id as externalIdentityId,
             oidc_session_id_hash as oidcSessionIdHash,
             service_identity_link_id as serviceIdentityLinkId,
-            encrypted_csrf_token as encryptedCsrfToken,
+          encrypted_csrf_token as encryptedCsrfToken,
+            encrypted_id_token_hint as encryptedIdTokenHint,
             length(token_hash) as tokenHashLength,
             length(csrf_token_hash) as csrfHashLength,
             revoked_at as revokedAt
@@ -471,6 +566,7 @@ describe("authentication schema upgrades", () => {
         authMethod: string;
         csrfHashLength: number;
         encryptedCsrfToken: string;
+        encryptedIdTokenHint: string | null;
         externalIdentityId: string | null;
         id: string;
         oidcProviderId: string | null;
@@ -497,6 +593,7 @@ describe("authentication schema upgrades", () => {
           encryptedCsrfToken: "legacy-revoked",
           externalIdentityId: "identity-oidc",
           id: "session-oidc",
+          encryptedIdTokenHint: null,
           oidcProviderId: "oidc-home",
           oidcSessionIdHash: null,
           serviceIdentityLinkId: null,
@@ -562,12 +659,14 @@ describe("authentication schema upgrades", () => {
 });
 
 describe("authentication schema invariants", () => {
-  it("loads the schema with connector-scoped links and no premature flow tables", () => {
+  it("loads the schema idempotently with connector-scoped links and logout replay receipts", () => {
     expect(authenticationSchema.connectorConfigs).toBeDefined();
+    expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
     expect(authenticationSchema.serviceIdentityLinks).toBeDefined();
 
     const database = openDatabase(":memory:");
     try {
+      database.migrate();
       database.migrate();
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
@@ -575,6 +674,31 @@ describe("authentication schema invariants", () => {
       const names = tables.map(({ name }) => name);
       expect(names).not.toContain("quick_connect_transactions");
       expect(names).not.toContain("logout_transactions");
+      expect(names).toContain("oidc_logout_receipts");
+      expect(
+        database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
+      ).toEqual({ count: 3 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select name
+            from sqlite_master
+            where type = 'trigger'
+              and name in (
+                'oidc_providers_client_secret_insert_check',
+                'oidc_providers_client_secret_update_check',
+                'sessions_id_token_hint_insert_check',
+                'sessions_id_token_hint_update_check'
+              )
+            order by name`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "oidc_providers_client_secret_insert_check" },
+        { name: "oidc_providers_client_secret_update_check" },
+        { name: "sessions_id_token_hint_insert_check" },
+        { name: "sessions_id_token_hint_update_check" },
+      ]);
 
       database.sqlite.exec(`
         insert into users (id, display_name)

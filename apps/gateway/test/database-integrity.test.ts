@@ -51,6 +51,24 @@ const enumConstraintCases = [
       "insert into users (id, display_name, role, status) values ('invalid-user-status', 'Invalid', 'viewer', 'invited')",
   },
   {
+    constraint: "oidc_providers_token_endpoint_auth_method_check",
+    name: "OIDC token endpoint authentication methods",
+    statement:
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, token_endpoint_auth_method) values ('invalid-token-auth', 'invalid-token-auth', 'Invalid', 'https://invalid-token-auth.example.test', 'omnifin', 'private_key_jwt')",
+  },
+  {
+    constraint: "oidc_providers_id_token_signing_alg_check",
+    name: "OIDC ID-token signing algorithms",
+    statement:
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, id_token_signing_alg) values ('invalid-id-alg', 'invalid-id-alg', 'Invalid', 'https://invalid-id-alg.example.test', 'omnifin', 'none')",
+  },
+  {
+    constraint: "oidc_providers_discovery_state_check",
+    name: "OIDC discovery states",
+    statement:
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, discovery_state) values ('invalid-discovery-state', 'invalid-discovery-state', 'Invalid', 'https://invalid-discovery-state.example.test', 'omnifin', 'trusted')",
+  },
+  {
     constraint: "role_mappings_operator_check",
     name: "role-mapping operators",
     statement:
@@ -111,6 +129,18 @@ const jsonConstraintCases = [
     name: "OIDC claim configuration",
     statement:
       "insert into oidc_providers (id, slug, display_name, issuer, client_id, claim_config_json) values ('invalid-oidc-json', 'invalid-json', 'Invalid', 'https://invalid-json.example.test', 'omnifin', '{broken')",
+  },
+  {
+    constraint: "oidc_providers_approved_endpoint_origins_json_check",
+    name: "OIDC approved endpoint origins",
+    statement:
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, approved_endpoint_origins_json) values ('invalid-origin-json', 'invalid-origin-json', 'Invalid', 'https://invalid-origin-json.example.test', 'omnifin', '{broken')",
+  },
+  {
+    constraint: "oidc_providers_discovery_capabilities_json_check",
+    name: "OIDC discovery capabilities",
+    statement:
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, discovery_capabilities_json) values ('invalid-discovery-json', 'invalid-discovery-json', 'Invalid', 'https://invalid-discovery-json.example.test', 'omnifin', '[]')",
   },
   {
     constraint: "external_identities_display_claims_json_check",
@@ -210,6 +240,159 @@ describe("database integrity constraints", () => {
       "insert into audit_events (id, event_type, outcome, metadata_json) values ('invalid-audit-shape', 'auth.login', 'success', '[]')",
       "audit_events_metadata_json_check",
     );
+  });
+
+  it("binds OIDC client secrets to the configured token endpoint authentication method", () => {
+    expectConstraintFailure(
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, encrypted_client_secret) values ('public-with-secret', 'public-with-secret', 'Invalid', 'https://public-with-secret.example.test', 'omnifin', 'encrypted')",
+      "oidc_providers_client_secret_check",
+    );
+    expectConstraintFailure(
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, token_endpoint_auth_method) values ('confidential-without-secret', 'confidential-without-secret', 'Invalid', 'https://confidential-without-secret.example.test', 'omnifin', 'client_secret_basic')",
+      "oidc_providers_client_secret_check",
+    );
+    expectConstraintFailure(
+      "insert into oidc_providers (id, slug, display_name, issuer, client_id, token_endpoint_auth_method, encrypted_client_secret) values ('empty-secret', 'empty-secret', 'Invalid', 'https://empty-secret.example.test', 'omnifin', 'client_secret_post', '')",
+      "oidc_providers_client_secret_check",
+    );
+
+    const database = openSeededDatabase();
+    try {
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update oidc_providers set token_endpoint_auth_method = 'client_secret_basic' where id = 'oidc-home'",
+          )
+          .run(),
+      ).toThrow(/oidc_providers_client_secret_check/);
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update oidc_providers set token_endpoint_auth_method = 'client_secret_post', encrypted_client_secret = ? where id = 'oidc-home'",
+          )
+          .run("x".repeat(8193)),
+      ).toThrow(/oidc_providers_client_secret_check/);
+      database.sqlite
+        .prepare(
+          "update oidc_providers set token_endpoint_auth_method = 'client_secret_post', encrypted_client_secret = ? where id = 'oidc-home'",
+        )
+        .run("v2.fixture-client-secret");
+      expect(
+        database.sqlite
+          .prepare(
+            "select token_endpoint_auth_method as method, encrypted_client_secret as secret from oidc_providers where id = 'oidc-home'",
+          )
+          .get(),
+      ).toEqual({ method: "client_secret_post", secret: "v2.fixture-client-secret" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("requires checked, bounded discovery data before a provider can be marked ready", () => {
+    const oversizedCapabilities = JSON.stringify({ value: "x".repeat(8192) });
+    const tooManyOrigins = JSON.stringify(
+      Array.from({ length: 17 }, (_, index) => `https://id-${index}.example.test`),
+    );
+    const database = openSeededDatabase();
+    try {
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update oidc_providers set discovery_capabilities_json = ? where id = 'oidc-home'",
+          )
+          .run(oversizedCapabilities),
+      ).toThrow(/oidc_providers_discovery_capabilities_json_check/);
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update oidc_providers set approved_endpoint_origins_json = ? where id = 'oidc-home'",
+          )
+          .run(tooManyOrigins),
+      ).toThrow(/oidc_providers_approved_endpoint_origins_json_check/);
+      expect(() =>
+        database.sqlite
+          .prepare("update oidc_providers set discovery_state = 'ready' where id = 'oidc-home'")
+          .run(),
+      ).toThrow(/oidc_providers_discovery_attribution_check/);
+      expect(() =>
+        database.sqlite
+          .prepare(
+            "update oidc_providers set discovery_capabilities_json = '{\"frontChannelLogout\":true}' where id = 'oidc-home'",
+          )
+          .run(),
+      ).toThrow(/oidc_providers_discovery_attribution_check/);
+
+      database.sqlite.exec(`
+        update oidc_providers
+        set
+          approved_endpoint_origins_json = '["https://id.example.test"]',
+          discovery_capabilities_json = '{"frontChannelLogout":true}',
+          discovery_checked_at = created_at,
+          discovery_state = 'ready'
+        where id = 'oidc-home'
+      `);
+      expect(
+        database.sqlite
+          .prepare(
+            "select discovery_state as state, discovery_checked_at as checkedAt from oidc_providers where id = 'oidc-home'",
+          )
+          .get(),
+      ).toMatchObject({ state: "ready" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("scopes hashed logout-token JTIs to a provider and rejects unsafe receipt timestamps", () => {
+    const database = openSeededDatabase();
+    const jtiHash = "j".repeat(43);
+    try {
+      database.sqlite.exec(`
+        insert into oidc_providers (id, slug, display_name, issuer, client_id)
+        values ('oidc-work', 'work', 'Work identity', 'https://work-id.example.test', 'omnifin');
+      `);
+      const insertReceipt = (
+        providerId: string,
+        hash: string,
+        issuedAt = 1000,
+        receivedAt = 1100,
+        expiresAt = 2000,
+      ) =>
+        database.sqlite
+          .prepare(
+            `insert into oidc_logout_receipts (
+              provider_id, jti_hash, issued_at, received_at, expires_at
+            ) values (?, ?, ?, ?, ?)`,
+          )
+          .run(providerId, hash, issuedAt, receivedAt, expiresAt);
+
+      insertReceipt("oidc-home", jtiHash);
+      expect(() => insertReceipt("oidc-home", jtiHash)).toThrow(/unique constraint/i);
+      expect(() => insertReceipt("oidc-work", "short")).toThrow(
+        /oidc_logout_receipts_jti_hash_check/,
+      );
+      expect(() => insertReceipt("oidc-work", "f".repeat(43), 301_101, 1100)).toThrow(
+        /oidc_logout_receipts_timestamp_order_check/,
+      );
+      expect(() => insertReceipt("oidc-work", "a".repeat(43), 1, 301_002, 400_000)).toThrow(
+        /oidc_logout_receipts_timestamp_order_check/,
+      );
+      expect(() => insertReceipt("oidc-work", "e".repeat(43), 1000, 1100, 1100)).toThrow(
+        /oidc_logout_receipts_timestamp_order_check/,
+      );
+      insertReceipt("oidc-work", jtiHash);
+      expect(
+        database.sqlite.prepare("select count(*) as count from oidc_logout_receipts").get(),
+      ).toEqual({ count: 2 });
+
+      database.sqlite.exec("delete from oidc_providers where id = 'oidc-work'");
+      expect(
+        database.sqlite.prepare("select count(*) as count from oidc_logout_receipts").get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
   });
 
   it("accepts valid constrained values and preserves intentional nullability", () => {

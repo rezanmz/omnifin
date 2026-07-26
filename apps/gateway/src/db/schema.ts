@@ -56,8 +56,35 @@ export const oidcProviders = sqliteTable(
     issuer: text("issuer").notNull(),
     clientId: text("client_id").notNull(),
     encryptedClientSecret: text("encrypted_client_secret"),
+    tokenEndpointAuthMethod: text("token_endpoint_auth_method", {
+      enum: ["client_secret_basic", "client_secret_post", "none"],
+    })
+      .notNull()
+      .default("none"),
+    idTokenSigningAlg: text("id_token_signing_alg", {
+      enum: [
+        "RS256",
+        "RS384",
+        "RS512",
+        "PS256",
+        "PS384",
+        "PS512",
+        "ES256",
+        "ES384",
+        "ES512",
+        "EdDSA",
+      ],
+    })
+      .notNull()
+      .default("RS256"),
     scopes: text("scopes").notNull().default("openid profile email"),
     claimConfigJson: text("claim_config_json").notNull().default("{}"),
+    approvedEndpointOriginsJson: text("approved_endpoint_origins_json").notNull().default("[]"),
+    discoveryState: text("discovery_state", { enum: ["unchecked", "ready", "failed"] })
+      .notNull()
+      .default("unchecked"),
+    discoveryCapabilitiesJson: text("discovery_capabilities_json").notNull().default("{}"),
+    discoveryCheckedAt: integer("discovery_checked_at", { mode: "timestamp_ms" }),
     allowJitProvisioning: integer("allow_jit_provisioning", { mode: "boolean" })
       .notNull()
       .default(true),
@@ -69,14 +96,101 @@ export const oidcProviders = sqliteTable(
     uniqueIndex("oidc_providers_issuer_unique").on(table.issuer),
     uniqueIndex("oidc_providers_id_issuer_unique").on(table.id, table.issuer),
     check(
+      "oidc_providers_token_endpoint_auth_method_check",
+      sql`${table.tokenEndpointAuthMethod} in ('client_secret_basic', 'client_secret_post', 'none')`,
+    ),
+    check(
+      "oidc_providers_id_token_signing_alg_check",
+      sql`${table.idTokenSigningAlg} in ('RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512', 'ES256', 'ES384', 'ES512', 'EdDSA')`,
+    ),
+    check(
+      "oidc_providers_client_secret_check",
+      sql`(
+          ${table.tokenEndpointAuthMethod} = 'none'
+          and ${table.encryptedClientSecret} is null
+        ) or (
+          ${table.tokenEndpointAuthMethod} in ('client_secret_basic', 'client_secret_post')
+          and ${table.encryptedClientSecret} is not null
+          and length(${table.encryptedClientSecret}) between 1 and 8192
+        )`,
+    ),
+    check(
       "oidc_providers_claim_config_json_check",
       sql`json_valid(${table.claimConfigJson}) and json_type(${table.claimConfigJson}) = 'object'`,
+    ),
+    check(
+      "oidc_providers_approved_endpoint_origins_json_check",
+      sql`length(${table.approvedEndpointOriginsJson}) between 2 and 4096
+        and json_valid(${table.approvedEndpointOriginsJson})
+        and json_type(${table.approvedEndpointOriginsJson}) = 'array'
+        and json_array_length(${table.approvedEndpointOriginsJson}) between 0 and 16`,
+    ),
+    check(
+      "oidc_providers_discovery_state_check",
+      sql`${table.discoveryState} in ('unchecked', 'ready', 'failed')`,
+    ),
+    check(
+      "oidc_providers_discovery_capabilities_json_check",
+      sql`length(${table.discoveryCapabilitiesJson}) between 2 and 8192
+        and json_valid(${table.discoveryCapabilitiesJson})
+        and json_type(${table.discoveryCapabilitiesJson}) = 'object'`,
+    ),
+    check(
+      "oidc_providers_discovery_attribution_check",
+      sql`(
+          ${table.discoveryState} = 'unchecked'
+          and ${table.discoveryCheckedAt} is null
+          and json(${table.discoveryCapabilitiesJson}) = '{}'
+        ) or (
+          ${table.discoveryState} = 'failed'
+          and ${table.discoveryCheckedAt} is not null
+        ) or (
+          ${table.discoveryState} = 'ready'
+          and ${table.discoveryCheckedAt} is not null
+          and json(${table.discoveryCapabilitiesJson}) <> '{}'
+          and json_array_length(${table.approvedEndpointOriginsJson}) between 1 and 16
+        )`,
+    ),
+    check(
+      "oidc_providers_discovery_timestamp_check",
+      sql`${table.discoveryCheckedAt} is null or ${table.discoveryCheckedAt} >= ${table.createdAt}`,
     ),
     check(
       "oidc_providers_allow_jit_provisioning_check",
       sql`${table.allowJitProvisioning} in (0, 1)`,
     ),
     check("oidc_providers_enabled_check", sql`${table.enabled} in (0, 1)`),
+  ],
+);
+
+export const oidcLogoutReceipts = sqliteTable(
+  "oidc_logout_receipts",
+  {
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => oidcProviders.id, { onDelete: "cascade" }),
+    jtiHash: text("jti_hash").notNull(),
+    issuedAt: integer("issued_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    receivedAt: integer("received_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch('subsec') * 1000)`),
+  },
+  (table) => [
+    uniqueIndex("oidc_logout_receipts_provider_jti_unique").on(table.providerId, table.jtiHash),
+    index("oidc_logout_receipts_expiry_idx").on(table.expiresAt),
+    check(
+      "oidc_logout_receipts_jti_hash_check",
+      sql`length(${table.jtiHash}) = 43 and ${table.jtiHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "oidc_logout_receipts_timestamp_order_check",
+      sql`${table.issuedAt} >= 0
+        and ${table.receivedAt} >= 0
+        and ${table.issuedAt} >= ${table.receivedAt} - 300000
+        and ${table.issuedAt} <= ${table.receivedAt} + 300000
+        and ${table.receivedAt} < ${table.expiresAt}`,
+    ),
   ],
 );
 
@@ -388,6 +502,10 @@ export const sessions = sqliteTable(
           length(${table.userAgentHash}) = 22
           and ${table.userAgentHash} not glob '*[^A-Za-z0-9_-]*'
         ))`,
+    ),
+    check(
+      "sessions_id_token_hint_check",
+      sql`${table.encryptedIdTokenHint} is null or length(${table.encryptedIdTokenHint}) between 1 and 32768`,
     ),
     check(
       "sessions_timestamp_order_check",

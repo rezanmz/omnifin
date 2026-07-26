@@ -10,6 +10,7 @@ const requiredTables = [
   "auth_transactions",
   "connector_configs",
   "external_identities",
+  "oidc_logout_receipts",
   "oidc_providers",
   "operational_failures",
   "role_mappings",
@@ -20,6 +21,15 @@ const requiredTables = [
 const requiredColumns = {
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
+  oidc_providers: [
+    "approved_endpoint_origins_json",
+    "discovery_capabilities_json",
+    "discovery_checked_at",
+    "discovery_state",
+    "id_token_signing_alg",
+    "token_endpoint_auth_method",
+  ],
   service_identity_links: [
     "connector_id",
     "device_id",
@@ -41,6 +51,10 @@ const requiredColumns = {
 const requiredIndexes = {
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  oidc_logout_receipts: [
+    "oidc_logout_receipts_expiry_idx",
+    "oidc_logout_receipts_provider_jti_unique",
+  ],
   service_identity_links: ["service_identity_links_connector_idx"],
 } as const;
 
