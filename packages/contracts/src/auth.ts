@@ -250,6 +250,34 @@ export const oidcProviderAdminSchema = z.strictObject({
 });
 export type OidcProviderAdmin = z.infer<typeof oidcProviderAdminSchema>;
 
+export const oidcProviderCapabilitiesSchema = z.strictObject({
+  authorizationCodeFlow: z.literal(true),
+  idTokenSigningAlg: oidcIdTokenSigningAlgSchema,
+  logout: z.strictObject({
+    backChannel: z.boolean(),
+    backChannelSession: z.boolean(),
+    frontChannel: z.boolean(),
+    frontChannelSession: z.boolean(),
+    rpInitiated: z.boolean(),
+  }),
+  pkceS256: z.literal(true),
+  schemaVersion: z.literal(1),
+  tokenEndpointAuthMethod: oidcTokenEndpointAuthMethodSchema,
+  userInfo: z.boolean(),
+});
+export type OidcProviderCapabilities = z.infer<typeof oidcProviderCapabilitiesSchema>;
+
+export const oidcProviderValidationParamsSchema = z.strictObject({
+  providerId: identifierSchema,
+});
+export type OidcProviderValidationParams = z.infer<typeof oidcProviderValidationParamsSchema>;
+
+export const oidcProviderValidationResponseSchema = z.strictObject({
+  capabilities: oidcProviderCapabilitiesSchema,
+  provider: oidcProviderAdminSchema,
+});
+export type OidcProviderValidationResponse = z.infer<typeof oidcProviderValidationResponseSchema>;
+
 export const oidcProvidersAdminResponseSchema = z.strictObject({
   providers: z.array(oidcProviderAdminSchema).max(AUTH_PROVIDERS_MAX_COUNT),
 });

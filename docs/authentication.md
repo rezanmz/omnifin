@@ -9,9 +9,9 @@ and contributors changing a security-sensitive flow.
 > resolution, direct Jellyfin password and Quick Connect sign-in, password and Quick
 > Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
 > front-channel logout, opaque sessions, and break-glass
-> recovery. The initial permission-checked provider administration API can create and list
-> encrypted configurations, but validation controls, role-mapping administration, the operator
-> interface, and the live Authentik gate remain incomplete. Phase 1 has not passed its release
+> recovery. The permission-checked provider administration API can create, list, and validate
+> encrypted configurations, but role-mapping administration, the operator interface, and the
+> live Authentik gate remain incomplete. Phase 1 has not passed its release
 > gate; treat this document as development evidence, not a production support claim.
 
 ## Current development surface
@@ -24,18 +24,22 @@ provider is offered by the sign-in screen only when its persisted capability sna
 is internally consistent and ready. Unchecked, failed, or malformed providers fail
 closed as unavailable or misconfigured.
 
-Administrators and short-lived recovery sessions can create and inspect OIDC provider
-configuration through a CSRF-protected API. Client secrets are encrypted before the
+Administrators and short-lived recovery sessions can create, inspect, and validate OIDC provider
+configuration through a CSRF-protected mutation API. Client secrets are encrypted before the
 transaction commits and are represented to browsers only by a boolean configured state.
 Creation writes a sanitized audit event atomically with the provider row. A newly created
-provider remains `unchecked` and cannot be selected on the login screen until the separate
-validation workflow is implemented and succeeds.
+provider remains `unchecked` and cannot be selected on the login screen until validation succeeds.
+Validation always performs fresh discovery through the pinned-address safe-fetch boundary,
+returns only normalized capability booleans, and never returns discovered endpoints or runtime
+security seals. Disabled providers can be validated without becoming sign-in eligible. Validation
+success and failure are audit-logged with bounded reason codes, and repeated failures use the
+registry's retry backoff instead of repeatedly contacting the issuer.
 
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide provider validation or role-mapping administration, live Authentik compatibility
-evidence, or the complete application permission surface. The
+yet provide role-mapping administration, live Authentik compatibility evidence, or the complete
+application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
 
@@ -104,6 +108,7 @@ gateway directly.
 | `POST /api/auth/recovery/session`                                 | Hidden, rate-limited recovery endpoint; never linked from the login UI.   |
 | `GET /api/admin/auth/oidc/providers`                              | List secret-free OIDC configuration for an authorized administrator.      |
 | `POST /api/admin/auth/oidc/providers`                             | Create an encrypted, audited OIDC configuration; requires session CSRF.   |
+| `POST /api/admin/auth/oidc/providers/{providerId}/validate`       | Freshly validate discovery and return only safe capability information.   |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect

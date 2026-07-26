@@ -11,8 +11,8 @@ the roadmap records when each area has passed its verification gate.
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
-> authentication audits, recovery access, and initial encrypted OIDC provider creation now
-> exist, while provider validation and role-mapping controls, complete authorization,
+> authentication audits, recovery access, and encrypted OIDC provider creation and validation now
+> exist, while role-mapping controls, complete authorization,
 > connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -30,8 +30,8 @@ direct Jellyfin password and Quick Connect exchanges, recovery access, and authe
 also migrates SQLite, validates public configuration, redacts structured logs, and
 provides isolated connector fixture and probe tooling.
 
-The provider-administration boundary can create and list encrypted, audited OIDC records,
-but validation, updates, role mappings, and its operator interface remain incomplete.
+The provider-administration boundary can create, list, and freshly validate encrypted, audited
+OIDC records, but updates, role mappings, and its operator interface remain incomplete.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented;
@@ -153,7 +153,10 @@ Current OIDC, direct Jellyfin, recovery, and provider-administration workflows c
 external identities, service identity links, encrypted Jellyfin tokens, sessions,
 authorization transactions, connector bootstrap records, and authentication audit
 events. OIDC provider client secrets are encrypted and provider creation is audited in
-the same transaction. Password and Quick Connect pairing, normalized link health,
+the same transaction. Administrative validation uses the same SSRF-resistant discovery and
+capability checks as sign-in, exposes no endpoints or runtime security seals, supports safe
+validation while disabled, and records bounded success or failure audits. Password and Quick
+Connect pairing, normalized link health,
 relinking, revocation, and account-wide local session logout are available; broader
 connector administration is not yet available. Signed provider back-channel logout can revoke an
 exact OIDC session or immutable external identity without storing the raw Logout Token.

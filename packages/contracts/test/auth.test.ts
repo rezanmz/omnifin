@@ -12,6 +12,8 @@ import {
   identityLinksResponseSchema,
   oidcProviderAdminSchema,
   oidcProviderCreateRequestSchema,
+  oidcProviderValidationParamsSchema,
+  oidcProviderValidationResponseSchema,
   oidcProvidersAdminResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
@@ -241,6 +243,42 @@ describe("authentication contracts", () => {
     });
     expect(
       oidcProviderAdminSchema.safeParse({ ...provider, clientSecret: "must-not-cross" }).success,
+    ).toBe(false);
+    expect(oidcProviderValidationParamsSchema.parse({ providerId: provider.id })).toEqual({
+      providerId: provider.id,
+    });
+    const validation = {
+      capabilities: {
+        authorizationCodeFlow: true,
+        idTokenSigningAlg: "RS256" as const,
+        logout: {
+          backChannel: true,
+          backChannelSession: true,
+          frontChannel: true,
+          frontChannelSession: true,
+          rpInitiated: true,
+        },
+        pkceS256: true,
+        schemaVersion: 1 as const,
+        tokenEndpointAuthMethod: "client_secret_basic" as const,
+        userInfo: true,
+      },
+      provider: {
+        ...provider,
+        discoveryCheckedAt: "2026-07-26T12:01:00.000Z",
+        discoveryState: "ready" as const,
+      },
+    };
+    expect(oidcProviderValidationResponseSchema.parse(validation)).toEqual(validation);
+    expect(
+      oidcProviderValidationResponseSchema.safeParse({
+        ...validation,
+        capabilities: {
+          ...validation.capabilities,
+          authorizationEndpoint: "https://id.example.test/private-authorize",
+          runtimeSecuritySeal: "must-not-cross",
+        },
+      }).success,
     ).toBe(false);
   });
 

@@ -1,11 +1,27 @@
-import { oidcProviderAdminSchema, oidcProvidersAdminResponseSchema } from "@omnifin/contracts/auth";
-import { describe, expect, it } from "vitest";
+import {
+  oidcProviderAdminSchema,
+  oidcProviderValidationResponseSchema,
+  oidcProvidersAdminResponseSchema,
+} from "@omnifin/contracts/auth";
+import {
+  Configuration,
+  type ClientAuth,
+  type ClientMetadata,
+  type ServerMetadata,
+} from "openid-client";
+import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import { oidcClientSecretEncryptionContext } from "../src/auth/oidc/provider-registry.js";
 import type { AppConfig } from "../src/config.js";
-import { externalIdentities, oidcProviders, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIdentities,
+  oidcProviders,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -65,11 +81,53 @@ const providerRequest = {
   tokenEndpointAuthMethod: "client_secret_basic",
 } as const;
 
-async function harness() {
+function validationMetadata(overrides: Readonly<Record<string, unknown>> = {}): ServerMetadata {
+  return {
+    authorization_endpoint: "https://id.example.test/application/o/authorize/",
+    backchannel_logout_session_supported: true,
+    backchannel_logout_supported: true,
+    code_challenge_methods_supported: ["S256"],
+    end_session_endpoint: "https://id.example.test/application/o/omnifin/end-session/",
+    frontchannel_logout_session_supported: true,
+    frontchannel_logout_supported: true,
+    grant_types_supported: ["authorization_code"],
+    id_token_signing_alg_values_supported: ["RS256"],
+    issuer: providerRequest.issuer,
+    jwks_uri: "https://id.example.test/application/o/omnifin/jwks/",
+    response_types_supported: ["code"],
+    token_endpoint: "https://id.example.test/application/o/token/",
+    token_endpoint_auth_methods_supported: ["client_secret_basic"],
+    userinfo_endpoint: "https://id.example.test/application/o/userinfo/",
+    ...overrides,
+  } as ServerMetadata;
+}
+
+function providerRegistryDependencies(server: ServerMetadata = validationMetadata()) {
+  return {
+    createSafeFetch: vi.fn(() => vi.fn()),
+    discover: vi.fn(
+      async (
+        _server: URL,
+        clientId: string,
+        clientMetadata?: Partial<ClientMetadata> | string,
+        clientAuthentication?: ClientAuth,
+      ) => new Configuration(server, clientId, clientMetadata, clientAuthentication),
+    ),
+  };
+}
+
+async function harness(
+  registryDependencies: ReturnType<
+    typeof providerRegistryDependencies
+  > = providerRegistryDependencies(),
+) {
   const config = testConfig();
   const app = await createApp({
     config,
-    oidcProviderAdminDependencies: providerDependencies(),
+    oidcProviderAdminDependencies: {
+      ...providerDependencies(),
+      providerRegistry: registryDependencies,
+    },
     sessionDependencies: sessionDependencies(),
   });
   const session = app.sessionService.createSession({
@@ -94,6 +152,7 @@ function pendingViewerSession(app: Awaited<ReturnType<typeof createApp>>) {
   app.database.db
     .insert(oidcProviders)
     .values({
+      approvedEndpointOriginsJson: JSON.stringify(["https://viewer-id.example.test"]),
       clientId: "viewer-client",
       displayName: "Viewer identity",
       enabled: true,
@@ -134,6 +193,89 @@ function pendingViewerSession(app: Awaited<ReturnType<typeof createApp>>) {
       externalIdentityId: "viewer-identity",
       oidcProviderId: "oidc-viewer",
       userId: "viewer-user",
+    },
+  });
+}
+
+function activeAdminSession(app: Awaited<ReturnType<typeof createApp>>) {
+  app.database.db
+    .insert(connectorConfigs)
+    .values({
+      baseUrl: "https://jellyfin-admin.example.test",
+      createdAt: now,
+      displayName: "Administrator Jellyfin",
+      encryptedCredentials: "v2.fixture-credentials",
+      healthState: "healthy",
+      id: "jellyfin-admin",
+      type: "jellyfin",
+      updatedAt: now,
+    })
+    .run();
+  app.database.db
+    .insert(oidcProviders)
+    .values({
+      approvedEndpointOriginsJson: JSON.stringify(["https://admin-id.example.test"]),
+      clientId: "admin-user-client",
+      displayName: "Administrator identity",
+      enabled: true,
+      id: "oidc-admin-user",
+      issuer: "https://admin-id.example.test/application/o/omnifin/",
+      slug: "administrator-identity",
+    })
+    .run();
+  app.database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Administrator",
+      id: "admin-user",
+      role: "admin",
+      roleSource: "oidc_mapping",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
+  app.database.db
+    .insert(externalIdentities)
+    .values({
+      createdAt: now,
+      displayClaimsJson: JSON.stringify({ displayName: "Administrator" }),
+      id: "admin-identity",
+      issuer: "https://admin-id.example.test/application/o/omnifin/",
+      lastLoginAt: now,
+      providerId: "oidc-admin-user",
+      subject: "immutable-admin-subject",
+      updatedAt: now,
+      userId: "admin-user",
+    })
+    .run();
+  app.database.db
+    .insert(serviceIdentityLinks)
+    .values({
+      connectorId: "jellyfin-admin",
+      createdAt: now,
+      deviceId: "admin-device",
+      encryptedAccessToken: "v2.fixture-access-token",
+      externalDisplayName: "Administrator",
+      externalServerId: "admin-server",
+      externalUserId: "admin-external-user",
+      externalUsername: "administrator",
+      healthState: "linked",
+      id: "admin-jellyfin-link",
+      lastVerifiedAt: now,
+      service: "jellyfin",
+      tokenCreatedAt: now,
+      updatedAt: now,
+      userId: "admin-user",
+    })
+    .run();
+  return app.sessionService.createSession({
+    attribution: {
+      authMethod: "oidc",
+      externalIdentityId: "admin-identity",
+      oidcProviderId: "oidc-admin-user",
+      serviceIdentityLinkId: "admin-jellyfin-link",
+      userId: "admin-user",
     },
   });
 }
@@ -246,6 +388,14 @@ describe("OIDC provider administration routes", () => {
         url: "/v1/admin/auth/oidc/providers",
       });
       expect(forbidden.statusCode).toBe(403);
+
+      const admin = activeAdminSession(app);
+      const permitted = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${admin.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      expect(permitted.statusCode).toBe(200);
     } finally {
       await app.close();
     }
@@ -267,6 +417,134 @@ describe("OIDC provider administration routes", () => {
       expect(
         app.database.sqlite.prepare("select count(*) as count from oidc_providers").get(),
       ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("freshly validates a disabled provider without exposing protocol endpoints or enabling sign-in", async () => {
+    const registryDependencies = providerRegistryDependencies();
+    const { app, session } = await harness(registryDependencies);
+    try {
+      const created = await app.inject({
+        body: { ...providerRequest, enabled: false },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const provider = oidcProviderAdminSchema.parse(created.json());
+      const validated = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${provider.id}/validate`,
+      });
+
+      expect(validated.statusCode, validated.body).toBe(200);
+      expect(validated.headers["cache-control"]).toBe("no-store");
+      const result = oidcProviderValidationResponseSchema.parse(validated.json());
+      expect(result).toMatchObject({
+        capabilities: {
+          authorizationCodeFlow: true,
+          idTokenSigningAlg: "RS256",
+          pkceS256: true,
+          tokenEndpointAuthMethod: "client_secret_basic",
+        },
+        provider: {
+          discoveryState: "ready",
+          enabled: false,
+          id: provider.id,
+        },
+      });
+      expect(registryDependencies.discover).toHaveBeenCalledOnce();
+      expect(validated.body).not.toContain(providerRequest.clientSecret);
+      expect(validated.body).not.toContain("authorization_endpoint");
+      expect(validated.body).not.toContain("runtimeSecuritySeal");
+
+      const publicProviders = await app.inject({ method: "GET", url: "/v1/auth/providers" });
+      expect(publicProviders.statusCode).toBe(200);
+      expect(publicProviders.body).not.toContain(provider.id);
+
+      const audit = app.database.sqlite
+        .prepare(
+          `select outcome, metadata_json as metadataJson
+           from audit_events where event_type = 'auth.oidc.provider.validated'`,
+        )
+        .get() as { metadataJson: string; outcome: string };
+      expect(audit.outcome).toBe("success");
+      expect(JSON.parse(audit.metadataJson)).toEqual({ reason: "ready", retryable: false });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("audits sanitized validation failures and enforces CSRF plus retry backoff", async () => {
+    const registryDependencies = providerRegistryDependencies(
+      validationMetadata({ code_challenge_methods_supported: ["plain"] }),
+    );
+    const { app, session } = await harness(registryDependencies);
+    try {
+      const created = await app.inject({
+        body: providerRequest,
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const provider = oidcProviderAdminSchema.parse(created.json());
+      const url = `/v1/admin/auth/oidc/providers/${provider.id}/validate`;
+
+      const missingCsrf = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "POST",
+        url,
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+      expect(registryDependencies.discover).not.toHaveBeenCalled();
+
+      const rejected = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url,
+      });
+      expect(rejected.statusCode, rejected.body).toBe(422);
+      expect(rejected.json()).toMatchObject({
+        error: { code: "oidc_provider_validation_rejected" },
+      });
+      expect(rejected.body).not.toContain("code_challenge_methods_supported");
+
+      const backedOff = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url,
+      });
+      expect(backedOff.statusCode).toBe(503);
+      expect(backedOff.headers["retry-after"]).toBe("30");
+      expect(registryDependencies.discover).toHaveBeenCalledOnce();
+
+      const audits = app.database.sqlite
+        .prepare(
+          `select outcome, metadata_json as metadataJson
+           from audit_events where event_type = 'auth.oidc.provider.validated'
+           order by created_at, id`,
+        )
+        .all() as Array<{ metadataJson: string; outcome: string }>;
+      expect(
+        audits.map((audit) => ({
+          metadata: JSON.parse(audit.metadataJson),
+          outcome: audit.outcome,
+        })),
+      ).toEqual([
+        {
+          metadata: { reason: "oidc_provider_misconfigured", retryable: false },
+          outcome: "failure",
+        },
+        {
+          metadata: { reason: "oidc_provider_discovery_failed", retryable: true },
+          outcome: "failure",
+        },
+      ]);
     } finally {
       await app.close();
     }

@@ -15,9 +15,31 @@ import { EnvelopeCipher, privacyHash, randomToken } from "../../security/crypto.
 import { oidcClientSecretEncryptionContext } from "./provider-registry.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const VALIDATION_AUDIT_REASONS = new Set<OidcProviderValidationAuditReason>([
+  "oidc_provider_changed",
+  "oidc_provider_disabled",
+  "oidc_provider_discovery_failed",
+  "oidc_provider_misconfigured",
+  "oidc_provider_not_found",
+  "oidc_provider_storage_failed",
+  "ready",
+]);
 
 export type OidcProviderAdminErrorReason =
-  "integrity_failure" | "provider_conflict" | "provider_limit_reached" | "storage_failure";
+  | "integrity_failure"
+  | "provider_conflict"
+  | "provider_limit_reached"
+  | "provider_not_found"
+  | "storage_failure";
+
+export type OidcProviderValidationAuditReason =
+  | "oidc_provider_changed"
+  | "oidc_provider_disabled"
+  | "oidc_provider_discovery_failed"
+  | "oidc_provider_misconfigured"
+  | "oidc_provider_not_found"
+  | "oidc_provider_storage_failed"
+  | "ready";
 
 export class OidcProviderAdminError extends Error {
   public readonly reason: OidcProviderAdminErrorReason;
@@ -108,6 +130,22 @@ export class OidcProviderAdminService {
         throw new OidcProviderAdminError("integrity_failure");
       }
       return rows.map(presentProvider);
+    } catch (error) {
+      if (error instanceof OidcProviderAdminError) throw error;
+      throw new OidcProviderAdminError("storage_failure", { cause: error });
+    }
+  }
+
+  public get(providerId: string): OidcProviderAdmin {
+    if (!validIdentifier(providerId)) throw new OidcProviderAdminError("integrity_failure");
+    try {
+      const row = this.#database.db
+        .select()
+        .from(oidcProviders)
+        .where(eq(oidcProviders.id, providerId))
+        .get();
+      if (!row) throw new OidcProviderAdminError("provider_not_found");
+      return presentProvider(row);
     } catch (error) {
       if (error instanceof OidcProviderAdminError) throw error;
       throw new OidcProviderAdminError("storage_failure", { cause: error });
@@ -226,6 +264,64 @@ export class OidcProviderAdminService {
       return presentProvider(row);
     } catch (error) {
       if (error instanceof OidcProviderAdminError) throw error;
+      throw new OidcProviderAdminError("storage_failure", { cause: error });
+    }
+  }
+
+  public recordValidation(
+    providerId: string,
+    context: OidcProviderAdminContext,
+    outcome: "failure" | "success",
+    reason: OidcProviderValidationAuditReason,
+    retryable: boolean,
+  ): void {
+    if (
+      !validIdentifier(providerId) ||
+      !this.#validContext(context) ||
+      !VALIDATION_AUDIT_REASONS.has(reason) ||
+      (outcome === "success") !== (reason === "ready")
+    ) {
+      throw new OidcProviderAdminError("integrity_failure");
+    }
+    const auditId = this.#nextId();
+    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const now = this.#currentTime();
+    try {
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (
+            id,
+            actor_user_id,
+            session_id,
+            actor_session_id,
+            actor_auth_method,
+            event_type,
+            outcome,
+            target_type,
+            target_id,
+            request_id,
+            metadata_json,
+            ip_hash,
+            created_at
+          ) values (?, ?, ?, ?, ?, 'auth.oidc.provider.validated', ?,
+                    'oidc_provider', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          auditId,
+          context.principal.userId,
+          context.principal.sessionId,
+          context.principal.sessionId,
+          context.principal.authenticationMethod.kind,
+          outcome,
+          providerId,
+          context.requestId ?? null,
+          JSON.stringify({ reason, retryable }),
+          context.ipAddress
+            ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+            : null,
+          now.getTime(),
+        );
+    } catch (error) {
       throw new OidcProviderAdminError("storage_failure", { cause: error });
     }
   }

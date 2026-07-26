@@ -1246,6 +1246,22 @@ export class OidcProviderRegistry {
   }
 
   public async discover(providerId: string): Promise<OidcProviderRuntime> {
+    return await this.#resolveProvider(providerId, false, false);
+  }
+
+  /**
+   * Performs a fresh administrative validation, including for disabled providers.
+   * Disabled providers remain unavailable to interactive discovery and sign-in.
+   */
+  public async validate(providerId: string): Promise<OidcProviderRuntime> {
+    return await this.#resolveProvider(providerId, true, true);
+  }
+
+  async #resolveProvider(
+    providerId: string,
+    allowDisabled: boolean,
+    forceRefresh: boolean,
+  ): Promise<OidcProviderRuntime> {
     if (!isExactProviderId(providerId)) throw registryError("oidc_provider_not_found");
     let record: ProviderRecord | undefined;
     try {
@@ -1261,7 +1277,7 @@ export class OidcProviderRegistry {
       this.#evictProviderRuntimeCache(providerId);
       throw registryError("oidc_provider_not_found");
     }
-    if (!record.enabled) {
+    if (!record.enabled && !allowDisabled) {
       this.#evictProviderRuntimeCache(providerId);
       throw registryError("oidc_provider_disabled");
     }
@@ -1269,9 +1285,11 @@ export class OidcProviderRegistry {
     validateProviderRecordTimestamps(record);
     const fingerprint = providerConfigFingerprint(record);
     const cacheTime = this.#clockNow();
-    const cachedRuntime = this.#readCachedRuntime(record, fingerprint, cacheTime);
+    const cachedRuntime = forceRefresh
+      ? undefined
+      : this.#readCachedRuntime(record, fingerprint, cacheTime);
     if (cachedRuntime) return cachedRuntime;
-    this.#evictProviderRuntimeCache(providerId, fingerprint);
+    this.#evictProviderRuntimeCache(providerId, forceRefresh ? undefined : fingerprint);
     this.#evictProviderFailureBackoffs(providerId, fingerprint);
 
     const existingDiscovery = this.#inFlightDiscoveries.get(providerId);

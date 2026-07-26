@@ -167,6 +167,38 @@ function expectFailedWithoutDetails(database: DatabaseHandle): void {
 }
 
 describe("OidcProviderRegistry", () => {
+  it("validates disabled providers with a fresh discovery while interactive discovery stays closed", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database, { enabled: false });
+      const discover = vi.fn(async (_server, clientId, clientMetadata, clientAuthentication) =>
+        configuration(metadata(), clientId, clientMetadata, clientAuthentication),
+      );
+      const service = registry(database, metadata(), { discover });
+
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_disabled",
+      });
+      const first = await service.validate(providerId);
+      const second = await service.validate(providerId);
+
+      expect(first.provider.capabilities.pkceS256).toBe(true);
+      expect(second.provider.checkedAt.getTime()).toBeGreaterThan(
+        first.provider.checkedAt.getTime(),
+      );
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(persistedProvider(database)).toMatchObject({
+        discoveryState: "ready",
+        enabled: false,
+      });
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_disabled",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("discovers from the exact issuer and persists a sealed endpoint-free security snapshot", async () => {
     const database = openHarness();
     try {
