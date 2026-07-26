@@ -1,5 +1,6 @@
 import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   IdentityProviderAdminClientError,
@@ -50,6 +51,10 @@ const provider = {
   tokenEndpointAuthMethod: "client_secret_basic" as const,
   updatedAt: "2026-07-26T12:00:00.000Z",
 };
+
+it("uses CSP-safe schema validation in the browser client", () => {
+  expect(z.config().jitless).toBe(true);
+});
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
