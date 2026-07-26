@@ -272,7 +272,7 @@ describe("gateway application", () => {
     await app.close();
   });
 
-  it("reports configured providers without advertising unimplemented login methods", async () => {
+  it("reports configured providers and only the implemented Jellyfin login method", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });
     database.db
@@ -308,9 +308,9 @@ describe("gateway application", () => {
           id: "jellyfin",
           kind: "jellyfin",
           pairingRequiredAfterOidc: true,
-          passwordLoginAvailable: false,
+          passwordLoginAvailable: true,
           quickConnectAvailable: false,
-          state: "unavailable",
+          state: "available",
         },
       ],
     });

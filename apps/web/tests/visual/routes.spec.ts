@@ -42,13 +42,35 @@ test("login visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("login.png", { fullPage: true });
 });
 
+test("Jellyfin credential login visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !visualProjects.has(testInfo.project.name),
+    "Visual baselines use representative Chromium viewports",
+  );
+  await page.goto(routeForProject("/login/jellyfin", testInfo.project.name));
+  await page.locator("main").waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-login.png", { fullPage: true });
+});
+
+test("Jellyfin credential denial visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Credential errors cover representative desktop and phone geometry",
+  );
+  await page.goto("/login/jellyfin?test-view=invalid-credentials");
+  await page.locator("main").waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-login-invalid-credentials.png", {
+    fullPage: true,
+  });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
     "Visual baselines use representative Chromium viewports",
   );
   await page.goto(routeForProject("/login?test-view=unconfigured", testInfo.project.name));
-  await page.locator("main").waitFor();
+  await page.getByText("No sign-in providers are configured", { exact: true }).waitFor();
   await expect(page).toHaveScreenshot("login-unconfigured.png", { fullPage: true });
 });
 

@@ -17,6 +17,10 @@
       "types": "./dist/http/pinned-transport.d.ts",
       "default": "./dist/http/pinned-transport.js"
     },
+    "./auth/jellyfin-authentication-client": {
+      "types": "./dist/auth/jellyfin-authentication-client.d.ts",
+      "default": "./dist/auth/jellyfin-authentication-client.js"
+    },
     "./security/destination": {
       "types": "./dist/security/destination.d.ts",
       "default": "./dist/security/destination.js"

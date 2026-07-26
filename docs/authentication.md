@@ -6,15 +6,17 @@ and contributors changing a security-sensitive flow.
 
 > [!IMPORTANT]
 > The current development branch implements the OIDC browser flow, JIT identity
-> resolution, opaque sessions, and break-glass recovery, but Phase 1 has not passed its
-> release gate. There is not yet a supported operator path for configuring providers,
-> and Jellyfin sign-in, account pairing, and OIDC logout remain incomplete. Treat this
+> resolution, direct Jellyfin password sign-in, opaque sessions, and break-glass
+> recovery, but Phase 1 has not passed its release gate. There is not yet a supported
+> operator path for configuring providers, and Jellyfin Quick Connect, account pairing,
+> and OIDC logout remain incomplete. Treat this
 > document as development evidence, not a production support claim.
 
 ## Current development surface
 
 The gateway exposes browser-safe provider metadata, OIDC start and callback endpoints,
-session inspection and revocation, and hidden recovery access. A discovered OIDC
+direct Jellyfin password authentication, session inspection and revocation, and hidden
+recovery access. A discovered OIDC
 provider is offered by the sign-in screen only when its persisted capability snapshot
 is internally consistent and ready. Unchecked, failed, or malformed providers fail
 closed as unavailable or misconfigured.
@@ -22,8 +24,8 @@ closed as unavailable or misconfigured.
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide supported provider administration, Jellyfin credential or Quick Connect
-login, account pairing, RP-initiated or provider-initiated logout, back-channel logout,
+yet provide supported provider administration, Jellyfin Quick Connect, account pairing,
+RP-initiated or provider-initiated logout, back-channel logout,
 or the complete application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
@@ -49,8 +51,8 @@ Provider states have deliberately narrow meanings:
   discovery snapshot. It is not a guarantee that the issuer is reachable now.
 - `unavailable` means the provider has not passed discovery or its latest discovery
   failed. An OIDC row offers an explicit retry action; selecting it re-enters the
-  bounded start path and recovery cooldown. Unavailable Jellyfin metadata remains
-  non-interactive until direct sign-in exists.
+  bounded start path and recovery cooldown. Jellyfin remains non-interactive when its
+  connector is disabled or cannot be selected unambiguously.
 - `misconfigured` means persisted discovery or security attribution is inconsistent
   and requires administrator repair; the row is non-interactive.
 
@@ -181,12 +183,20 @@ the OIDC identity may remain pending, but media operations must stay denied. Use
 be able to inspect link health, relink, revoke the link, and revoke all of their local
 sessions.
 
-## Required direct Jellyfin sign-in
+## Current direct Jellyfin password sign-in
 
-Direct sign-in must exchange credentials or Quick Connect approval for a Jellyfin
-access token. Omnifin must create or resolve the local user from the immutable Jellyfin
-server and user identifiers, then create a local opaque session. It must not expose the
-Jellyfin token in that session or in browser storage.
+`POST /v1/auth/jellyfin/password` exchanges a bounded username and byte-preserved
+password directly with the configured server. The gateway verifies that Jellyfin's
+public server identifier matches the token issuer, creates or resolves the local user
+only from the immutable connector, server, and Jellyfin user identifiers, encrypts the
+resulting token with link-bound authenticated encryption, and issues a local opaque
+session. The password is never persisted and neither it nor the Jellyfin token reaches
+browser storage or the response. Exact-origin enforcement, bounded request bodies,
+per-client and global credential limits, connector-binding revalidation, and safe audit
+metadata protect the public route.
+
+Quick Connect remains required Phase 1 work and will reuse the same immutable identity
+reconciliation rather than introduce a second linking path.
 
 An operator disabling direct Jellyfin sign-in must first verify a working OIDC admin
 path or retain the documented recovery secret once those controls are available.

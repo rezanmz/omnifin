@@ -4,8 +4,10 @@ import {
   OIDC_ISSUER_MAX_LENGTH,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
+  authenticatedSessionResponseSchema,
   authProviderSchema,
   externalIdentitySchema,
+  jellyfinPasswordAuthenticationRequestSchema,
   roleMappingSchema,
   serviceIdentityLinkSchema,
   sessionPrincipalSchema,
@@ -41,6 +43,48 @@ const activePrincipal = {
   linkedServices: [jellyfinLink],
   ...sessionTimes,
 };
+
+describe("Jellyfin authentication contracts", () => {
+  it("preserves password bytes while normalizing the username", () => {
+    expect(
+      jellyfinPasswordAuthenticationRequestSchema.parse({
+        password: "  password bytes stay exact  ",
+        username: "  riley  ",
+      }),
+    ).toEqual({
+      password: "  password bytes stay exact  ",
+      username: "riley",
+    });
+  });
+
+  it("rejects oversized credentials and unexpected fields", () => {
+    expect(
+      jellyfinPasswordAuthenticationRequestSchema.safeParse({
+        password: "x".repeat(1_025),
+        username: "riley",
+      }).success,
+    ).toBe(false);
+    expect(
+      jellyfinPasswordAuthenticationRequestSchema.safeParse({
+        password: "password",
+        username: "riley",
+        upstreamUrl: "https://attacker.example",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a fully attributed authenticated session response", () => {
+    expect(
+      authenticatedSessionResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        principal: activePrincipal,
+      }),
+    ).toMatchObject({ principal: { accountState: "active" } });
+    expect(
+      authenticatedSessionResponseSchema.safeParse({ csrfToken: null, principal: null }).success,
+    ).toBe(false);
+  });
+});
 
 const oidcIdentity = {
   providerId: "authentik",

@@ -1,6 +1,20 @@
 export { createApp, type CreateAppOptions } from "./app.js";
 export { hasPermission, requirePermission } from "./auth/authorization.js";
 export {
+  bootstrapConfiguredJellyfinConnector,
+  JellyfinConnectorConfigurationError,
+  JellyfinConnectorRegistry,
+  type JellyfinConnectorTarget,
+} from "./auth/jellyfin/connector-registry.js";
+export {
+  JellyfinSignInService,
+  JellyfinSignInServiceError,
+  type JellyfinPasswordSignInInput,
+  type JellyfinSignInDenialReason,
+  type JellyfinSignInResult,
+  type JellyfinSignInServiceDependencies,
+} from "./auth/jellyfin/sign-in-service.js";
+export {
   canonicalLocalReturnPath,
   canonicalOidcCallbackUri,
   LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME,

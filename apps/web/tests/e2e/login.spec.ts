@@ -86,3 +86,57 @@ test("login bounds fifty providers without clipping labels or TV focus", async (
   await last.press("Home");
   await expect(first).toBeFocused();
 });
+
+test("Jellyfin credential sign-in keeps password bytes out of the URL and clears a denial", async ({
+  page,
+}) => {
+  let submittedBody = "";
+  await page.route("**/api/auth/jellyfin/password", async (route) => {
+    submittedBody = route.request().postData() ?? "";
+    await route.fulfill({
+      body: JSON.stringify({
+        error: {
+          code: "authentication_denied",
+          message: "The Jellyfin username or password was not accepted.",
+          requestId: "fixture-request",
+        },
+      }),
+      contentType: "application/json",
+      status: 401,
+    });
+  });
+  await page.goto("/login/jellyfin");
+
+  await expect(page.getByRole("heading", { name: "Step into your library." })).toBeVisible();
+  await page.getByRole("textbox", { name: "Username" }).fill("riley");
+  await page.getByRole("textbox", { name: "Password" }).fill("private-password");
+  await page.getByRole("button", { name: "Continue to Omnifin" }).click();
+
+  await expect(page.locator('.jellyfin-login-form__feedback [role="alert"]')).toContainText(
+    "was not accepted",
+  );
+  await expect(page.getByRole("textbox", { name: "Password" })).toHaveValue("");
+  await expect(page.getByRole("textbox", { name: "Password" })).toBeFocused();
+  expect(JSON.parse(submittedBody)).toEqual({ password: "private-password", username: "riley" });
+  expect(page.url()).not.toContain("private-password");
+});
+
+test("Jellyfin credential controls remain keyboard-usable and meet target geometry", async ({
+  page,
+}) => {
+  await page.goto("/login/jellyfin");
+  const password = page.getByRole("textbox", { name: "Password" });
+  const reveal = page.getByRole("button", { name: "Show password" });
+
+  await password.fill("private-password");
+  await password.press("Tab");
+  await expect(reveal).toBeFocused();
+  await reveal.press("Enter");
+  await expect(password).toHaveAttribute("type", "text");
+  const hiddenReveal = page.getByRole("button", { name: "Hide password" });
+  await expect(hiddenReveal).toBeFocused();
+  const bounds = await hiddenReveal.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.width).toBeGreaterThanOrEqual(44);
+  expect(bounds!.height).toBeGreaterThanOrEqual(44);
+});

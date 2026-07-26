@@ -9,6 +9,11 @@ const routes = [
   { label: "unconfigured login", path: "/login?test-view=unconfigured" },
   { label: "unavailable login", path: "/login?test-view=unavailable" },
   { label: "login authentication error", path: "/login?authError=invalid_request" },
+  { label: "Jellyfin credential login", path: "/login/jellyfin" },
+  {
+    label: "Jellyfin credential denial",
+    path: "/login/jellyfin?test-view=invalid-credentials",
+  },
   { label: "loading dashboard", path: "/?test-view=loading" },
   { label: "quiet dashboard", path: "/?test-view=quiet" },
   { label: "offline dashboard", path: "/?test-view=offline" },

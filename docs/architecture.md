@@ -9,8 +9,9 @@ the roadmap records when each area has passed its verification gate.
 > Phase 0 established the process topology, SQLite migrations, health and readiness,
 > security headers and origin checks, connector contracts and probes, secret-handling
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
-> sessions, identity resolution, authentication audits, and recovery access now exist,
-> while Jellyfin linking, complete authorization, connector administration, live
+> sessions, direct Jellyfin credential sign-in, identity resolution, authentication
+> audits, and recovery access now exist, while OIDC-to-Jellyfin pairing, Quick Connect,
+> complete authorization, connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
 
@@ -22,13 +23,14 @@ process. Ready OIDC providers can complete the authorization-code flow and creat
 local session; failed or inconsistent providers remain non-interactive. Gateway
 liveness and storage readiness stay private to the Compose network. The gateway owns
 OIDC discovery and backoff, one-time authorization transactions, identities, sessions,
-recovery access, and authentication audits. It also migrates SQLite, validates public
-configuration, redacts structured logs, and provides isolated connector fixture and
-probe tooling.
+direct Jellyfin credential exchange, recovery access, and authentication audits. It
+also migrates SQLite, validates public configuration, redacts structured logs, and
+provides isolated connector fixture and probe tooling.
 
-There is not yet a supported provider-administration workflow. Direct Jellyfin login,
-Quick Connect, OIDC-to-Jellyfin linking, OIDC logout, connector administration, and
-media operations remain unavailable.
+There is not yet a supported provider-administration workflow. Direct Jellyfin password
+login is implemented for the deployment-configured connector; Quick Connect,
+OIDC-to-Jellyfin linking, OIDC logout, connector administration, and media operations
+remain unavailable.
 
 ## Target system shape
 
@@ -139,10 +141,10 @@ The SQLite schema stores or reserves storage for:
 - durable audit records and persisted failure state; and
 - schema migration history.
 
-Current OIDC and recovery workflows create authenticated users, external identities,
-sessions, authorization transactions, and authentication audit events. Jellyfin
-identity links, encrypted Jellyfin tokens, and connector configuration are not yet
-created through supported product workflows.
+Current OIDC, direct Jellyfin, and recovery workflows create authenticated users,
+external identities, service identity links, encrypted Jellyfin tokens, sessions,
+authorization transactions, connector bootstrap records, and authentication audit
+events. Pairing and connector-administration workflows are not yet available.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the

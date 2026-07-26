@@ -8,6 +8,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
+import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
+import { jellyfinRoutes, type JellyfinRoutesOptions } from "./auth/jellyfin/routes.js";
 import { oidcRoutes, type OidcRoutesDependencies } from "./auth/oidc/routes.js";
 import { recoveryRoutes } from "./auth/recovery-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
@@ -44,6 +46,7 @@ export interface CreateAppOptions {
   database?: DatabaseHandle;
   migrate?: boolean;
   oidcDependencies?: OidcRoutesDependencies;
+  jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -92,6 +95,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         revokeRecoverySessionsOnStartup(database);
       } catch (error) {
         throw asStartupError(error, "database_initialization_failed");
+      }
+    }
+    if (options.migrate !== false) {
+      try {
+        bootstrapConfiguredJellyfinConnector(database, config);
+      } catch (error) {
+        throw asStartupError(error, "jellyfin_configuration_invalid");
       }
     }
 
@@ -234,6 +244,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(
+      jellyfinRoutes,
+      options.jellyfinDependencies === undefined
+        ? {}
+        : { dependencies: options.jellyfinDependencies },
+    );
     await app.register(
       oidcRoutes,
       options.oidcDependencies === undefined ? {} : { dependencies: options.oidcDependencies },

@@ -7,7 +7,7 @@ import {
 } from "../src/auth/provider-routes.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { oidcProviders } from "../src/db/schema.js";
+import { connectorConfigs, oidcProviders } from "../src/db/schema.js";
 
 const createdAt = new Date("2026-01-01T00:00:00.000Z");
 const checkedAt = new Date("2026-01-02T00:00:00.000Z");
@@ -116,6 +116,38 @@ function seedReadyProvider(
 }
 
 describe("GET /v1/auth/providers", () => {
+  it("fails Jellyfin metadata closed when more than one connector is enabled", async () => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({ config: testConfig(), database });
+    try {
+      for (const id of ["jellyfin-a", "jellyfin-b"]) {
+        database.db
+          .insert(connectorConfigs)
+          .values({
+            baseUrl: `https://${id}.example.test`,
+            displayName: id,
+            encryptedCredentials: "v2.fixture",
+            id,
+            type: "jellyfin",
+          })
+          .run();
+      }
+
+      const response = await app.inject({ method: "GET", url: "/v1/auth/providers" });
+
+      expect(authProvidersResponseSchema.parse(response.json()).providers).toEqual([
+        expect.objectContaining({
+          id: "jellyfin",
+          passwordLoginAvailable: false,
+          quickConnectAvailable: false,
+          state: "misconfigured",
+        }),
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it.each([
     {
       expected: {

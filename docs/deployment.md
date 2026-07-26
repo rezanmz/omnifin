@@ -7,8 +7,9 @@ untagged image or default branch build as a production support promise.
 > [!IMPORTANT]
 > The current development branch is not an operable media control plane or a production
 > support promise. It can run the OIDC browser flow for an already configured provider,
-> establish local sessions, and provide hidden recovery access, but there is not yet a
-> supported provider-administration path, Jellyfin pairing, complete logout and
+> establish local sessions, authenticate directly with a configured Jellyfin server,
+> and provide hidden recovery access, but there is not yet a supported
+> provider-administration path, Jellyfin pairing or Quick Connect, complete logout and
 > authorization, connector administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 
@@ -16,9 +17,10 @@ untagged image or default branch build as a production support promise.
 
 The Compose file establishes the intended topology: web and gateway processes
 run from the same source-built image, only the web service is published, and the
-gateway owns the SQLite volume. Communication with configured upstream services is a
-later-phase capability; the current repository contains connector contracts and probe
-tooling, but the runtime has no administrative configuration or operational API.
+gateway owns the SQLite volume. The gateway currently communicates with Jellyfin only
+for public server identity, password authentication, and connector probes. Other live
+upstream workflows remain later-phase capabilities, and the runtime has no supported
+administrative configuration surface.
 
 The production image is distroless and runs without a shell or package manager as a
 numeric non-root user. Use the application health endpoints and structured logs for
@@ -50,16 +52,16 @@ Keep the master key and recovery secret outside the database backup. Anyone hold
 both the database and master key may be able to recover upstream credentials.
 
 The gateway requires an encryption key to start and can store encrypted OIDC client
-secrets and local session and recovery state. Jellyfin access tokens and connector
-credentials are not yet written through supported workflows. Supplying future-facing
-settings early does not activate unavailable features.
+secrets, Jellyfin access tokens, connector credentials, and local session and recovery
+state. Direct Jellyfin sign-in is the first workflow that writes an encrypted upstream
+token; passwords are used only for the upstream exchange and are never persisted.
 
-The optional `OMNIFIN_JELLYFIN_URL` setting exposes only browser-safe,
-unavailable provider metadata. It must be a canonical HTTPS URL without embedded
-credentials, a query, or a fragment. An operator who deliberately targets a trusted
-private-network HTTP endpoint must also set
-`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`; this acknowledgement does not enable
-authentication or any media operation.
+The optional `OMNIFIN_JELLYFIN_URL` setting bootstraps the single direct-authentication
+connector and exposes browser-safe provider metadata. It must be a canonical HTTPS URL
+without embedded credentials, a query, or a fragment. An operator who deliberately
+targets a trusted private-network HTTP endpoint must also set
+`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. That acknowledgement enables only the
+currently implemented authentication exchange and does not enable media operations.
 
 `OMNIFIN_BASE_URL` must contain only the canonical public origin, with no credentials,
 path, query, or fragment. Production requires HTTPS except for a loopback-only source

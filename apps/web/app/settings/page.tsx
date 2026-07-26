@@ -22,9 +22,10 @@ export default function SettingsPage() {
         <h1>Account setup is still being secured.</h1>
         <p>
           OIDC sign-in, local sessions, and recovery now run behind the gateway boundary, but this
-          pre-release checkpoint has no supported provider or account administration. Jellyfin
-          sign-in and pairing, identity-provider logout, connector setup, and media operations
-          remain gated.
+          pre-release checkpoint has no supported provider or account administration. Direct
+          Jellyfin password sign-in is available for a deployment-configured server; Quick Connect,
+          OIDC pairing, identity-provider logout, connector setup, and media operations remain
+          gated.
         </p>
         <Link className="button button--glass" href="/">
           <ArrowLeft aria-hidden="true" size={17} /> Return home

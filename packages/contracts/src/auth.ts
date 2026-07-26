@@ -362,11 +362,22 @@ export const csrfTokenSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9_-]+$/, "CSRF tokens must use unpadded base64url characters");
 
+export const jellyfinPasswordAuthenticationRequestSchema = z.strictObject({
+  password: z.string().min(1).max(1_024),
+  username: z.string().trim().min(1).max(160),
+});
+export type JellyfinPasswordAuthenticationRequest = z.infer<
+  typeof jellyfinPasswordAuthenticationRequestSchema
+>;
+
+export const authenticatedSessionResponseSchema = z.object({
+  principal: sessionPrincipalSchema,
+  csrfToken: csrfTokenSchema,
+});
+export type AuthenticatedSessionResponse = z.infer<typeof authenticatedSessionResponseSchema>;
+
 export const sessionResponseSchema = z.union([
-  z.object({
-    principal: sessionPrincipalSchema,
-    csrfToken: csrfTokenSchema,
-  }),
+  authenticatedSessionResponseSchema,
   z.object({
     principal: z.null(),
     csrfToken: z.null(),

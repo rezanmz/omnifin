@@ -13,7 +13,8 @@ describe("SettingsPage", () => {
       }),
     ).toBeVisible();
     expect(screen.getByText(/has no supported provider or account administration/i)).toBeVisible();
-    expect(screen.getByText(/Jellyfin sign-in and pairing/i)).toBeVisible();
+    expect(screen.getByText(/Direct Jellyfin password sign-in is available/i)).toBeVisible();
+    expect(screen.getByText(/Quick Connect, OIDC pairing/i)).toBeVisible();
     expect(screen.getByRole("link", { name: /Return home/i })).toHaveAttribute("href", "/");
     expect(screen.queryByText(/Phase 0|preview|validation/i)).not.toBeInTheDocument();
   });

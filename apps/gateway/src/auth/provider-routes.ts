@@ -336,23 +336,31 @@ export const authProviderRoutes: FastifyPluginAsync = async (app) => {
     async (_request, reply) => {
       reply.header("cache-control", "no-store");
       const configuredJellyfin = app.database.db
-        .select({ id: connectorConfigs.id })
+        .select({ enabled: connectorConfigs.enabled, id: connectorConfigs.id })
         .from(connectorConfigs)
         .where(eq(connectorConfigs.type, "jellyfin"))
-        .get();
-      const jellyfinAvailable = Boolean(configuredJellyfin || app.appConfig.jellyfinUrl);
+        .limit(2)
+        .all();
+      const jellyfinAvailable = configuredJellyfin.length > 0 || Boolean(app.appConfig.jellyfinUrl);
       const oidcLimit = MAX_PUBLIC_AUTH_PROVIDERS - (jellyfinAvailable ? 1 : 0);
       const providers = readPublicOidcProviders(app.database, oidcLimit);
 
       if (jellyfinAvailable) {
+        const connectorIsUsable =
+          configuredJellyfin.length === 1 && configuredJellyfin[0]?.enabled === true;
         providers.push({
           displayName: "Jellyfin",
           id: "jellyfin",
           kind: "jellyfin",
           pairingRequiredAfterOidc: true,
-          passwordLoginAvailable: false,
+          passwordLoginAvailable: connectorIsUsable,
           quickConnectAvailable: false,
-          state: "unavailable",
+          state:
+            configuredJellyfin.length > 1
+              ? "misconfigured"
+              : connectorIsUsable
+                ? "available"
+                : "unavailable",
         });
       }
 
