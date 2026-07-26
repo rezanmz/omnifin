@@ -5,6 +5,7 @@ import {
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectPairingPollResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
 } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -605,6 +606,268 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         csrfToken: result.session.csrfToken,
         principal: result.session.principal,
         status: "signed_in",
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/jellyfin/link/quick-connect",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        const statusCode =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        clientQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Too many Jellyfin Quick Connect pairing attempts were started.",
+      );
+      await enforceRateLimit(
+        globalQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect pairing is temporarily rate limited.",
+      );
+      if (!jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success) {
+        recordFailure(request, "invalid_request", "pairing");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect pairing request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let started;
+      try {
+        started = await quickConnect.startPairing({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (
+          error instanceof JellyfinQuickConnectServiceError &&
+          error.reason === "pairing_session_required"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "pairing_not_available",
+            message: "This session is not eligible for Jellyfin pairing.",
+            statusCode: 409,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "pairing",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+
+      recordedRequests.add(request);
+      writeJellyfinQuickConnectBrowserBindingCookie(
+        reply,
+        app.appConfig,
+        started.browserBindingToken,
+        started.expiresAt,
+      );
+      return jellyfinQuickConnectInitiationResponseSchema.parse({
+        code: started.code,
+        expiresAt: started.expiresAt.toISOString(),
+        pollAfterMs: started.pollAfterMs,
+        transactionId: started.transactionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { transactionId: string } }>(
+    "/v1/auth/jellyfin/link/quick-connect/:transactionId/poll",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 90, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        const statusCode =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        globalQuickConnectPollRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect pairing polling is temporarily rate limited.",
+      );
+      if (
+        !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||
+        !jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success
+      ) {
+        recordFailure(request, "invalid_request", "pairing");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect pairing poll request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let result;
+      try {
+        result = await quickConnect.pollPairing({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          ...requestContext(request),
+          transactionId: request.params.transactionId,
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited", "pairing");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Jellyfin pairing is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          if (error.reason === "pairing_session_required") {
+            recordedRequests.add(request);
+            throw new SafeHttpError({
+              code: "pairing_not_available",
+              message: "This session is not eligible for Jellyfin pairing.",
+              statusCode: 409,
+            });
+          }
+          if (error.reason === "invalid_transaction") {
+            recordFailure(request, "invalid_request", "pairing");
+            throw new SafeHttpError({
+              cause: error,
+              code: "authentication_attempt_invalid",
+              message: "The Jellyfin Quick Connect pairing attempt is invalid or has expired.",
+              statusCode: 400,
+            });
+          }
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "pairing",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+
+      if (result.status === "expired") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPairingPollResponseSchema.parse({ status: "expired" });
+      }
+      if (result.status === "pending") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPairingPollResponseSchema.parse({
+          expiresAt: result.expiresAt.toISOString(),
+          pollAfterMs: result.pollAfterMs,
+          status: "pending",
+        });
+      }
+      if (result.status === "denied") {
+        if (
+          result.reason === "identity_already_linked" ||
+          result.reason === "link_already_exists"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "identity_link_conflict",
+            message: "That Jellyfin identity cannot be linked to this account.",
+            statusCode: 409,
+          });
+        }
+        if (result.reason === "pairing_session_required") {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "pairing_not_available",
+            message: "This session is not eligible for Jellyfin pairing.",
+            statusCode: 409,
+          });
+        }
+        recordFailure(request, "authentication_denied", "pairing");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin account is not permitted to pair.",
+          statusCode: 401,
+        });
+      }
+
+      recordedRequests.add(request);
+      const response = jellyfinQuickConnectPairingPollResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+        status: "paired",
       });
       writeSessionCookie(
         reply,

@@ -34,9 +34,9 @@ pnpm dev
 
 The current workspace starts the application shells, health and readiness endpoints,
 safe provider metadata, OIDC browser routes, local sessions, recovery access,
-migrations, direct Jellyfin sign-in, password pairing for pending OIDC users, and
-connector fixture/probe tooling. There is no supported provider, account, or connector
-administration yet; Quick Connect pairing, link lifecycle controls, complete logout and
+migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pending OIDC users,
+and connector fixture/probe tooling. There is no supported provider, account, or connector
+administration yet; link lifecycle controls, complete logout and
 permission enforcement, and upstream media operations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still

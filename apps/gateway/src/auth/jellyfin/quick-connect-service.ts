@@ -18,7 +18,11 @@ import {
   JellyfinConnectorRegistry,
   type JellyfinConnectorTarget,
 } from "./connector-registry.js";
-import type { JellyfinSignInDenialReason, JellyfinSignInService } from "./sign-in-service.js";
+import type {
+  JellyfinPairingDenialReason,
+  JellyfinSignInDenialReason,
+  JellyfinSignInService,
+} from "./sign-in-service.js";
 
 export const JELLYFIN_QUICK_CONNECT_TRANSACTION_TTL_MS = 5 * 60 * 1_000;
 export const JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS = 2_000;
@@ -57,6 +61,10 @@ export interface StartJellyfinQuickConnectInput {
   readonly browserBindingToken?: unknown;
 }
 
+export interface StartJellyfinQuickConnectPairingInput extends StartJellyfinQuickConnectInput {
+  readonly validatedSession?: unknown;
+}
+
 export interface PollJellyfinQuickConnectInput {
   readonly browserBindingToken?: unknown;
   readonly currentSessionToken?: unknown;
@@ -64,6 +72,13 @@ export interface PollJellyfinQuickConnectInput {
   readonly requestId?: string;
   readonly transactionId: string;
   readonly userAgent?: string;
+}
+
+export interface PollJellyfinQuickConnectPairingInput extends Omit<
+  PollJellyfinQuickConnectInput,
+  "currentSessionToken"
+> {
+  readonly validatedSession?: unknown;
 }
 
 export interface StartedJellyfinQuickConnect {
@@ -90,12 +105,28 @@ export type JellyfinQuickConnectPollResult =
     }
   | { readonly session: IssuedSession; readonly status: "signed_in"; toJSON(): never };
 
+export type JellyfinQuickConnectPairingPollResult =
+  | {
+      readonly expiresAt: Date;
+      readonly pollAfterMs: number;
+      readonly status: "pending";
+      toJSON(): never;
+    }
+  | { readonly status: "expired"; toJSON(): never }
+  | {
+      readonly reason: JellyfinPairingDenialReason;
+      readonly status: "denied";
+      toJSON(): never;
+    }
+  | { readonly session: IssuedSession; readonly status: "paired"; toJSON(): never };
+
 export class JellyfinQuickConnectServiceError extends Error {
   public readonly code = "jellyfin_quick_connect_failed";
   public readonly reason:
     | "capacity_exceeded"
     | "configuration_invalid"
     | "invalid_transaction"
+    | "pairing_session_required"
     | "provider_unavailable"
     | "quick_connect_disabled";
 
@@ -117,6 +148,8 @@ interface StoredQuickConnectTransaction {
   id: string;
   nextPollAt: number;
   pollCount: number;
+  pairingSessionId: string | null;
+  purpose: "pairing" | "sign_in";
 }
 
 interface QuickConnectPayload {
@@ -125,7 +158,9 @@ interface QuickConnectPayload {
   connectorId: string;
   deviceId: string;
   insecureHttpApproved: boolean;
-  schemaVersion: 1;
+  pairingSessionId: string | null;
+  purpose: "pairing" | "sign_in";
+  schemaVersion: 1 | 2;
   secret: string;
   serverId: string;
   targetUpdatedAt: number;
@@ -179,15 +214,19 @@ function parsePayload(plaintext: string): QuickConnectPayload {
     value === null ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    Object.keys(value).sort().join(",") !==
-      "baseUrl,code,connectorId,deviceId,insecureHttpApproved,schemaVersion,secret,serverId,targetUpdatedAt"
+    Object.getPrototypeOf(value) !== Object.prototype
   ) {
     throw new JellyfinQuickConnectServiceError("invalid_transaction");
   }
   const candidate = value as Record<string, unknown>;
+  const legacyKeys =
+    "baseUrl,code,connectorId,deviceId,insecureHttpApproved,schemaVersion,secret,serverId,targetUpdatedAt";
+  const currentKeys =
+    "baseUrl,code,connectorId,deviceId,insecureHttpApproved,pairingSessionId,purpose,schemaVersion,secret,serverId,targetUpdatedAt";
+  const keys = Object.keys(candidate).sort().join(",");
   if (
-    candidate.schemaVersion !== 1 ||
+    ((candidate.schemaVersion !== 1 || keys !== legacyKeys) &&
+      (candidate.schemaVersion !== 2 || keys !== currentKeys)) ||
     typeof candidate.baseUrl !== "string" ||
     candidate.baseUrl.length < 1 ||
     candidate.baseUrl.length > 2_048 ||
@@ -204,6 +243,24 @@ function parsePayload(plaintext: string): QuickConnectPayload {
     candidate.serverId.length > 256 ||
     !Number.isSafeInteger(candidate.targetUpdatedAt) ||
     (candidate.targetUpdatedAt as number) < 0
+  ) {
+    throw new JellyfinQuickConnectServiceError("invalid_transaction");
+  }
+  if (candidate.schemaVersion === 1) {
+    return {
+      ...(candidate as unknown as Omit<
+        QuickConnectPayload,
+        "pairingSessionId" | "purpose" | "schemaVersion"
+      >),
+      pairingSessionId: null,
+      purpose: "sign_in",
+      schemaVersion: 1,
+    };
+  }
+  if (
+    (candidate.purpose !== "sign_in" && candidate.purpose !== "pairing") ||
+    (candidate.purpose === "sign_in" && candidate.pairingSessionId !== null) ||
+    (candidate.purpose === "pairing" && !validIdentifier(candidate.pairingSessionId))
   ) {
     throw new JellyfinQuickConnectServiceError("invalid_transaction");
   }
@@ -296,6 +353,25 @@ export class JellyfinQuickConnectService {
   }
 
   public async start(input: StartJellyfinQuickConnectInput): Promise<StartedJellyfinQuickConnect> {
+    return this.#start(input, "sign_in", null, undefined);
+  }
+
+  public async startPairing(
+    input: StartJellyfinQuickConnectPairingInput,
+  ): Promise<StartedJellyfinQuickConnect> {
+    const pairingSession = this.#signIn.resolveEligiblePairingSession(input?.validatedSession);
+    if (!pairingSession) {
+      throw new JellyfinQuickConnectServiceError("pairing_session_required");
+    }
+    return this.#start(input, "pairing", pairingSession.sessionId, input.validatedSession);
+  }
+
+  async #start(
+    input: StartJellyfinQuickConnectInput,
+    purpose: "pairing" | "sign_in",
+    pairingSessionId: string | null,
+    validatedSession: unknown,
+  ): Promise<StartedJellyfinQuickConnect> {
     if (!input || typeof input !== "object") {
       throw new JellyfinQuickConnectServiceError("invalid_transaction");
     }
@@ -325,6 +401,12 @@ export class JellyfinQuickConnectService {
     if (initiated.Authenticated || !CODE_PATTERN.test(initiated.Code)) {
       throw new JellyfinQuickConnectServiceError("provider_unavailable");
     }
+    if (purpose === "pairing") {
+      const currentPairingSession = this.#signIn.resolveEligiblePairingSession(validatedSession);
+      if (!currentPairingSession || currentPairingSession.sessionId !== pairingSessionId) {
+        throw new JellyfinQuickConnectServiceError("pairing_session_required");
+      }
+    }
 
     const browserBindingToken = isCanonicalToken(input.browserBindingToken)
       ? input.browserBindingToken
@@ -339,7 +421,9 @@ export class JellyfinQuickConnectService {
       connectorId: target.connectorId,
       deviceId,
       insecureHttpApproved: target.insecureHttpApproved,
-      schemaVersion: 1,
+      pairingSessionId,
+      purpose,
+      schemaVersion: 2,
       secret: initiated.Secret,
       serverId: publicInfo.Id,
       targetUpdatedAt: target.updatedAt,
@@ -359,6 +443,8 @@ export class JellyfinQuickConnectService {
         expiresAt: expiresAt.getTime(),
         id: transactionId,
         nextPollAt: now + JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS,
+        pairingSessionId,
+        purpose,
       });
       if (inserted === "capacity") {
         throw new JellyfinQuickConnectServiceError("capacity_exceeded");
@@ -376,6 +462,34 @@ export class JellyfinQuickConnectService {
   }
 
   public async poll(input: PollJellyfinQuickConnectInput): Promise<JellyfinQuickConnectPollResult> {
+    return this.#poll(input, "sign_in", null);
+  }
+
+  public async pollPairing(
+    input: PollJellyfinQuickConnectPairingInput,
+  ): Promise<JellyfinQuickConnectPairingPollResult> {
+    const pairingSession = this.#signIn.resolveEligiblePairingSession(input?.validatedSession);
+    if (!pairingSession) {
+      throw new JellyfinQuickConnectServiceError("pairing_session_required");
+    }
+    return this.#poll(input, "pairing", pairingSession.sessionId);
+  }
+
+  #poll(
+    input: PollJellyfinQuickConnectInput,
+    purpose: "sign_in",
+    pairingSessionId: null,
+  ): Promise<JellyfinQuickConnectPollResult>;
+  #poll(
+    input: PollJellyfinQuickConnectPairingInput,
+    purpose: "pairing",
+    pairingSessionId: string,
+  ): Promise<JellyfinQuickConnectPairingPollResult>;
+  async #poll(
+    input: PollJellyfinQuickConnectInput | PollJellyfinQuickConnectPairingInput,
+    purpose: "pairing" | "sign_in",
+    pairingSessionId: string | null,
+  ): Promise<JellyfinQuickConnectPairingPollResult | JellyfinQuickConnectPollResult> {
     if (
       !input ||
       typeof input !== "object" ||
@@ -386,7 +500,13 @@ export class JellyfinQuickConnectService {
     }
     const now = this.#currentTime();
     const browserBindingHash = hashToken(input.browserBindingToken);
-    const reservation = this.#reservePoll(input.transactionId, browserBindingHash, now);
+    const reservation = this.#reservePoll(
+      input.transactionId,
+      browserBindingHash,
+      now,
+      purpose,
+      pairingSessionId,
+    );
     if (reservation.status === "expired") return internalResult({ status: "expired" as const });
     if (reservation.status === "pending") {
       return internalResult({
@@ -398,7 +518,11 @@ export class JellyfinQuickConnectService {
 
     const payload = this.#decryptPayload(reservation.row);
     const target = this.#resolveTarget();
-    if (!this.#payloadMatchesTarget(payload, target)) {
+    if (
+      !this.#payloadMatchesTarget(payload, target) ||
+      payload.purpose !== purpose ||
+      payload.pairingSessionId !== pairingSessionId
+    ) {
       throw new JellyfinQuickConnectServiceError("configuration_invalid");
     }
     const client = this.#createClient(target);
@@ -422,7 +546,9 @@ export class JellyfinQuickConnectService {
       });
     }
 
-    if (!this.#consume(reservation.row, browserBindingHash, now, target)) {
+    if (
+      !this.#consume(reservation.row, browserBindingHash, now, target, purpose, pairingSessionId)
+    ) {
       throw new JellyfinQuickConnectServiceError("invalid_transaction");
     }
     let authentication;
@@ -437,20 +563,35 @@ export class JellyfinQuickConnectService {
     if (authentication.ServerId !== payload.serverId) {
       throw new JellyfinQuickConnectServiceError("provider_unavailable");
     }
-    const result = this.#signIn.completeAuthenticatedSignIn({
-      authentication,
-      currentSessionToken: input.currentSessionToken,
-      deviceId: payload.deviceId,
-      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
-      proof: "quick_connect",
-      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-      target,
-      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
-    });
+    const result =
+      purpose === "pairing"
+        ? this.#signIn.completeAuthenticatedPairing({
+            authentication,
+            deviceId: payload.deviceId,
+            ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+            proof: "quick_connect",
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            target,
+            ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+            validatedSession: (input as PollJellyfinQuickConnectPairingInput).validatedSession,
+          })
+        : this.#signIn.completeAuthenticatedSignIn({
+            authentication,
+            currentSessionToken: (input as PollJellyfinQuickConnectInput).currentSessionToken,
+            deviceId: payload.deviceId,
+            ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+            proof: "quick_connect",
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            target,
+            ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+          });
     if (result.status === "denied") {
       return internalResult({ reason: result.reason, status: "denied" as const });
     }
-    return internalResult({ session: result.session, status: "signed_in" as const });
+    return internalResult({
+      session: result.session,
+      status: purpose === "pairing" ? ("paired" as const) : ("signed_in" as const),
+    });
   }
 
   #insert(input: {
@@ -461,6 +602,8 @@ export class JellyfinQuickConnectService {
     expiresAt: number;
     id: string;
     nextPollAt: number;
+    pairingSessionId: string | null;
+    purpose: "pairing" | "sign_in";
   }): "capacity" | "collision" | "inserted" {
     try {
       return this.#database.sqlite
@@ -497,17 +640,21 @@ export class JellyfinQuickConnectService {
                 id,
                 connector_id,
                 connector_type,
+                purpose,
+                pairing_session_id,
                 browser_binding_hash,
                 encrypted_payload,
                 expires_at,
                 next_poll_at,
                 poll_count,
                 created_at
-              ) values (?, ?, 'jellyfin', ?, ?, ?, ?, 0, ?)`,
+              ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, 0, ?)`,
             )
             .run(
               input.id,
               input.connectorId,
+              input.purpose,
+              input.pairingSessionId,
               input.browserBindingHash,
               input.encryptedPayload,
               input.expiresAt,
@@ -526,6 +673,8 @@ export class JellyfinQuickConnectService {
     transactionId: string,
     browserBindingHash: string,
     now: number,
+    purpose: "pairing" | "sign_in",
+    pairingSessionId: string | null,
   ):
     | { status: "expired" }
     | { expiresAt: number; pollAfterMs: number; status: "pending" }
@@ -539,6 +688,8 @@ export class JellyfinQuickConnectService {
                 id,
                 connector_id as connectorId,
                 connector_type as connectorType,
+                purpose,
+                pairing_session_id as pairingSessionId,
                 browser_binding_hash as browserBindingHash,
                 encrypted_payload as encryptedPayload,
                 expires_at as expiresAt,
@@ -553,6 +704,8 @@ export class JellyfinQuickConnectService {
           if (
             !row ||
             row.connectorType !== "jellyfin" ||
+            row.purpose !== purpose ||
+            row.pairingSessionId !== pairingSessionId ||
             !constantTimeTextEqual(row.browserBindingHash, browserBindingHash) ||
             row.consumedAt !== null
           ) {
@@ -575,11 +728,21 @@ export class JellyfinQuickConnectService {
                set next_poll_at = ?, poll_count = poll_count + 1
                where id = ?
                  and browser_binding_hash = ?
+                 and purpose = ?
+                 and pairing_session_id is ?
                  and consumed_at is null
                  and poll_count = ?
                  and next_poll_at = ?`,
             )
-            .run(nextPollAt, row.id, browserBindingHash, row.pollCount, row.nextPollAt);
+            .run(
+              nextPollAt,
+              row.id,
+              browserBindingHash,
+              purpose,
+              pairingSessionId,
+              row.pollCount,
+              row.nextPollAt,
+            );
           if (update.changes !== 1) {
             throw new JellyfinQuickConnectServiceError("invalid_transaction");
           }
@@ -600,6 +763,8 @@ export class JellyfinQuickConnectService {
     browserBindingHash: string,
     now: number,
     target: JellyfinConnectorTarget,
+    purpose: "pairing" | "sign_in",
+    pairingSessionId: string | null,
   ) {
     try {
       return this.#database.sqlite
@@ -611,11 +776,13 @@ export class JellyfinQuickConnectService {
                set consumed_at = ?
                where id = ?
                  and browser_binding_hash = ?
+                 and purpose = ?
+                 and pairing_session_id is ?
                  and consumed_at is null
                  and expires_at > ?
                  and poll_count = ?`,
             )
-            .run(now, row.id, browserBindingHash, now, row.pollCount);
+            .run(now, row.id, browserBindingHash, purpose, pairingSessionId, now, row.pollCount);
           return result.changes === 1;
         })
         .immediate();

@@ -69,6 +69,17 @@ export interface JellyfinAuthenticatedSignInInput {
   readonly userAgent?: string;
 }
 
+export interface JellyfinAuthenticatedPairingInput {
+  readonly authentication: JellyfinAuthenticationResult;
+  readonly deviceId: string;
+  readonly ipAddress?: string;
+  readonly proof: "password" | "quick_connect";
+  readonly requestId?: string;
+  readonly target: JellyfinConnectorTarget;
+  readonly userAgent?: string;
+  readonly validatedSession?: unknown;
+}
+
 export type JellyfinSignInDenialReason = "account_disabled" | "invalid_credentials";
 
 export interface JellyfinSignInDeniedResult {
@@ -214,6 +225,11 @@ export class JellyfinSignInService {
     throw new TypeError("Jellyfin sign-in services cannot be serialized.");
   }
 
+  /** @internal Resolves only the exact pending OIDC session eligible for account pairing. */
+  public resolveEligiblePairingSession(validatedSession: unknown) {
+    return this.#sessionService.beginValidatedOidcPairingSession(validatedSession);
+  }
+
   public async signInWithPassword(
     input: JellyfinPasswordSignInInput,
   ): Promise<JellyfinSignInResult> {
@@ -310,6 +326,35 @@ export class JellyfinSignInService {
       throw new JellyfinSignInServiceError("server_mismatch");
     }
 
+    return this.completeAuthenticatedPairing({
+      authentication,
+      deviceId,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      proof: "password",
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      target,
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+      validatedSession: input.validatedSession,
+    });
+  }
+
+  public completeAuthenticatedSignIn(
+    input: JellyfinAuthenticatedSignInInput,
+  ): JellyfinSignInResult {
+    this.#validateAuthenticatedSignInInput(input);
+    return this.#reconcileAndIssueSession({
+      authentication: input.authentication,
+      deviceId: input.deviceId,
+      proof: input.proof,
+      requestContext: input,
+      target: input.target,
+    });
+  }
+
+  public completeAuthenticatedPairing(
+    input: JellyfinAuthenticatedPairingInput,
+  ): JellyfinPairingResult {
+    this.#validateAuthenticatedPairingInput(input);
     try {
       return this.#database.sqlite
         .transaction(() => {
@@ -323,13 +368,13 @@ export class JellyfinSignInService {
             });
           }
           const identity = this.#pairIdentity({
-            authentication,
-            deviceId,
+            authentication: input.authentication,
+            deviceId: input.deviceId,
             occurredAt: pairingSession.operationTime,
             pairingSession,
-            proof: "password",
+            proof: input.proof,
             requestContext: input,
-            target,
+            target: input.target,
           });
           if (identity.status === "denied") return identity;
           const session = this.#sessionService.completeValidatedOidcPairingSession(
@@ -349,19 +394,6 @@ export class JellyfinSignInService {
       if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
-  }
-
-  public completeAuthenticatedSignIn(
-    input: JellyfinAuthenticatedSignInInput,
-  ): JellyfinSignInResult {
-    this.#validateAuthenticatedSignInInput(input);
-    return this.#reconcileAndIssueSession({
-      authentication: input.authentication,
-      deviceId: input.deviceId,
-      proof: input.proof,
-      requestContext: input,
-      target: input.target,
-    });
   }
 
   #reconcileAndIssueSession(input: {
@@ -887,6 +919,25 @@ export class JellyfinSignInService {
     if (
       !input ||
       typeof input !== "object" ||
+      !validIdentifier(input.deviceId) ||
+      (input.proof !== "password" && input.proof !== "quick_connect") ||
+      !input.authentication ||
+      typeof input.authentication !== "object" ||
+      !validIdentifier(input.target?.connectorId) ||
+      (input.requestId !== undefined &&
+        (typeof input.requestId !== "string" ||
+          input.requestId.length < 1 ||
+          input.requestId.length > 128))
+    ) {
+      throw new JellyfinSignInServiceError("provider_unavailable");
+    }
+  }
+
+  #validateAuthenticatedPairingInput(input: JellyfinAuthenticatedPairingInput) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !input.validatedSession ||
       !validIdentifier(input.deviceId) ||
       (input.proof !== "password" && input.proof !== "quick_connect") ||
       !input.authentication ||

@@ -10,8 +10,8 @@ the roadmap records when each area has passed its verification gate.
 > security headers and origin checks, connector contracts and probes, secret-handling
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
-> password-based OIDC-to-Jellyfin pairing, authentication audits, and recovery access
-> now exist, while Quick Connect pairing, link lifecycle controls, complete
+> password and Quick Connect OIDC-to-Jellyfin pairing, authentication audits, and recovery access
+> now exist, while link lifecycle controls, complete
 > authorization, connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -29,9 +29,9 @@ also migrates SQLite, validates public configuration, redacts structured logs, a
 provides isolated connector fixture and probe tooling.
 
 There is not yet a supported provider-administration workflow. Direct Jellyfin password
-and Quick Connect login plus password-based pairing for a pending OIDC session are
-implemented for the deployment-configured connector. Quick Connect pairing, relink and
-revocation controls, OIDC logout, connector administration, and media operations remain
+and Quick Connect login plus both pairing methods for a pending OIDC session are
+implemented for the deployment-configured connector. Relink and revocation controls,
+OIDC logout, connector administration, and media operations remain
 unavailable.
 
 ## Target system shape
@@ -123,8 +123,8 @@ do not open connections directly to upstream services.
 The current checkpoint supports configured OIDC issuers, immutable issuer-and-subject
 identity keys, explicit claim-to-role mapping, viewer-default JIT provisioning, opaque
 sessions, and recovery access. Direct Jellyfin authentication and the user-controlled
-password-pairing path are implemented; Quick Connect pairing and the rest of the
-user-controlled pairing lifecycle remain Phase 1 work. Media access requires a
+password and Quick Connect pairing paths are implemented; the rest of the
+user-controlled pairing lifecycle remains Phase 1 work. Media access requires a
 separately proven Jellyfin account link; matching email addresses is never sufficient
 proof. The full flow and recovery model are documented in
 [Authentication](authentication.md).
@@ -148,8 +148,8 @@ The SQLite schema stores or reserves storage for:
 Current OIDC, direct Jellyfin, and recovery workflows create authenticated users,
 external identities, service identity links, encrypted Jellyfin tokens, sessions,
 authorization transactions, connector bootstrap records, and authentication audit
-events. Password pairing is available for pending OIDC sessions; Quick Connect pairing,
-link lifecycle management, and connector administration are not yet available.
+events. Password and Quick Connect pairing are available for pending OIDC sessions;
+link lifecycle management and connector administration are not yet available.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the

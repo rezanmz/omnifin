@@ -210,6 +210,99 @@ function insertLinkedIdentity(database: ReturnType<typeof openDatabase>) {
 }
 
 describe("authentication schema upgrades", () => {
+  it("preserves active Quick Connect sign-in transactions while adding pairing ownership", () => {
+    const database = new Database(":memory:");
+    try {
+      database.pragma("foreign_keys = OFF");
+      for (const migration of [
+        "0000_foundation.sql",
+        "0001_auth_security_foundation.sql",
+        "0002_oidc_runtime_security.sql",
+        "0003_session_secret_reservations.sql",
+        "0004_oidc_failure_audit_budget.sql",
+        "0005_session_issuance_indexes.sql",
+        "0006_jellyfin_quick_connect.sql",
+      ]) {
+        applyMigration(database, migration);
+      }
+      database.pragma("foreign_keys = ON");
+      database.exec(`
+        insert into connector_configs (
+          id, type, display_name, base_url, encrypted_credentials, created_at, updated_at
+        ) values (
+          'jellyfin-home',
+          'jellyfin',
+          'Home Jellyfin',
+          'https://jellyfin.example.test',
+          'v1.fixture-connector-secret',
+          1000,
+          1000
+        );
+
+        insert into jellyfin_quick_connect_transactions (
+          id,
+          connector_id,
+          connector_type,
+          browser_binding_hash,
+          encrypted_payload,
+          expires_at,
+          next_poll_at,
+          poll_count,
+          consumed_at,
+          created_at
+        ) values (
+          'quick-connect-before-pairing',
+          'jellyfin-home',
+          'jellyfin',
+          '${"b".repeat(43)}',
+          'v1.fixture-encrypted-payload',
+          3000,
+          2000,
+          4,
+          null,
+          1000
+        );
+      `);
+
+      applyMigration(database, "0007_jellyfin_quick_connect_pairing.sql");
+
+      expect(
+        database
+          .prepare(
+            `select
+              id,
+              purpose,
+              pairing_session_id as pairingSessionId,
+              browser_binding_hash as browserBindingHash,
+              encrypted_payload as encryptedPayload,
+              poll_count as pollCount
+             from jellyfin_quick_connect_transactions`,
+          )
+          .get(),
+      ).toEqual({
+        browserBindingHash: "b".repeat(43),
+        encryptedPayload: "v1.fixture-encrypted-payload",
+        id: "quick-connect-before-pairing",
+        pairingSessionId: null,
+        pollCount: 4,
+        purpose: "sign_in",
+      });
+      expect(
+        database
+          .prepare(
+            `select name
+             from sqlite_master
+             where type = 'index'
+               and name = 'jellyfin_quick_connect_transactions_pairing_session_idx'`,
+          )
+          .get(),
+      ).toEqual({ name: "jellyfin_quick_connect_transactions_pairing_session_idx" });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("backfills every existing bearer and CSRF hash with immutable origin attribution", () => {
     const database = new Database(":memory:");
     try {
@@ -897,7 +990,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 7 });
+      ).toEqual({ count: 8 });
       expect(
         database.sqlite
           .prepare(

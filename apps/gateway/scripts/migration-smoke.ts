@@ -49,7 +49,9 @@ const requiredColumns = {
     "encrypted_payload",
     "expires_at",
     "next_poll_at",
+    "pairing_session_id",
     "poll_count",
+    "purpose",
   ],
   oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
   oidc_providers: [
@@ -95,6 +97,7 @@ const requiredIndexes = {
   jellyfin_quick_connect_transactions: [
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
+    "jellyfin_quick_connect_transactions_pairing_session_idx",
   ],
   oidc_logout_receipts: [
     "oidc_logout_receipts_expiry_idx",
@@ -244,7 +247,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0006.",
+  "Current migration journal must contain migration 0007.",
 );
 
 try {
@@ -469,8 +472,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 7, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0006.",
+        JSON.stringify({ count: 8, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0007.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -635,7 +638,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0006, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0007, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -417,6 +417,31 @@ export type JellyfinQuickConnectPollResponse = z.infer<
   typeof jellyfinQuickConnectPollResponseSchema
 >;
 
+const pairedOidcPrincipalSchema = sessionPrincipalSchema.refine(
+  (principal) =>
+    principal.accountState === "active" && principal.authenticationMethod.kind === "oidc",
+  "Quick Connect pairing requires an active OIDC-attributed principal",
+);
+
+export const jellyfinQuickConnectPairingPollResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("pending"),
+    expiresAt: z.iso.datetime({ offset: true }),
+    pollAfterMs: z.int().min(1_000).max(30_000),
+  }),
+  z.strictObject({
+    status: z.literal("paired"),
+    principal: pairedOidcPrincipalSchema,
+    csrfToken: csrfTokenSchema,
+  }),
+  z.strictObject({
+    status: z.literal("expired"),
+  }),
+]);
+export type JellyfinQuickConnectPairingPollResponse = z.infer<
+  typeof jellyfinQuickConnectPairingPollResponseSchema
+>;
+
 export const sessionResponseSchema = z.union([
   authenticatedSessionResponseSchema,
   z.object({

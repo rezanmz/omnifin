@@ -8,7 +8,8 @@ design and review.
 > [!IMPORTANT]
 > The current checkpoint implements defensive foundations plus OIDC authentication,
 > opaque local sessions, identity resolution, authentication audit records, and hidden
-> recovery access. Jellyfin linking, complete permission enforcement, connector
+> recovery access. Password and Quick Connect Jellyfin linking are implemented, while
+> the complete link lifecycle, permission enforcement, connector
 > administration, media proxying, and upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
@@ -130,9 +131,9 @@ diagnostic.
   require an explicit validated claim mapping, and identity plus session changes commit
   atomically.
 
-Password-based Jellyfin proof-of-control pairing now has immutable-ownership, CSRF,
-session-rotation, and secret-preservation tests. Quick Connect pairing, the complete
-link lifecycle, OIDC logout, and full permission enforcement still need completed
+Password and Quick Connect Jellyfin proof-of-control pairing now have
+immutable-ownership, exact-session binding, CSRF, session-rotation, migration, and
+secret-preservation tests. The complete link lifecycle, OIDC logout, and full permission enforcement still need completed
 threat-model gates before Phase 1 can pass.
 
 When media proxying is implemented, responses must enforce an approved upstream

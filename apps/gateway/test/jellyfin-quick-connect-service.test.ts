@@ -14,7 +14,13 @@ import { JellyfinSignInService } from "../src/auth/jellyfin/sign-in-service.js";
 import { SessionService } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIdentities,
+  oidcProviders,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const START = new Date("2026-07-26T12:00:00.000Z");
@@ -151,6 +157,7 @@ function fixture(
     },
     calls,
     service,
+    sessions,
   };
 }
 
@@ -163,6 +170,57 @@ function pollInput(transactionId: string, overrides: Record<string, unknown> = {
     userAgent: "fixture-browser/1.0",
     ...overrides,
   };
+}
+
+function seedPendingOidcSession(handle: DatabaseHandle, sessions: SessionService) {
+  handle.db
+    .insert(oidcProviders)
+    .values({
+      clientId: "omnifin",
+      displayName: "Home identity",
+      enabled: true,
+      id: "oidc-home",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      slug: "home",
+    })
+    .run();
+  handle.db
+    .insert(users)
+    .values({
+      createdAt: START,
+      displayName: "Riley from OIDC",
+      id: "oidc-user-1",
+      role: "requester",
+      roleSource: "oidc_mapping",
+      status: "pending_link",
+      updatedAt: START,
+    })
+    .run();
+  handle.db
+    .insert(externalIdentities)
+    .values({
+      createdAt: START,
+      displayClaimsJson: JSON.stringify({ displayName: "Riley from OIDC" }),
+      id: "oidc-identity-1",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      lastLoginAt: START,
+      providerId: "oidc-home",
+      subject: "immutable-oidc-subject",
+      updatedAt: START,
+      userId: "oidc-user-1",
+    })
+    .run();
+  const session = sessions.createSession({
+    attribution: {
+      authMethod: "oidc",
+      externalIdentityId: "oidc-identity-1",
+      oidcProviderId: "oidc-home",
+      userId: "oidc-user-1",
+    },
+  });
+  const validated = sessions.validateSessionCsrf(session.sessionToken, session.csrfToken);
+  if (!validated) throw new Error("Expected a validated pending OIDC session.");
+  return { session, validated };
 }
 
 describe("JellyfinQuickConnectService", () => {
@@ -391,6 +449,71 @@ describe("JellyfinQuickConnectService", () => {
           .get(),
       ).toEqual({ consumed: 1 });
       expect(handle.db.select().from(users).all()).toHaveLength(0);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("binds a pairing transaction to one pending OIDC session and preserves OIDC attribution", async () => {
+    const handle = database();
+    const test = fixture(handle, { authenticated: true });
+    try {
+      const pending = seedPendingOidcSession(handle, test.sessions);
+      const started = await test.service.startPairing({
+        validatedSession: pending.validated,
+      });
+      expect(
+        handle.sqlite
+          .prepare(
+            `select purpose, pairing_session_id as pairingSessionId
+             from jellyfin_quick_connect_transactions`,
+          )
+          .get(),
+      ).toEqual({
+        pairingSessionId: pending.session.principal.sessionId,
+        purpose: "pairing",
+      });
+
+      const secondSession = test.sessions.createSession({
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "oidc-identity-1",
+          oidcProviderId: "oidc-home",
+          userId: "oidc-user-1",
+        },
+      });
+      const secondValidated = test.sessions.validateSessionCsrf(
+        secondSession.sessionToken,
+        secondSession.csrfToken,
+      );
+      test.advance(2_000);
+      await expect(
+        test.service.pollPairing({
+          ...pollInput(started.transactionId),
+          validatedSession: secondValidated,
+        }),
+      ).rejects.toMatchObject({ reason: "invalid_transaction" });
+      expect(test.calls.poll).toBe(0);
+
+      const result = await test.service.pollPairing({
+        ...pollInput(started.transactionId),
+        validatedSession: pending.validated,
+      });
+      expect(result.status).toBe("paired");
+      if (result.status !== "paired") throw new Error("Expected Quick Connect pairing.");
+      expect(result.session.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "oidc", providerId: "oidc-home" },
+        userId: "oidc-user-1",
+      });
+      expect(handle.db.select().from(users).all()).toHaveLength(1);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toEqual([
+        expect.objectContaining({
+          externalUserId: "jellyfin-user-1",
+          userId: "oidc-user-1",
+        }),
+      ]);
+      expect(test.sessions.resolveAndRefresh(secondSession.sessionToken)).toBeNull();
     } finally {
       handle.close();
     }

@@ -1,5 +1,6 @@
 import {
   jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectPairingPollResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
 } from "@omnifin/contracts/auth";
 import { describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { JellyfinQuickConnectServiceDependencies } from "../src/auth/jellyfin/quick-connect-service.js";
 import type { AppConfig } from "../src/config.js";
+import { externalIdentities, oidcProviders, users } from "../src/db/schema.js";
 
 const START = new Date("2026-07-26T12:00:00.000Z");
 
@@ -114,6 +116,54 @@ function pollRequest(transactionId: string, cookie: string, payload: Record<stri
     payload,
     url: `/v1/auth/jellyfin/quick-connect/${transactionId}/poll`,
   };
+}
+
+function pendingOidcSession(app: Awaited<ReturnType<typeof createApp>>) {
+  app.database.db
+    .insert(oidcProviders)
+    .values({
+      clientId: "omnifin",
+      displayName: "Home identity",
+      enabled: true,
+      id: "oidc-home",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      slug: "home",
+    })
+    .run();
+  app.database.db
+    .insert(users)
+    .values({
+      createdAt: START,
+      displayName: "Riley from OIDC",
+      id: "oidc-user-1",
+      role: "requester",
+      roleSource: "oidc_mapping",
+      status: "pending_link",
+      updatedAt: START,
+    })
+    .run();
+  app.database.db
+    .insert(externalIdentities)
+    .values({
+      createdAt: START,
+      displayClaimsJson: JSON.stringify({ displayName: "Riley from OIDC" }),
+      id: "oidc-identity-1",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      lastLoginAt: START,
+      providerId: "oidc-home",
+      subject: "immutable-oidc-subject",
+      updatedAt: START,
+      userId: "oidc-user-1",
+    })
+    .run();
+  return app.sessionService.createSession({
+    attribution: {
+      authMethod: "oidc",
+      externalIdentityId: "oidc-identity-1",
+      oidcProviderId: "oidc-home",
+      userId: "oidc-user-1",
+    },
+  });
 }
 
 describe("Jellyfin Quick Connect browser routes", () => {
@@ -269,6 +319,118 @@ describe("Jellyfin Quick Connect browser routes", () => {
       const after = await app.inject({ method: "GET", url: "/v1/auth/providers" });
       expect(after.json()).toMatchObject({
         providers: [expect.objectContaining({ kind: "jellyfin", quickConnectAvailable: false })],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("pairs Quick Connect only for the CSRF-proven pending OIDC session", async () => {
+    const test = fixture();
+    const app = await createApp({
+      config: config(),
+      jellyfinQuickConnectDependencies: test.dependencies,
+      sessionDependencies: { clock: () => new Date(START) },
+    });
+    try {
+      const pending = pendingOidcSession(app);
+      const sessionCookie = `__Host-omnifin_session=${pending.sessionToken}`;
+      const startedResponse = await app.inject({
+        headers: {
+          cookie: sessionCookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": pending.csrfToken,
+        },
+        method: "POST",
+        payload: {},
+        url: "/v1/auth/jellyfin/link/quick-connect",
+      });
+      expect(startedResponse.statusCode).toBe(200);
+      const started = jellyfinQuickConnectInitiationResponseSchema.parse(startedResponse.json());
+      const bindingCookie = cookieHeader(startedResponse.headers["set-cookie"]);
+
+      const sibling = app.sessionService.createSession({
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "oidc-identity-1",
+          oidcProviderId: "oidc-home",
+          userId: "oidc-user-1",
+        },
+      });
+      test.advance(2_000);
+      test.setAuthenticated(true);
+      const stolen = await app.inject({
+        headers: {
+          cookie: `__Host-omnifin_session=${sibling.sessionToken}; ${bindingCookie}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": sibling.csrfToken,
+        },
+        method: "POST",
+        payload: {},
+        url: `/v1/auth/jellyfin/link/quick-connect/${started.transactionId}/poll`,
+      });
+      expect(stolen.statusCode).toBe(400);
+      expect(stolen.json()).toMatchObject({
+        error: { code: "authentication_attempt_invalid" },
+      });
+      expect(test.calls.poll).toBe(0);
+
+      const completed = await app.inject({
+        headers: {
+          cookie: `${sessionCookie}; ${bindingCookie}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": pending.csrfToken,
+        },
+        method: "POST",
+        payload: {},
+        url: `/v1/auth/jellyfin/link/quick-connect/${started.transactionId}/poll`,
+      });
+
+      expect(completed.statusCode).toBe(200);
+      expect(jellyfinQuickConnectPairingPollResponseSchema.parse(completed.json())).toMatchObject({
+        principal: {
+          accountState: "active",
+          authenticationMethod: { kind: "oidc", providerId: "oidc-home" },
+          userId: "oidc-user-1",
+        },
+        status: "paired",
+      });
+      expect(completed.body).not.toMatch(
+        /private-jellyfin-access-token|private-quick-connect-secret/,
+      );
+      expect(test.calls).toMatchObject({ authenticate: 1, poll: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects Quick Connect pairing without CSRF before contacting Jellyfin", async () => {
+    const test = fixture();
+    const app = await createApp({
+      config: config(),
+      jellyfinQuickConnectDependencies: test.dependencies,
+      sessionDependencies: { clock: () => new Date(START) },
+    });
+    try {
+      const pending = pendingOidcSession(app);
+      const response = await app.inject({
+        headers: {
+          cookie: `__Host-omnifin_session=${pending.sessionToken}`,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: {},
+        url: "/v1/auth/jellyfin/link/quick-connect",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "csrf_denied" } });
+      expect(test.calls).toEqual({
+        authenticate: 0,
+        enabled: 0,
+        initiate: 0,
+        poll: 0,
+        publicInfo: 0,
       });
     } finally {
       await app.close();

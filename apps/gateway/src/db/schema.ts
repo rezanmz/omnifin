@@ -757,6 +757,12 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
     connectorType: text("connector_type", { enum: ["jellyfin"] })
       .notNull()
       .default("jellyfin"),
+    purpose: text("purpose", { enum: ["sign_in", "pairing"] })
+      .notNull()
+      .default("sign_in"),
+    pairingSessionId: text("pairing_session_id").references(() => sessions.id, {
+      onDelete: "cascade",
+    }),
     browserBindingHash: text("browser_binding_hash").notNull(),
     encryptedPayload: text("encrypted_payload").notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
@@ -769,6 +775,10 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
     index("jellyfin_quick_connect_transactions_expiry_idx").on(table.expiresAt),
     index("jellyfin_quick_connect_transactions_browser_expiry_idx").on(
       table.browserBindingHash,
+      table.expiresAt,
+    ),
+    index("jellyfin_quick_connect_transactions_pairing_session_idx").on(
+      table.pairingSessionId,
       table.expiresAt,
     ),
     foreignKey({
@@ -786,6 +796,11 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
     check(
       "jellyfin_quick_connect_transactions_connector_type_check",
       sql`${table.connectorType} = 'jellyfin'`,
+    ),
+    check(
+      "jellyfin_quick_connect_transactions_purpose_check",
+      sql`(${table.purpose} = 'sign_in' and ${table.pairingSessionId} is null)
+        or (${table.purpose} = 'pairing' and ${table.pairingSessionId} is not null)`,
     ),
     check(
       "jellyfin_quick_connect_transactions_poll_count_check",

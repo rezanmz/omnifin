@@ -12,6 +12,7 @@ import {
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectPairingPollResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
   roleMappingSchema,
   serviceIdentityLinkSchema,
@@ -47,6 +48,17 @@ const activePrincipal = {
   externalIdentity: null,
   linkedServices: [jellyfinLink],
   ...sessionTimes,
+};
+
+const activeOidcPrincipal = {
+  ...activePrincipal,
+  authenticationMethod: { kind: "oidc" as const, providerId: "authentik" },
+  externalIdentity: {
+    displayClaims: { displayName: "Riley" },
+    issuer: "https://id.example.test/application/o/omnifin/",
+    providerId: "authentik",
+    subject: "immutable-subject",
+  },
 };
 
 describe("Jellyfin authentication contracts", () => {
@@ -153,6 +165,23 @@ describe("Jellyfin authentication contracts", () => {
         pollAfterMs: 2_000,
         secret: "must-not-cross-the-contract",
         status: "pending",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("distinguishes a paired OIDC session from direct Quick Connect sign-in", () => {
+    expect(
+      jellyfinQuickConnectPairingPollResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        principal: activeOidcPrincipal,
+        status: "paired",
+      }),
+    ).toMatchObject({ status: "paired" });
+    expect(
+      jellyfinQuickConnectPairingPollResponseSchema.safeParse({
+        csrfToken: "c".repeat(43),
+        principal: activePrincipal,
+        status: "paired",
       }).success,
     ).toBe(false);
   });
