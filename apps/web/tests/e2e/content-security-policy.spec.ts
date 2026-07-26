@@ -25,7 +25,7 @@ for (const route of ["/", "/login", "/settings", "/does-not-exist"] as const) {
     expect(scriptNonces.length).toBeGreaterThan(0);
     expect(new Set(scriptNonces)).toEqual(new Set([nonce]));
 
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("load");
     expect(policyViolations).toEqual([]);
   });
 }

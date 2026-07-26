@@ -17,7 +17,7 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   await expect(
     page.getByRole("heading", { level: 1, name: "Your media control room is being prepared." }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "View release readiness" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Review account access" })).toHaveAttribute(
     "href",
     "/settings",
   );
@@ -207,7 +207,7 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
 
   await page.goto("/?test-view=onboarding");
   await expect(page.locator(".mobile-navigation")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "View release readiness" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Review account access" })).toBeVisible();
 });
 
 test("touch users can disclose operations and navigate to settings", async ({ page }, testInfo) => {
