@@ -1,5 +1,7 @@
 "use client";
 
+import "../lib/zod-browser";
+
 import {
   oidcProviderCreateRequestSchema,
   oidcProviderUpdateRequestSchema,
@@ -73,7 +75,7 @@ const tokenMethods = ["client_secret_basic", "client_secret_post", "none"] as co
 const roles = ["viewer", "requester", "operator", "admin"] as const;
 const mappingOperators = ["equals", "contains_any", "contains_all"] as const;
 
-interface IdentityProviderConsoleProperties {
+export interface IdentityProviderConsoleProperties {
   client?: IdentityProviderAdminClient;
   displayProfile?: DisplayProfile;
   embedded?: boolean;
@@ -554,11 +556,19 @@ function ProviderForm({
           <span />
         )}
         {step < 3 ? (
-          <button className={styles.primaryButton} onClick={next} type="button">
+          <button
+            className={styles.primaryButton}
+            key="continue"
+            onClick={(event) => {
+              event.preventDefault();
+              next();
+            }}
+            type="button"
+          >
             Continue <ArrowRight aria-hidden="true" size={16} />
           </button>
         ) : (
-          <button className={styles.primaryButton} disabled={busy} type="submit">
+          <button className={styles.primaryButton} disabled={busy} key="submit" type="submit">
             {busy ? (
               <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
             ) : (

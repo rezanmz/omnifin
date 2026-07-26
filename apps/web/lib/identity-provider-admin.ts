@@ -1,3 +1,5 @@
+import "./zod-browser";
+
 import {
   oidcProviderAdminSchema,
   oidcProviderCreateRequestSchema,
@@ -24,13 +26,6 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { z } from "zod";
-
-if (typeof window !== "undefined") {
-  // Object-schema JIT uses Function construction. Keep browser validation
-  // compatible with the production nonce-only script policy.
-  z.config({ jitless: true });
-}
 
 const CSRF_HEADER = "x-omnifin-csrf";
 

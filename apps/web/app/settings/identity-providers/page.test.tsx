@@ -38,9 +38,9 @@ describe("IdentityProvidersPage", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Authentik" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Authentik" })).toBeVisible();
     expect(
-      screen.getByText("https://omnifin.example.test/api/auth/oidc/callback/oidc-authentik"),
+      await screen.findByText("https://omnifin.example.test/api/auth/oidc/callback/oidc-authentik"),
     ).toBeVisible();
     expect(await screen.findByText(/media-operators/)).toBeVisible();
   });
