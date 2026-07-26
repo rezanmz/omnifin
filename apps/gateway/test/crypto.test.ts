@@ -81,13 +81,27 @@ describe("opaque token helpers", () => {
     expect(hashToken(token)).toBe(hashToken(token));
     expect(hashToken(token)).not.toContain(token);
     const rootKey = Buffer.alloc(32, 1);
-    const privateHash = privacyHash("192.0.2.1", rootKey);
+    const privateHash = privacyHash("ip_address", "192.0.2.1", rootKey);
     const directRootHash = createHmac("sha256", rootKey)
       .update("192.0.2.1", "utf8")
       .digest("base64url")
       .slice(0, 22);
     expect(privateHash).toHaveLength(22);
     expect(privateHash).not.toBe(directRootHash);
+  });
+
+  it("domain-separates privacy hashes for unrelated sensitive fields", () => {
+    const rootKey = Buffer.alloc(32, 9);
+    const value = "same-sensitive-value";
+    const hashes = [
+      privacyHash("ip_address", value, rootKey),
+      privacyHash("user_agent", value, rootKey),
+      privacyHash("oidc_session_id", value, rootKey),
+      privacyHash("rate_limit_client", value, rootKey),
+    ];
+
+    expect(new Set(hashes).size).toBe(hashes.length);
+    expect(privacyHash("ip_address", value, rootKey)).toBe(hashes[0]);
   });
 
   it("compares text without early length exits", () => {

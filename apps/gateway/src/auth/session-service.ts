@@ -347,20 +347,20 @@ export class SessionService {
           externalIdentityId:
             attribution.authMethod === "oidc" ? attribution.externalIdentityId : null,
           id: sessionId,
-          ipHash: ipAddress ? privacyHash(ipAddress, this.privacyKey) : null,
+          ipHash: ipAddress ? privacyHash("ip_address", ipAddress, this.privacyKey) : null,
           lastRotatedAt: now,
           lastSeenAt: now,
           oidcProviderId: attribution.authMethod === "oidc" ? attribution.oidcProviderId : null,
           oidcSessionIdHash:
             attribution.authMethod === "oidc" && attribution.oidcSessionId
-              ? privacyHash(attribution.oidcSessionId, this.privacyKey)
+              ? privacyHash("oidc_session_id", attribution.oidcSessionId, this.privacyKey)
               : null,
           serviceIdentityLinkId:
             attribution.authMethod === "recovery"
               ? null
               : (attribution.serviceIdentityLinkId ?? null),
           tokenHash,
-          userAgentHash: userAgent ? privacyHash(userAgent, this.privacyKey) : null,
+          userAgentHash: userAgent ? privacyHash("user_agent", userAgent, this.privacyKey) : null,
           userId: attribution.authMethod === "recovery" ? null : attribution.userId,
         })
         .run();
@@ -703,6 +703,7 @@ export class SessionService {
         id: auditId,
         ipHash: event.context.ipAddress
           ? privacyHash(
+              "ip_address",
               optionalBoundedText(event.context.ipAddress, 256, "IP address")!,
               this.privacyKey,
             )

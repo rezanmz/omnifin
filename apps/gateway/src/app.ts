@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
+import { recoveryRoutes } from "./auth/recovery-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 import { SESSION_CSRF_HEADER, sessionCookieName } from "./auth/session-cookie.js";
 import { sessionRoutes } from "./auth/session-routes.js";
@@ -117,11 +118,21 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     await app.register(formBody, { bodyLimit: 64 * 1_024 });
     await app.register(sensible);
     await app.register(rateLimit, {
-      global: true,
+      global: false,
       max: 300,
       timeWindow: "1 minute",
       hook: "onRequest",
       keyGenerator: (request) => request.ip,
+    });
+    const globalRateLimit = app.createRateLimit();
+    app.addHook("onRequest", async (request, reply) => {
+      const result = await globalRateLimit(request);
+      if (result.isAllowed || !result.isExceeded) return;
+      reply.header("x-ratelimit-limit", result.max);
+      reply.header("x-ratelimit-remaining", 0);
+      reply.header("x-ratelimit-reset", result.ttlInSeconds);
+      reply.header("retry-after", result.ttlInSeconds);
+      throw request.server.httpErrors.tooManyRequests("Rate limit exceeded.");
     });
     await app.register(helmet, {
       contentSecurityPolicy: {
@@ -219,6 +230,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(recoveryRoutes);
     await app.register(sessionRoutes);
     return app;
   } catch (initializationError) {

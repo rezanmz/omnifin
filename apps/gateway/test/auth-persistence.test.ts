@@ -94,7 +94,11 @@ describe("authentication persistence invariants", () => {
       })
       .run();
 
-    const sidHash = privacyHash("upstream-session-identifier", Buffer.alloc(32, 7));
+    const sidHash = privacyHash(
+      "oidc_session_id",
+      "upstream-session-identifier",
+      Buffer.alloc(32, 7),
+    );
     database.db
       .insert(sessions)
       .values({

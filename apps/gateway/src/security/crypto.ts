@@ -16,6 +16,9 @@ const DERIVATION_SALT = Buffer.from("omnifin:v1:key-derivation", "utf8");
 const ENVELOPE_KEY_PURPOSE = "omnifin:v1:envelope:aes-256-gcm";
 const PRIVACY_HASH_KEY_PURPOSE = "omnifin:v1:privacy-hash:hmac-sha256";
 
+export type PrivacyHashDomain =
+  "ip_address" | "oidc_session_id" | "rate_limit_client" | "user_agent";
+
 function deriveDomainKey(rootKey: Buffer, purpose: string) {
   if (rootKey.length !== ROOT_KEY_BYTES) {
     throw new Error("Cryptographic root keys must be 32 bytes.");
@@ -99,8 +102,8 @@ export function hashToken(token: string) {
   return createHash("sha256").update(token, "utf8").digest("base64url");
 }
 
-export function privacyHash(value: string, key: Buffer) {
-  const privacyKey = deriveDomainKey(key, PRIVACY_HASH_KEY_PURPOSE);
+export function privacyHash(domain: PrivacyHashDomain, value: string, key: Buffer) {
+  const privacyKey = deriveDomainKey(key, `${PRIVACY_HASH_KEY_PURPOSE}:${domain}`);
   try {
     return createHmac("sha256", privacyKey).update(value, "utf8").digest("base64url").slice(0, 22);
   } finally {

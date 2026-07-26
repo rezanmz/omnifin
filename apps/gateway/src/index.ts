@@ -60,5 +60,6 @@ export {
   EnvelopeCipher,
   hashToken,
   privacyHash,
+  type PrivacyHashDomain,
   randomToken,
 } from "./security/crypto.js";
