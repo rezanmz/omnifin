@@ -50,6 +50,22 @@ async function mutate(request, webOrigin, path, csrfToken, data, method = "POST"
   return json(response, method === "POST" ? 201 : 200);
 }
 
+async function validateProvider(request, path, webOrigin, csrfToken) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await request.post(path, {
+      headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken },
+      maxRedirects: 0,
+    });
+    if (response.status() === 200) return json(response, 200);
+    if (response.status() !== 503 || attempt === 2) throw new BrowserCheckError();
+    const retryAfterSeconds = Number(response.headers()["retry-after"]);
+    assert(Number.isInteger(retryAfterSeconds));
+    assert(retryAfterSeconds >= 1 && retryAfterSeconds <= 60);
+    await new Promise((resolve) => setTimeout(resolve, (retryAfterSeconds + 6) * 1_000));
+  }
+  throw new BrowserCheckError();
+}
+
 async function visible(locator) {
   try {
     return (await locator.count()) > 0 && (await locator.first().isVisible());
@@ -317,11 +333,12 @@ async function run() {
     assert(created.enabled === false);
 
     currentStage = "provider_validate";
-    const validationResponse = await context.request.post(
+    const validation = await validateProvider(
+      context.request,
       `/api/admin/auth/oidc/providers/${expectedProviderId}/validate`,
-      { headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken }, maxRedirects: 0 },
+      webOrigin,
+      csrfToken,
     );
-    const validation = await json(validationResponse, 200);
     assert(validation.capabilities?.authorizationCodeFlow === true);
     assert(validation.capabilities?.pkceS256 === true);
     assert(validation.capabilities?.logout?.backChannel === true);

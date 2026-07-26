@@ -94,6 +94,8 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /INTERACTION_RETRY_ATTEMPTS = 4/u);
   assert.match(browserSource, /retryInteraction/u);
   assert.match(browserSource, /click\(\{ noWaitAfter: true, timeout: 5_000 \}\)/u);
+  assert.match(browserSource, /response\.status\(\) !== 503/u);
+  assert.match(browserSource, /retryAfterSeconds \+ 6/u);
   assert.match(browserSource, /backchannelTaskFailureStage/u);
   assert.match(browserSource, /backchannel_logout_notification_dispatch/u);
   assert.match(browserSource, /send_backchannel_logout_request/u);
