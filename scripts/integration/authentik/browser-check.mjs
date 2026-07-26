@@ -107,6 +107,18 @@ async function fillStable(page, locator, value) {
   });
 }
 
+async function submitStableForm(page, locator) {
+  await retryInteraction(page, async () => {
+    await locator.waitFor({ state: "visible", timeout: 5_000 });
+    await locator.evaluate((form) => {
+      if (form.tagName !== "FORM" || typeof form.requestSubmit !== "function") {
+        throw new Error("fixture_form_unavailable");
+      }
+      form.requestSubmit();
+    });
+  });
+}
+
 async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
   currentStage = `${attempt}_navigation`;
   await page.goto(startPath, { waitUntil: "domcontentloaded" });
@@ -170,21 +182,10 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     }
     if (completedField) {
       currentStage = `${attempt}_form_submit`;
-      await retryInteraction(page, async () => {
-        await credentialForm.waitFor({ state: "visible", timeout: 5_000 });
-        await credentialForm.evaluate((form) => {
-          if (form.tagName !== "FORM" || typeof form.requestSubmit !== "function") {
-            throw new Error("fixture_form_unavailable");
-          }
-          form.requestSubmit();
-        });
-      });
+      await submitStableForm(page, credentialForm);
     } else {
       currentStage = `${attempt}_consent_submit`;
-      await retryInteraction(page, async () => {
-        await action.waitFor({ state: "visible", timeout: 5_000 });
-        await action.click({ noWaitAfter: true, timeout: 5_000 });
-      });
+      await submitStableForm(page, page.locator("ak-stage-consent form").first());
     }
     currentStage = `${attempt}_transition`;
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);

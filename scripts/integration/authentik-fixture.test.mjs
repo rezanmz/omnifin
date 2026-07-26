@@ -95,7 +95,7 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /retryInteraction/u);
   assert.match(browserSource, /form\.requestSubmit\(\)/u);
   assert.match(browserSource, /ak-stage-identification form/u);
-  assert.match(browserSource, /click\(\{ noWaitAfter: true, timeout: 5_000 \}\)/u);
+  assert.match(browserSource, /ak-stage-consent form/u);
   assert.match(browserSource, /response\.status\(\) !== 503/u);
   assert.match(browserSource, /retryAfterSeconds \+ 6/u);
   assert.match(browserSource, /backchannelTaskFailureStage/u);
