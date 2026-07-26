@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 import {
   authentikFixture,
+  djangoPasswordHash,
   dotenv,
   isPrivateIpv4,
   reportFor,
@@ -18,6 +19,7 @@ const blueprintSource = readFileSync(
   new URL("./authentik/blueprint.yaml", import.meta.url),
   "utf8",
 );
+const runnerSource = readFileSync(new URL("./authentik/run.mjs", import.meta.url), "utf8");
 
 test("selects only a non-loopback RFC1918 fixture host", () => {
   assert.equal(isPrivateIpv4("10.4.5.6"), true);
@@ -46,6 +48,18 @@ test("serializes a deterministic quoted environment without multiline injection"
   assert.equal(dotenv({ SECOND: "two$", FIRST: "one" }), "FIRST='one'\nSECOND='two$'\n");
   assert.throws(() => dotenv({ INVALID: "line\nbreak" }), /environment_value_invalid/u);
   assert.throws(() => dotenv({ invalid: "value" }), /environment_name_invalid/u);
+});
+
+test("generates the current Django PBKDF2 bootstrap hash without a plaintext subprocess", () => {
+  assert.equal(
+    djangoPasswordHash("a-long-isolated-password", "fixedFixtureSalt1234"),
+    "pbkdf2_sha256$1000000$fixedFixtureSalt1234$yOBThZRNKwQFOBzKL4dEsOcTkTEeSXNzeet6DzMo5bU=",
+  );
+  assert.throws(
+    () => djangoPasswordHash("short", "fixedFixtureSalt1234"),
+    /password_hash_input_invalid/u,
+  );
+  assert.doesNotMatch(runnerSource, /hash_password|"run",\s*"--rm"/u);
 });
 
 test("emits only the bounded, sanitized Authentik report contract", () => {

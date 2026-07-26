@@ -1,3 +1,4 @@
+import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
 const AUTHENTIK_VERSION = "2026.5.6";
@@ -51,6 +52,21 @@ export function dotenv(values) {
     })
     .join("\n")
     .concat("\n");
+}
+
+export function djangoPasswordHash(password, salt = randomBytes(16).toString("base64url")) {
+  if (
+    typeof password !== "string" ||
+    password.length < 16 ||
+    Buffer.byteLength(password, "utf8") > 1_024 ||
+    typeof salt !== "string" ||
+    !/^[A-Za-z0-9_-]{16,64}$/u.test(salt)
+  ) {
+    throw new Error("password_hash_input_invalid");
+  }
+  const iterations = 1_000_000;
+  const encoded = pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("base64");
+  return `pbkdf2_sha256$${iterations}$${salt}$${encoded}`;
 }
 
 export function reportFor(checks = CHECKS) {

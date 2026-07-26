@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   authentikFixture,
+  djangoPasswordHash,
   dotenv,
   reportFor,
   secretLeakDetected,
@@ -235,12 +236,6 @@ function composeArguments(project, environmentFile, ...arguments_) {
   ];
 }
 
-function parsePasswordHash(output) {
-  const match = output.match(/pbkdf2_sha256\$\d+\$[^\s$]+\$[A-Za-z0-9+/=]+/u);
-  if (!match) throw new FixtureError("password_hash_generation_failed");
-  return match[0];
-}
-
 function trustedJson(url, caCertificate) {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -343,9 +338,10 @@ async function main() {
       recoverySecret: randomBytes(48).toString("base64"),
     };
     const clientId = `omnifin-${secureToken(12)}`;
+    const passwordHash = djangoPasswordHash(secrets.authentikPassword);
     const environment = {
       OMNIFIN_AUTHENTIK_BACKCHANNEL_URL: `${webOrigin}/api/auth/oidc/backchannel/oidc-authentik`,
-      OMNIFIN_AUTHENTIK_BOOTSTRAP_PASSWORD_HASH: "pending-password-hash",
+      OMNIFIN_AUTHENTIK_BOOTSTRAP_PASSWORD_HASH: passwordHash,
       OMNIFIN_AUTHENTIK_BOOTSTRAP_TOKEN: secrets.authentikToken,
       OMNIFIN_AUTHENTIK_CALLBACK_URL: `${webOrigin}/api/auth/oidc/callback/oidc-authentik`,
       OMNIFIN_AUTHENTIK_CA_FILE: certificates.caCertificate,
@@ -357,26 +353,6 @@ async function main() {
       OMNIFIN_AUTHENTIK_SECRET_KEY: secrets.authentikSecretKey,
     };
     writePrivateFile(environmentFile, dotenv(environment));
-
-    const hashExecution = await runCommand(
-      "docker",
-      composeArguments(
-        project,
-        environmentFile,
-        "run",
-        "--rm",
-        "--no-deps",
-        "server",
-        "hash_password",
-        secrets.authentikPassword,
-      ),
-      { failureCategory: "password_hash_generation_failed" },
-    );
-    const passwordHash = parsePasswordHash(hashExecution.stdout);
-    writePrivateFile(
-      environmentFile,
-      dotenv({ ...environment, OMNIFIN_AUTHENTIK_BOOTSTRAP_PASSWORD_HASH: passwordHash }),
-    );
 
     const proxy = spawnRuntime("node", [proxyScript], {
       OMNIFIN_FIXTURE_AUTHENTIK_TLS_PORT: String(authentikTlsPort),
