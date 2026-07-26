@@ -450,6 +450,15 @@ async function main() {
       const match = stderr.match(/"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u);
       const allowedStages = new Set([
         "backchannel_revocation",
+        "backchannel_dispatch_completed",
+        "backchannel_dispatch_failed",
+        "backchannel_dispatch_missing",
+        "backchannel_dispatch_pending",
+        "backchannel_send_completed",
+        "backchannel_send_failed",
+        "backchannel_send_missing",
+        "backchannel_send_pending",
+        "backchannel_task_status_unavailable",
         "backchannel_trigger",
         "configuration",
         "first_browser_login",
@@ -502,7 +511,7 @@ async function main() {
     } catch (error) {
       if (
         error instanceof FixtureError &&
-        error.category === "browser_flow_failed_backchannel_revocation"
+        error.category.startsWith("browser_flow_failed_backchannel_")
       ) {
         const responseMatch = proxy.stdout.match(
           /"event":"fixture_backchannel_response","status":(\d{3})/u,
@@ -513,7 +522,9 @@ async function main() {
         if (proxy.stdout.includes("fixture_backchannel_received")) {
           throw new FixtureError("backchannel_response_missing");
         }
-        throw new FixtureError("backchannel_not_delivered");
+        if (error.category === "browser_flow_failed_backchannel_revocation") {
+          throw new FixtureError("backchannel_not_delivered");
+        }
       }
       throw error;
     }

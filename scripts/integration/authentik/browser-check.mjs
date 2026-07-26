@@ -208,6 +208,65 @@ async function revokeAuthentikSessions(request, issuerOrigin, token) {
   }
 }
 
+const AUTHENTIK_TASK_STATES = new Set([
+  "consumed",
+  "done",
+  "error",
+  "info",
+  "postprocess",
+  "preprocess",
+  "queued",
+  "rejected",
+  "running",
+  "warning",
+]);
+
+async function authentikTaskOutcome(request, issuerOrigin, token, actorName) {
+  const response = await request.get(
+    `${issuerOrigin}/api/v3/tasks/tasks/?actor_name=${encodeURIComponent(actorName)}&page_size=100`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const body = await json(response, 200);
+  assert(Array.isArray(body.results));
+  const states = body.results
+    .filter((task) => task?.actorName === actorName || task?.actor_name === actorName)
+    .map((task) => task.aggregatedStatus ?? task.aggregated_status ?? task.state)
+    .filter((state) => typeof state === "string" && AUTHENTIK_TASK_STATES.has(state));
+  if (states.some((state) => state === "error" || state === "rejected" || state === "warning")) {
+    return "failed";
+  }
+  if (
+    states.some((state) =>
+      ["consumed", "postprocess", "preprocess", "queued", "running"].includes(state),
+    )
+  ) {
+    return "pending";
+  }
+  if (states.some((state) => state === "done" || state === "info")) return "completed";
+  return "missing";
+}
+
+async function backchannelTaskFailureStage(request, issuerOrigin, token) {
+  try {
+    const dispatch = await authentikTaskOutcome(
+      request,
+      issuerOrigin,
+      token,
+      "backchannel_logout_notification_dispatch",
+    );
+    if (dispatch !== "completed") return `backchannel_dispatch_${dispatch}`;
+    const delivery = await authentikTaskOutcome(
+      request,
+      issuerOrigin,
+      token,
+      "send_backchannel_logout_request",
+    );
+    return `backchannel_send_${delivery}`;
+  } catch {
+    return "backchannel_task_status_unavailable";
+  }
+}
+
 async function run() {
   const webOrigin = required("OMNIFIN_FIXTURE_WEB_ORIGIN");
   const issuer = required("OMNIFIN_FIXTURE_AUTHENTIK_ISSUER");
@@ -336,7 +395,16 @@ async function run() {
     currentStage = "backchannel_trigger";
     await revokeAuthentikSessions(context.request, issuerOrigin, authentikToken);
     currentStage = "backchannel_revocation";
-    await waitForRevokedSession(context.request);
+    try {
+      await waitForRevokedSession(context.request);
+    } catch {
+      currentStage = await backchannelTaskFailureStage(
+        context.request,
+        issuerOrigin,
+        authentikToken,
+      );
+      throw new BrowserCheckError();
+    }
 
     currentStage = "second_browser_login";
     await completeAuthentikFlow(
