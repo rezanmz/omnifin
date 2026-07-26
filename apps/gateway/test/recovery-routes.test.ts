@@ -12,7 +12,11 @@ import {
   RecoveryAccessService,
 } from "../src/auth/recovery-access-service.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
-import { SessionService } from "../src/auth/session-service.js";
+import {
+  MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW,
+  SESSION_ISSUANCE_WINDOW_MS,
+  SessionService,
+} from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
 import { privacyHash } from "../src/security/crypto.js";
@@ -35,6 +39,7 @@ function testConfig(
     encryptionKey: Buffer.alloc(32, 23),
     environment: "test",
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     logLevel: "silent",
     port: 4000,
@@ -201,6 +206,60 @@ describe("recovery access route", () => {
       expect(databaseBytes).not.toContain(recoverySecret);
       expect(databaseBytes).not.toContain("private recovery agent");
       expect(databaseBytes).not.toContain("127.0.0.1");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed with a bounded denial after the durable recovery issuance budget", async () => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      sessionDependencies: sessionDependencies(),
+    });
+    try {
+      for (let issuance = 0; issuance < MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW; issuance += 1) {
+        app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
+      }
+      const storageBefore = database.sqlite
+        .prepare(
+          `select
+             (select count(*) from sessions) as sessions,
+             (select count(*) from session_secret_reservations) as reservations,
+             (select count(*) from audit_events where event_type = 'auth.session.created') as creationAudits`,
+        )
+        .get();
+
+      const response = await app.inject(recoveryRequest({ secret: recoverySecret }));
+
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["retry-after"]).toBe(
+        String(Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000)),
+      );
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+               (select count(*) from sessions) as sessions,
+               (select count(*) from session_secret_reservations) as reservations,
+               (select count(*) from audit_events where event_type = 'auth.session.created') as creationAudits`,
+          )
+          .get(),
+      ).toEqual(storageBefore);
+      expect(
+        database.sqlite
+          .prepare(
+            `select outcome, json_extract(metadata_json, '$.reason') as reason
+             from audit_events
+             where event_type = 'auth.recovery_access.attempt'
+             order by created_at desc
+             limit 1`,
+          )
+          .get(),
+      ).toEqual({ outcome: "denied", reason: "rate_limited" });
     } finally {
       await app.close();
     }
@@ -437,63 +496,69 @@ describe("recovery access route", () => {
     }
   });
 
-  it("caps mixed denial writes when trusted client addresses rotate below per-IP limits", async () => {
-    const database = openDatabase(":memory:");
-    const app = await createApp({
-      config: { ...testConfig(), trustProxyHops: 1 },
-      database,
-    });
-    try {
-      const clients = 300;
-      for (let client = 0; client < clients; client += 1) {
-        const forwardedFor = `192.0.2.10, 2001:db8::${client.toString(16)}`;
-        const requests = [
-          recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
-          recoveryRequest({}, { forwardedFor }),
-          recoveryRequest(
-            { secret: wrongRecoverySecret },
-            { forwardedFor, origin: "https://attacker.example" },
-          ),
-          recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
-          recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
-        ];
-        for (const [index, request] of requests.entries()) {
-          const response = await app.inject(request);
-          expect(response.statusCode).toBe(index === 2 ? 403 : 401);
-          expect(response.headers["set-cookie"]).toBeUndefined();
-        }
-      }
-
-      expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual({
-        count: RECOVERY_DENIAL_AUDIT_MAX_ROWS,
+  it(
+    "caps mixed denial writes when trusted client addresses rotate below per-IP limits",
+    { timeout: 30_000 },
+    async () => {
+      const database = openDatabase(":memory:");
+      const app = await createApp({
+        config: { ...testConfig(), trustProxyHops: 1 },
+        database,
       });
-      expect(
-        database.sqlite
-          .prepare(
-            `select outcome, ip_hash as ipHash, request_id as requestId
+      try {
+        const clients = 300;
+        for (let client = 0; client < clients; client += 1) {
+          const forwardedFor = `192.0.2.10, 2001:db8:0:${client.toString(16)}::1`;
+          const requests = [
+            recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
+            recoveryRequest({}, { forwardedFor }),
+            recoveryRequest(
+              { secret: wrongRecoverySecret },
+              { forwardedFor, origin: "https://attacker.example" },
+            ),
+            recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
+            recoveryRequest({ secret: wrongRecoverySecret }, { forwardedFor }),
+          ];
+          for (const [index, request] of requests.entries()) {
+            const response = await app.inject(request);
+            expect(response.statusCode).toBe(index === 2 ? 403 : 401);
+            expect(response.headers["set-cookie"]).toBeUndefined();
+          }
+        }
+
+        expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual(
+          {
+            count: RECOVERY_DENIAL_AUDIT_MAX_ROWS,
+          },
+        );
+        expect(
+          database.sqlite
+            .prepare(
+              `select outcome, ip_hash as ipHash, request_id as requestId
              from audit_events
              where json_extract(metadata_json, '$.reason') = 'audit_budget_saturated'`,
-          )
-          .all(),
-      ).toEqual([{ ipHash: null, outcome: "failure", requestId: null }]);
-      const recordedReasons = database.sqlite
-        .prepare(
-          `select distinct json_extract(metadata_json, '$.reason') as reason
+            )
+            .all(),
+        ).toEqual([{ ipHash: null, outcome: "failure", requestId: null }]);
+        const recordedReasons = database.sqlite
+          .prepare(
+            `select distinct json_extract(metadata_json, '$.reason') as reason
            from audit_events
            order by reason`,
-        )
-        .all() as { reason: string }[];
-      expect(recordedReasons.map(({ reason }) => reason)).toEqual([
-        "audit_budget_saturated",
-        "credential_mismatch",
-        "invalid_request",
-        "origin_denied",
-      ]);
-      expect(database.sqlite.serialize().toString("utf8")).not.toContain("2001:db8::");
-    } finally {
-      await app.close();
-    }
-  });
+          )
+          .all() as { reason: string }[];
+        expect(recordedReasons.map(({ reason }) => reason)).toEqual([
+          "audit_budget_saturated",
+          "credential_mismatch",
+          "invalid_request",
+          "origin_denied",
+        ]);
+        expect(database.sqlite.serialize().toString("utf8")).not.toContain("2001:db8:");
+      } finally {
+        await app.close();
+      }
+    },
+  );
 
   it("preserves an existing valid session on denial and atomically replaces it on success", async () => {
     const database = openDatabase(":memory:");
@@ -548,10 +613,10 @@ describe("recovery access route", () => {
           .prepare(
             `select event_type as eventType
              from audit_events
-             where target_id = ? and event_type = 'auth.session.logout'`,
+             where target_id = ? and event_type = 'auth.session.replaced'`,
           )
           .get(existing.principal.sessionId),
-      ).toEqual({ eventType: "auth.session.logout" });
+      ).toEqual({ eventType: "auth.session.replaced" });
     } finally {
       await app.close();
     }

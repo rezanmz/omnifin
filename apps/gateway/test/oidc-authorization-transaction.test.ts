@@ -9,15 +9,18 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalLocalReturnPath,
   canonicalOidcCallbackUri,
+  clearOidcTransactionBindingCookie,
   LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME,
   OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
   OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT,
   OIDC_BROWSER_BINDING_COOKIE_NAME,
+  oidcTransactionBindingCookieName,
   OidcAuthorizationTransactionError,
   OidcAuthorizationTransactionService,
   type CreateOidcAuthorizationTransactionInput,
   type OidcAuthorizationTransactionDependencies,
   writeOidcBrowserBindingCookie,
+  writeOidcTransactionBindingCookie,
 } from "../src/auth/oidc/authorization-transaction.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
@@ -28,12 +31,15 @@ import type { OidcProviderRuntimeBinding } from "../src/auth/oidc/provider-regis
 const initialTime = new Date("2026-07-25T12:00:00.000Z");
 
 function transactionConfig(
-  overrides: Partial<Pick<AppConfig, "baseUrl" | "environment" | "secureCookies">> = {},
+  overrides: Partial<
+    Pick<AppConfig, "baseUrl" | "environment" | "insecureLoopbackPreview" | "secureCookies">
+  > = {},
 ) {
   return {
     baseUrl: new URL("https://omnifin.example"),
     encryptionKey: Buffer.alloc(32, 12),
     environment: "test" as const,
+    insecureLoopbackPreview: false,
     secureCookies: true,
     ...overrides,
   };
@@ -193,6 +199,7 @@ const capacityWorkerSource = String.raw`
           baseUrl: new URL(workerData.baseUrl),
           encryptionKey: Buffer.from(workerData.encryptionKey, "base64"),
           environment: "test",
+          insecureLoopbackPreview: false,
           secureCookies: true,
         },
         {
@@ -584,6 +591,50 @@ describe("OidcAuthorizationTransactionService", () => {
       expect(database.db.select().from(authTransactions).all()).toHaveLength(
         OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT + 1,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("cancels only the exact unconsumed transaction and immediately releases capacity", async () => {
+    const database = openDatabase(":memory:");
+    database.migrate();
+    seedProvider(database);
+    const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
+      clock: () => new Date(initialTime),
+      createBrowserBinding: () => opaqueToken(81),
+      createCodeVerifier: () => opaqueToken(82),
+      createId: () => "cancel-transaction",
+      createNonce: () => opaqueToken(83),
+      createState: () => opaqueToken(84),
+    });
+
+    try {
+      const created = await service.create({ providerId: "oidc-home" });
+      expect(
+        service.cancel({
+          browserBindingToken: opaqueToken(99),
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toBe(false);
+      expect(
+        service.cancel({
+          browserBindingToken: created.browserBindingToken,
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toBe(true);
+      expect(
+        service.cancel({
+          browserBindingToken: created.browserBindingToken,
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toBe(false);
+      expect(
+        database.sqlite.prepare("select count(*) as count from auth_transactions").get(),
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }
@@ -1199,6 +1250,7 @@ describe("OidcAuthorizationTransactionService", () => {
       const localConfig = transactionConfig({
         baseUrl: new URL("http://127.0.0.1:3000"),
         environment: "development",
+        insecureLoopbackPreview: true,
         secureCookies: false,
       });
       const localService = new TestOidcAuthorizationTransactionService(database, localConfig, {
@@ -1220,12 +1272,102 @@ describe("OidcAuthorizationTransactionService", () => {
         options: { httpOnly: true, path: "/", sameSite: "lax", secure: false },
       });
       expect(captured[1]?.options).not.toHaveProperty("domain");
+
+      writeOidcTransactionBindingCookie(
+        reply,
+        transactionConfig(),
+        secureTransaction.state,
+        secureTransaction.browserBindingToken,
+        secureTransaction.expiresAt,
+      );
+      expect(captured[2]).toEqual({
+        name: `__Host-omnifin_oidc_tx_${secureTransaction.state}`,
+        options: {
+          expires: secureTransaction.expiresAt,
+          httpOnly: true,
+          path: "/",
+          sameSite: "lax",
+          secure: true,
+        },
+        value: secureTransaction.browserBindingToken,
+      });
+
+      const cleared: Array<{ name: string; options: Record<string, unknown> }> = [];
+      const clearingReply = {
+        clearCookie(name: string, options: Record<string, unknown>) {
+          cleared.push({ name, options });
+          return clearingReply;
+        },
+      };
+      clearOidcTransactionBindingCookie(
+        clearingReply as Parameters<typeof clearOidcTransactionBindingCookie>[0],
+        transactionConfig(),
+        secureTransaction.state,
+      );
+      expect(cleared).toEqual([
+        {
+          name: `__Host-omnifin_oidc_tx_${secureTransaction.state}`,
+          options: { httpOnly: true, path: "/", sameSite: "lax", secure: true },
+        },
+      ]);
+      writeOidcTransactionBindingCookie(
+        reply,
+        localConfig,
+        localTransaction.state,
+        localTransaction.browserBindingToken,
+        localTransaction.expiresAt,
+      );
+      expect(captured[3]).toMatchObject({
+        name: `omnifin_local_oidc_tx_${localTransaction.state}`,
+        options: { httpOnly: true, path: "/", sameSite: "lax", secure: false },
+        value: localTransaction.browserBindingToken,
+      });
+      expectInvalidTransaction(
+        () => oidcTransactionBindingCookieName(transactionConfig(), "non-canonical-state"),
+        ["non-canonical-state"],
+      );
     } finally {
       database.close();
     }
   });
 
-  it("rejects insecure public, production fallback, and Secure-over-HTTP configurations", () => {
+  it("keeps sixteen independent state-cookie pairs within a bounded request header", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const first = await service.create({ providerId: "oidc-home" });
+      const transactions = [first];
+      for (
+        let index = 1;
+        index < OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT;
+        index += 1
+      ) {
+        transactions.push(
+          await service.create({
+            browserBindingToken: first.browserBindingToken,
+            providerId: "oidc-home",
+          }),
+        );
+      }
+
+      const cookiePairs = transactions.map((transaction) => {
+        const name = oidcTransactionBindingCookieName(transactionConfig(), transaction.state);
+        return `${name}=${transaction.browserBindingToken}`;
+      });
+      cookiePairs.unshift(`${OIDC_BROWSER_BINDING_COOKIE_NAME}=${first.browserBindingToken}`);
+
+      expect(new Set(cookiePairs).size).toBe(
+        OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT + 1,
+      );
+      expect(Buffer.byteLength(cookiePairs.join("; "), "utf8")).toBeLessThan(4_096);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects insecure public, unapproved production fallback, and Secure-over-HTTP configurations", () => {
     const database = openDatabase(":memory:");
     try {
       const invalidConfigurations = [
@@ -1251,6 +1393,19 @@ describe("OidcAuthorizationTransactionService", () => {
           expect.objectContaining({ code: "oidc_transaction_unavailable" }),
         );
       }
+
+      expect(
+        () =>
+          new OidcAuthorizationTransactionService(
+            database,
+            transactionConfig({
+              baseUrl: new URL("http://localhost:3000"),
+              environment: "production",
+              insecureLoopbackPreview: true,
+              secureCookies: false,
+            }),
+          ),
+      ).not.toThrow();
     } finally {
       database.close();
     }

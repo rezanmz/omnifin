@@ -152,6 +152,7 @@ async function openProtocolHarness(protocolFetch?: CustomFetch) {
     baseUrl: new URL("https://omnifin.example"),
     encryptionKey,
     environment: "test",
+    insecureLoopbackPreview: false,
     secureCookies: true,
   });
   const created = await transactions.create({
@@ -176,7 +177,11 @@ function visibleError(error: unknown) {
 
 async function expectProtocolRejection(
   action: () => Promise<unknown>,
-  code: "oidc_protocol_failed" | "oidc_protocol_invalid" | "oidc_protocol_provider_changed",
+  code:
+    | "oidc_protocol_claims_invalid"
+    | "oidc_protocol_invalid"
+    | "oidc_protocol_provider_changed"
+    | "oidc_protocol_token_exchange_failed",
   secrets: readonly string[] = [],
 ) {
   try {
@@ -191,7 +196,11 @@ async function expectProtocolRejection(
 
 function expectProtocolThrow(
   action: () => unknown,
-  code: "oidc_protocol_failed" | "oidc_protocol_invalid" | "oidc_protocol_provider_changed",
+  code:
+    | "oidc_protocol_claims_invalid"
+    | "oidc_protocol_invalid"
+    | "oidc_protocol_provider_changed"
+    | "oidc_protocol_token_exchange_failed",
   secrets: readonly string[] = [],
 ) {
   try {
@@ -267,6 +276,40 @@ describe("OidcProtocolService", () => {
     }
   });
 
+  it("rejects an oversized composed authorization URL during the pre-allocation probe", async () => {
+    const database = openDatabase(":memory:");
+    database.migrate();
+    seedProvider(database);
+    const scopes = ["openid"];
+    while (scopes.join(" ").length < 1_900) {
+      scopes.push(`scope-${scopes.length}-${"a".repeat(110)}`);
+    }
+    database.db
+      .update(oidcProviders)
+      .set({ scopes: scopes.join(" ") })
+      .run();
+    const oversizedEndpoint = `https://id.example.test/${"authorize".repeat(300)}`;
+
+    try {
+      const runtime = await discoverRuntime(
+        database,
+        metadata({ authorization_endpoint: oversizedEndpoint }),
+      );
+      const protocol = new OidcProtocolService();
+
+      expectProtocolThrow(
+        () =>
+          protocol.assertAuthorizationRequestViable(runtime, {
+            providerId,
+            redirectUri: `https://omnifin.example/api/auth/oidc/callback/${providerId}`,
+          }),
+        "oidc_protocol_invalid",
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("relies on openid-client for signature, issuer, audience, expiry, nonce, and multi-audience azp checks", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2_048 });
     const attackerKey = generateKeyPairSync("rsa", { modulusLength: 2_048 }).privateKey;
@@ -338,7 +381,7 @@ describe("OidcProtocolService", () => {
               runtime: harness.runtime,
               transaction: harness.consumed,
             }),
-          "oidc_protocol_failed",
+          "oidc_protocol_token_exchange_failed",
           [invalidToken],
         );
       }
@@ -450,7 +493,7 @@ describe("OidcProtocolService", () => {
             runtime: harness.runtime,
             transaction: harness.consumed,
           }),
-        "oidc_protocol_failed",
+        "oidc_protocol_token_exchange_failed",
         [authorizationCode, tokenBody],
       );
     } finally {
@@ -481,7 +524,7 @@ describe("OidcProtocolService", () => {
               runtime: harness.runtime,
               transaction: harness.consumed,
             }),
-          "oidc_protocol_failed",
+          "oidc_protocol_claims_invalid",
         );
       }
     } finally {

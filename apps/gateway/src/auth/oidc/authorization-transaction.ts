@@ -10,6 +10,8 @@ import type { OidcProviderRuntimeBinding } from "./provider-registry.js";
 export const OIDC_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 export const OIDC_BROWSER_BINDING_COOKIE_NAME = "__Host-omnifin_oidc_binding";
 export const LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME = "omnifin_local_oidc_binding";
+const OIDC_TRANSACTION_BINDING_COOKIE_PREFIX = "__Host-omnifin_oidc_tx_";
+const LOCAL_OIDC_TRANSACTION_BINDING_COOKIE_PREFIX = "omnifin_local_oidc_tx_";
 // Sixteen active tabs is deliberately generous for one browser. The larger
 // ceiling counts every physical, unexpired row—including consumed tombstones—so
 // callback churn cannot grow the ten-minute unauthenticated write set without bound.
@@ -31,7 +33,7 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export type OidcAuthorizationTransactionConfig = Pick<
   AppConfig,
-  "baseUrl" | "encryptionKey" | "environment" | "secureCookies"
+  "baseUrl" | "encryptionKey" | "environment" | "insecureLoopbackPreview" | "secureCookies"
 >;
 
 export type OidcAuthorizationTransactionErrorCode =
@@ -87,6 +89,8 @@ export interface ConsumeOidcAuthorizationTransactionInput {
   state: string;
 }
 
+export type CancelOidcAuthorizationTransactionInput = ConsumeOidcAuthorizationTransactionInput;
+
 export interface ConsumedOidcAuthorizationTransaction {
   codeVerifier: string;
   createdAt: Date;
@@ -106,6 +110,18 @@ export interface OidcBrowserBindingCookieWriter {
     value: string,
     options: {
       expires: Date;
+      httpOnly: true;
+      path: "/";
+      sameSite: "lax";
+      secure: boolean;
+    },
+  ) => unknown;
+}
+
+export interface OidcTransactionBindingCookieClearer {
+  clearCookie: (
+    name: string,
+    options: {
       httpOnly: true;
       path: "/";
       sameSite: "lax";
@@ -190,9 +206,9 @@ function assertCookieConfiguration(config: OidcAuthorizationTransactionConfig) {
   if (
     (config.secureCookies && baseUrl.protocol !== "https:") ||
     (!config.secureCookies &&
-      (config.environment === "production" ||
-        baseUrl.protocol !== "http:" ||
-        !isLoopbackHostname(baseUrl.hostname)))
+      (baseUrl.protocol !== "http:" ||
+        !isLoopbackHostname(baseUrl.hostname) ||
+        (config.environment === "production" && config.insecureLoopbackPreview !== true)))
   ) {
     unavailableTransaction();
   }
@@ -202,6 +218,17 @@ export function oidcBrowserBindingCookieName(config: Pick<AppConfig, "secureCook
   return config.secureCookies
     ? OIDC_BROWSER_BINDING_COOKIE_NAME
     : LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME;
+}
+
+export function oidcTransactionBindingCookieName(
+  config: Pick<AppConfig, "secureCookies">,
+  state: string,
+) {
+  if (!isCanonical256BitToken(state)) invalidTransaction();
+  const prefix = config.secureCookies
+    ? OIDC_TRANSACTION_BINDING_COOKIE_PREFIX
+    : LOCAL_OIDC_TRANSACTION_BINDING_COOKIE_PREFIX;
+  return `${prefix}${state}`;
 }
 
 function oidcBrowserBindingCookieOptions(
@@ -236,6 +263,42 @@ export function writeOidcBrowserBindingCookie(
     browserBindingToken,
     oidcBrowserBindingCookieOptions(config, expiresAt),
   );
+}
+
+export function writeOidcTransactionBindingCookie(
+  reply: OidcBrowserBindingCookieWriter,
+  config: OidcAuthorizationTransactionConfig,
+  state: string,
+  browserBindingToken: string,
+  expiresAt: Date,
+) {
+  assertCookieConfiguration(config);
+  if (
+    !isCanonical256BitToken(browserBindingToken) ||
+    !(expiresAt instanceof Date) ||
+    !Number.isFinite(expiresAt.getTime())
+  ) {
+    unavailableTransaction();
+  }
+  reply.setCookie(
+    oidcTransactionBindingCookieName(config, state),
+    browserBindingToken,
+    oidcBrowserBindingCookieOptions(config, expiresAt),
+  );
+}
+
+export function clearOidcTransactionBindingCookie(
+  reply: OidcTransactionBindingCookieClearer,
+  config: OidcAuthorizationTransactionConfig,
+  state: string,
+) {
+  assertCookieConfiguration(config);
+  reply.clearCookie(oidcTransactionBindingCookieName(config, state), {
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secure: config.secureCookies,
+  });
 }
 
 export function canonicalOidcCallbackUri(baseUrl: URL, providerId: string) {
@@ -572,6 +635,38 @@ export class OidcAuthorizationTransactionService {
       returnPath,
       transactionId: row.id,
     };
+  }
+
+  /** Removes only the exact unconsumed transaction created for a failed start. */
+  public cancel(input: CancelOidcAuthorizationTransactionInput): boolean {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !validProviderId(input.providerId) ||
+      !isCanonical256BitToken(input.state) ||
+      !isCanonical256BitToken(input.browserBindingToken)
+    ) {
+      invalidTransaction();
+    }
+    try {
+      const deleted = this.database.sqlite
+        .prepare(
+          `delete from auth_transactions
+           where provider_id = @providerId
+             and state_hash = @stateHash
+             and browser_binding_hash = @browserBindingHash
+             and consumed_at is null`,
+        )
+        .run({
+          browserBindingHash: hashToken(input.browserBindingToken),
+          providerId: input.providerId,
+          stateHash: hashToken(input.state),
+        });
+      if (deleted.changes > 1) unavailableTransaction();
+      return deleted.changes === 1;
+    } catch {
+      unavailableTransaction();
+    }
   }
 
   public cleanupExpired(batchSize = DEFAULT_CLEANUP_BATCH_SIZE, now = currentTime(this.clock)) {

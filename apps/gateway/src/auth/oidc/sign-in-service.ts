@@ -1,4 +1,9 @@
-import type { CreateSessionInput, IssuedSession, SessionService } from "../session-service.js";
+import {
+  SessionIssuanceLimitError,
+  type CreateSessionInput,
+  type IssuedSession,
+  type SessionService,
+} from "../session-service.js";
 import type { OidcIdentityDenialReason, OidcIdentityService } from "./identity-service.js";
 import type { VerifiedOidcGrant } from "./protocol.js";
 import type { DatabaseHandle } from "../../db/client.js";
@@ -124,6 +129,7 @@ export class OidcSignInService {
         )
         .immediate();
     } catch (error) {
+      if (error instanceof SessionIssuanceLimitError) throw error;
       if (error instanceof OidcSignInServiceError) throw error;
       throw new OidcSignInServiceError({ cause: error });
     }

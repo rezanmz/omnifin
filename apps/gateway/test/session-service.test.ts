@@ -16,14 +16,22 @@ import {
   sessions,
   users,
 } from "../src/db/schema.js";
-import { SessionService } from "../src/auth/session-service.js";
+import {
+  MAX_ACTIVE_SESSIONS_PER_USER,
+  MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW,
+  MAX_SESSION_ISSUANCES_PER_USER_WINDOW,
+  SESSION_ISSUANCE_WINDOW_MS,
+  SessionIssuanceLimitError,
+  SessionService,
+  type SessionAttribution,
+} from "../src/auth/session-service.js";
 import { hashToken } from "../src/security/crypto.js";
 
 const initialTime = new Date("2026-07-25T12:00:00.000Z");
 
 type IssuanceWorkerResult =
   | { csrfToken: string; sessionId: string; sessionToken: string; status: "fulfilled" }
-  | { message: string; status: "rejected" };
+  | { code?: string; message: string; reason?: string; status: "rejected" };
 
 interface IssuanceWorkerHandle {
   ready: Promise<void>;
@@ -77,7 +85,7 @@ const issuanceWorkerSource = String.raw`
       parentPort.postMessage({ kind: "ready" });
       Atomics.wait(gate, 0, 0);
       try {
-        const issued = service.createSession({ attribution: { authMethod: "recovery" } });
+        const issued = service.createSession({ attribution: workerData.attribution });
         result = {
           csrfToken: issued.csrfToken,
           sessionId: issued.principal.sessionId,
@@ -86,7 +94,9 @@ const issuanceWorkerSource = String.raw`
         };
       } catch (error) {
         result = {
+          code: error && typeof error === "object" && "code" in error ? error.code : undefined,
           message: error instanceof Error ? error.message : "Unknown issuance failure.",
+          reason: error && typeof error === "object" && "reason" in error ? error.reason : undefined,
           status: "rejected",
         };
       }
@@ -108,6 +118,7 @@ const sessionServiceModuleUrl = new URL("../src/auth/session-service.ts", import
 const databaseModuleUrl = new URL("../src/db/client.ts", import.meta.url).href;
 
 function startIssuanceWorker(input: {
+  attribution?: SessionAttribution;
   databasePath: string;
   gate: SharedArrayBuffer;
   tokens: string[];
@@ -131,6 +142,7 @@ function startIssuanceWorker(input: {
       tokens: input.tokens,
       tsxApiUrl,
       workerId: input.workerId,
+      attribution: input.attribution ?? { authMethod: "recovery" },
     },
   });
 
@@ -177,6 +189,14 @@ function startIssuanceWorker(input: {
 
 function fixtureToken(byte: number) {
   return Buffer.alloc(32, byte).toString("base64url");
+}
+
+function totalChanges(database: DatabaseHandle) {
+  return (
+    database.sqlite.prepare("select total_changes() as totalChanges").get() as {
+      totalChanges: number;
+    }
+  ).totalChanges;
 }
 
 function sessionConfig(overrides: Partial<AppConfig["session"]> = {}) {
@@ -370,6 +390,214 @@ describe("SessionService", () => {
       });
       expect(JSON.stringify(creationAudit)).not.toContain(issued.sessionToken);
       expect(JSON.stringify(creationAudit)).not.toContain(issued.csrfToken);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("caps active sessions per user without writing on repeated denied issuance", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      seedSecondLinkedJellyfinUser(database);
+      const { service } = createHarness(database);
+      const active = Array.from({ length: MAX_ACTIVE_SESSIONS_PER_USER }, () =>
+        issueOidcSession(service),
+      );
+      const changesAtLimit = totalChanges(database);
+
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        expect(() => issueOidcSession(service)).toThrowError(
+          expect.objectContaining({
+            code: "session_issuance_limited",
+            reason: "active_session_limit",
+          }),
+        );
+      }
+
+      expect(totalChanges(database)).toBe(changesAtLimit);
+      expect(database.db.select().from(sessions).all()).toHaveLength(MAX_ACTIVE_SESSIONS_PER_USER);
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
+      ).toEqual({ count: MAX_ACTIVE_SESSIONS_PER_USER * 2 });
+      expect(service.resolveAndRefresh(active[0]?.sessionToken)).toMatchObject({
+        principal: { userId: "user-1" },
+      });
+
+      expect(
+        service.createSession({
+          attribution: {
+            authMethod: "jellyfin",
+            serviceIdentityLinkId: "link-2",
+            userId: "user-2",
+          },
+        }).principal,
+      ).toMatchObject({ userId: "user-2" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("allows exact replacement at the active-session cap", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const { service } = createHarness(database);
+      const active = Array.from({ length: MAX_ACTIVE_SESSIONS_PER_USER }, () =>
+        issueOidcSession(service),
+      );
+      const previous = active[0];
+      if (!previous) throw new Error("Expected an active session fixture.");
+
+      const replacement = service.replaceSession(previous.sessionToken, {
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "identity-1",
+          oidcProviderId: "oidc-home",
+          serviceIdentityLinkId: "link-1",
+          userId: "user-1",
+        },
+      });
+
+      expect(replacement.principal.userId).toBe("user-1");
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count
+             from sessions
+             where user_id = 'user-1' and revoked_at is null`,
+          )
+          .get(),
+      ).toEqual({ count: MAX_ACTIVE_SESSIONS_PER_USER });
+      expect(
+        database.sqlite
+          .prepare("select revoked_at is not null as revoked from sessions where id = ?")
+          .get(previous.principal.sessionId),
+      ).toEqual({ revoked: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("enforces a rolling per-user issuance budget across revocation and clock rollback", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const harness = createHarness(database);
+
+      for (let issuance = 0; issuance < MAX_SESSION_ISSUANCES_PER_USER_WINDOW; issuance += 1) {
+        const issued = issueOidcSession(harness.service);
+        expect(harness.service.revokeSession(issued.sessionToken)).toBe(true);
+      }
+      const changesAtLimit = totalChanges(database);
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        expect(() => issueOidcSession(harness.service)).toThrow(SessionIssuanceLimitError);
+      }
+      expect(totalChanges(database)).toBe(changesAtLimit);
+      expect(database.db.select().from(sessions).all()).toHaveLength(
+        MAX_SESSION_ISSUANCES_PER_USER_WINDOW,
+      );
+
+      harness.advance(-60 * 60 * 1_000);
+      expect(() => issueOidcSession(harness.service)).toThrowError(
+        expect.objectContaining({ reason: "issuance_rate_limit" }),
+      );
+      expect(totalChanges(database)).toBe(changesAtLimit);
+
+      harness.advance(SESSION_ISSUANCE_WINDOW_MS + 60 * 60 * 1_000);
+      expect(issueOidcSession(harness.service).principal.userId).toBe("user-1");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("charges exact reauthentication replacements to the rolling issuance budget", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const { service } = createHarness(database);
+      let current = issueOidcSession(service);
+      const attribution: SessionAttribution = {
+        authMethod: "oidc",
+        externalIdentityId: "identity-1",
+        oidcProviderId: "oidc-home",
+        serviceIdentityLinkId: "link-1",
+        userId: "user-1",
+      };
+      for (let issuance = 1; issuance < MAX_SESSION_ISSUANCES_PER_USER_WINDOW; issuance += 1) {
+        current = service.replaceSession(current.sessionToken, { attribution });
+      }
+      const changesAtLimit = totalChanges(database);
+
+      expect(() => service.replaceSession(current.sessionToken, { attribution })).toThrowError(
+        expect.objectContaining({ reason: "issuance_rate_limit" }),
+      );
+
+      expect(totalChanges(database)).toBe(changesAtLimit);
+      expect(service.resolveAndRefresh(current.sessionToken)).toMatchObject({
+        principal: { sessionId: current.principal.sessionId, userId: "user-1" },
+      });
+      expect(database.db.select().from(sessions).all()).toHaveLength(
+        MAX_SESSION_ISSUANCES_PER_USER_WINDOW,
+      );
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from sessions where revoked_at is null")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps recovery access singleton and applies a separate rolling issuance budget", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      const { service } = createHarness(database);
+      let current: ReturnType<SessionService["createSession"]> | undefined;
+
+      for (let issuance = 0; issuance < MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW; issuance += 1) {
+        const previous = current;
+        current = service.createSession({ attribution: { authMethod: "recovery" } });
+        expect(
+          database.sqlite
+            .prepare(
+              `select count(*) as count
+               from sessions
+               where auth_method = 'recovery' and revoked_at is null`,
+            )
+            .get(),
+        ).toEqual({ count: 1 });
+        if (previous) expect(service.resolveAndRefresh(previous.sessionToken)).toBeNull();
+      }
+      const changesAtLimit = totalChanges(database);
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        expect(() =>
+          service.createSession({ attribution: { authMethod: "recovery" } }),
+        ).toThrowError(expect.objectContaining({ reason: "issuance_rate_limit" }));
+      }
+
+      expect(totalChanges(database)).toBe(changesAtLimit);
+      expect(database.db.select().from(sessions).all()).toHaveLength(
+        MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW,
+      );
+      expect(
+        database.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
+      ).toEqual({ count: MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW * 2 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count
+             from audit_events
+             where event_type = 'auth.recovery_session.superseded'`,
+          )
+          .get(),
+      ).toEqual({ count: MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW - 1 });
     } finally {
       database.close();
     }
@@ -590,6 +818,129 @@ describe("SessionService", () => {
       expect(JSON.stringify(audit)).not.toContain(issued.csrfToken);
     } finally {
       database.close();
+    }
+  });
+
+  it("coalesces high-volume CSRF denials per session without further SQLite writes", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      const { service } = createHarness(database);
+      const issued = service.createSession({ attribution: { authMethod: "recovery" } });
+      const incorrectCsrf = fixtureToken(201);
+
+      expect(
+        service.validateSessionCsrf(issued.sessionToken, incorrectCsrf, {
+          ipAddress: "192.0.2.21",
+          requestId: "csrf-denial-first",
+        }),
+      ).toBeNull();
+      const changesAfterFirstDenial = totalChanges(database);
+
+      for (let attempt = 0; attempt < 10_000; attempt += 1) {
+        expect(
+          service.validateSessionCsrf(issued.sessionToken, incorrectCsrf, {
+            ipAddress: "192.0.2.22",
+            requestId: "csrf-denial-repeated",
+          }),
+        ).toBeNull();
+      }
+
+      expect(totalChanges(database)).toBe(changesAfterFirstDenial);
+      expect(
+        database.sqlite
+          .prepare(
+            `select request_id as requestId, ip_hash as ipHash
+             from audit_events
+             where event_type = 'auth.session.csrf_denied'`,
+          )
+          .all(),
+      ).toEqual([{ ipHash: expect.any(String), requestId: "csrf-denial-first" }]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps CSRF denial coalescing durable across connections and restarts", () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-session-csrf-audit-"));
+    const databasePath = join(temporaryDirectory, "gateway.sqlite");
+    let databaseA: DatabaseHandle | undefined;
+    let databaseB: DatabaseHandle | undefined;
+    let databaseAfterRestart: DatabaseHandle | undefined;
+    try {
+      databaseA = openDatabase(databasePath);
+      databaseA.migrate();
+      seedLinkedOidcIdentity(databaseA);
+      const serviceA = createHarness(databaseA).service;
+      const firstSession = issueOidcSession(serviceA);
+      const secondSession = issueOidcSession(serviceA);
+      const incorrectCsrf = fixtureToken(202);
+
+      expect(
+        serviceA.validateSessionCsrf(firstSession.sessionToken, incorrectCsrf, {
+          requestId: "csrf-denial-first-session",
+        }),
+      ).toBeNull();
+
+      databaseB = openDatabase(databasePath);
+      const serviceB = createHarness(databaseB).service;
+      expect(
+        serviceB.validateSessionCsrf(secondSession.sessionToken, incorrectCsrf, {
+          requestId: "csrf-denial-second-session",
+        }),
+      ).toBeNull();
+      const changesA = totalChanges(databaseA);
+      const changesB = totalChanges(databaseB);
+
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        expect(serviceA.validateSessionCsrf(secondSession.sessionToken, incorrectCsrf)).toBeNull();
+        expect(serviceB.validateSessionCsrf(firstSession.sessionToken, incorrectCsrf)).toBeNull();
+      }
+
+      expect(totalChanges(databaseA)).toBe(changesA);
+      expect(totalChanges(databaseB)).toBe(changesB);
+      expect(
+        databaseA.sqlite
+          .prepare(
+            `select request_id as requestId
+             from audit_events
+             where event_type = 'auth.session.csrf_denied'
+             order by request_id`,
+          )
+          .all(),
+      ).toEqual([
+        { requestId: "csrf-denial-first-session" },
+        { requestId: "csrf-denial-second-session" },
+      ]);
+
+      databaseB.close();
+      databaseB = undefined;
+      databaseA.close();
+      databaseA = undefined;
+
+      databaseAfterRestart = openDatabase(databasePath);
+      const serviceAfterRestart = createHarness(databaseAfterRestart).service;
+      const changesAfterRestart = totalChanges(databaseAfterRestart);
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        const session = attempt % 2 === 0 ? firstSession : secondSession;
+        expect(
+          serviceAfterRestart.validateSessionCsrf(session.sessionToken, incorrectCsrf),
+        ).toBeNull();
+      }
+
+      expect(totalChanges(databaseAfterRestart)).toBe(changesAfterRestart);
+      expect(
+        databaseAfterRestart.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.session.csrf_denied'",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      databaseAfterRestart?.close();
+      databaseB?.close();
+      databaseA?.close();
+      rmSync(temporaryDirectory, { force: true, recursive: true });
     }
   });
 
@@ -1136,11 +1487,10 @@ describe("SessionService", () => {
       const database = openDatabase(":memory:");
       try {
         database.migrate();
+        seedLinkedOidcIdentity(database);
         let generated = [fixtureToken(71), fixtureToken(72)];
         const harness = createHarness(database, {}, { createToken: () => generated.shift()! });
-        const historical = harness.service.createSession({
-          attribution: { authMethod: "recovery" },
-        });
+        const historical = issueOidcSession(harness.service);
         if (inactiveLifecycle === "expired") {
           harness.advance(10 * 60 * 1_000);
         } else {
@@ -1152,9 +1502,7 @@ describe("SessionService", () => {
         const newCsrf = fixtureToken(74);
         generated = [historical.sessionToken, newBearer, historical.csrfToken, newCsrf];
 
-        const issued = harness.service.createSession({
-          attribution: { authMethod: "recovery" },
-        });
+        const issued = issueOidcSession(harness.service);
 
         expect(issued.sessionToken).toBe(newBearer);
         expect(issued.csrfToken).toBe(newCsrf);
@@ -1299,87 +1647,259 @@ describe("SessionService", () => {
     }
   });
 
-  it("serializes simultaneous issuance and prevents cross-process cross-purpose reuse", async () => {
-    const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-session-issuance-"));
-    const databasePath = join(temporaryDirectory, "gateway.sqlite");
-    const gateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    const gate = new Int32Array(gateBuffer);
-    const sharedBearer = fixtureToken(121);
-    const sharedCsrf = fixtureToken(122);
-    const workers: IssuanceWorkerHandle[] = [];
-    let inspectionDatabase: DatabaseHandle | undefined;
-    try {
-      const migrationDatabase = openDatabase(databasePath);
-      migrationDatabase.migrate();
-      migrationDatabase.close();
-      workers.push(
-        startIssuanceWorker({
-          databasePath,
-          gate: gateBuffer,
-          tokens: [sharedBearer, sharedCsrf, fixtureToken(123), fixtureToken(124)],
-          workerId: "session-worker-a",
-        }),
-        startIssuanceWorker({
-          databasePath,
-          gate: gateBuffer,
-          tokens: [sharedBearer, sharedCsrf, fixtureToken(125), fixtureToken(126)],
-          workerId: "session-worker-b",
-        }),
-      );
-      await Promise.all(workers.map((worker) => worker.ready));
-      Atomics.store(gate, 0, 1);
-      Atomics.notify(gate, 0);
-      const results = await Promise.all(workers.map((worker) => worker.result));
+  it(
+    "serializes simultaneous issuance and prevents cross-process cross-purpose reuse",
+    { timeout: 30_000 },
+    async () => {
+      const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-session-issuance-"));
+      const databasePath = join(temporaryDirectory, "gateway.sqlite");
+      const gateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      const gate = new Int32Array(gateBuffer);
+      const sharedBearer = fixtureToken(121);
+      const sharedCsrf = fixtureToken(122);
+      const workers: IssuanceWorkerHandle[] = [];
+      let inspectionDatabase: DatabaseHandle | undefined;
+      try {
+        const migrationDatabase = openDatabase(databasePath);
+        migrationDatabase.migrate();
+        migrationDatabase.close();
+        workers.push(
+          startIssuanceWorker({
+            databasePath,
+            gate: gateBuffer,
+            tokens: [sharedBearer, sharedCsrf, fixtureToken(123), fixtureToken(124)],
+            workerId: "session-worker-a",
+          }),
+          startIssuanceWorker({
+            databasePath,
+            gate: gateBuffer,
+            tokens: [sharedBearer, sharedCsrf, fixtureToken(125), fixtureToken(126)],
+            workerId: "session-worker-b",
+          }),
+        );
+        await Promise.all(workers.map((worker) => worker.ready));
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        const results = await Promise.all(workers.map((worker) => worker.result));
 
-      expect(results.every((result) => result.status === "fulfilled")).toBe(true);
-      const issued = results.filter(
-        (result): result is Extract<IssuanceWorkerResult, { status: "fulfilled" }> =>
-          result.status === "fulfilled",
-      );
-      expect(issued).toHaveLength(2);
-      expect(
-        new Set(issued.flatMap((result) => [result.sessionToken, result.csrfToken])).size,
-      ).toBe(4);
-      expect(
-        issued.filter(
-          (result) => result.sessionToken === sharedBearer && result.csrfToken === sharedCsrf,
-        ),
-      ).toHaveLength(1);
+        expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+        const issued = results.filter(
+          (result): result is Extract<IssuanceWorkerResult, { status: "fulfilled" }> =>
+            result.status === "fulfilled",
+        );
+        expect(issued).toHaveLength(2);
+        expect(
+          new Set(issued.flatMap((result) => [result.sessionToken, result.csrfToken])).size,
+        ).toBe(4);
+        expect(
+          issued.filter(
+            (result) => result.sessionToken === sharedBearer && result.csrfToken === sharedCsrf,
+          ),
+        ).toHaveLength(1);
 
-      inspectionDatabase = openDatabase(databasePath);
-      expect(
-        inspectionDatabase.sqlite.prepare("select count(*) as count from sessions").get(),
-      ).toEqual({ count: 2 });
-      expect(
-        inspectionDatabase.sqlite
-          .prepare("select count(*) as count from session_secret_reservations")
-          .get(),
-      ).toEqual({ count: 4 });
-      expect(
-        inspectionDatabase.sqlite
-          .prepare(
-            "select count(*) as count from audit_events where event_type = 'auth.session.created'",
-          )
-          .get(),
-      ).toEqual({ count: 2 });
-      expect(
-        inspectionDatabase.sqlite
-          .prepare(
-            `select purpose
+        inspectionDatabase = openDatabase(databasePath);
+        expect(
+          inspectionDatabase.sqlite.prepare("select count(*) as count from sessions").get(),
+        ).toEqual({ count: 2 });
+        expect(
+          inspectionDatabase.sqlite
+            .prepare("select count(*) as count from session_secret_reservations")
+            .get(),
+        ).toEqual({ count: 4 });
+        expect(
+          inspectionDatabase.sqlite
+            .prepare(
+              "select count(*) as count from audit_events where event_type = 'auth.session.created'",
+            )
+            .get(),
+        ).toEqual({ count: 2 });
+        expect(
+          inspectionDatabase.sqlite
+            .prepare(
+              `select purpose
              from session_secret_reservations
              where secret_hash in (?, ?)
              order by purpose`,
-          )
-          .all(hashToken(sharedBearer), hashToken(sharedCsrf)),
-      ).toEqual([{ purpose: "bearer" }, { purpose: "csrf" }]);
-    } finally {
-      Atomics.store(gate, 0, 1);
-      Atomics.notify(gate, 0);
-      inspectionDatabase?.close();
-      await Promise.allSettled(workers.map((worker) => worker.worker.terminate()));
-      rmSync(temporaryDirectory, { force: true, recursive: true });
-    }
-  });
+            )
+            .all(hashToken(sharedBearer), hashToken(sharedCsrf)),
+        ).toEqual([{ purpose: "bearer" }, { purpose: "csrf" }]);
+      } finally {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        inspectionDatabase?.close();
+        await Promise.allSettled(workers.map((worker) => worker.worker.terminate()));
+        rmSync(temporaryDirectory, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it(
+    "serializes the per-user cap across processes and preserves both limits after reopen",
+    { timeout: 30_000 },
+    async () => {
+      const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-session-cap-"));
+      const databasePath = join(temporaryDirectory, "gateway.sqlite");
+      const gateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      const gate = new Int32Array(gateBuffer);
+      const workers: IssuanceWorkerHandle[] = [];
+      const attribution: SessionAttribution = {
+        authMethod: "oidc",
+        externalIdentityId: "identity-1",
+        oidcProviderId: "oidc-home",
+        serviceIdentityLinkId: "link-1",
+        userId: "user-1",
+      };
+      let database: DatabaseHandle | undefined;
+      try {
+        database = openDatabase(databasePath);
+        database.migrate();
+        seedLinkedOidcIdentity(database);
+        let preseedId = 0;
+        let preseedToken = 1;
+        const preseed = new SessionService(
+          database,
+          { encryptionKey: Buffer.alloc(32, 9), session: sessionConfig() },
+          {
+            clock: () => new Date(initialTime),
+            createId: () => `session-cap-preseed-${(preseedId += 1)}`,
+            createToken: () => fixtureToken(preseedToken++),
+          },
+        );
+        for (let index = 1; index < MAX_ACTIVE_SESSIONS_PER_USER; index += 1) {
+          preseed.createSession({ attribution });
+        }
+        database.close();
+        database = undefined;
+
+        workers.push(
+          startIssuanceWorker({
+            attribution,
+            databasePath,
+            gate: gateBuffer,
+            tokens: [fixtureToken(151), fixtureToken(152)],
+            workerId: "session-cap-worker-a",
+          }),
+          startIssuanceWorker({
+            attribution,
+            databasePath,
+            gate: gateBuffer,
+            tokens: [fixtureToken(153), fixtureToken(154)],
+            workerId: "session-cap-worker-b",
+          }),
+        );
+        await Promise.all(workers.map((worker) => worker.ready));
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        const results = await Promise.all(workers.map((worker) => worker.result));
+        expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+        expect(results.filter(({ status }) => status === "rejected")).toEqual([
+          expect.objectContaining({
+            code: "session_issuance_limited",
+            reason: "active_session_limit",
+          }),
+        ]);
+
+        database = openDatabase(databasePath);
+        expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+          count: MAX_ACTIVE_SESSIONS_PER_USER,
+        });
+        expect(
+          database.sqlite
+            .prepare("select count(*) as count from session_secret_reservations")
+            .get(),
+        ).toEqual({ count: MAX_ACTIVE_SESSIONS_PER_USER * 2 });
+        expect(
+          database.sqlite
+            .prepare(
+              "select count(*) as count from audit_events where event_type = 'auth.session.created'",
+            )
+            .get(),
+        ).toEqual({ count: MAX_ACTIVE_SESSIONS_PER_USER });
+        database.close();
+        database = undefined;
+
+        database = openDatabase(databasePath);
+        let activeReopenId = 0;
+        let activeReopenToken = 160;
+        const activeReopen = new SessionService(
+          database,
+          { encryptionKey: Buffer.alloc(32, 9), session: sessionConfig() },
+          {
+            clock: () => new Date(initialTime),
+            createId: () => `session-cap-active-reopen-${(activeReopenId += 1)}`,
+            createToken: () => fixtureToken(activeReopenToken++),
+          },
+        );
+        const activeChanges = totalChanges(database);
+        expect(() => activeReopen.createSession({ attribution })).toThrowError(
+          expect.objectContaining({ reason: "active_session_limit" }),
+        );
+        expect(totalChanges(database)).toBe(activeChanges);
+        database.sqlite
+          .prepare("update sessions set revoked_at = @now where revoked_at is null")
+          .run({ now: initialTime.getTime() });
+        database.close();
+        database = undefined;
+
+        database = openDatabase(databasePath);
+        let rateId = 0;
+        let rateToken = 170;
+        const rateService = new SessionService(
+          database,
+          { encryptionKey: Buffer.alloc(32, 9), session: sessionConfig() },
+          {
+            clock: () => new Date(initialTime),
+            createId: () => `session-cap-rate-${(rateId += 1)}`,
+            createToken: () => fixtureToken(rateToken++),
+          },
+        );
+        for (
+          let index = MAX_ACTIVE_SESSIONS_PER_USER;
+          index < MAX_SESSION_ISSUANCES_PER_USER_WINDOW;
+          index += 1
+        ) {
+          const issued = rateService.createSession({ attribution });
+          expect(rateService.revokeSession(issued.sessionToken)).toBe(true);
+        }
+        expect(() => rateService.createSession({ attribution })).toThrowError(
+          expect.objectContaining({ reason: "issuance_rate_limit" }),
+        );
+        expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+          count: MAX_SESSION_ISSUANCES_PER_USER_WINDOW,
+        });
+        expect(
+          database.sqlite
+            .prepare("select count(*) as count from session_secret_reservations")
+            .get(),
+        ).toEqual({ count: MAX_SESSION_ISSUANCES_PER_USER_WINDOW * 2 });
+        database.close();
+        database = undefined;
+
+        database = openDatabase(databasePath);
+        let rateReopenId = 0;
+        const rateReopen = new SessionService(
+          database,
+          { encryptionKey: Buffer.alloc(32, 9), session: sessionConfig() },
+          {
+            clock: () => new Date(initialTime),
+            createId: () => `session-cap-rate-reopen-${(rateReopenId += 1)}`,
+            createToken: () => fixtureToken(250),
+          },
+        );
+        const rateChanges = totalChanges(database);
+        expect(() => rateReopen.createSession({ attribution })).toThrowError(
+          expect.objectContaining({ reason: "issuance_rate_limit" }),
+        );
+        expect(totalChanges(database)).toBe(rateChanges);
+      } finally {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        database?.close();
+        await Promise.allSettled(workers.map((worker) => worker.worker.terminate()));
+        rmSync(temporaryDirectory, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("uses one operation timestamp for issuance, revocation, and replacement auditing", () => {
     const database = openDatabase(":memory:");

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import type { AppConfig } from "../../config.js";
 import type { DatabaseHandle } from "../../db/client.js";
+import { clientNetworkGroup } from "../../security/client-network.js";
 import { privacyHash } from "../../security/crypto.js";
+import { OIDC_IDENTITY_DENIAL_REASONS, type OidcIdentityDenialReason } from "./identity-service.js";
 
 export const OIDC_FAILURE_AUDIT_EVENT_TYPE = "auth.oidc.failure";
 export const OIDC_FAILURE_AUDIT_SCOPE = "auth.oidc.failure:v1";
@@ -27,6 +28,7 @@ export type OidcFailureAuditReason =
   | "internal_failure"
   | "invalid_request"
   | "provider_unavailable"
+  | "session_limit_reached"
   | "token_exchange_failed";
 
 export interface OidcFailureAuditContext {
@@ -35,10 +37,19 @@ export interface OidcFailureAuditContext {
   userAgent?: string | undefined;
 }
 
-export interface OidcFailureAuditInput extends OidcFailureAuditContext {
-  outcome: "denied" | "failure";
-  reason: OidcFailureAuditReason;
-}
+export type OidcFailureAuditInput = OidcFailureAuditContext &
+  (
+    | {
+        identityReason: OidcIdentityDenialReason;
+        outcome: "denied" | "failure";
+        reason: "identity_rejected";
+      }
+    | {
+        identityReason?: never;
+        outcome: "denied" | "failure";
+        reason: Exclude<OidcFailureAuditReason, "identity_rejected">;
+      }
+  );
 
 export interface OidcFailureAuditDependencies {
   clock?: () => Date;
@@ -62,6 +73,7 @@ interface NormalizedAuditContext {
 }
 
 interface AuditInputSnapshot {
+  identityReason: unknown;
   ipAddress: unknown;
   outcome: unknown;
   reason: unknown;
@@ -92,6 +104,24 @@ interface AuditBudgetSnapshot {
   state: AuditBudgetState;
 }
 
+interface SaturatedWindowMemory {
+  clockWatermarkAt: number;
+  generation: number;
+  rollbackStartedAt: number | null;
+  suppressedCount: number;
+  windowStartedAt: number;
+}
+
+interface CappedDuplicateWindowMemory extends SaturatedWindowMemory {
+  bucketHashes: Set<string>;
+}
+
+interface AuditRecordResult {
+  cappedDuplicateWindow?: CappedDuplicateWindowMemory;
+  disposition: OidcFailureAuditDisposition;
+  saturatedWindow?: SaturatedWindowMemory;
+}
+
 const allowedReasons = new Set<OidcFailureAuditReason>([
   "authorization_denied",
   "callback_validation_failed",
@@ -100,8 +130,10 @@ const allowedReasons = new Set<OidcFailureAuditReason>([
   "internal_failure",
   "invalid_request",
   "provider_unavailable",
+  "session_limit_reached",
   "token_exchange_failed",
 ]);
+const allowedIdentityReasons = new Set<OidcIdentityDenialReason>(OIDC_IDENTITY_DENIAL_REASONS);
 
 function boundedPrivateContext(value: unknown, maximum: number) {
   if (typeof value !== "string" || value.length === 0) return undefined;
@@ -125,58 +157,31 @@ function currentTime(clock: () => Date) {
   return milliseconds;
 }
 
-function ipv4TailHextets(token: string) {
-  const octets = token.split(".").map(Number);
-  if (
-    octets.length !== 4 ||
-    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
-  ) {
-    return [];
+function failureBucketHash(
+  privacyKey: Buffer,
+  generation: number,
+  reason: OidcFailureAuditReason,
+  identityReason: OidcIdentityDenialReason | null,
+  clientGroup: string,
+) {
+  const reasonBucket = identityReason === null ? reason : `${reason}\0${identityReason}`;
+  const bucketHash = privacyHash(
+    "oidc_failure_audit_bucket",
+    `${generation}\0${reasonBucket}\0${clientGroup}`,
+    privacyKey,
+  );
+  if (!HASH_PATTERN.test(bucketHash)) {
+    throw new Error("OIDC failure audit bucket is invalid.");
   }
-  return [(octets[0]! << 8) | octets[1]!, (octets[2]! << 8) | octets[3]!];
-}
-
-function ipv6Hextets(address: string) {
-  const normalized = address.toLowerCase().split("%", 1)[0]!;
-  const halves = normalized.split("::");
-  if (halves.length > 2) return [];
-  const parseHalf = (half: string) => {
-    if (!half) return [];
-    const values: number[] = [];
-    for (const token of half.split(":")) {
-      if (token.includes(".")) values.push(...ipv4TailHextets(token));
-      else values.push(Number.parseInt(token, 16));
-    }
-    return values;
-  };
-  const left = parseHalf(halves[0] ?? "");
-  const right = parseHalf(halves[1] ?? "");
-  const omitted = halves.length === 2 ? 8 - left.length - right.length : 0;
-  if (omitted < 0) return [];
-  const values = [...left, ...Array.from({ length: omitted }, () => 0), ...right];
-  return values.length === 8 && values.every((value) => value >= 0 && value <= 0xffff)
-    ? values
-    : [];
-}
-
-function clientGroup(ipAddress: string | undefined) {
-  if (!ipAddress) return "unattributed-client";
-  const version = isIP(ipAddress);
-  if (version === 4) return ipAddress.split(".").map(Number).join(".");
-  if (version !== 6) return "unattributed-client";
-  const values = ipv6Hextets(ipAddress);
-  if (values.length !== 8) return "unattributed-client";
-  if (values.slice(0, 5).every((value) => value === 0) && values[5] === 0xffff) {
-    return [values[6]! >> 8, values[6]! & 0xff, values[7]! >> 8, values[7]! & 0xff].join(".");
-  }
-  return `${values
-    .slice(0, 4)
-    .map((value) => value.toString(16).padStart(4, "0"))
-    .join(":")}::/64`;
+  return bucketHash;
 }
 
 function validReason(value: unknown): value is OidcFailureAuditReason {
   return typeof value === "string" && allowedReasons.has(value as OidcFailureAuditReason);
+}
+
+function validIdentityReason(value: unknown): value is OidcIdentityDenialReason {
+  return typeof value === "string" && allowedIdentityReasons.has(value as OidcIdentityDenialReason);
 }
 
 function validInteger(value: unknown, minimum: number, maximum: number): value is number {
@@ -205,6 +210,8 @@ export class OidcFailureAuditService {
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
   readonly #privacyKey: Buffer;
+  #cappedDuplicateWindow: CappedDuplicateWindowMemory | undefined;
+  #saturatedWindow: SaturatedWindowMemory | undefined;
 
   public constructor(
     database: DatabaseHandle,
@@ -227,6 +234,7 @@ export class OidcFailureAuditService {
     let snapshot: AuditInputSnapshot;
     try {
       snapshot = {
+        identityReason: input.identityReason,
         ipAddress: input.ipAddress,
         outcome: input.outcome,
         reason: input.reason,
@@ -236,37 +244,125 @@ export class OidcFailureAuditService {
     } catch {
       throw new TypeError("OIDC failure audit input is invalid.");
     }
-    const { outcome, reason } = snapshot;
+    const { identityReason, outcome, reason } = snapshot;
     if (!validReason(reason)) {
       throw new TypeError("OIDC failure reason is invalid.");
     }
     if (outcome !== "denied" && outcome !== "failure") {
       throw new TypeError("OIDC failure outcome is invalid.");
     }
+    if (
+      (reason === "identity_rejected" && !validIdentityReason(identityReason)) ||
+      (reason !== "identity_rejected" && identityReason !== undefined)
+    ) {
+      throw new TypeError("OIDC identity denial reason is invalid.");
+    }
+    const normalizedIdentityReason =
+      reason === "identity_rejected" ? (identityReason as OidcIdentityDenialReason) : null;
 
     const now = currentTime(this.#clock);
+    if (this.#suppressFromSaturatedMemory(now)) return "saturated";
+    const observedSaturatedWindow = this.#saturatedWindow;
     const context = this.#normalizeContext(snapshot);
-    const transaction = this.#database.sqlite.transaction(() => {
+    const rememberedDuplicateWindow = this.#cappedDuplicateWindow;
+    if (rememberedDuplicateWindow) {
+      const rememberedBucketHash = failureBucketHash(
+        this.#privacyKey,
+        rememberedDuplicateWindow.generation,
+        reason,
+        normalizedIdentityReason,
+        context.clientGroup,
+      );
+      if (this.#suppressFromCappedDuplicateMemory(now, rememberedBucketHash)) {
+        return "coalesced";
+      }
+    }
+    const observedDuplicateWindow = this.#cappedDuplicateWindow;
+    const transaction = this.#database.sqlite.transaction((): AuditRecordResult => {
       this.#ensureScope(now);
       let snapshot = this.#readSnapshot();
-      snapshot = this.#transitionClock(snapshot, now);
-
-      const bucketHash = privacyHash(
-        "oidc_failure_audit_bucket",
-        `${snapshot.state.generation}\0${reason}\0${context.clientGroup}`,
-        this.#privacyKey,
+      snapshot = this.#reconcileObservedSaturatedRollback(snapshot, now, observedSaturatedWindow);
+      snapshot = this.#reconcileObservedCappedDuplicateRollback(
+        snapshot,
+        now,
+        observedDuplicateWindow,
       );
-      if (!HASH_PATTERN.test(bucketHash)) {
-        throw new Error("OIDC failure audit bucket is invalid.");
+      let saturatedWindow = this.#saturatedWindowFromSnapshot(
+        snapshot,
+        now,
+        observedSaturatedWindow,
+        true,
+      );
+      if (saturatedWindow) {
+        return { disposition: "saturated", saturatedWindow } satisfies AuditRecordResult;
+      }
+      let bucketHash = failureBucketHash(
+        this.#privacyKey,
+        snapshot.state.generation,
+        reason,
+        normalizedIdentityReason,
+        context.clientGroup,
+      );
+      let cappedDuplicateWindow = this.#cappedDuplicateWindowFromSnapshot(
+        snapshot,
+        now,
+        observedDuplicateWindow,
+        bucketHash,
+      );
+      if (cappedDuplicateWindow) {
+        return {
+          cappedDuplicateWindow,
+          disposition: "coalesced",
+        } satisfies AuditRecordResult;
+      }
+      snapshot = this.#transitionClock(snapshot, now);
+      saturatedWindow = this.#saturatedWindowFromSnapshot(
+        snapshot,
+        now,
+        observedSaturatedWindow,
+        true,
+      );
+      if (saturatedWindow) {
+        return { disposition: "saturated", saturatedWindow } satisfies AuditRecordResult;
+      }
+      bucketHash = failureBucketHash(
+        this.#privacyKey,
+        snapshot.state.generation,
+        reason,
+        normalizedIdentityReason,
+        context.clientGroup,
+      );
+      cappedDuplicateWindow = this.#cappedDuplicateWindowFromSnapshot(
+        snapshot,
+        now,
+        observedDuplicateWindow,
+        bucketHash,
+      );
+      if (cappedDuplicateWindow) {
+        return {
+          cappedDuplicateWindow,
+          disposition: "coalesced",
+        } satisfies AuditRecordResult;
       }
 
       if (snapshot.entries.some((entry) => entry.bucketHash === bucketHash)) {
-        this.#incrementSuppressed(snapshot.state.generation);
-        return "coalesced" as const;
-      }
-      if (snapshot.state.saturated === 1) {
-        this.#incrementSuppressed(snapshot.state.generation);
-        return "saturated" as const;
+        if (snapshot.state.suppressedCount < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT) {
+          this.#incrementSuppressed(snapshot.state.generation);
+        }
+        const suppressedCount = Math.min(
+          snapshot.state.suppressedCount + 1,
+          OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+        );
+        cappedDuplicateWindow = this.#cappedDuplicateWindowFromSnapshot(
+          { entries: snapshot.entries, state: { ...snapshot.state, suppressedCount } },
+          now,
+          observedDuplicateWindow,
+          bucketHash,
+        );
+        return {
+          ...(cappedDuplicateWindow ? { cappedDuplicateWindow } : {}),
+          disposition: "coalesced",
+        } satisfies AuditRecordResult;
       }
       if (snapshot.entries.length < MAX_BUCKETS_PER_GENERATION) {
         const occupiedSlots = new Set(snapshot.entries.map(({ slot }) => slot));
@@ -278,20 +374,39 @@ export class OidcFailureAuditService {
         this.#insertAudit({
           bucketHash,
           context,
+          identityReason: normalizedIdentityReason,
           outcome,
           reason,
           now,
           generation: snapshot.state.generation,
         });
-        return "recorded" as const;
+        return { disposition: "recorded" } satisfies AuditRecordResult;
       }
 
       this.#insertSaturationAudit(now, snapshot.state.generation);
       this.#markSaturated(snapshot.state.generation);
-      return "saturated" as const;
+      const saturatedState: AuditBudgetSnapshot = {
+        entries: snapshot.entries,
+        state: {
+          ...snapshot.state,
+          saturated: 1,
+          suppressedCount: Math.min(
+            snapshot.state.suppressedCount + 1,
+            OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+          ),
+        },
+      };
+      saturatedWindow = this.#saturatedWindowFromSnapshot(saturatedState, now, undefined, false);
+      if (!saturatedWindow) {
+        throw new Error("OIDC failure audit saturation state is invalid.");
+      }
+      return { disposition: "saturated", saturatedWindow } satisfies AuditRecordResult;
     });
 
-    return transaction.immediate();
+    const result = transaction.immediate();
+    this.#cappedDuplicateWindow = result.cappedDuplicateWindow;
+    this.#saturatedWindow = result.saturatedWindow;
+    return result.disposition;
   }
 
   public get metrics(): Readonly<OidcFailureAuditMetrics> {
@@ -305,14 +420,215 @@ export class OidcFailureAuditService {
           window: null,
         };
       }
+      const suppressedCount =
+        snapshot.state.saturated === 1 &&
+        this.#saturatedWindow?.generation === snapshot.state.generation
+          ? Math.max(snapshot.state.suppressedCount, this.#saturatedWindow.suppressedCount)
+          : snapshot.state.suppressedCount;
       return {
         bucketCount: snapshot.entries.length,
         saturated: snapshot.state.saturated === 1,
-        suppressedCount: snapshot.state.suppressedCount,
+        suppressedCount,
         window: snapshot.state.generation,
       };
     });
     return Object.freeze(transaction.deferred());
+  }
+
+  #suppressFromCappedDuplicateMemory(now: number, bucketHash: string) {
+    const remembered = this.#cappedDuplicateWindow;
+    if (!remembered?.bucketHashes.has(bucketHash)) return false;
+
+    if (remembered.rollbackStartedAt === null) {
+      if (
+        now < remembered.clockWatermarkAt ||
+        now - remembered.windowStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+      ) {
+        return false;
+      }
+      remembered.clockWatermarkAt = now;
+    } else if (
+      now >= remembered.clockWatermarkAt ||
+      now < remembered.rollbackStartedAt ||
+      now - remembered.rollbackStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  #cappedDuplicateWindowFromSnapshot(
+    snapshot: AuditBudgetSnapshot,
+    now: number,
+    observed: CappedDuplicateWindowMemory | undefined,
+    bucketHash: string,
+  ): CappedDuplicateWindowMemory | undefined {
+    const { state } = snapshot;
+    if (
+      state.saturated !== 0 ||
+      state.suppressedCount !== OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT ||
+      !snapshot.entries.some((entry) => entry.bucketHash === bucketHash)
+    ) {
+      return undefined;
+    }
+
+    let clockWatermarkAt = state.clockWatermarkAt;
+    if (state.rollbackStartedAt === null) {
+      if (now < clockWatermarkAt || now - state.windowStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS) {
+        return undefined;
+      }
+      clockWatermarkAt = now;
+    } else if (
+      now >= clockWatermarkAt ||
+      now < state.rollbackStartedAt ||
+      now - state.rollbackStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+    ) {
+      return undefined;
+    }
+
+    const bucketHashes =
+      observed?.generation === state.generation
+        ? new Set(observed.bucketHashes)
+        : new Set<string>();
+    bucketHashes.add(bucketHash);
+    return {
+      bucketHashes,
+      clockWatermarkAt,
+      generation: state.generation,
+      rollbackStartedAt: state.rollbackStartedAt,
+      suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+      windowStartedAt: state.windowStartedAt,
+    };
+  }
+
+  #reconcileObservedCappedDuplicateRollback(
+    snapshot: AuditBudgetSnapshot,
+    now: number,
+    observed: CappedDuplicateWindowMemory | undefined,
+  ) {
+    const { state } = snapshot;
+    if (
+      !observed ||
+      state.saturated !== 0 ||
+      state.suppressedCount !== OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT ||
+      observed.generation !== state.generation ||
+      observed.clockWatermarkAt <= state.clockWatermarkAt ||
+      now >= observed.clockWatermarkAt ||
+      state.rollbackStartedAt !== null
+    ) {
+      return snapshot;
+    }
+
+    this.#updateScope(
+      `update audit_budget_scopes
+       set clock_watermark_at = @clockWatermarkAt
+       where scope = @scope and generation = @generation`,
+      { clockWatermarkAt: observed.clockWatermarkAt, generation: state.generation },
+    );
+    this.#updateScope(
+      `update audit_budget_scopes
+       set rollback_started_at = @now
+       where scope = @scope and generation = @generation`,
+      { generation: state.generation, now },
+    );
+    return this.#readSnapshot();
+  }
+
+  #suppressFromSaturatedMemory(now: number) {
+    const remembered = this.#saturatedWindow;
+    if (!remembered) return false;
+
+    if (remembered.rollbackStartedAt === null) {
+      if (
+        now < remembered.clockWatermarkAt ||
+        now - remembered.windowStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+      ) {
+        return false;
+      }
+      remembered.clockWatermarkAt = now;
+    } else if (
+      now >= remembered.clockWatermarkAt ||
+      now < remembered.rollbackStartedAt ||
+      now - remembered.rollbackStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+    ) {
+      return false;
+    }
+
+    remembered.suppressedCount = Math.min(
+      remembered.suppressedCount + 1,
+      OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+    );
+    return true;
+  }
+
+  #saturatedWindowFromSnapshot(
+    snapshot: AuditBudgetSnapshot,
+    now: number,
+    observed: SaturatedWindowMemory | undefined,
+    countCurrentAttempt: boolean,
+  ): SaturatedWindowMemory | undefined {
+    const { state } = snapshot;
+    if (state.saturated !== 1) return undefined;
+
+    let clockWatermarkAt = state.clockWatermarkAt;
+    if (state.rollbackStartedAt === null) {
+      if (now < clockWatermarkAt || now - state.windowStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS) {
+        return undefined;
+      }
+      clockWatermarkAt = now;
+    } else if (
+      now >= clockWatermarkAt ||
+      now < state.rollbackStartedAt ||
+      now - state.rollbackStartedAt >= OIDC_FAILURE_AUDIT_WINDOW_MS
+    ) {
+      return undefined;
+    }
+
+    const observedSuppressedCount =
+      observed?.generation === state.generation ? observed.suppressedCount : 0;
+    return {
+      clockWatermarkAt,
+      generation: state.generation,
+      rollbackStartedAt: state.rollbackStartedAt,
+      suppressedCount: Math.min(
+        Math.max(state.suppressedCount, observedSuppressedCount) + (countCurrentAttempt ? 1 : 0),
+        OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+      ),
+      windowStartedAt: state.windowStartedAt,
+    };
+  }
+
+  #reconcileObservedSaturatedRollback(
+    snapshot: AuditBudgetSnapshot,
+    now: number,
+    observed: SaturatedWindowMemory | undefined,
+  ) {
+    const { state } = snapshot;
+    if (
+      !observed ||
+      state.saturated !== 1 ||
+      observed.generation !== state.generation ||
+      observed.clockWatermarkAt <= state.clockWatermarkAt ||
+      now >= observed.clockWatermarkAt ||
+      state.rollbackStartedAt !== null
+    ) {
+      return snapshot;
+    }
+
+    this.#updateScope(
+      `update audit_budget_scopes
+       set clock_watermark_at = @clockWatermarkAt
+       where scope = @scope and generation = @generation`,
+      { clockWatermarkAt: observed.clockWatermarkAt, generation: state.generation },
+    );
+    this.#updateScope(
+      `update audit_budget_scopes
+       set rollback_started_at = @now
+       where scope = @scope and generation = @generation`,
+      { generation: state.generation, now },
+    );
+    return this.#readSnapshot();
   }
 
   #ensureScope(now: number) {
@@ -544,6 +860,7 @@ export class OidcFailureAuditService {
     bucketHash: string;
     context: NormalizedAuditContext;
     generation: number;
+    identityReason: OidcIdentityDenialReason | null;
     now: number;
     outcome: "denied" | "failure";
     reason: OidcFailureAuditReason;
@@ -553,6 +870,7 @@ export class OidcFailureAuditService {
       metadataJson: JSON.stringify({
         bucketHash: options.bucketHash,
         budgetGeneration: options.generation,
+        ...(options.identityReason === null ? {} : { identityReason: options.identityReason }),
         reason: options.reason,
         userAgentHash: options.context.userAgentHash,
       }),
@@ -612,7 +930,7 @@ export class OidcFailureAuditService {
     const ipAddress = boundedPrivateContext(context.ipAddress, MAX_IP_ADDRESS_CHARACTERS);
     const userAgent = boundedPrivateContext(context.userAgent, MAX_USER_AGENT_CHARACTERS);
     return {
-      clientGroup: clientGroup(ipAddress),
+      clientGroup: clientNetworkGroup(ipAddress),
       ipHash: ipAddress
         ? privacyHash("oidc_failure_audit_ip_address", ipAddress, this.#privacyKey)
         : null,

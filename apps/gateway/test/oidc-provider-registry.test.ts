@@ -7,8 +7,11 @@ import {
   type CustomFetch,
   type ServerMetadata,
 } from "openid-client";
+import { OIDC_ISSUER_MAX_LENGTH } from "@omnifin/contracts/auth";
 import { describe, expect, it, vi } from "vitest";
 import {
+  OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS,
+  OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
   OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES,
   OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS,
   OidcProviderRegistry,
@@ -151,10 +154,14 @@ function persistedProvider(database: DatabaseHandle) {
 function expectFailedWithoutDetails(database: DatabaseHandle): void {
   const stored = persistedProvider(database);
   expect(stored).toMatchObject({
-    discoveryCapabilitiesJson: "{}",
+    discoveryCapabilitiesJson: expect.any(String),
     discoveryCheckedAt: checkedTime,
     discoveryState: "failed",
     updatedAt: initialTime,
+  });
+  expect(JSON.parse(stored!.discoveryCapabilitiesJson)).toEqual({
+    configurationFingerprint: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    schemaVersion: 1,
   });
   expect(JSON.stringify(stored)).not.toContain(clientSecret);
 }
@@ -402,6 +409,44 @@ describe("OidcProviderRegistry", () => {
     },
   );
 
+  it("applies standard metadata defaults when a basic-auth provider omits optional arrays", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      const runtime = await registry(
+        database,
+        metadata({
+          grant_types_supported: undefined,
+          token_endpoint_auth_methods_supported: undefined,
+        }),
+      ).discover(providerId);
+
+      expect(runtime.provider.capabilities).toMatchObject({
+        authorizationCodeFlow: true,
+        tokenEndpointAuthMethod: "client_secret_basic",
+      });
+      expect(persistedProvider(database)?.discoveryState).toBe("ready");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not apply the basic-auth metadata default to a configured public client", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database, { tokenEndpointAuthMethod: "none" });
+
+      await expect(
+        registry(database, metadata({ token_endpoint_auth_methods_supported: undefined })).discover(
+          providerId,
+        ),
+      ).rejects.toMatchObject({ code: "oidc_provider_misconfigured" });
+      expectFailedWithoutDetails(database);
+    } finally {
+      database.close();
+    }
+  });
+
   it.each([
     ["profile email", "missing openid"],
     ["openid offline_access", "offline access"],
@@ -478,6 +523,31 @@ describe("OidcProviderRegistry", () => {
       expectFailedWithoutDetails(database);
     } finally {
       database.close();
+    }
+  });
+
+  it("accepts the shared maximum issuer length and rejects one character beyond it", async () => {
+    const prefix = "https://id.example.test/";
+    const maximumIssuer = `${prefix}${"a".repeat(OIDC_ISSUER_MAX_LENGTH - prefix.length)}`;
+    const accepted = openHarness();
+    const rejected = openHarness();
+    try {
+      seedProvider(accepted, { issuer: maximumIssuer });
+      await expect(
+        registry(accepted, metadataForIssuer(maximumIssuer)).discover(providerId),
+      ).resolves.toMatchObject({ provider: { issuer: maximumIssuer } });
+
+      seedProvider(rejected, { issuer: `${maximumIssuer}a` });
+      const discover = vi.fn<NonNullable<OidcProviderRegistryDependencies["discover"]>>();
+      await expect(
+        registry(rejected, metadataForIssuer(`${maximumIssuer}a`), { discover }).discover(
+          providerId,
+        ),
+      ).rejects.toMatchObject({ code: "oidc_provider_misconfigured" });
+      expect(discover).not.toHaveBeenCalled();
+    } finally {
+      accepted.close();
+      rejected.close();
     }
   });
 
@@ -819,10 +889,11 @@ describe("OidcProviderRegistry", () => {
     }
   });
 
-  it("does not poison the cache after a failed discovery and retries cleanly", async () => {
+  it("backs off failed discovery across retries and registry restarts before recovering", async () => {
     const database = openHarness();
     try {
       seedProvider(database);
+      let now = new Date(checkedTime);
       let attempts = 0;
       const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
         async (_server, clientId, clientMetadata, clientAuthentication) => {
@@ -831,11 +902,32 @@ describe("OidcProviderRegistry", () => {
           return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
         },
       );
-      const service = registry(database, metadata(), { discover });
+      const dependencies: OidcProviderRegistryDependencies = {
+        clock: () => new Date(now),
+        createSafeFetch: () => vi.fn<CustomFetch>(),
+        discover,
+      };
+      const service = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
 
       await expect(service.discover(providerId)).rejects.toMatchObject({
         code: "oidc_provider_discovery_failed",
       });
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledOnce();
+
+      const restarted = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+      await expect(restarted.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledOnce();
+
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
       const recovered = await service.discover(providerId);
 
       expect(discover).toHaveBeenCalledTimes(2);
@@ -846,6 +938,354 @@ describe("OidcProviderRegistry", () => {
         discoveryState: "ready",
         updatedAt: initialTime,
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("increases the in-process discovery cooldown after consecutive failures", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async () => {
+          throw new Error(`unsafe discovery failure ${clientSecret}`);
+        },
+      );
+      const service = registry(database, metadata(), { clock: () => new Date(now), discover });
+
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledTimes(2);
+
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledTimes(2);
+
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledTimes(3);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("bypasses a stale discovery cooldown after an administrator changes the provider", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error(`unsafe discovery failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const service = registry(database, metadata(), { discover });
+
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      database.db
+        .update(oidcProviders)
+        .set({
+          displayName: "Updated identity",
+          updatedAt: new Date(checkedTime.getTime() + 1),
+        })
+        .run();
+
+      const runtime = await service.discover(providerId);
+
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(runtime.provider.displayName).toBe("Updated identity");
+      expect(persistedProvider(database)).toMatchObject({
+        discoveryState: "ready",
+        displayName: "Updated identity",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("honors a newer failure persisted by another live registry instance", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts <= 2) throw new Error(`unsafe discovery failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const dependencies: OidcProviderRegistryDependencies = {
+        clock: () => new Date(now),
+        createSafeFetch: () => vi.fn<CustomFetch>(),
+        discover,
+      };
+      const first = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+      const second = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+
+      await expect(first.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await expect(second.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      await expect(first.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("drops a longer stale cooldown after another registry persists recovery", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts <= 2) throw new Error(`unsafe discovery failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const dependencies: OidcProviderRegistryDependencies = {
+        clock: () => new Date(now),
+        createSafeFetch: () => vi.fn<CustomFetch>(),
+        discover,
+      };
+      const first = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+
+      await expect(first.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await expect(first.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      const second = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+      await second.discover(providerId);
+      await first.discover(providerId);
+
+      expect(discover).toHaveBeenCalledTimes(4);
+      expect(persistedProvider(database)).toMatchObject({ discoveryState: "ready" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("invalidates a cached runtime after another registry persists a newer ready generation", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) =>
+          configuration(metadata(), clientId, clientMetadata, clientAuthentication),
+      );
+      const dependencies: OidcProviderRegistryDependencies = {
+        clock: () => new Date(now),
+        createSafeFetch: () => vi.fn<CustomFetch>(),
+        discover,
+      };
+      const first = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+      const second = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+
+      const initial = await first.discover(providerId);
+      now = new Date(now.getTime() + 1);
+      await second.discover(providerId);
+      const refreshed = await first.discover(providerId);
+
+      expect(Object.is(refreshed, initial)).toBe(false);
+      expect(discover).toHaveBeenCalledTimes(3);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not return a cached runtime after another registry persists a failure", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts === 2) throw new Error(`unsafe discovery failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const dependencies: OidcProviderRegistryDependencies = {
+        clock: () => new Date(checkedTime),
+        createSafeFetch: () => vi.fn<CustomFetch>(),
+        discover,
+      };
+      const first = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+      const second = new OidcProviderRegistry(database, { encryptionKey }, dependencies);
+
+      await first.discover(providerId);
+      await expect(second.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      await expect(first.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("anchors an in-process cooldown to the failure clock after clock rollback", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts === 2) throw new Error(`unsafe rollback failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const service = registry(database, metadata(), { clock: () => new Date(now), discover });
+
+      await service.discover(providerId);
+      now = new Date(checkedTime.getTime() - 30 * 60 * 1_000);
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await service.discover(providerId);
+
+      expect(discover).toHaveBeenCalledTimes(3);
+      expect(persistedProvider(database)).toMatchObject({ discoveryState: "ready" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reanchors a live cooldown when the clock rolls back after a failure", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error(`unsafe rollback failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const service = registry(database, metadata(), { clock: () => new Date(now), discover });
+
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      now = new Date(now.getTime() - 60 * 60 * 1_000);
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      expect(discover).toHaveBeenCalledOnce();
+
+      now = new Date(
+        now.getTime() +
+          OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS +
+          OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS,
+      );
+      await service.discover(providerId);
+
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("detects a provider configuration change during a rolled-back clock", async () => {
+    const database = openHarness();
+    try {
+      seedProvider(database);
+      let now = new Date(checkedTime);
+      let attempts = 0;
+      const discover: NonNullable<OidcProviderRegistryDependencies["discover"]> = vi.fn(
+        async (_server, clientId, clientMetadata, clientAuthentication) => {
+          attempts += 1;
+          if (attempts === 2) throw new Error(`unsafe rollback failure ${clientSecret}`);
+          return configuration(metadata(), clientId, clientMetadata, clientAuthentication);
+        },
+      );
+      const service = registry(database, metadata(), { clock: () => new Date(now), discover });
+
+      await service.discover(providerId);
+      now = new Date(checkedTime.getTime() - 30 * 60 * 1_000);
+      await expect(service.discover(providerId)).rejects.toMatchObject({
+        code: "oidc_provider_discovery_failed",
+      });
+      database.db
+        .update(oidcProviders)
+        .set({
+          displayName: "Rollback-safe identity",
+          updatedAt: new Date(now.getTime() + 1),
+        })
+        .run();
+
+      const runtime = await service.discover(providerId);
+
+      expect(runtime.provider.displayName).toBe("Rollback-safe identity");
+      expect(discover).toHaveBeenCalledTimes(3);
     } finally {
       database.close();
     }

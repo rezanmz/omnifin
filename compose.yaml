@@ -28,6 +28,9 @@ services:
       OMNIFIN_DATABASE_URL: /data/omnifin.db
       OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key
       OMNIFIN_HOST: 0.0.0.0
+      # The default is an explicit loopback-only source preview. Set a public HTTPS
+      # OMNIFIN_BASE_URL for any non-loopback deployment.
+      OMNIFIN_INSECURE_LOOPBACK_PREVIEW: ${OMNIFIN_INSECURE_LOOPBACK_PREVIEW:-true}
       OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: ${OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED:-false}
       OMNIFIN_JELLYFIN_URL: ${OMNIFIN_JELLYFIN_URL:-}
       OMNIFIN_LOG_LEVEL: ${OMNIFIN_LOG_LEVEL:-info}
@@ -67,6 +70,9 @@ services:
       OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
       OMNIFIN_DISPLAY_PROFILE: ${OMNIFIN_DISPLAY_PROFILE:-standard}
       OMNIFIN_GATEWAY_URL: http://gateway:4000
+      # The published socket is loopback-only and is expected to sit behind one
+      # maintained TLS proxy. Override only for an explicitly reviewed proxy chain.
+      OMNIFIN_WEB_TRUST_PROXY_HOPS: ${OMNIFIN_WEB_TRUST_PROXY_HOPS:-1}
       PORT: 3000
     ports:
       - 127.0.0.1:${OMNIFIN_WEB_PORT:-3000}:3000

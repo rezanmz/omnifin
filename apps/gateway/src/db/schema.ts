@@ -434,6 +434,19 @@ export const sessions = sqliteTable(
   (table) => [
     uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
     index("sessions_user_idx").on(table.userId),
+    index("sessions_user_created_idx").on(table.userId, table.createdAt),
+    index("sessions_user_active_idx").on(
+      table.userId,
+      table.revokedAt,
+      table.expiresAt,
+      table.absoluteExpiresAt,
+    ),
+    index("sessions_recovery_created_idx")
+      .on(table.createdAt)
+      .where(sql`${table.authMethod} = 'recovery'`),
+    index("sessions_active_recovery_idx")
+      .on(table.revokedAt)
+      .where(sql`${table.authMethod} = 'recovery' and ${table.revokedAt} is null`),
     index("sessions_expiry_idx").on(table.expiresAt),
     index("sessions_external_identity_idx").on(table.externalIdentityId),
     index("sessions_service_identity_link_idx").on(table.serviceIdentityLinkId),

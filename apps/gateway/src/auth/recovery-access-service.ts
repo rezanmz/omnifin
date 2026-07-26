@@ -91,19 +91,16 @@ export class RecoveryAccessService {
 
     return this.#database.sqlite
       .transaction(() => {
-        const session = this.#sessionService.createSession({
+        const sessionInput = {
           attribution: { authMethod: "recovery" },
           ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
           ...(context.requestId ? { requestId: context.requestId } : {}),
           ...(context.userAgent ? { userAgent: context.userAgent } : {}),
-        });
-
-        if (input.currentSessionToken !== undefined) {
-          this.#sessionService.revokeSession(input.currentSessionToken, {
-            ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
-            ...(context.requestId ? { requestId: context.requestId } : {}),
-          });
-        }
+        } as const;
+        const session =
+          input.currentSessionToken === undefined
+            ? this.#sessionService.createSession(sessionInput)
+            : this.#sessionService.replaceSession(input.currentSessionToken, sessionInput);
 
         this.#recordAttempt("success", context, session.principal.sessionId);
         return session;

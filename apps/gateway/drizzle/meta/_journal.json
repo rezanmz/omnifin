@@ -36,6 +36,13 @@
       "when": 1785038321917,
       "tag": "0004_oidc_failure_audit_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785061316244,
+      "tag": "0005_session_issuance_indexes",
+      "breakpoints": true
     }
   ]
 }

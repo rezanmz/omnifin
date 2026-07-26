@@ -1,4 +1,5 @@
 import {
+  AUTH_PROVIDERS_MAX_COUNT,
   authProviderSchema,
   authProvidersResponseSchema,
   type AuthProvider,
@@ -8,7 +9,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { DatabaseHandle } from "../db/client.js";
 import { connectorConfigs, oidcProviders } from "../db/schema.js";
 
-const MAX_PUBLIC_AUTH_PROVIDERS = 50;
+const MAX_PUBLIC_AUTH_PROVIDERS = AUTH_PROVIDERS_MAX_COUNT;
 export const OIDC_PROVIDER_PRESENTATION_PAGE_SIZE = 50;
 export const OIDC_PROVIDER_PRESENTATION_SCAN_LIMIT = 250;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -174,7 +175,7 @@ function presentOidcProvider(record: OidcProviderPresentationRecord): AuthProvid
     state = "unavailable";
   } else if (record.discoveryState === "ready" && readyDiscoveryAttributionIsValid(record)) {
     const parsedLogout = parseReadyLogoutCapabilities(record);
-    state = parsedLogout ? "unavailable" : "misconfigured";
+    state = parsedLogout ? "available" : "misconfigured";
     logout = parsedLogout ?? noLogoutCapabilities;
   } else {
     state = "misconfigured";

@@ -17,11 +17,13 @@ describe("loadConfig", () => {
   it("decodes a 32-byte key and production security defaults", () => {
     const config = loadConfig({
       NODE_ENV: "production",
+      OMNIFIN_BASE_URL: "https://omnifin.example",
       OMNIFIN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     });
     expect(config.encryptionKey).toHaveLength(32);
     expect(config.secureCookies).toBe(true);
-    expect(config.baseUrl.origin).toBe("http://localhost:3000");
+    expect(config.baseUrl.origin).toBe("https://omnifin.example");
+    expect(config.insecureLoopbackPreview).toBe(false);
     expect(config.host).toBe("127.0.0.1");
     expect(config.trustProxyHops).toBe(0);
     expect(config.session.recoveryAbsoluteTtlMs).toBe(15 * 60 * 1_000);
@@ -171,15 +173,20 @@ describe("loadConfig", () => {
     ).toThrow();
   });
 
-  it("requires a canonical HTTP(S) public URL and HTTPS for non-loopback production hosts", () => {
+  it("requires a root HTTP(S) public origin and HTTPS for non-loopback production hosts", () => {
     const encryptionKey = Buffer.alloc(32, 7).toString("base64");
     for (const baseUrl of [
       "file:///tmp/omnifin",
       "ftp://omnifin.example/",
       "https://user:password@omnifin.example/",
+      "https://omnifin.example/preview",
+      "https://omnifin.example/preview/",
       "https://omnifin.example/?tenant=home",
+      "https://omnifin.example/?",
       "https://omnifin.example/#dashboard",
+      "https://omnifin.example/#",
       "http://omnifin.example/",
+      "http://127.0.0.1:3000/preview",
     ]) {
       expect(() =>
         loadConfig({
@@ -190,24 +197,40 @@ describe("loadConfig", () => {
       ).toThrow(/base url/i);
     }
 
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "production",
+        OMNIFIN_BASE_URL: "http://127.0.0.1:3000",
+        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      }),
+    ).toThrow(/base url/i);
+    const preview = loadConfig({
+      NODE_ENV: "production",
+      OMNIFIN_BASE_URL: "http://127.0.0.1:3000",
+      OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      OMNIFIN_INSECURE_LOOPBACK_PREVIEW: "true",
+    });
+    expect(preview.baseUrl.href).toBe("http://127.0.0.1:3000/");
+    expect(preview.insecureLoopbackPreview).toBe(true);
+    expect(preview.secureCookies).toBe(false);
     expect(
       loadConfig({
         NODE_ENV: "production",
-        OMNIFIN_BASE_URL: "http://127.0.0.1:3000/preview",
+        OMNIFIN_BASE_URL: "https://omnifin.example",
         OMNIFIN_ENCRYPTION_KEY: encryptionKey,
       }).baseUrl.href,
-    ).toBe("http://127.0.0.1:3000/preview");
+    ).toBe("https://omnifin.example/");
   });
 
-  it("limits the insecure development cookie fallback to loopback HTTP", () => {
+  it("limits insecure cookies to an explicit production preview or development loopback", () => {
     const encryptionKey = Buffer.alloc(32, 7).toString("base64");
-    expect(
-      loadConfig({
-        NODE_ENV: "development",
-        OMNIFIN_BASE_URL: "http://localhost:3000",
-        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
-      }).secureCookies,
-    ).toBe(false);
+    const developmentPreview = loadConfig({
+      NODE_ENV: "development",
+      OMNIFIN_BASE_URL: "http://localhost:3000",
+      OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+    });
+    expect(developmentPreview.secureCookies).toBe(false);
+    expect(developmentPreview.insecureLoopbackPreview).toBe(true);
     expect(
       loadConfig({
         NODE_ENV: "development",
@@ -220,6 +243,14 @@ describe("loadConfig", () => {
         NODE_ENV: "development",
         OMNIFIN_BASE_URL: "http://omnifin.example",
         OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+      }),
+    ).toThrow(/base url/i);
+    expect(() =>
+      loadConfig({
+        NODE_ENV: "production",
+        OMNIFIN_BASE_URL: "http://localhost:3000",
+        OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+        OMNIFIN_SECURE_COOKIES: "true",
       }),
     ).toThrow(/base url/i);
   });

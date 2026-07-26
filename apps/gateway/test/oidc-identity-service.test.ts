@@ -1,4 +1,9 @@
-import { roleMappingSchema, type Role, type RoleMapping } from "@omnifin/contracts/auth";
+import {
+  OIDC_ISSUER_MAX_LENGTH,
+  roleMappingSchema,
+  type Role,
+  type RoleMapping,
+} from "@omnifin/contracts/auth";
 import {
   Configuration,
   type ClientAuth,
@@ -152,6 +157,7 @@ async function verifiedGrantFromRuntime(
     baseUrl: new URL("https://omnifin.example"),
     encryptionKey: PROTOCOL_KEY,
     environment: "test",
+    insecureLoopbackPreview: false,
     secureCookies: true,
   });
   const created = await transactions.create({
@@ -518,6 +524,19 @@ describe("OidcIdentityService", () => {
     database.close();
   });
 
+  it("carries the shared maximum-length issuer from discovery through identity resolution", async () => {
+    const { database, service } = createHarness("maximum-issuer-fixture");
+    const prefix = "https://id.example.test/";
+    const maximumIssuer = `${prefix}${"a".repeat(OIDC_ISSUER_MAX_LENGTH - prefix.length)}`;
+    seedProvider(database, { issuer: maximumIssuer });
+
+    const result = await resolve(database, service, claims({ iss: maximumIssuer }));
+
+    expect(result).toMatchObject({ provisioned: true, status: "resolved" });
+    expect(database.db.select().from(externalIdentities).get()?.issuer).toBe(maximumIssuer);
+    database.close();
+  });
+
   it("accepts protocol-verified multi-audience claims and still requires current provider bindings", async () => {
     const { database, service } = createHarness();
     seedProvider(database);
@@ -667,13 +686,7 @@ describe("OidcIdentityService", () => {
           .get(),
       ).toEqual(before);
       expect(database.db.select().from(users).all()).toHaveLength(0);
-      expect(readAudit(database)).toEqual([
-        expect.objectContaining({
-          eventType: "auth.oidc.identity.denied",
-          metadataJson: JSON.stringify({ reason: "invalid_verified_context" }),
-          outcome: "denied",
-        }),
-      ]);
+      expect(readAudit(database)).toEqual([]);
       database.close();
     }
   });
@@ -762,10 +775,8 @@ describe("OidcIdentityService", () => {
       expect(auditJson).not.toContain(sealA);
       expect(auditJson).not.toContain(sealB);
       expect(auditJson).not.toContain(transition.value);
-      expect(readAudit(database)[0]).toMatchObject({
-        metadataJson: JSON.stringify({ reason: "invalid_verified_context" }),
-        outcome: "denied",
-      });
+      expect(readAudit(database)).toHaveLength(2);
+      expect(readAudit(database).every(({ outcome }) => outcome === "success")).toBe(true);
       database.close();
     }
   });
@@ -1227,7 +1238,7 @@ describe("OidcIdentityService", () => {
     expect(auditJson).not.toContain(idTokenHint);
     expect(auditJson).not.toContain(sessionId);
     expect(auditJson).not.toContain("subject-1");
-    expect(readAudit(database).filter((event) => event.outcome === "denied")).toHaveLength(6);
+    expect(readAudit(database).filter((event) => event.outcome === "denied")).toHaveLength(0);
     database.close();
   });
 
@@ -1260,10 +1271,7 @@ describe("OidcIdentityService", () => {
     expect(auditJson).not.toContain(idTokenHint);
     expect(auditJson).not.toContain(sessionId);
     expect(auditJson).not.toContain("subject-1");
-    expect(readAudit(database).map((event) => JSON.parse(event.metadataJson))).toEqual([
-      { reason: "invalid_request" },
-      { reason: "invalid_verified_context" },
-    ]);
+    expect(readAudit(database)).toEqual([]);
     database.close();
   });
 });

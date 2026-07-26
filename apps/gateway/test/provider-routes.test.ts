@@ -20,6 +20,7 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     encryptionKey: Buffer.alloc(32, 4),
     environment: "test",
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     logLevel: "silent",
     port: 4000,
@@ -182,7 +183,7 @@ describe("GET /v1/auth/providers", () => {
             issuer: "https://oidc-home.example.test/",
             jitProvisioningEnabled: true,
             kind: "oidc",
-            state: "unavailable",
+            state: "available",
             ...expected,
           },
         ],
@@ -239,7 +240,7 @@ describe("GET /v1/auth/providers", () => {
     }
   });
 
-  it("does not advertise OIDC as actionable before the sign-in route exists", async () => {
+  it("advertises a ready OIDC provider once the sign-in route is registered", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });
     try {
@@ -252,17 +253,18 @@ describe("GET /v1/auth/providers", () => {
       const providers = await app.inject({ method: "GET", url: "/v1/auth/providers" });
       const start = await app.inject({
         method: "GET",
-        url: "/api/auth/oidc/oidc-home/start",
+        url: "/v1/auth/oidc/oidc-home/start",
       });
 
       expect(authProvidersResponseSchema.parse(providers.json()).providers).toEqual([
         expect.objectContaining({
           id: "oidc-home",
-          state: "unavailable",
+          state: "available",
           supportsRpInitiatedLogout: true,
         }),
       ]);
-      expect(start.statusCode).toBe(404);
+      expect(start.statusCode).toBe(303);
+      expect(start.headers.location).toBe("/api/auth/oidc/oidc-home/start?returnPath=%2F");
     } finally {
       await app.close();
     }
@@ -355,7 +357,7 @@ describe("GET /v1/auth/providers", () => {
 
       expect(response.statusCode).toBe(200);
       expect(providers).toHaveLength(2);
-      expect(providers[0]).toMatchObject({ id: "oidc-valid", state: "unavailable" });
+      expect(providers[0]).toMatchObject({ id: "oidc-valid", state: "available" });
       expect(providers[1]).toEqual({
         displayName: "B malformed identity",
         id: "oidc-malformed",
@@ -599,7 +601,7 @@ describe("GET /v1/auth/providers", () => {
 
       expect(response.statusCode).toBe(200);
       expect(authProvidersResponseSchema.parse(response.json()).providers).toEqual([
-        expect.objectContaining({ id: "oidc-private", state: "unavailable" }),
+        expect.objectContaining({ id: "oidc-private", state: "available" }),
       ]);
       for (const marker of [...Object.values(markers), runtimeSecuritySeal]) {
         expect(response.body).not.toContain(marker);

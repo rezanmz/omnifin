@@ -897,7 +897,57 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 5 });
+      ).toEqual({ count: 6 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select name
+             from sqlite_master
+             where type = 'index'
+               and name in (
+                 'sessions_active_recovery_idx',
+                 'sessions_recovery_created_idx',
+                 'sessions_user_active_idx',
+                 'sessions_user_created_idx'
+               )
+             order by name`,
+          )
+          .all(),
+      ).toEqual([
+        { name: "sessions_active_recovery_idx" },
+        { name: "sessions_recovery_created_idx" },
+        { name: "sessions_user_active_idx" },
+        { name: "sessions_user_created_idx" },
+      ]);
+      const recoveryIssuancePlan = database.sqlite
+        .prepare(
+          `explain query plan
+           select count(*)
+           from (
+             select 1
+             from sessions
+             where auth_method = 'recovery'
+               and created_at > @windowCutoff
+             limit 8
+           )`,
+        )
+        .all({ windowCutoff: 0 }) as { detail: string }[];
+      expect(recoveryIssuancePlan.map(({ detail }) => detail).join("\n")).toContain(
+        "sessions_recovery_created_idx",
+      );
+      const activeRecoveryPlan = database.sqlite
+        .prepare(
+          `explain query plan
+           update sessions
+           set revoked_at = max(@now, created_at)
+           where auth_method = 'recovery'
+             and revoked_at is null
+             and (@replacingSessionId is null or id <> @replacingSessionId)`,
+        )
+        .all({ now: 1, replacingSessionId: null }) as { detail: string }[];
+      expect(activeRecoveryPlan.map(({ detail }) => detail).join("\n")).toContain(
+        "sessions_active_recovery_idx",
+      );
       expect(
         database.sqlite
           .prepare(

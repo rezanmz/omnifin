@@ -27,6 +27,7 @@ const environmentSchema = z.object({
   OMNIFIN_ENCRYPTION_KEY: optionalSecretSetting,
   OMNIFIN_ENCRYPTION_KEY_FILE: optionalSecretSetting,
   OMNIFIN_HOST: z.string().min(1).default("127.0.0.1"),
+  OMNIFIN_INSECURE_LOOPBACK_PREVIEW: booleanString,
   OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: booleanString,
   OMNIFIN_JELLYFIN_URL: optionalUrlString,
   OMNIFIN_LOG_LEVEL: z
@@ -45,6 +46,7 @@ export interface AppConfig {
   encryptionKey: Buffer;
   environment: "development" | "test" | "production";
   host: string;
+  insecureLoopbackPreview: boolean;
   jellyfinInsecureHttpApproved: boolean;
   jellyfinUrl?: URL;
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
@@ -162,6 +164,7 @@ function canonicalBaseUrl(value: string, environment: AppConfig["environment"]) 
     (url.protocol !== "http:" && url.protocol !== "https:") ||
     url.username ||
     url.password ||
+    url.pathname !== "/" ||
     value.includes("?") ||
     value.includes("#")
   ) {
@@ -221,11 +224,16 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
       )
     : undefined;
   const baseUrl = canonicalBaseUrl(parsed.OMNIFIN_BASE_URL, parsed.NODE_ENV);
-  const secureCookies =
-    parsed.OMNIFIN_SECURE_COOKIES ||
-    parsed.NODE_ENV === "production" ||
-    baseUrl.protocol === "https:";
-  if (!secureCookies && !isLoopbackHostname(baseUrl.hostname)) {
+  const secureCookies = parsed.OMNIFIN_SECURE_COOKIES || baseUrl.protocol === "https:";
+  const insecureLoopbackPreview =
+    !secureCookies &&
+    baseUrl.protocol === "http:" &&
+    isLoopbackHostname(baseUrl.hostname) &&
+    (parsed.NODE_ENV !== "production" || parsed.OMNIFIN_INSECURE_LOOPBACK_PREVIEW);
+  if (
+    (secureCookies && baseUrl.protocol !== "https:") ||
+    (!secureCookies && !insecureLoopbackPreview)
+  ) {
     throw new StartupError("base_url_invalid");
   }
 
@@ -235,6 +243,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     encryptionKey: decodeEncryptionKey(encryptionKey),
     environment: parsed.NODE_ENV,
     host: parsed.OMNIFIN_HOST,
+    insecureLoopbackPreview,
     jellyfinInsecureHttpApproved: parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED,
     ...(jellyfinUrl ? { jellyfinUrl } : {}),
     logLevel: parsed.OMNIFIN_LOG_LEVEL,

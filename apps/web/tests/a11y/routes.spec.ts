@@ -7,6 +7,8 @@ const routes = [
   { label: "first-run dashboard", path: "/?test-view=onboarding" },
   { label: "configured login", path: "/login" },
   { label: "unconfigured login", path: "/login?test-view=unconfigured" },
+  { label: "unavailable login", path: "/login?test-view=unavailable" },
+  { label: "login authentication error", path: "/login?authError=invalid_request" },
   { label: "loading dashboard", path: "/?test-view=loading" },
   { label: "quiet dashboard", path: "/?test-view=quiet" },
   { label: "offline dashboard", path: "/?test-view=offline" },
@@ -21,8 +23,10 @@ for (const route of routes) {
       !supportedProjects.has(testInfo.project.name),
       "Covered by representative Chromium viewports",
     );
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(route.path);
     await page.locator("main").waitFor();
+    await page.evaluate(() => document.fonts.ready);
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);
   });

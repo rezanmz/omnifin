@@ -21,16 +21,21 @@ const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PKCE_CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 const COMPACT_JWS_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const AUTHORIZATION_PROBE_TOKEN = "A".repeat(43);
 
 const verifiedGrantBrand: unique symbol = Symbol("verified-oidc-grant");
 
 export type OidcProtocolErrorCode =
-  "oidc_protocol_failed" | "oidc_protocol_invalid" | "oidc_protocol_provider_changed";
+  | "oidc_protocol_claims_invalid"
+  | "oidc_protocol_invalid"
+  | "oidc_protocol_provider_changed"
+  | "oidc_protocol_token_exchange_failed";
 
 const ERROR_MESSAGES: Readonly<Record<OidcProtocolErrorCode, string>> = Object.freeze({
-  oidc_protocol_failed: "The identity provider could not complete authentication.",
+  oidc_protocol_claims_invalid: "The identity provider could not complete authentication.",
   oidc_protocol_invalid: "The authentication response is invalid or has expired.",
   oidc_protocol_provider_changed: "The identity provider changed during authentication.",
+  oidc_protocol_token_exchange_failed: "The identity provider could not complete authentication.",
 });
 
 export class OidcProtocolError extends Error {
@@ -48,6 +53,11 @@ export interface OidcAuthorizationRedirect {
   readonly authorizationUrl: string;
   readonly expiresAt: Date;
   readonly providerId: string;
+}
+
+export interface OidcAuthorizationRequestProbe {
+  readonly providerId: string;
+  readonly redirectUri: string;
 }
 
 export interface CompleteOidcAuthorizationInput {
@@ -272,6 +282,30 @@ export class OidcProtocolService {
       dependencies.authorizationCodeGrant ?? executeOidcRuntimeAuthorizationCodeGrant;
   }
 
+  /**
+   * Verifies the exact configured request shape before any database-backed
+   * authorization transaction is allocated. All generated PKCE/state/nonce
+   * values use the same unreserved 43-character encoding as this probe, so the
+   * resulting URL has the same encoded length as a live request.
+   */
+  public assertAuthorizationRequestViable(
+    runtime: OidcProviderRuntime,
+    input: OidcAuthorizationRequestProbe,
+  ): void {
+    this.buildAuthorizationRequest(runtime, {
+      browserBindingToken: AUTHORIZATION_PROBE_TOKEN,
+      codeChallenge: AUTHORIZATION_PROBE_TOKEN,
+      codeChallengeMethod: "S256",
+      expiresAt: new Date(0),
+      nonce: AUTHORIZATION_PROBE_TOKEN,
+      providerId: input.providerId,
+      providerRuntimeBinding: oidcProviderRuntimeBinding(runtime),
+      redirectUri: input.redirectUri,
+      returnPath: "/",
+      state: AUTHORIZATION_PROBE_TOKEN,
+    });
+  }
+
   public buildAuthorizationRequest(
     runtime: OidcProviderRuntime,
     transaction: CreatedOidcAuthorizationTransaction,
@@ -370,7 +404,7 @@ export class OidcProtocolService {
         pkceCodeVerifier: input.transaction.codeVerifier,
       });
     } catch {
-      protocolError("oidc_protocol_failed");
+      protocolError("oidc_protocol_token_exchange_failed");
     }
 
     let idToken: unknown;
@@ -379,12 +413,12 @@ export class OidcProtocolService {
       idToken = result.idToken;
       rawClaims = result.claims;
     } catch {
-      protocolError("oidc_protocol_failed");
+      protocolError("oidc_protocol_token_exchange_failed");
     }
-    if (!isBoundedCompactIdToken(idToken)) protocolError("oidc_protocol_failed");
+    if (!isBoundedCompactIdToken(idToken)) protocolError("oidc_protocol_claims_invalid");
     const claims = validateOidcClaims(rawClaims);
     if (!claims.ok || !isValidatedOidcClaims(claims.value)) {
-      protocolError("oidc_protocol_failed");
+      protocolError("oidc_protocol_claims_invalid");
     }
 
     return mintVerifiedGrant({

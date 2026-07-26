@@ -4,6 +4,7 @@ import { z } from "zod";
 import { SafeHttpError } from "../http-error.js";
 import { RecoveryAccessService } from "./recovery-access-service.js";
 import { sessionCookieName, writeSessionCookie } from "./session-cookie.js";
+import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "./session-service.js";
 
 const RECOVERY_REQUEST_BODY_LIMIT_BYTES = 256;
 const RECOVERY_SECRET_MIN_DECODED_BYTES = 32;
@@ -115,12 +116,23 @@ export const recoveryRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       const parsedBody = recoveryAccessRequestSchema.safeParse(request.body);
-      const session = recoveryAccess.authenticate({
-        ...requestContext(request),
-        currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
-        denialReason: parsedBody.success ? "credential_mismatch" : "invalid_request",
-        secret: parsedBody.success ? parsedBody.data.secret : undefined,
-      });
+      let session;
+      try {
+        session = recoveryAccess.authenticate({
+          ...requestContext(request),
+          currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
+          denialReason: parsedBody.success ? "credential_mismatch" : "invalid_request",
+          secret: parsedBody.success ? parsedBody.data.secret : undefined,
+        });
+      } catch (error) {
+        if (!(error instanceof SessionIssuanceLimitError)) throw error;
+        reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Recovery access is temporarily rate limited.",
+          statusCode: 429,
+        });
+      }
       recordedRequests.add(request);
       if (!session) throw recoveryAccessDenied();
 

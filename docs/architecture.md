@@ -6,22 +6,29 @@ It describes the target architecture for the current pre-release implementation;
 the roadmap records when each area has passed its verification gate.
 
 > [!IMPORTANT]
-> Phase 0 implements the process topology, SQLite migrations, health and readiness,
-> security headers and origin checks, browser-safe provider discovery, connector
-> contracts and probes, secret-handling primitives, and the interface shell. It does
-> not implement sign-in, sessions, application authorization, identity linking,
-> connector administration, audit writes, live upstream workflows, or media proxying.
-> Unless a section says “current Phase 0,” it describes a required later-phase boundary.
+> Phase 0 established the process topology, SQLite migrations, health and readiness,
+> security headers and origin checks, connector contracts and probes, secret-handling
+> primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
+> sessions, identity resolution, authentication audits, and recovery access now exist,
+> while Jellyfin linking, complete authorization, connector administration, live
+> upstream workflows, and media proxying remain incomplete. The roadmap, not branch
+> availability, determines supported-release status.
 
-## Current Phase 0 foundation
+## Current implementation checkpoint
 
-The current browser can render the foundation preview, reach the web process's own
-liveness endpoint, and reach the versioned provider-discovery endpoint through the
-same-origin web process. Gateway liveness and storage readiness remain private to the
-Compose network. The gateway migrates SQLite, validates public configuration, and
-redacts structured logs; the repository also provides isolated connector fixture and
-probe tooling. Configured provider metadata is deliberately reported as unavailable
-because no login flow is registered yet.
+The browser renders the application and sign-in shells, reaches the web process's own
+liveness endpoint, and loads versioned provider metadata through the same-origin web
+process. Ready OIDC providers can complete the authorization-code flow and create a
+local session; failed or inconsistent providers remain non-interactive. Gateway
+liveness and storage readiness stay private to the Compose network. The gateway owns
+OIDC discovery and backoff, one-time authorization transactions, identities, sessions,
+recovery access, and authentication audits. It also migrates SQLite, validates public
+configuration, redacts structured logs, and provides isolated connector fixture and
+probe tooling.
+
+There is not yet a supported provider-administration workflow. Direct Jellyfin login,
+Quick Connect, OIDC-to-Jellyfin linking, OIDC logout, connector administration, and
+media operations remain unavailable.
 
 ## Target system shape
 
@@ -107,22 +114,23 @@ Live data uses server-sent events or bounded polling behind the same session and
 authorization checks. Clients reconcile updates through normalized query keys; they
 do not open connections directly to upstream services.
 
-## Planned Phase 1 identity and authorization
+## Phase 1 identity and authorization
 
-Phase 1 must support configured OIDC issuers and direct Jellyfin authentication. OIDC
-identities must be keyed by immutable issuer and subject. Media access must require a
-separately proven Jellyfin account link; matching email addresses is never sufficient
-proof. The full required flow and recovery model are documented in
-[Authentication](authentication.md).
+The current checkpoint supports configured OIDC issuers, immutable issuer-and-subject
+identity keys, explicit claim-to-role mapping, viewer-default JIT provisioning, opaque
+sessions, and recovery access. Direct Jellyfin authentication and the user-controlled
+pairing lifecycle remain Phase 1 work. Media access must require a separately proven
+Jellyfin account link; matching email addresses is never sufficient proof. The full
+flow and recovery model are documented in [Authentication](authentication.md).
 
 The shared contract defines `viewer`, `requester`, `operator`, and `admin` roles. Phase
 1 permission evaluation must remain local to Omnifin because most upstream service
 keys are effectively administrative. Connector credentials must not determine the
 signed-in user's authority.
 
-## Persistence schema and target secrets
+## Persistence schema and secrets
 
-The Phase 0 SQLite schema reserves storage for:
+The SQLite schema stores or reserves storage for:
 
 - users, external identities, service identity links, and role mappings;
 - opaque session digests and short-lived authentication transactions;
@@ -131,9 +139,10 @@ The Phase 0 SQLite schema reserves storage for:
 - durable audit records and persisted failure state; and
 - schema migration history.
 
-Phase 0 exercises the schema and migration history but does not yet create authenticated
-users, identity links, sessions, connector configuration, encrypted upstream tokens,
-or audit events through product workflows.
+Current OIDC and recovery workflows create authenticated users, external identities,
+sessions, authorization transactions, and authentication audit events. Jellyfin
+identity links, encrypted Jellyfin tokens, and connector configuration are not yet
+created through supported product workflows.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the
@@ -147,12 +156,13 @@ profile.
 
 ## Current shell and target frontend architecture
 
-Phase 0 provides server-rendered route shells, deterministic preview data, responsive
-navigation, and selected intentional transitions. As live workflows arrive, TanStack
-Query will own remote data and invalidation, while Zustand remains limited to ephemeral
-interface state such as an open drawer or command-palette context. Motion is reserved
-for purposeful, interruptible transitions; reduced-motion users receive stable state
-changes without decorative movement.
+The web application provides server-rendered route shells, deterministic preview data,
+responsive navigation, and a live provider-driven sign-in screen with exact loading,
+unconfigured, unavailable, denied, and error states. As media workflows arrive,
+TanStack Query will own remote data and invalidation, while Zustand remains limited to
+ephemeral interface state such as an open drawer or command-palette context. Motion is
+reserved for purposeful, interruptible transitions; reduced-motion users receive
+stable state changes without decorative movement.
 
 Heavy surfaces—the theater player, manual release workbench, expanded calendar, and
 administrative tools—will be loaded on demand when implemented. Reusable components
@@ -177,6 +187,8 @@ not proxy storage readiness to the public network.
 ## Required deployment invariants
 
 - Production traffic terminates TLS before reaching the web service.
+- The public proxy sanitizes the forwarding chain, and the web trusted-hop count
+  exactly matches the maintained proxies that cannot be bypassed.
 - The gateway is not exposed directly to untrusted networks.
 - One release uses one immutable image digest for both services.
 - The SQLite database and master key are backed up separately and restored together.

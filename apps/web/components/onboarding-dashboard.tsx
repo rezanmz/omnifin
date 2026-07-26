@@ -6,7 +6,7 @@ import { CinematicBackdrop } from "./cinematic-backdrop";
 
 const steps = [
   {
-    copy: "Phase 1 adds OIDC and Jellyfin sign-in with explicit account pairing and local roles.",
+    copy: "OIDC sign-in and local sessions are in development; Jellyfin sign-in and proof-based pairing remain gated.",
     icon: ShieldCheck,
     label: "Identity without lock-in",
   },
@@ -47,9 +47,9 @@ export function OnboardingDashboard({
             <p className="eyebrow">A private control plane</p>
             <h1 id="onboarding-title">Your media control room is being prepared.</h1>
             <p>
-              This foundation release is ready for deployment review. It does not accept account
-              credentials or connect to media services, keeping your stack untouched until secure
-              setup passes the Phase 1 security and integration gates.
+              This pre-release checkpoint can validate OIDC sign-in and recovery in an isolated
+              environment. Supported provider setup, Jellyfin pairing, and media-service connections
+              remain locked until the Phase 1 security and integration gates pass.
             </p>
             <Link className="button button--primary" href="/settings">
               View release readiness <ArrowRight aria-hidden="true" size={17} />

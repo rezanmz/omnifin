@@ -52,17 +52,23 @@ See the [compatibility matrix](docs/compatibility.md) for validation status.
 ## Architecture at a glance
 
 Omnifin is a TypeScript monorepo with a Next.js application, a Fastify gateway,
-and shared contract and connector packages. Phase 0 keeps the first interface
-primitives app-local; the planned design-system package will be extracted as its API
-stabilizes during Phase 2. The current foundation provides storage-backed health
-checks, browser-safe authentication-provider discovery, normalized contracts,
-connector probes, migration tooling, and the application shell.
+and shared contract and connector packages. The first interface primitives remain
+app-local until the design-system API stabilizes during Phase 2. The current
+development checkpoint provides storage-backed health checks, browser-safe provider
+discovery, an OIDC Authorization Code flow with PKCE, opaque local sessions,
+break-glass recovery, normalized contracts, connector probes, migration tooling, and
+the application shell and sign-in experience.
 
-The target boundary routes all upstream access through the gateway. Phase 1 will add
-sessions, authorization, encrypted connector administration, identity linking, and
-audit records; later phases add live events, media proxying, and complete upstream
-workflows. Raw upstream credentials and payloads are never intended to cross into the
-browser.
+All upstream access crosses the gateway boundary. Phase 1 is still in development:
+supported provider administration, Jellyfin sign-in and pairing, complete logout,
+permission enforcement, and encrypted connector administration remain release-gate
+work. Later phases add live events, media proxying, and complete upstream workflows.
+Reusable upstream credentials, token responses, identity assertions, and raw upstream
+API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
+carry the provider's transient, one-time `code`, `state`, or error parameters to the
+callback; PKCE, one-shot transaction consumption, `no-store` responses, and the
+restrictive referrer policy limit that exposure. Reverse proxies must not persist
+authentication callback query strings in access logs.
 
 The default deployment is a single-node Docker Compose installation backed by
 SQLite. One immutable image contains both process entry points, allowing the web and

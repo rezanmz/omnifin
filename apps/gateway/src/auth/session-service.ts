@@ -20,6 +20,24 @@ const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
 const SESSION_REPLACEMENT_CAPABILITY_BRAND = Symbol("session-replacement-capability");
 
+export const MAX_ACTIVE_SESSIONS_PER_USER = 16;
+export const MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW = 8;
+export const MAX_SESSION_ISSUANCES_PER_USER_WINDOW = 32;
+export const SESSION_ISSUANCE_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+export type SessionIssuanceLimitReason = "active_session_limit" | "issuance_rate_limit";
+
+export class SessionIssuanceLimitError extends Error {
+  public readonly code = "session_issuance_limited";
+  public readonly reason: SessionIssuanceLimitReason;
+
+  public constructor(reason: SessionIssuanceLimitReason) {
+    super("Session issuance is temporarily unavailable.");
+    this.name = "SessionIssuanceLimitError";
+    this.reason = reason;
+  }
+}
+
 type SessionAuthMethod = "jellyfin" | "oidc" | "recovery";
 
 export type SessionAttribution =
@@ -455,6 +473,7 @@ export class SessionService {
         input,
         new Set([state.proof.presentedTokenHash]),
         now,
+        currentSession.sessionId,
       );
       const revoked = this.revokeSessionForReplacement(currentSession, now);
       if (!revoked) throw new Error("Proven session could not be replaced.");
@@ -474,13 +493,19 @@ export class SessionService {
     input: CreateSessionInput,
     disallowedTokenHashes: ReadonlySet<string>,
     now: Date,
+    replacingSessionId?: string,
   ): IssuedSession {
-    this.deleteExpiredRotationAliases(now);
-    const sessionId = assertIdentifier(this.createId(), "Session identifier");
     const attribution = this.validateAttribution(input.attribution);
     const ipAddress = optionalBoundedText(input.ipAddress, 256, "IP address");
     const requestId = optionalBoundedText(input.requestId, 128, "Request identifier");
     const userAgent = optionalBoundedText(input.userAgent, 2_048, "User agent");
+    this.assertSessionIssuanceAllowed(attribution, now, replacingSessionId);
+    this.deleteExpiredRotationAliases(now);
+    const supersededRecoverySessionCount =
+      attribution.authMethod === "recovery"
+        ? this.revokeActiveRecoverySessions(now, replacingSessionId)
+        : 0;
+    const sessionId = assertIdentifier(this.createId(), "Session identifier");
     const absoluteTtlMs =
       attribution.authMethod === "recovery" ? this.recoveryAbsoluteTtlMs : this.absoluteTtlMs;
     const absoluteExpiresAt = new Date(now.getTime() + absoluteTtlMs);
@@ -562,6 +587,30 @@ export class SessionService {
           targetId: sessionId,
         },
       );
+      if (supersededRecoverySessionCount > 0) {
+        this.insertAuditEvent(
+          {
+            authMethod: "recovery",
+            createdAt: now.getTime(),
+            sessionId,
+            userId: null,
+          },
+          {
+            context: {
+              ...(ipAddress ? { ipAddress } : {}),
+              ...(requestId ? { requestId } : {}),
+            },
+            eventType: "auth.recovery_session.superseded",
+            metadata: {
+              reason: "verified_recovery_access",
+              revokedSessionCount: supersededRecoverySessionCount,
+            },
+            occurredAt: now,
+            outcome: "success",
+            targetId: sessionId,
+          },
+        );
+      }
 
       return {
         absoluteExpiresAt,
@@ -581,7 +630,12 @@ export class SessionService {
     return this.withImmediateTransaction(() => {
       const now = this.currentTime();
       const currentSession = this.loadReplaceableSession(currentSessionToken, now);
-      const issued = this.issueSessionInCurrentTransaction(input, disallowedTokenHashes, now);
+      const issued = this.issueSessionInCurrentTransaction(
+        input,
+        disallowedTokenHashes,
+        now,
+        currentSession?.sessionId,
+      );
       if (!currentSession) return issued;
 
       const revoked = this.revokeSessionForReplacement(currentSession, now);
@@ -767,6 +821,7 @@ export class SessionService {
     const candidateMatches = constantTimeTextEqual(candidateHash, row.csrfTokenHash);
     if (!parsedCsrfToken.success || !candidateMatches) {
       this.auditSessionEvent(row, {
+        coalescedAuditId: `csrf-denied-${hashToken(`session:${row.sessionId}`)}`,
         context,
         eventType: "auth.session.csrf_denied",
         metadata: { reason: "csrf_mismatch" },
@@ -866,9 +921,10 @@ export class SessionService {
   private auditSessionEvent(
     row: SessionJoinedRow,
     event: {
+      coalescedAuditId?: string;
       context: SessionRequestContext;
       eventType: string;
-      metadata: Record<string, string>;
+      metadata: Record<string, boolean | number | string>;
       occurredAt: Date;
       outcome: "denied" | "failure" | "success";
       targetId: string;
@@ -935,15 +991,17 @@ export class SessionService {
   private insertAuditEvent(
     session: RevokedSessionRow,
     event: {
+      coalescedAuditId?: string;
       context: SessionRequestContext;
       eventType: string;
-      metadata: Record<string, string>;
+      metadata: Record<string, boolean | number | string>;
       occurredAt: Date;
       outcome: "denied" | "failure" | "success";
       targetId: string;
     },
   ) {
-    const auditId = assertIdentifier(this.createId(), "Audit identifier");
+    const coalescesById = event.coalescedAuditId !== undefined;
+    const auditId = assertIdentifier(event.coalescedAuditId ?? this.createId(), "Audit identifier");
     const requestId = event.context.requestId;
     if (requestId !== undefined && (requestId.length < 1 || requestId.length > 128)) {
       throw new TypeError("Audit request identifier is invalid.");
@@ -978,7 +1036,7 @@ export class SessionService {
           @metadataJson,
           @ipHash,
           @createdAt
-        )`,
+        )${coalescesById ? " on conflict(id) do nothing" : ""}`,
       )
       .run({
         actorAuthMethod: session.authMethod,
@@ -1202,6 +1260,87 @@ export class SessionService {
       return candidate;
     }
     throw new Error("A unique secure session token could not be generated.");
+  }
+
+  private assertSessionIssuanceAllowed(
+    attribution: SessionAttribution,
+    now: Date,
+    replacingSessionId?: string,
+  ) {
+    const nowTime = now.getTime();
+    if (attribution.authMethod === "recovery") {
+      const recentRecovery = this.database.sqlite
+        .prepare(
+          `select count(*) as count
+           from (
+             select 1
+             from sessions
+             where auth_method = 'recovery'
+               and created_at > @windowCutoff
+             limit ${MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW}
+           )`,
+        )
+        .get({ windowCutoff: nowTime - SESSION_ISSUANCE_WINDOW_MS }) as { count: number };
+      if (recentRecovery.count >= MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW) {
+        throw new SessionIssuanceLimitError("issuance_rate_limit");
+      }
+      return;
+    }
+    const active = this.database.sqlite
+      .prepare(
+        `select count(*) as count
+         from (
+           select 1
+           from sessions
+           where user_id = @userId
+             and revoked_at is null
+             and expires_at > @now
+             and absolute_expires_at > @now
+             and (@replacingSessionId is null or id <> @replacingSessionId)
+           limit ${MAX_ACTIVE_SESSIONS_PER_USER}
+         )`,
+      )
+      .get({
+        now: nowTime,
+        replacingSessionId: replacingSessionId ?? null,
+        userId: attribution.userId,
+      }) as { count: number };
+    if (active.count >= MAX_ACTIVE_SESSIONS_PER_USER) {
+      throw new SessionIssuanceLimitError("active_session_limit");
+    }
+
+    const recent = this.database.sqlite
+      .prepare(
+        `select count(*) as count
+         from (
+           select 1
+           from sessions
+           where user_id = @userId
+             and created_at > @windowCutoff
+           limit ${MAX_SESSION_ISSUANCES_PER_USER_WINDOW}
+         )`,
+      )
+      .get({
+        userId: attribution.userId,
+        windowCutoff: nowTime - SESSION_ISSUANCE_WINDOW_MS,
+      }) as { count: number };
+    if (recent.count >= MAX_SESSION_ISSUANCES_PER_USER_WINDOW) {
+      throw new SessionIssuanceLimitError("issuance_rate_limit");
+    }
+  }
+
+  private revokeActiveRecoverySessions(now: Date, replacingSessionId?: string) {
+    const revoked = this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where auth_method = 'recovery'
+           and revoked_at is null
+           and (@replacingSessionId is null or id <> @replacingSessionId)
+         returning id`,
+      )
+      .all({ now: now.getTime(), replacingSessionId: replacingSessionId ?? null });
+    return revoked.length;
   }
 
   private deleteExpiredRotationAliases(now: Date) {

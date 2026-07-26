@@ -1,17 +1,24 @@
 import { z } from "zod";
 
+export const AUTH_PROVIDERS_MAX_COUNT = 50;
+export const AUTH_PROVIDERS_RESPONSE_MAX_BYTES = 1_048_576;
+export const OIDC_ISSUER_MAX_LENGTH = 2_048;
+
 const identifierSchema = z.string().trim().min(1).max(128);
 const displayNameSchema = z.string().trim().min(1).max(160);
-const oidcIssuerSchema = z.url().refine((value) => {
-  const issuer = new URL(value);
-  return (
-    issuer.protocol === "https:" &&
-    !issuer.username &&
-    !issuer.password &&
-    !issuer.search &&
-    !issuer.hash
-  );
-}, "OIDC issuers must be HTTPS URLs without credentials, query parameters, or fragments");
+const oidcIssuerSchema = z
+  .url()
+  .max(OIDC_ISSUER_MAX_LENGTH)
+  .refine((value) => {
+    const issuer = new URL(value);
+    return (
+      issuer.protocol === "https:" &&
+      !issuer.username &&
+      !issuer.password &&
+      !issuer.search &&
+      !issuer.hash
+    );
+  }, "OIDC issuers must be HTTPS URLs without credentials, query parameters, or fragments");
 
 export const roleSchema = z.enum(["viewer", "requester", "operator", "admin"]);
 export type Role = z.infer<typeof roleSchema>;
@@ -345,7 +352,7 @@ export const roleMappingSchema = z.object({
 export type RoleMapping = z.infer<typeof roleMappingSchema>;
 
 export const authProvidersResponseSchema = z.object({
-  providers: z.array(authProviderSchema).max(50),
+  providers: z.array(authProviderSchema).max(AUTH_PROVIDERS_MAX_COUNT),
 });
 export type AuthProvidersResponse = z.infer<typeof authProvidersResponseSchema>;
 

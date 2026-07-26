@@ -3,6 +3,8 @@ import { expect, test } from "@playwright/test";
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
 
+test.use({ contextOptions: { reducedMotion: "reduce" } });
+
 function routeForProject(path: string, projectName: string) {
   if (projectName !== "ten-foot") return path;
   const url = new URL(path, "http://omnifin.test");
@@ -49,6 +51,52 @@ test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("login-unconfigured.png", { fullPage: true });
 });
+
+for (const state of ["unavailable", "authentication-error"] as const) {
+  test(`${state} login visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Login states cover representative desktop and phone geometry",
+    );
+    const path =
+      state === "unavailable" ? "/login?test-view=unavailable" : "/login?authError=invalid_request";
+    await page.goto(path);
+    await page.locator("main").waitFor();
+    await expect(page).toHaveScreenshot(`login-${state}.png`, { fullPage: true });
+  });
+}
+
+for (const focusTarget of ["first", "last"] as const) {
+  test(`provider overflow ${focusTarget} focus visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Provider overflow covers representative desktop and phone geometry",
+    );
+    await page.goto("/login?test-view=provider-overflow");
+    const providers = page
+      .getByRole("list", { name: "Sign-in methods" })
+      .locator("[data-directional-item]");
+    const focusedProvider = focusTarget === "first" ? providers.first() : providers.last();
+    await focusedProvider.focus();
+    await expect
+      .poll(async () => {
+        const [listBox, providerBox] = await Promise.all([
+          page.getByRole("list", { name: "Sign-in methods" }).boundingBox(),
+          focusedProvider.boundingBox(),
+        ]);
+        return Boolean(
+          listBox &&
+          providerBox &&
+          providerBox.y >= listBox.y + 5 &&
+          providerBox.y + providerBox.height <= listBox.y + listBox.height - 5,
+        );
+      })
+      .toBe(true);
+    await expect(page).toHaveScreenshot(`login-provider-overflow-focus-${focusTarget}.png`, {
+      fullPage: true,
+    });
+  });
+}
 
 for (const state of ["loading", "empty", "offline", "terminal-error", "quiet"] as const) {
   test(`${state} dashboard visual baseline`, async ({ page }, testInfo) => {

@@ -29,7 +29,7 @@ health using documented commands; repository settings match the contribution mod
 
 ## Phase 1 — Identity and secure control plane
 
-**Status: Planned**
+**Status: In development**
 
 - Multiple-provider OIDC discovery and code flow with PKCE, including Authentik
 - Jellyfin credentials and Quick Connect

@@ -59,6 +59,14 @@ function readScope(database: ReturnType<typeof openDatabase>) {
   };
 }
 
+function totalChanges(database: ReturnType<typeof openDatabase>) {
+  return (
+    database.sqlite.prepare("select total_changes() as totalChanges").get() as {
+      totalChanges: number;
+    }
+  ).totalChanges;
+}
+
 type AuditWorkerResult =
   | { dispositions: Record<string, number>; status: "fulfilled" }
   | { message: string; status: "rejected" };
@@ -290,7 +298,14 @@ describe("OIDC failure audit service", () => {
   it("redacts hostile context accessor errors before creating persistent state", () => {
     const database = openDatabase(":memory:");
     const service = new OidcFailureAuditService(database, { encryptionKey: privacyKey });
-    const reads = { ipAddress: 0, outcome: 0, reason: 0, requestId: 0, userAgent: 0 };
+    const reads = {
+      identityReason: 0,
+      ipAddress: 0,
+      outcome: 0,
+      reason: 0,
+      requestId: 0,
+      userAgent: 0,
+    };
     const input = new Proxy(
       {},
       {
@@ -306,7 +321,14 @@ describe("OIDC failure audit service", () => {
     try {
       database.migrate();
       expect(() => service.record(input)).toThrow("OIDC failure audit input is invalid.");
-      expect(reads).toEqual({ ipAddress: 1, outcome: 1, reason: 1, requestId: 1, userAgent: 1 });
+      expect(reads).toEqual({
+        identityReason: 1,
+        ipAddress: 1,
+        outcome: 1,
+        reason: 1,
+        requestId: 1,
+        userAgent: 1,
+      });
       expect(
         database.sqlite.prepare("select count(*) as count from audit_budget_scopes").get(),
       ).toEqual({ count: 0 });
@@ -415,6 +437,23 @@ describe("OIDC failure audit service", () => {
       expect(() =>
         service.record({ outcome: "success", reason: "private_reason" } as never),
       ).toThrow(/reason|outcome/);
+      expect(() =>
+        service.record({ outcome: "denied", reason: "identity_rejected" } as never),
+      ).toThrow("OIDC identity denial reason is invalid.");
+      expect(() =>
+        service.record({
+          identityReason: "private_reason",
+          outcome: "denied",
+          reason: "identity_rejected",
+        } as never),
+      ).toThrow("OIDC identity denial reason is invalid.");
+      expect(() =>
+        service.record({
+          identityReason: "disabled_user",
+          outcome: "denied",
+          reason: "authorization_denied",
+        } as never),
+      ).toThrow("OIDC identity denial reason is invalid.");
     } finally {
       database.close();
     }
@@ -485,6 +524,75 @@ describe("OIDC failure audit service", () => {
       expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual({
         count: 3,
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves bounded identity-denial fidelity without creating a second audit stream", () => {
+    const database = openDatabase(":memory:");
+    const service = new OidcFailureAuditService(
+      database,
+      { encryptionKey: privacyKey },
+      { clock: () => auditTime, createId: idFactory("identity-denial") },
+    );
+    try {
+      database.migrate();
+      expect(
+        service.record({
+          identityReason: "jit_provisioning_disabled",
+          ipAddress: "192.0.2.44",
+          outcome: "denied",
+          reason: "identity_rejected",
+          requestId: "trusted-request-1",
+        }),
+      ).toBe("recorded");
+      expect(
+        service.record({
+          identityReason: "jit_provisioning_disabled",
+          ipAddress: "192.0.2.44",
+          outcome: "denied",
+          reason: "identity_rejected",
+          requestId: "trusted-request-2",
+        }),
+      ).toBe("coalesced");
+      expect(
+        service.record({
+          identityReason: "disabled_user",
+          ipAddress: "192.0.2.44",
+          outcome: "denied",
+          reason: "identity_rejected",
+          requestId: "trusted-request-3",
+        }),
+      ).toBe("recorded");
+
+      const rows = database.sqlite
+        .prepare(
+          `select event_type as eventType, request_id as requestId, metadata_json as metadataJson
+           from audit_events
+           order by created_at, id`,
+        )
+        .all() as Array<{ eventType: string; metadataJson: string; requestId: string }>;
+      expect(rows).toHaveLength(2);
+      expect(rows.map(({ eventType }) => eventType)).toEqual([
+        OIDC_FAILURE_AUDIT_EVENT_TYPE,
+        OIDC_FAILURE_AUDIT_EVENT_TYPE,
+      ]);
+      expect(rows.map(({ requestId }) => requestId)).toEqual([
+        "trusted-request-1",
+        "trusted-request-3",
+      ]);
+      expect(rows.map(({ metadataJson }) => JSON.parse(metadataJson))).toEqual([
+        expect.objectContaining({
+          identityReason: "jit_provisioning_disabled",
+          reason: "identity_rejected",
+        }),
+        expect.objectContaining({
+          identityReason: "disabled_user",
+          reason: "identity_rejected",
+        }),
+      ]);
+      expect(service.metrics).toMatchObject({ bucketCount: 2, suppressedCount: 1 });
     } finally {
       database.close();
     }
@@ -580,7 +688,7 @@ describe("OIDC failure audit service", () => {
         expect(restarted.metrics).toEqual({
           bucketCount: bucketCapacity,
           saturated: true,
-          suppressedCount: 256 - bucketCapacity,
+          suppressedCount: 1,
           window: 1,
         });
       } finally {
@@ -591,30 +699,87 @@ describe("OIDC failure audit service", () => {
     },
   );
 
-  it("persists and saturates the suppressed counter without creating more audit rows", () => {
-    const database = openDatabase(":memory:");
-    const service = new OidcFailureAuditService(
-      database,
-      { encryptionKey: privacyKey },
-      { clock: () => auditTime, createId: idFactory("suppressed") },
-    );
+  it(
+    "persists and saturates the suppressed counter without creating more audit rows",
+    { timeout: 30_000 },
+    () => {
+      const database = openDatabase(":memory:");
+      const service = new OidcFailureAuditService(
+        database,
+        { encryptionKey: privacyKey },
+        { clock: () => auditTime, createId: idFactory("suppressed") },
+      );
+      try {
+        database.migrate();
+        expect(recordUnique(service, 1)).toBe("recorded");
+        for (
+          let attempt = 0;
+          attempt < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT + 20;
+          attempt += 1
+        ) {
+          expect(recordUnique(service, 1)).toBe("coalesced");
+        }
+        expect(service.metrics).toEqual({
+          bucketCount: 1,
+          saturated: false,
+          suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+          window: 1,
+        });
+        expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual(
+          {
+            count: 1,
+          },
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it("stops duplicate bucket writes at the durable cap and preserves that guard after reopen", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-audit-duplicate-cap-"));
+    const databasePath = path.join(directory, "audit.db");
+    let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
+    let now = new Date(auditTime);
+    const serviceFor = (prefix: string) =>
+      new OidcFailureAuditService(
+        database!,
+        { encryptionKey: privacyKey },
+        { clock: () => new Date(now), createId: idFactory(prefix) },
+      );
+
     try {
       database.migrate();
-      expect(recordUnique(service, 1)).toBe("recorded");
-      for (let attempt = 0; attempt < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT + 20; attempt += 1) {
-        expect(recordUnique(service, 1)).toBe("coalesced");
+      const initial = serviceFor("duplicate-cap-before-reopen");
+      expect(recordUnique(initial, 1)).toBe("recorded");
+      for (let attempt = 0; attempt < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT; attempt += 1) {
+        expect(recordUnique(initial, 1)).toBe("coalesced");
       }
-      expect(service.metrics).toEqual({
+      const changesAtCap = totalChanges(database);
+      now = new Date(auditTime.getTime() + 60_000);
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        expect(recordUnique(initial, 1)).toBe("coalesced");
+      }
+      expect(totalChanges(database)).toBe(changesAtCap);
+
+      database.close();
+      database = openDatabase(databasePath);
+      now = new Date(auditTime.getTime() + 120_000);
+      const restarted = serviceFor("duplicate-cap-after-reopen");
+      const changesAtReopen = totalChanges(database);
+      for (let attempt = 0; attempt < 1_000; attempt += 1) {
+        expect(recordUnique(restarted, 1)).toBe("coalesced");
+      }
+      expect(totalChanges(database)).toBe(changesAtReopen);
+      expect(restarted.metrics).toEqual({
         bucketCount: 1,
         saturated: false,
         suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
         window: 1,
       });
-      expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual({
-        count: 1,
-      });
     } finally {
-      database.close();
+      database?.close();
+      rmSync(directory, { force: true, recursive: true });
     }
   });
 
@@ -634,9 +799,12 @@ describe("OIDC failure audit service", () => {
           expect(recordUnique(service, index)).toBe("recorded");
         }
         expect(recordUnique(service, bucketCapacity)).toBe("saturated");
+        const changesAtSaturation = totalChanges(database);
         for (let index = 0; index < 10_000; index += 1) {
           expect(recordUnique(service, 10_000 + index)).toBe("saturated");
         }
+
+        expect(totalChanges(database)).toBe(changesAtSaturation);
 
         expect(service.metrics).toEqual({
           bucketCount: bucketCapacity,
@@ -664,6 +832,164 @@ describe("OIDC failure audit service", () => {
       }
     },
   );
+
+  it("rebuilds the no-write saturation guard after restart and expires it on schedule", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-audit-saturation-restart-"));
+    const databasePath = path.join(directory, "audit.db");
+    let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
+    let now = new Date(auditTime);
+    const serviceFor = (prefix: string) =>
+      new OidcFailureAuditService(
+        database!,
+        { encryptionKey: privacyKey },
+        { clock: () => new Date(now), createId: idFactory(prefix) },
+      );
+    try {
+      database.migrate();
+      const initial = serviceFor("saturation-before-restart");
+      for (let index = 0; index < bucketCapacity; index += 1) {
+        expect(recordUnique(initial, index)).toBe("recorded");
+      }
+      expect(recordUnique(initial, bucketCapacity)).toBe("saturated");
+
+      database.close();
+      database = openDatabase(databasePath);
+      const restarted = serviceFor("saturation-after-restart");
+      const changesAtRestart = totalChanges(database);
+      for (let index = 0; index < 5_000; index += 1) {
+        expect(recordUnique(restarted, 20_000 + index)).toBe("saturated");
+      }
+      expect(totalChanges(database)).toBe(changesAtRestart);
+      expect(restarted.metrics).toEqual({
+        bucketCount: bucketCapacity,
+        saturated: true,
+        suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+        window: 1,
+      });
+
+      now = new Date(auditTime.getTime() + OIDC_FAILURE_AUDIT_WINDOW_MS);
+      expect(recordUnique(restarted, 30_000)).toBe("recorded");
+      expect(totalChanges(database)).toBeGreaterThan(changesAtRestart);
+      expect(restarted.metrics).toEqual({
+        bucketCount: 1,
+        saturated: false,
+        suppressedCount: 0,
+        window: 2,
+      });
+    } finally {
+      database?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("persists saturated rollback progress once and resumes it safely after restart", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-audit-saturated-rollback-"));
+    const databasePath = path.join(directory, "audit.db");
+    let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
+    let now = new Date(auditTime.getTime() + 60 * 60 * 1_000);
+    const future = now.getTime();
+    const serviceFor = (prefix: string) =>
+      new OidcFailureAuditService(
+        database!,
+        { encryptionKey: privacyKey },
+        { clock: () => new Date(now), createId: idFactory(prefix) },
+      );
+    try {
+      database.migrate();
+      const initial = serviceFor("saturated-rollback-before-restart");
+      for (let index = 0; index < bucketCapacity; index += 1) {
+        expect(recordUnique(initial, index)).toBe("recorded");
+      }
+      expect(recordUnique(initial, bucketCapacity)).toBe("saturated");
+
+      now = new Date(auditTime.getTime() + 60_000);
+      expect(recordUnique(initial, 40_000)).toBe("saturated");
+      expect(readScope(database)).toMatchObject({
+        clockWatermarkAt: future,
+        generation: 1,
+        rollbackStartedAt: now.getTime(),
+        saturated: 1,
+      });
+      const changesAfterRollbackAnchor = totalChanges(database);
+      for (let index = 0; index < 2_000; index += 1) {
+        expect(recordUnique(initial, 50_000 + index)).toBe("saturated");
+      }
+      expect(totalChanges(database)).toBe(changesAfterRollbackAnchor);
+
+      database.close();
+      database = openDatabase(databasePath);
+      now = new Date(now.getTime() + OIDC_FAILURE_AUDIT_WINDOW_MS);
+      const restarted = serviceFor("saturated-rollback-after-restart");
+      expect(recordUnique(restarted, 60_000)).toBe("recorded");
+      expect(restarted.metrics).toEqual({
+        bucketCount: 1,
+        saturated: false,
+        suppressedCount: 0,
+        window: 2,
+      });
+      expect(readScope(database)).toMatchObject({
+        clockWatermarkAt: future,
+        generation: 2,
+        rollbackStartedAt: now.getTime(),
+        windowStartedAt: now.getTime(),
+      });
+    } finally {
+      database?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("persists a process-local watermark before accepting a saturated clock rollback", () => {
+    const database = openDatabase(":memory:");
+    let now = new Date(auditTime);
+    const service = new OidcFailureAuditService(
+      database,
+      { encryptionKey: privacyKey },
+      {
+        clock: () => new Date(now),
+        createId: idFactory("saturated-local-watermark"),
+      },
+    );
+    try {
+      database.migrate();
+      for (let index = 0; index < bucketCapacity; index += 1) {
+        expect(recordUnique(service, index)).toBe("recorded");
+      }
+      expect(recordUnique(service, bucketCapacity)).toBe("saturated");
+
+      now = new Date(auditTime.getTime() + 60_000);
+      expect(recordUnique(service, 70_000)).toBe("saturated");
+      expect(readScope(database).clockWatermarkAt).toBe(auditTime.getTime());
+
+      now = new Date(auditTime.getTime() + 30_000);
+      expect(recordUnique(service, 70_001)).toBe("saturated");
+      expect(readScope(database)).toMatchObject({
+        clockWatermarkAt: auditTime.getTime() + 60_000,
+        rollbackStartedAt: now.getTime(),
+        saturated: 1,
+      });
+      const changesAfterRollbackAnchor = totalChanges(database);
+      for (let index = 0; index < 2_000; index += 1) {
+        expect(recordUnique(service, 80_000 + index)).toBe("saturated");
+      }
+      expect(totalChanges(database)).toBe(changesAfterRollbackAnchor);
+
+      now = new Date(auditTime.getTime() + 60_000);
+      expect(recordUnique(service, 90_000)).toBe("saturated");
+      expect(readScope(database)).toMatchObject({
+        clockWatermarkAt: now.getTime(),
+        rollbackStartedAt: null,
+        windowStartedAt: now.getTime(),
+      });
+      const changesAfterCatchup = totalChanges(database);
+      for (let index = 0; index < 2_000; index += 1) {
+        expect(recordUnique(service, 100_000 + index)).toBe("saturated");
+      }
+      expect(totalChanges(database)).toBe(changesAfterCatchup);
+    } finally {
+      database.close();
+    }
+  });
 
   it("keeps budget decisions independent of a large immutable audit history", () => {
     const database = openDatabase(":memory:");

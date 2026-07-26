@@ -194,6 +194,7 @@ async function verifiedGrant(
       baseUrl: new URL("https://omnifin.example"),
       encryptionKey: ENCRYPTION_KEY,
       environment: "test",
+      insecureLoopbackPreview: false,
       secureCookies: true,
     },
     { clock: () => new Date(LOGIN_TIME) },
@@ -522,7 +523,7 @@ describe("OidcSignInService", () => {
     }
   });
 
-  it("commits a denied identity audit without issuing a session", async () => {
+  it("returns a typed denial without issuing a session or duplicating route-level audit", async () => {
     const { database, service } = createHarness({ allowJitProvisioning: false });
     try {
       const grant = await verifiedGrant(database, claims());
@@ -536,21 +537,16 @@ describe("OidcSignInService", () => {
       expect({ ...result }).toEqual({});
       expect(database.db.select().from(users).all()).toHaveLength(0);
       expect(database.db.select().from(sessions).all()).toHaveLength(0);
-      expect(
-        database.sqlite
-          .prepare(
-            `select event_type as eventType, outcome
-             from audit_events`,
-          )
-          .all(),
-      ).toEqual([{ eventType: "auth.oidc.identity.denied", outcome: "denied" }]);
+      expect(database.sqlite.prepare("select count(*) as count from audit_events").get()).toEqual({
+        count: 0,
+      });
       expect(() => JSON.stringify(result)).toThrow("OIDC sign-in results cannot be serialized.");
     } finally {
       database.close();
     }
   });
 
-  it("commits identity denial without consuming a proven current session", async () => {
+  it("preserves a proven current session when identity resolution is denied", async () => {
     const { database, service, sessionService } = createHarness({ allowJitProvisioning: false });
     try {
       const prior = sessionService.createSession({ attribution: { authMethod: "recovery" } });
@@ -580,7 +576,7 @@ describe("OidcSignInService", () => {
             "select count(*) as count from audit_events where event_type = 'auth.oidc.identity.denied'",
           )
           .get(),
-      ).toEqual({ count: 1 });
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }

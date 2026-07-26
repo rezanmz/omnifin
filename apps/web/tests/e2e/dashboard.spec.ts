@@ -224,7 +224,7 @@ test("touch users can disclose operations and navigate to settings", async ({ pa
   await page.getByRole("link", { name: "Settings" }).tap();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(
-    page.getByRole("heading", { name: "Account setup arrives in Phase 1." }),
+    page.getByRole("heading", { name: "Account setup is still being secured." }),
   ).toBeVisible();
 });
 

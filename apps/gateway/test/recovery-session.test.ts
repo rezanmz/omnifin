@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { revokeRecoverySessionsOnStartup } from "../src/auth/recovery-session.js";
 import { openDatabase } from "../src/db/client.js";
 
@@ -61,6 +64,29 @@ describe("recovery-session lifecycle", () => {
       );
     } finally {
       database.close();
+    }
+  });
+
+  it("acquires the startup write lock before reading recovery sessions", () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-recovery-startup-"));
+    const databasePath = join(temporaryDirectory, "gateway.sqlite");
+    const lockOwner = openDatabase(databasePath);
+    const contender = openDatabase(databasePath);
+    try {
+      lockOwner.migrate();
+      contender.sqlite.pragma("busy_timeout = 0");
+      const prepare = vi.spyOn(contender.sqlite, "prepare");
+      lockOwner.sqlite.exec("begin immediate");
+
+      expect(() => revokeRecoverySessionsOnStartup(contender, new Date(2000))).toThrow(
+        /database is locked/i,
+      );
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      if (lockOwner.sqlite.inTransaction) lockOwner.sqlite.exec("rollback");
+      contender.close();
+      lockOwner.close();
+      rmSync(temporaryDirectory, { force: true, recursive: true });
     }
   });
 });

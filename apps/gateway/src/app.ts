@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
+import { oidcRoutes, type OidcRoutesDependencies } from "./auth/oidc/routes.js";
 import { recoveryRoutes } from "./auth/recovery-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 import { SESSION_CSRF_HEADER, sessionCookieName } from "./auth/session-cookie.js";
@@ -23,6 +24,7 @@ import { healthRoutes } from "./health.js";
 import { isSafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
 import { asStartupError } from "./startup-error.js";
+import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
 
 declare module "fastify" {
@@ -41,6 +43,7 @@ export interface CreateAppOptions {
   config?: AppConfig;
   database?: DatabaseHandle;
   migrate?: boolean;
+  oidcDependencies?: OidcRoutesDependencies;
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -97,6 +100,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       genReqId: (request) => requestId(request.headers["x-request-id"] as string | undefined),
       logger: createLoggerOptions(config),
       requestIdHeader: false,
+      routerOptions: { maxParamLength: 512 },
       trustProxy: config.trustProxyHops,
     });
 
@@ -122,7 +126,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       max: 300,
       timeWindow: "1 minute",
       hook: "onRequest",
-      keyGenerator: (request) => request.ip,
+      keyGenerator: (request) => clientNetworkGroup(request.ip),
     });
     const globalRateLimit = app.createRateLimit();
     app.addHook("onRequest", async (request, reply) => {
@@ -230,6 +234,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(
+      oidcRoutes,
+      options.oidcDependencies === undefined ? {} : { dependencies: options.oidcDependencies },
+    );
     await app.register(recoveryRoutes);
     await app.register(sessionRoutes);
     return app;

@@ -15,6 +15,7 @@
     "test": "vitest run --project=unit --coverage",
     "test:a11y": "playwright test tests/a11y",
     "test:e2e": "playwright test tests/e2e",
+    "test:oidc-rewrite": "playwright test --config=playwright.oidc.config.ts",
     "test:storybook": "cross-env STORYBOOK_DISABLE_TELEMETRY=1 vitest run --project=storybook",
     "test:visual": "playwright test tests/visual",
     "typecheck": "tsc --noEmit"

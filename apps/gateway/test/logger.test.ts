@@ -11,6 +11,7 @@ function config(environment: AppConfig["environment"]): AppConfig {
     encryptionKey: Buffer.alloc(32),
     environment,
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     logLevel: "info",
     port: 4000,

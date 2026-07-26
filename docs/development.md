@@ -32,10 +32,11 @@ set +a
 pnpm dev
 ```
 
-The Phase 0 workspace starts a foundation preview: interface shells, health and
-readiness, safe provider metadata, migrations, and connector fixture/probe tooling. It
-does not provide a working sign-in, account or connector administration, sessions,
-recovery access, or upstream media operations.
+The current workspace starts the application shells, health and readiness endpoints,
+safe provider metadata, OIDC browser routes, local sessions, recovery access,
+migrations, and connector fixture/probe tooling. There is no supported provider,
+account, or connector administration yet; Jellyfin sign-in and pairing, complete
+logout and permission enforcement, and upstream media operations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the
@@ -150,6 +151,11 @@ docs(deploy): clarify master-key backup
 Keep refactors separate from behavior changes when practical. Sign commits with a
 verified GPG, SSH, or S/MIME signature. Pull requests should explain user impact,
 security and migration consequences, evidence, and rollback.
+
+Use neutral, purpose-based branch names under `feature/`, `fix/`, `phase/`, or
+`release/`. Branch names, commits, pull requests, documentation, releases, and package
+metadata must describe the project change itself and must not include editor,
+automation, or implementation-tool attribution.
 
 ## Data and migrations
 

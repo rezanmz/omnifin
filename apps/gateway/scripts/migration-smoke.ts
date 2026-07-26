@@ -94,6 +94,12 @@ const requiredIndexes = {
     "session_secret_reservations_attribution_unique",
     "session_secret_reservations_origin_idx",
   ],
+  sessions: [
+    "sessions_active_recovery_idx",
+    "sessions_recovery_created_idx",
+    "sessions_user_active_idx",
+    "sessions_user_created_idx",
+  ],
 } as const;
 const requiredTriggers = [
   "audit_budget_entries_current_generation_delete_protected",
@@ -223,7 +229,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0004.",
+  "Current migration journal must contain migration 0005.",
 );
 
 try {
@@ -448,8 +454,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 5, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0004.",
+        JSON.stringify({ count: 6, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0005.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -614,7 +620,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0004, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0005, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

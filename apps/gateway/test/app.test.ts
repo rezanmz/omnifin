@@ -17,6 +17,7 @@ function testConfig(): AppConfig {
     encryptionKey: Buffer.alloc(32, 4),
     environment: "test",
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     jellyfinUrl: new URL("https://jellyfin.example"),
     logLevel: "silent",
@@ -33,6 +34,25 @@ function testConfig(): AppConfig {
 }
 
 describe("gateway application", () => {
+  it("starts the production image in an explicitly approved loopback preview", async () => {
+    const app = await createApp({
+      config: {
+        ...testConfig(),
+        baseUrl: new URL("http://localhost:3000"),
+        environment: "production",
+        insecureLoopbackPreview: true,
+        secureCookies: false,
+      },
+      database: openDatabase(":memory:"),
+    });
+    try {
+      const health = await app.inject({ method: "GET", url: "/healthz" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("closes the transferred database handle when initialization fails", async () => {
     const database = openDatabase(":memory:");
     const close = vi.fn(database.close);

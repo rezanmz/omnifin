@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
+import { OIDC_ISSUER_MAX_LENGTH } from "@omnifin/contracts/auth";
 import {
   ClientSecretBasic,
   ClientSecretPost,
@@ -38,6 +39,9 @@ const MAX_METADATA_ARRAY_LENGTH = 128;
 
 export const OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS = 5 * 60 * 1_000;
 export const OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES = 32;
+export const OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS = 30 * 1_000;
+export const OIDC_PROVIDER_FAILURE_BACKOFF_MAX_MS = 5 * 60 * 1_000;
+export const OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS = 5 * 1_000;
 
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SCOPE_TOKEN_PATTERN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
@@ -140,6 +144,11 @@ interface ValidatedOidcRuntimeEndpoints {
 interface PersistedOidcDiscoverySecuritySnapshot {
   readonly capabilities: OidcProviderCapabilities;
   readonly runtimeSecuritySeal: OidcProviderRuntimeBinding;
+  readonly schemaVersion: 1;
+}
+
+interface PersistedOidcFailureSnapshot {
+  readonly configurationFingerprint: string;
   readonly schemaVersion: 1;
 }
 
@@ -279,6 +288,7 @@ interface ParsedProviderBase {
 
 interface CachedOidcProviderRuntime {
   readonly cachedAtMs: number;
+  readonly checkedAtMs: number;
   readonly expiresAtMs: number;
   readonly providerId: string;
   readonly runtime: OidcProviderRuntime;
@@ -287,6 +297,15 @@ interface CachedOidcProviderRuntime {
 interface InFlightOidcProviderDiscovery {
   readonly fingerprint: string;
   readonly promise: Promise<OidcProviderRuntime>;
+}
+
+interface OidcProviderFailureBackoff {
+  readonly checkedAtMs: number;
+  readonly failureAtMs: number;
+  readonly failures: number;
+  readonly fingerprint: string;
+  readonly providerId: string;
+  readonly retryAtMs: number;
 }
 
 type ParsedProvider = ParsedProviderBase &
@@ -431,7 +450,7 @@ function parseIssuer(
   value: unknown,
   approvedOrigins: readonly string[],
 ): { readonly identifier: string; readonly url: URL } {
-  if (typeof value !== "string" || value.length === 0 || value.length > OIDC_MAX_URL_LENGTH) {
+  if (typeof value !== "string" || value.length === 0 || value.length > OIDC_ISSUER_MAX_LENGTH) {
     throw registryError("oidc_provider_misconfigured");
   }
 
@@ -548,6 +567,18 @@ function requireMetadataArray(value: unknown, expected: string): void {
   if (!entries.has(expected)) throw registryError("oidc_provider_misconfigured");
 }
 
+function requireMetadataArrayWithDefault(
+  value: unknown,
+  expected: string,
+  defaultValues: readonly string[],
+): void {
+  if (value === undefined) {
+    if (!defaultValues.includes(expected)) throw registryError("oidc_provider_misconfigured");
+    return;
+  }
+  requireMetadataArray(value, expected);
+}
+
 function requireApprovedEndpoint(value: unknown, approvedOrigins: ReadonlySet<string>): string {
   if (typeof value !== "string" || value.length === 0 || value.length > OIDC_MAX_URL_LENGTH) {
     throw registryError("oidc_provider_misconfigured");
@@ -614,11 +645,15 @@ function validateMetadata(
   const tokenEndpoint = requireApprovedEndpoint(metadata.token_endpoint, approvedOrigins);
   const jwksEndpoint = requireApprovedEndpoint(metadata.jwks_uri, approvedOrigins);
   requireMetadataArray(metadata.response_types_supported, "code");
-  requireMetadataArray(metadata.grant_types_supported, "authorization_code");
+  requireMetadataArrayWithDefault(metadata.grant_types_supported, "authorization_code", [
+    "authorization_code",
+    "implicit",
+  ]);
   requireMetadataArray(metadata.code_challenge_methods_supported, "S256");
-  requireMetadataArray(
+  requireMetadataArrayWithDefault(
     metadata.token_endpoint_auth_methods_supported,
     provider.tokenEndpointAuthMethod,
+    ["client_secret_basic"],
   );
   requireMetadataArray(metadata.id_token_signing_alg_values_supported, provider.idTokenSigningAlg);
 
@@ -708,6 +743,34 @@ function providerConfigFingerprint(record: ProviderRecord): string {
     digest.update(value, "utf8");
   }
   return digest.digest("base64url");
+}
+
+function persistedFailureFingerprint(record: ProviderRecord): string | undefined {
+  if (record.discoveryState !== "failed") return undefined;
+  let snapshot: unknown;
+  try {
+    snapshot = JSON.parse(record.discoveryCapabilitiesJson) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (
+    snapshot === null ||
+    typeof snapshot !== "object" ||
+    Array.isArray(snapshot) ||
+    Object.getPrototypeOf(snapshot) !== Object.prototype
+  ) {
+    return undefined;
+  }
+  const candidate = snapshot as Record<string, unknown>;
+  if (
+    Object.keys(candidate).sort().join(",") !== "configurationFingerprint,schemaVersion" ||
+    candidate.schemaVersion !== 1 ||
+    typeof candidate.configurationFingerprint !== "string" ||
+    !OPAQUE_256_BIT_TOKEN_PATTERN.test(candidate.configurationFingerprint)
+  ) {
+    return undefined;
+  }
+  return candidate.configurationFingerprint;
 }
 
 function providerSecurityFingerprint(record: ProviderRecord): string {
@@ -1007,6 +1070,7 @@ export class OidcProviderRegistry {
   readonly #createSafeFetch: typeof createOidcSafeFetch;
   readonly #database: DatabaseHandle;
   readonly #discover: NonNullable<OidcProviderRegistryDependencies["discover"]>;
+  readonly #failureBackoffs = new Map<string, OidcProviderFailureBackoff>();
   readonly #inFlightDiscoveries = new Map<string, InFlightOidcProviderDiscovery>();
   readonly #runtimeBindingKey: Buffer;
   readonly #runtimeCache = new Map<string, CachedOidcProviderRuntime>();
@@ -1048,9 +1112,10 @@ export class OidcProviderRegistry {
     validateProviderRecordTimestamps(record);
     const fingerprint = providerConfigFingerprint(record);
     const cacheTime = this.#clockNow();
-    const cachedRuntime = this.#readCachedRuntime(providerId, fingerprint, cacheTime);
+    const cachedRuntime = this.#readCachedRuntime(record, fingerprint, cacheTime);
     if (cachedRuntime) return cachedRuntime;
     this.#evictProviderRuntimeCache(providerId, fingerprint);
+    this.#evictProviderFailureBackoffs(providerId, fingerprint);
 
     const existingDiscovery = this.#inFlightDiscoveries.get(providerId);
     if (existingDiscovery) {
@@ -1062,6 +1127,9 @@ export class OidcProviderRegistry {
         // of how the obsolete flight completed.
       }
       return this.discover(providerId);
+    }
+    if (this.#isDiscoveryBackedOff(record, fingerprint, cacheTime)) {
+      throw registryError("oidc_provider_discovery_failed", true);
     }
     if (this.#inFlightDiscoveries.size >= OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES) {
       throw registryError("oidc_provider_discovery_failed", true);
@@ -1087,7 +1155,7 @@ export class OidcProviderRegistry {
     try {
       provider = parseProvider(record, this.#cipher);
     } catch {
-      this.#persistFailed(record);
+      this.#recordDiscoveryFailure(record, fingerprint);
       throw registryError("oidc_provider_misconfigured");
     }
 
@@ -1095,7 +1163,7 @@ export class OidcProviderRegistry {
     try {
       providerFetch = this.#createSafeFetch({ approvedOrigins: provider.approvedOrigins });
     } catch {
-      this.#persistFailed(record);
+      this.#recordDiscoveryFailure(record, fingerprint);
       throw registryError("oidc_provider_misconfigured");
     }
 
@@ -1125,7 +1193,7 @@ export class OidcProviderRegistry {
       }
       configuration = discoveredConfiguration;
     } catch {
-      this.#persistFailed(record);
+      this.#recordDiscoveryFailure(record, fingerprint);
       throw registryError("oidc_provider_discovery_failed", true);
     }
 
@@ -1135,7 +1203,7 @@ export class OidcProviderRegistry {
       ({ capabilities, endpoints } = validateMetadata(configuration, provider));
       enableNonRepudiationChecks(configuration);
     } catch {
-      this.#persistFailed(record);
+      this.#recordDiscoveryFailure(record, fingerprint);
       throw registryError("oidc_provider_misconfigured");
     }
 
@@ -1154,6 +1222,7 @@ export class OidcProviderRegistry {
       discoveryCheckedAt: checkedAt,
       discoveryState: "ready",
     });
+    this.#clearProviderFailureBackoffs(record.id);
 
     const sanitizedProvider: DiscoveredOidcProvider = Object.freeze({
       allowJitProvisioning: record.allowJitProvisioning,
@@ -1177,7 +1246,7 @@ export class OidcProviderRegistry {
       ),
       endpoints,
     );
-    this.#cacheRuntime(record.id, fingerprint, runtime, cacheTime);
+    this.#cacheRuntime(record.id, fingerprint, runtime, cacheTime, checkedAt.getTime());
     return runtime;
   }
 
@@ -1192,7 +1261,7 @@ export class OidcProviderRegistry {
   }
 
   #readCachedRuntime(
-    providerId: string,
+    record: ProviderRecord,
     fingerprint: string,
     now: number,
   ): OidcProviderRuntime | undefined {
@@ -1201,7 +1270,15 @@ export class OidcProviderRegistry {
     }
 
     const entry = this.#runtimeCache.get(fingerprint);
-    if (!entry || entry.providerId !== providerId) return undefined;
+    if (!entry || entry.providerId !== record.id) return undefined;
+    if (
+      record.discoveryState !== "ready" ||
+      record.discoveryCheckedAt === null ||
+      entry.checkedAtMs !== validatedTimestampMilliseconds(record.discoveryCheckedAt)
+    ) {
+      this.#runtimeCache.delete(fingerprint);
+      return undefined;
+    }
     this.#runtimeCache.delete(fingerprint);
     this.#runtimeCache.set(fingerprint, entry);
     return entry.runtime;
@@ -1212,6 +1289,7 @@ export class OidcProviderRegistry {
     fingerprint: string,
     runtime: OidcProviderRuntime,
     cachedAtMs: number,
+    checkedAtMs: number,
   ): void {
     const expiresAtMs = cachedAtMs + OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS;
     if (!Number.isSafeInteger(expiresAtMs) || new Date(expiresAtMs).getTime() !== expiresAtMs) {
@@ -1221,7 +1299,7 @@ export class OidcProviderRegistry {
     this.#evictProviderRuntimeCache(providerId);
     this.#runtimeCache.set(
       fingerprint,
-      Object.freeze({ cachedAtMs, expiresAtMs, providerId, runtime }),
+      Object.freeze({ cachedAtMs, checkedAtMs, expiresAtMs, providerId, runtime }),
     );
     while (this.#runtimeCache.size > OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES) {
       const oldest = this.#runtimeCache.keys().next().value as string | undefined;
@@ -1238,8 +1316,112 @@ export class OidcProviderRegistry {
     }
   }
 
-  #nextCheckedAt(record: ProviderRecord): Date {
-    const now = this.#clockNow();
+  #isDiscoveryBackedOff(record: ProviderRecord, fingerprint: string, now: number): boolean {
+    const checkedAtMs =
+      record.discoveryCheckedAt === null
+        ? undefined
+        : validatedTimestampMilliseconds(record.discoveryCheckedAt);
+    const failureFingerprint = persistedFailureFingerprint(record);
+    const persistedFailureMatches =
+      record.discoveryState === "failed" &&
+      checkedAtMs !== undefined &&
+      (failureFingerprint === fingerprint ||
+        (failureFingerprint === undefined &&
+          validatedTimestampMilliseconds(record.updatedAt) <= checkedAtMs));
+    const memoryEntry = this.#failureBackoffs.get(fingerprint);
+    if (memoryEntry?.providerId === record.id) {
+      if (persistedFailureMatches && memoryEntry.checkedAtMs === checkedAtMs) {
+        const currentEntry =
+          now < memoryEntry.failureAtMs
+            ? this.#failureBackoffEntry(
+                record.id,
+                fingerprint,
+                memoryEntry.failures,
+                now,
+                checkedAtMs,
+              )
+            : memoryEntry;
+        this.#failureBackoffs.delete(fingerprint);
+        this.#failureBackoffs.set(fingerprint, currentEntry);
+        return now < currentEntry.retryAtMs;
+      }
+      this.#failureBackoffs.delete(fingerprint);
+    }
+
+    if (!persistedFailureMatches || checkedAtMs === undefined) return false;
+
+    const failureAtMs = Math.min(checkedAtMs, now);
+    const entry = this.#failureBackoffEntry(record.id, fingerprint, 1, failureAtMs, checkedAtMs);
+    this.#storeProviderFailureBackoff(entry);
+    return now < entry.retryAtMs;
+  }
+
+  #recordDiscoveryFailure(record: ProviderRecord, fingerprint: string): void {
+    const failure = this.#persistFailed(record, fingerprint);
+    const previous = this.#failureBackoffs.get(fingerprint);
+    const failures = previous?.providerId === record.id ? previous.failures + 1 : 1;
+    this.#storeProviderFailureBackoff(
+      this.#failureBackoffEntry(
+        record.id,
+        fingerprint,
+        failures,
+        failure.failureAtMs,
+        failure.checkedAtMs,
+      ),
+    );
+  }
+
+  #failureBackoffEntry(
+    providerId: string,
+    fingerprint: string,
+    failures: number,
+    failureAtMs: number,
+    checkedAtMs: number,
+  ): OidcProviderFailureBackoff {
+    const exponent = Math.min(Math.max(failures - 1, 0), 30);
+    const exponentialDelay = Math.min(
+      OIDC_PROVIDER_FAILURE_BACKOFF_BASE_MS * 2 ** exponent,
+      OIDC_PROVIDER_FAILURE_BACKOFF_MAX_MS,
+    );
+    const jitterDigest = createHash("sha256").update(`${fingerprint}:${failures}`, "utf8").digest();
+    const jitter = jitterDigest.readUInt32BE(0) % (OIDC_PROVIDER_FAILURE_BACKOFF_JITTER_MS + 1);
+    const retryAtMs = failureAtMs + exponentialDelay + jitter;
+    if (!Number.isSafeInteger(retryAtMs) || new Date(retryAtMs).getTime() !== retryAtMs) {
+      throw registryError("oidc_provider_storage_failed", true);
+    }
+    return Object.freeze({
+      checkedAtMs,
+      failureAtMs,
+      failures,
+      fingerprint,
+      providerId,
+      retryAtMs,
+    });
+  }
+
+  #storeProviderFailureBackoff(entry: OidcProviderFailureBackoff): void {
+    this.#failureBackoffs.delete(entry.fingerprint);
+    this.#failureBackoffs.set(entry.fingerprint, entry);
+    while (this.#failureBackoffs.size > OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES) {
+      const oldest = this.#failureBackoffs.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.#failureBackoffs.delete(oldest);
+    }
+  }
+
+  #evictProviderFailureBackoffs(providerId: string, exceptFingerprint?: string): void {
+    for (const [fingerprint, entry] of this.#failureBackoffs) {
+      if (entry.providerId === providerId && fingerprint !== exceptFingerprint) {
+        this.#failureBackoffs.delete(fingerprint);
+      }
+    }
+  }
+
+  #clearProviderFailureBackoffs(providerId: string): void {
+    this.#evictProviderFailureBackoffs(providerId);
+  }
+
+  #nextCheckedAt(record: ProviderRecord, now = this.#clockNow()): Date {
     const createdAt = validatedTimestampMilliseconds(record.createdAt);
     const previousCheck =
       record.discoveryCheckedAt === null
@@ -1253,13 +1435,21 @@ export class OidcProviderRegistry {
     return checkedAt;
   }
 
-  #persistFailed(record: ProviderRecord): void {
-    const checkedAt = this.#nextCheckedAt(record);
+  #persistFailed(
+    record: ProviderRecord,
+    fingerprint: string,
+  ): { checkedAtMs: number; failureAtMs: number } {
+    const failureAtMs = this.#clockNow();
+    const checkedAt = this.#nextCheckedAt(record, failureAtMs);
     this.#persistState(record, {
-      discoveryCapabilitiesJson: "{}",
+      discoveryCapabilitiesJson: JSON.stringify({
+        configurationFingerprint: fingerprint,
+        schemaVersion: 1,
+      } satisfies PersistedOidcFailureSnapshot),
       discoveryCheckedAt: checkedAt,
       discoveryState: "failed",
     });
+    return Object.freeze({ checkedAtMs: checkedAt.getTime(), failureAtMs });
   }
 
   #persistState(

@@ -18,13 +18,13 @@ export default function SettingsPage() {
         <span className="utility-card__icon" aria-hidden="true">
           <Construction size={24} />
         </span>
-        <p className="eyebrow">Secure foundation</p>
-        <h1>Account setup arrives in Phase 1.</h1>
+        <p className="eyebrow">Identity foundation</p>
+        <h1>Account setup is still being secured.</h1>
         <p>
-          This foundation build is ready for deployment review, but it does not yet accept
-          credentials or connect to media services. Phase 1 introduces OIDC and Jellyfin sign-in,
-          explicit account pairing, local roles, encrypted administration, and audit trails after
-          those flows pass their security and integration gates.
+          OIDC sign-in, local sessions, and recovery now run behind the gateway boundary, but this
+          pre-release checkpoint has no supported provider or account administration. Jellyfin
+          sign-in and pairing, identity-provider logout, connector setup, and media operations
+          remain gated.
         </p>
         <Link className="button button--glass" href="/">
           <ArrowLeft aria-hidden="true" size={17} /> Return home

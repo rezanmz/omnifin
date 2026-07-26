@@ -1756,10 +1756,30 @@ a {
 }
 
 .login-card__providers {
+  --login-provider-row-size: 70px;
+  --login-provider-viewport-size: 162px;
+  animation: login-reveal 420ms 150ms cubic-bezier(0.2, 0, 0, 1) both;
+  block-size: var(--login-provider-viewport-size);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 32px;
+  list-style: none;
+  margin: 32px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scrollbar-color: rgb(216 255 112 / 28%) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.login-card__providers--empty {
+  scrollbar-gutter: auto;
+}
+
+.login-provider__item {
+  flex: 0 0 var(--login-provider-row-size);
+  min-width: 0;
 }
 
 .login-provider {
@@ -1769,22 +1789,123 @@ a {
   border-radius: var(--radius-md);
   display: grid;
   gap: 13px;
-  grid-template-columns: auto 1fr auto;
-  min-height: 70px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: var(--login-provider-row-size);
   padding: 10px 16px 10px 11px;
   transition:
     background-color 160ms ease-out,
     border-color 160ms ease-out,
-    transform 120ms ease-out;
+    box-shadow 160ms ease-out,
+    scale 120ms ease-out;
+}
+
+.login-provider__item > .login-provider {
+  height: 100%;
+  width: 100%;
 }
 
 .login-provider:hover {
   background: rgb(255 255 255 / 7%);
   border-color: rgb(216 255 112 / 24%);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 18%);
 }
 
 .login-provider:active {
-  transform: scale(0.98);
+  scale: 0.96;
+}
+
+.login-provider > svg {
+  color: var(--paper-2);
+  transition:
+    color 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.login-provider:hover > svg {
+  color: var(--acid);
+  transform: translateX(2px);
+}
+
+.login-provider--disabled {
+  background: rgb(255 255 255 / 2.5%);
+  border-color: rgb(238 247 238 / 6%);
+  color: var(--paper-1);
+}
+
+.login-provider--disabled:hover {
+  background: rgb(255 255 255 / 2.5%);
+  border-color: rgb(238 247 238 / 6%);
+  box-shadow: none;
+}
+
+.login-provider--disabled > svg,
+.login-provider--disabled:hover > svg {
+  color: var(--paper-2);
+  transform: none;
+}
+
+.login-provider--retry {
+  background: rgb(246 189 107 / 4%);
+  border-color: rgb(246 189 107 / 14%);
+}
+
+.login-provider--retry:hover {
+  border-color: rgb(246 189 107 / 28%);
+}
+
+.login-provider--retry:hover > svg {
+  color: var(--warning);
+  transform: rotate(35deg);
+}
+
+.login-provider--skeleton {
+  pointer-events: none;
+}
+
+.login-provider__skeleton-icon,
+.login-provider__skeleton-copy span,
+.login-provider__skeleton-action {
+  animation: login-skeleton-shimmer 1.8s ease-in-out infinite;
+  background: linear-gradient(
+    100deg,
+    rgb(255 255 255 / 5%) 20%,
+    rgb(255 255 255 / 10%) 42%,
+    rgb(255 255 255 / 5%) 64%
+  );
+  background-size: 220% 100%;
+}
+
+.login-provider__skeleton-icon {
+  border-radius: var(--radius-sm);
+  height: 46px;
+  width: 46px;
+}
+
+.login-provider__skeleton-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.login-provider__skeleton-copy span {
+  border-radius: 99px;
+  display: block;
+  height: 9px;
+  max-width: 210px;
+  width: 62%;
+}
+
+.login-provider__skeleton-copy span:last-child {
+  height: 7px;
+  max-width: 150px;
+  opacity: 0.72;
+  width: 44%;
+}
+
+.login-provider__skeleton-action {
+  border-radius: 50%;
+  height: 17px;
+  width: 17px;
 }
 
 .login-provider__icon {
@@ -1799,10 +1920,19 @@ a {
   width: 46px;
 }
 
-.login-provider > span:nth-child(2) {
+.login-provider__copy {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
+}
+
+.login-provider strong,
+.login-provider small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .login-provider strong {
@@ -1822,8 +1952,15 @@ a {
   border-radius: var(--radius-md);
   color: var(--warning);
   display: flex;
+  flex: 1;
   gap: 13px;
   padding: 17px;
+}
+
+.login-card__unconfigured[data-severity="danger"] {
+  background: rgb(255 142 130 / 7%);
+  border-color: rgb(255 142 130 / 18%);
+  color: var(--danger);
 }
 
 .login-card__unconfigured strong {
@@ -1840,7 +1977,62 @@ a {
   margin: 0;
 }
 
+.login-card__retry {
+  align-items: center;
+  color: var(--paper-0);
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 650;
+  gap: 7px;
+  margin-top: 8px;
+  min-height: 44px;
+  transition:
+    color 160ms ease-out,
+    gap 160ms ease-out,
+    scale 120ms ease-out;
+}
+
+.login-card__retry:hover {
+  color: var(--acid);
+  gap: 10px;
+}
+
+.login-card__retry:active {
+  scale: 0.96;
+}
+
+.login-card__auth-error {
+  align-items: flex-start;
+  animation: login-reveal 360ms 90ms cubic-bezier(0.2, 0, 0, 1) both;
+  background: rgb(255 142 130 / 8%);
+  border: 1px solid rgb(255 142 130 / 20%);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  display: flex;
+  gap: 11px;
+  margin-top: 24px;
+  padding: 14px;
+}
+
+.login-card__auth-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.login-card__auth-error p {
+  color: var(--paper-1);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.login-card__auth-error + .login-card__providers {
+  margin-top: 12px;
+}
+
 .login-card__footer {
+  animation: login-reveal 420ms 240ms cubic-bezier(0.2, 0, 0, 1) both;
   color: #7b867e;
   display: flex;
   flex-wrap: wrap;
@@ -1848,6 +2040,30 @@ a {
   gap: 8px;
   justify-content: center;
   margin-top: 28px;
+}
+
+@keyframes login-reveal {
+  from {
+    filter: blur(4px);
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    filter: blur(0);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -120% 0;
+  }
 }
 
 .utility-card {
@@ -2527,7 +2743,13 @@ html:has([data-display-profile="ten-foot"]) {
 }
 
 [data-display-profile="ten-foot"] .login-provider {
-  min-height: 96px;
+  min-height: var(--login-provider-row-size);
+}
+
+[data-display-profile="ten-foot"] .login-card__providers {
+  --login-provider-row-size: 96px;
+  --login-provider-viewport-size: 218px;
+  padding: 8px;
 }
 
 [data-display-profile="ten-foot"] .login-provider strong {
@@ -2580,8 +2802,7 @@ html:has([data-display-profile="ten-foot"]) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }

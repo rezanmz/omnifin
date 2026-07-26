@@ -1,62 +1,165 @@
 # Authentication and account linking
 
-This document records the current authentication foundation and the mandatory Phase 1
+This document records the current authentication checkpoint and the remaining Phase 1
 authentication and authorization contract. It is for operators evaluating readiness
 and contributors changing a security-sensitive flow.
 
 > [!IMPORTANT]
-> Phase 0 does not provide a usable sign-in method. It includes authentication schemas,
-> database migrations, browser-safe provider discovery, and security primitives. A
-> configured provider is reported as unavailable, and its login-method flags remain
-> false, until the corresponding Phase 1 flow is implemented and verified. The OIDC,
-> Jellyfin, account-linking, session, authorization, and recovery behavior below is the
-> required Phase 1 contract, not a current support claim.
+> The current development branch implements the OIDC browser flow, JIT identity
+> resolution, opaque sessions, and break-glass recovery, but Phase 1 has not passed its
+> release gate. There is not yet a supported operator path for configuring providers,
+> and Jellyfin sign-in, account pairing, and OIDC logout remain incomplete. Treat this
+> document as development evidence, not a production support claim.
 
-## Current Phase 0 surface
+## Current development surface
 
-The foundation can describe configured OIDC and Jellyfin providers without exposing
-secrets. It does not yet expose OIDC start or callback endpoints, Jellyfin credential
-or Quick Connect login, account pairing, authenticated sessions, role enforcement, or
-recovery access. The public roadmap and compatibility matrix remain the source of
+The gateway exposes browser-safe provider metadata, OIDC start and callback endpoints,
+session inspection and revocation, and hidden recovery access. A discovered OIDC
+provider is offered by the sign-in screen only when its persisted capability snapshot
+is internally consistent and ready. Unchecked, failed, or malformed providers fail
+closed as unavailable or misconfigured.
+
+The OIDC flow currently creates or resolves an external identity keyed by immutable
+issuer and subject, applies explicit role mappings, provisions a `viewer` by default
+when JIT is enabled, and creates an opaque server-side session atomically. It does not
+yet provide supported provider administration, Jellyfin credential or Quick Connect
+login, account pairing, RP-initiated or provider-initiated logout, back-channel logout,
+or the complete application permission surface. The
+[roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
 
-## Planned Phase 1 sign-in choices
+## Phase 1 sign-in choices
 
 When Phase 1 is complete, a normal user will be able to sign in through either:
 
 - a configured OpenID Connect provider, such as Authentik; or
 - Jellyfin username and password or Jellyfin Quick Connect.
 
-The Phase 1 login screen must receive only safe provider metadata. Client secrets,
-issuer credentials, upstream tokens, and internal configuration must never reach the
-browser. Multiple OIDC issuers are already supported by the data model even when an
-installation uses only one.
+The current login screen receives only safe provider metadata. Client secrets,
+upstream token responses and identity assertions, runtime security seals, detailed
+discovery failures, and internal configuration never reach the browser. The standard
+OIDC redirect still carries its transient `code`, one-time `state`, or provider error
+through the callback URL; operators must exclude those callback query strings from
+reverse-proxy access logs. Multiple OIDC issuers are supported by the data model even
+when an installation uses only one.
 
-## Required OIDC flow
+Provider states have deliberately narrow meanings:
 
-The Phase 1 implementation must use Authorization Code Flow with PKCE S256. It must
-never use the implicit grant or resource-owner password grant.
+- `available` means the enabled provider has a structurally valid last successful
+  discovery snapshot. It is not a guarantee that the issuer is reachable now.
+- `unavailable` means the provider has not passed discovery or its latest discovery
+  failed. An OIDC row offers an explicit retry action; selecting it re-enters the
+  bounded start path and recovery cooldown. Unavailable Jellyfin metadata remains
+  non-interactive until direct sign-in exists.
+- `misconfigured` means persisted discovery or security attribution is inconsistent
+  and requires administrator repair; the row is non-interactive.
+
+An empty successful response is shown as an unconfigured installation. A timeout,
+malformed response, or failed gateway request produces the distinct control-plane
+unavailable state. Discovery runtimes cache for five minutes; failures back off from
+30 seconds to five minutes, with up to five seconds of bounded jitter. A security-
+relevant provider configuration change bypasses a stale cooldown.
+
+## Current OIDC browser routes
+
+Browsers use the same-origin web routes below. The web process forwards them to the
+versioned gateway API; operators must not expose the gateway directly.
+
+| Route                                      | Purpose                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /api/auth/providers`                  | Return the bounded browser-safe provider list.                          |
+| `GET /api/auth/oidc/{providerId}/start`    | Bind the browser, create a one-time transaction, and start OIDC.        |
+| `GET /api/auth/oidc/callback/{providerId}` | Consume the transaction, validate the grant, and establish a session.   |
+| `GET /api/auth/session`                    | Inspect and, when due, rotate the current local session.                |
+| `DELETE /api/auth/session`                 | Revoke the current session; requires same-origin CSRF protection.       |
+| `POST /api/auth/recovery/session`          | Hidden, rate-limited recovery endpoint; never linked from the login UI. |
+
+Register the exact callback
+`<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` with each identity provider.
+`OMNIFIN_BASE_URL` is a canonical origin only: it cannot contain credentials, a path,
+query, or fragment. Start requests accept at most one `returnPath`, currently `/` or
+`/settings`; all other redirect targets fail closed.
+
+The first start request may issue a short-lived preflight binding cookie and redirect
+once to the same start route before contacting the identity provider. Each created
+transaction then receives its own state-named HttpOnly binding cookie. A callback can
+therefore clear exactly its own cookie while concurrent tabs retain independent
+one-time transactions, without exposing binding material to JavaScript.
+
+## Implemented OIDC flow
+
+The implementation uses Authorization Code Flow with PKCE S256. It never uses the
+implicit grant or resource-owner password grant.
 
 1. The gateway discovers metadata from the configured issuer and validates that the
    discovered issuer exactly matches the configured issuer.
 2. It creates high-entropy PKCE, `state`, and `nonce` values, persists only the
    short-lived transaction state, and redirects to the provider.
-3. The callback consumes the transaction exactly once and validates state, code
-   exchange, signature, issuer, audience, expiry, and nonce.
+3. The callback binds to the same browser, consumes the transaction exactly once, and
+   validates state, code exchange, signature, issuer, audience, expiry, and nonce.
 4. The external identity is keyed by `(issuer, sub)`. Email address and username are
    display claims, never identity keys.
 5. A new identity is provisioned only when JIT provisioning is enabled. Its default
    role is `viewer` unless an explicit configured claim mapping grants another role.
-6. The gateway rotates the local session before completing sign-in.
+6. Identity resolution, audit attribution, prior-session revocation, and new-session
+   creation commit atomically before the browser receives the session cookie.
 
 Default scopes must be `openid profile email`. Additional group or entitlement claims
 may be requested only when an operator configures a role mapping. Omnifin must not ask
 for `offline_access`, because it does not need long-lived access to an identity provider
 API.
 
-Provider-initiated and RP-initiated logout must be supported when advertised by
+Provider-initiated and RP-initiated logout still must be supported when advertised by
 provider metadata. A back-channel logout token must be validated against the same
 issuer and client constraints before affected local sessions are revoked.
+
+Authorization transactions expire after ten minutes and are consumed before the
+callback interprets provider success or failure. A wrong browser binding does not
+consume another tab's valid transaction. Provider configuration is bound into the
+transaction so a security-relevant configuration change invalidates an in-flight
+grant. The callback URL used for token exchange is reconstructed from the configured
+public URL rather than request forwarding headers. Only `account_not_authorized`,
+`authorization_denied`, `authentication_failed`, `invalid_request`,
+`provider_unavailable`, and `session_limit_reached` may reach
+`/login?authError=...`; arbitrary values and upstream details are discarded. Fixed
+browser errors and bounded audit reasons prevent
+provider diagnostics or assertions from leaking through redirects or application
+logs.
+
+OIDC starts are limited to 20 per minute per client network and 512 per ten minutes
+server-wide. In the bundled topology, the loopback-bound web service trusts the exact
+maintained edge hop count, discards caller-controlled forwarding prefixes and all
+other address assertions, and passes one validated IP across the private gateway hop.
+Directly reachable web processes must use a trusted-hop count of zero and enforce
+per-client limits at their public edge. A separate 512-per-ten-minute server-wide start
+budget is reserved before
+each attempted start failure-audit write, including route-limit errors. Successful
+preflights and authorization starts consume no audit-work units; exhaustion suppresses
+only additional audit writes and does not change the start response. Callbacks are
+limited to 30 per minute per client network. A separate 512-per-ten-minute server-wide
+callback budget limits failure-audit write work; once that budget is exhausted,
+callback validation and legitimate sign-in continue, but additional failures are
+intentionally not written to the audit budget. Provider
+metadata is limited to 60 requests per minute, and every route remains under the
+gateway-wide 300-per-minute client limit. IPv6 addresses group by `/64`, and
+IPv4-mapped IPv6 addresses normalize to IPv4. Discovery failures enter bounded
+exponential backoff so an unavailable issuer cannot be hammered by every login
+attempt. Actual request-limit failures use `429`, `Retry-After`, and `no-store`
+directives; rate-limited callbacks do not create another failure-audit write. Failure
+audits coalesce duplicate client-network and reason buckets; once the durable
+suppression counter or distinct-bucket capacity is full, further duplicate or
+saturated failures make no SQLite changes, including after the audit service reopens
+the database within the same window.
+
+Authenticated session issuance is also bounded inside the same immediate database
+transaction that creates the session. One user may hold at most 16 active sessions and
+may receive at most 32 new sessions in any rolling 24-hour window. Exact
+reauthentication replacement receives credit for the active session it replaces, but
+still consumes the rolling issuance budget. Concurrent gateway processes cannot race
+either boundary. A limit denial creates no session, secret reservation, or session
+success audit; the callback records one bounded `session_limit_reached` denial and the
+login screen gives a safe recovery instruction. Historical secret digests remain
+reserved so a stale bearer or CSRF value cannot become valid again after a restart.
 
 ## Required OIDC-to-Jellyfin pairing
 
@@ -118,17 +221,39 @@ Login, callback, pairing, and recovery routes must have stricter rate limits tha
 ordinary reads. Redirect destinations must be allowlisted local paths, not arbitrary
 URLs.
 
+The first invalid CSRF proof for a valid session creates an attributable denial audit.
+Later denials for that same session coalesce through a deterministic database key and
+make no additional SQLite changes, including across gateway processes or restarts.
+This retains the initial security signal while bounding durable storage by the number
+of sessions already created.
+
 ## Required recovery access
 
 A hidden break-glass route must restore administrative access when both OIDC and
 Jellyfin configuration are unusable. It must remain absent from the normal login
 interface and require a high-entropy value supplied as a Docker secret.
 
-Recovery attempts must be rate-limited and audit-logged, including failures. A
-successful recovery session must be short-lived, locally scoped, visibly marked, and
+Recovery attempts must be rate-limited and audit-logged, including bounded failure
+signals. Successful attempts always produce an audit record. Unauthenticated denials
+and internal failures coalesce by privacy-protected client and reason within each
+15-minute window. At most 255 distinct denial records and one context-free
+`audit_budget_saturated` marker are written per process window; repeats and later
+attempts in a saturated window are suppressed. The durable audit table is therefore a
+security-signal ledger, not a complete request counter.
+
+A successful recovery session must be short-lived, locally scoped, visibly marked, and
 must not be usable as a permanent authentication method. Operators should test recovery
 after initial setup, store the secret separately from the database, and rotate it after
 use.
+
+The implemented recovery boundary allows only one active recovery session: a newly
+verified break-glass login atomically supersedes the prior recovery session and records
+that transition. It also permits at most eight recovery sessions in a rolling 24-hour
+window, independent of normal per-user capacity. Further verified attempts return a
+no-store `429` with `Retry-After` and create no session or secret-reservation rows.
+Every gateway startup revokes and audits any active recovery session before serving
+requests. Restarting the gateway during a repair therefore requires a fresh break-glass
+login, which also consumes another slot in the rolling issuance budget.
 
 ## Phase 1 operator checklist
 

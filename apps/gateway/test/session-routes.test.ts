@@ -19,6 +19,7 @@ function testConfig(): AppConfig {
     encryptionKey: Buffer.alloc(32, 6),
     environment: "test",
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     logLevel: "silent",
     port: 4000,
@@ -214,7 +215,12 @@ describe("session routes", () => {
 
   it("uses a distinct non-Secure cookie name only for explicit local development", async () => {
     const timing = createDependencies();
-    const config = { ...testConfig(), secureCookies: false };
+    const config = {
+      ...testConfig(),
+      baseUrl: new URL("http://localhost:3000"),
+      insecureLoopbackPreview: true,
+      secureCookies: false,
+    };
     const app = await createApp({
       config,
       database: openDatabase(":memory:"),
@@ -314,7 +320,6 @@ describe("session routes", () => {
         .all();
       expect(audit).toEqual([
         { eventType: "auth.session.created", outcome: "success" },
-        { eventType: "auth.session.csrf_denied", outcome: "denied" },
         { eventType: "auth.session.csrf_denied", outcome: "denied" },
         { eventType: "auth.session.logout", outcome: "success" },
       ]);

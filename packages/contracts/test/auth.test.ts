@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  OIDC_ISSUER_MAX_LENGTH,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   authProviderSchema,
@@ -101,6 +102,35 @@ describe("authentication contracts", () => {
         },
       }),
     ).toMatchObject({ subject: "01J2Y9MX1ZC9Y4K4VZ0B1BG2GN" });
+  });
+
+  it("uses one exact issuer-length boundary across provider and identity contracts", () => {
+    const prefix = "https://id.example.test/";
+    const issuer = `${prefix}${"a".repeat(OIDC_ISSUER_MAX_LENGTH - prefix.length)}`;
+    const provider = {
+      id: "maximum-issuer",
+      kind: "oidc" as const,
+      displayName: "Maximum issuer",
+      issuer,
+      state: "available" as const,
+      jitProvisioningEnabled: true,
+      supportsRpInitiatedLogout: false,
+      supportsFrontChannelLogout: false,
+      supportsBackChannelLogout: false,
+    };
+
+    expect(issuer).toHaveLength(OIDC_ISSUER_MAX_LENGTH);
+    expect(authProviderSchema.safeParse(provider).success).toBe(true);
+    expect(
+      externalIdentitySchema.safeParse({
+        ...oidcIdentity,
+        issuer,
+      }).success,
+    ).toBe(true);
+    expect(authProviderSchema.safeParse({ ...provider, issuer: `${issuer}a` }).success).toBe(false);
+    expect(
+      externalIdentitySchema.safeParse({ ...oidcIdentity, issuer: `${issuer}a` }).success,
+    ).toBe(false);
   });
 
   it("uses explicit Jellyfin link health states", () => {

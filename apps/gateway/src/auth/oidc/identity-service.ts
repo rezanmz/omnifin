@@ -1,4 +1,9 @@
-import { roleSchema, type Role, type RoleMapping } from "@omnifin/contracts/auth";
+import {
+  OIDC_ISSUER_MAX_LENGTH,
+  roleSchema,
+  type Role,
+  type RoleMapping,
+} from "@omnifin/contracts/auth";
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../../db/client.js";
 import {
@@ -16,7 +21,6 @@ import type { OidcProviderRuntimeBindingVerifier } from "./provider-registry.js"
 import { resolveOidcRole, type OidcRoleResolution } from "./role-mapping.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const MAX_ISSUER_LENGTH = 2_048;
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_DISPLAY_NAME_LENGTH = 160;
 const MAX_PREFERRED_USERNAME_LENGTH = 160;
@@ -29,20 +33,23 @@ const SAFE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 type AccountStatus = "active" | "pending_link";
 type RoleSource = "default" | "manual" | "oidc_mapping" | "recovery_bootstrap";
 
-export type OidcIdentityDenialReason =
-  | "active_service_link_required"
-  | "disabled_user"
-  | "identity_integrity_failure"
-  | "identity_provider_mismatch"
-  | "invalid_request"
-  | "invalid_verified_context"
-  | "jit_provisioning_disabled"
-  | "provider_context_mismatch"
-  | "provider_disabled"
-  | "provider_not_ready"
-  | "provider_not_found"
-  | "role_mapping_denied"
-  | "role_resolution_mismatch";
+export const OIDC_IDENTITY_DENIAL_REASONS = [
+  "active_service_link_required",
+  "disabled_user",
+  "identity_integrity_failure",
+  "identity_provider_mismatch",
+  "invalid_request",
+  "invalid_verified_context",
+  "jit_provisioning_disabled",
+  "provider_context_mismatch",
+  "provider_disabled",
+  "provider_not_ready",
+  "provider_not_found",
+  "role_mapping_denied",
+  "role_resolution_mismatch",
+] as const;
+
+export type OidcIdentityDenialReason = (typeof OIDC_IDENTITY_DENIAL_REASONS)[number];
 
 export interface ResolveOidcIdentityInput {
   readonly grant: VerifiedOidcGrant;
@@ -226,7 +233,7 @@ function validRequestId(value: unknown): value is string | undefined {
 }
 
 function validIssuer(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 1 || value.length > MAX_ISSUER_LENGTH) {
+  if (typeof value !== "string" || value.length < 1 || value.length > OIDC_ISSUER_MAX_LENGTH) {
     return false;
   }
   try {
@@ -381,10 +388,10 @@ export class OidcIdentityService {
     try {
       identity = consumeVerifiedOidcGrant(grantWasExtracted ? grant : undefined);
     } catch {
-      return this.deny("invalid_verified_context", occurredAt, requestId);
+      return this.deny("invalid_verified_context");
     }
     if (!requestEnvelopeValid || !validRequestId(requestIdInput)) {
-      return this.deny("invalid_request", occurredAt, requestId);
+      return this.deny("invalid_request");
     }
     if (
       !isValidatedOidcClaims(identity.claims) ||
@@ -392,7 +399,7 @@ export class OidcIdentityService {
       !validIssuer(identity.issuer) ||
       !validClientId(identity.clientId)
     ) {
-      return this.deny("invalid_verified_context", occurredAt, requestId);
+      return this.deny("invalid_verified_context");
     }
 
     const provider = this.database.sqlite
@@ -409,21 +416,21 @@ export class OidcIdentityService {
       )
       .get(identity.providerId) as ProviderRow | undefined;
     if (!provider) {
-      return this.deny("provider_not_found", occurredAt, requestId, identity.providerId);
+      return this.deny("provider_not_found");
     }
     if (provider.issuer !== identity.issuer || provider.clientId !== identity.clientId) {
-      return this.deny("provider_context_mismatch", occurredAt, requestId, provider.id);
+      return this.deny("provider_context_mismatch");
     }
     if (provider.enabled !== 1) {
-      return this.deny("provider_disabled", occurredAt, requestId, provider.id);
+      return this.deny("provider_disabled");
     }
     if (provider.discoveryState !== "ready") {
-      return this.deny("provider_not_ready", occurredAt, requestId, provider.id);
+      return this.deny("provider_not_ready");
     }
     try {
       this.#providerBindingVerifier.verify(provider.id, identity.providerRuntimeBinding);
     } catch {
-      return this.deny("invalid_verified_context", occurredAt, requestId);
+      return this.deny("invalid_verified_context");
     }
 
     const mappingRows = this.database.sqlite
@@ -447,7 +454,7 @@ export class OidcIdentityService {
       ? resolveOidcRole({ claims: identity.claims, mappings, providerId: provider.id })
       : undefined;
     if (!expectedResolution || expectedResolution.status !== "resolved") {
-      return this.deny("role_mapping_denied", occurredAt, requestId, provider.id);
+      return this.deny("role_mapping_denied");
     }
 
     const displayClaims = normalizedDisplayClaims(identity.claims);
@@ -474,7 +481,7 @@ export class OidcIdentityService {
 
     if (!existing) {
       if (provider.allowJitProvisioning !== 1) {
-        return this.deny("jit_provisioning_disabled", occurredAt, requestId, provider.id);
+        return this.deny("jit_provisioning_disabled");
       }
       return this.provision({
         claims: identity.claims,
@@ -492,7 +499,7 @@ export class OidcIdentityService {
     }
 
     if (existing.identityProviderId !== provider.id) {
-      return this.deny("identity_provider_mismatch", occurredAt, requestId, provider.id);
+      return this.deny("identity_provider_mismatch");
     }
     if (
       !existing.userId ||
@@ -511,31 +518,17 @@ export class OidcIdentityService {
       existing.identityCreatedAt > existing.lastLoginAt ||
       existing.userCreatedAt > existing.userUpdatedAt
     ) {
-      return this.deny("identity_integrity_failure", occurredAt, requestId, provider.id);
+      return this.deny("identity_integrity_failure");
     }
     if (existing.status === "disabled") {
-      return this.deny(
-        "disabled_user",
-        occurredAt,
-        requestId,
-        existing.externalIdentityId,
-        existing.userId,
-        "external_identity",
-      );
+      return this.deny("disabled_user");
     }
     const serviceIdentityLinkId =
       existing.status === "active"
         ? this.loadActiveServiceLink(existing.userId, occurredAt)
         : undefined;
     if (existing.status === "active" && serviceIdentityLinkId === undefined) {
-      return this.deny(
-        "active_service_link_required",
-        occurredAt,
-        requestId,
-        existing.externalIdentityId,
-        existing.userId,
-        "external_identity",
-      );
+      return this.deny("active_service_link_required");
     }
     return this.loginExisting({
       claims: identity.claims,
@@ -710,24 +703,7 @@ export class OidcIdentityService {
       );
   }
 
-  private deny(
-    reason: OidcIdentityDenialReason,
-    occurredAt: number,
-    requestId?: string,
-    targetId?: string,
-    actorUserId?: string,
-    targetType: AuditEvent["targetType"] = "oidc_provider",
-  ): OidcIdentityResolution {
-    this.insertAudit({
-      ...(actorUserId ? { actorUserId } : {}),
-      eventType: "auth.oidc.identity.denied",
-      metadata: { reason },
-      occurredAt,
-      outcome: "denied",
-      ...(requestId ? { requestId } : {}),
-      ...(targetId ? { targetId } : {}),
-      targetType,
-    });
+  private deny(reason: OidcIdentityDenialReason): OidcIdentityResolution {
     return Object.freeze({ reason, status: "denied" });
   }
 
