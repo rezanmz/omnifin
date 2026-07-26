@@ -57,7 +57,8 @@ async function visible(locator) {
   }
 }
 
-async function completeAuthentikFlow(page, startPath, username, password, webOrigin) {
+async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
+  currentStage = `${attempt}_navigation`;
   await page.goto(startPath, { waitUntil: "domcontentloaded" });
 
   for (let step = 0; step < 12; step += 1) {
@@ -80,10 +81,12 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       .first();
     let completedField = false;
     if (await visible(usernameInput)) {
+      currentStage = `${attempt}_username`;
       await usernameInput.fill(username);
       completedField = true;
     }
     if (await visible(passwordInput)) {
+      currentStage = `${attempt}_password`;
       await passwordInput.fill(password);
       completedField = true;
     }
@@ -95,11 +98,16 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       .first();
     const submitAction = page.locator('button[type="submit"], input[type="submit"]').last();
     const action = (await visible(namedAction)) ? namedAction : submitAction;
-    assert(completedField || (await visible(action)));
+    if (!completedField) currentStage = `${attempt}_consent`;
+    if (!(completedField || (await visible(action)))) {
+      currentStage = `${attempt}_unrecognized`;
+      throw new BrowserCheckError();
+    }
     await action.click();
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await page.waitForTimeout(250);
   }
+  currentStage = `${attempt}_callback`;
   throw new BrowserCheckError();
 }
 
@@ -263,7 +271,14 @@ async function run() {
 
     const startPath = `/api/auth/oidc/${expectedProviderId}/start`;
     currentStage = "first_browser_login";
-    await completeAuthentikFlow(page, startPath, "akadmin", authentikPassword, webOrigin);
+    await completeAuthentikFlow(
+      page,
+      startPath,
+      "akadmin",
+      authentikPassword,
+      webOrigin,
+      "first_login",
+    );
     currentStage = "first_session";
     const firstSession = await session(context.request);
     const subject = assertPrincipal(firstSession, issuer);
@@ -274,7 +289,14 @@ async function run() {
     await waitForRevokedSession(context.request);
 
     currentStage = "second_browser_login";
-    await completeAuthentikFlow(page, startPath, "akadmin", authentikPassword, webOrigin);
+    await completeAuthentikFlow(
+      page,
+      startPath,
+      "akadmin",
+      authentikPassword,
+      webOrigin,
+      "second_login",
+    );
     currentStage = "second_session";
     const secondSession = await session(context.request);
     assertPrincipal(secondSession, issuer, subject);
