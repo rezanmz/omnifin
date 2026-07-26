@@ -41,9 +41,11 @@ import {
   OidcProviderRegistryError,
 } from "./provider-registry.js";
 import { OidcSignInService } from "./sign-in-service.js";
+import type { OidcBackchannelLogoutDependencies } from "./backchannel-logout.js";
 
 const ALLOWED_RETURN_PATHS = new Set(["/", "/settings"]);
 const MAX_CALLBACK_REQUEST_TARGET_LENGTH = 16_384;
+const MAX_BACKCHANNEL_LOGOUT_BODY_BYTES = 40 * 1_024;
 const MAX_PROVIDER_LOGOUT_LOCATION_LENGTH = 16_384;
 const MAX_START_REQUEST_TARGET_LENGTH = 4_096;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -253,6 +255,7 @@ function callbackFailure(error: unknown): {
 
 export interface OidcRoutesDependencies {
   authorizationTransaction?: OidcAuthorizationTransactionDependencies;
+  backchannelLogout?: Omit<OidcBackchannelLogoutDependencies, "providerRegistry">;
   failureAudit?: OidcFailureAuditDependencies;
   identity?: Omit<OidcIdentityServiceDependencies, "providerBindingVerifier">;
   protocol?: OidcProtocolDependencies;
@@ -392,6 +395,23 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
       statusCode: 429,
     });
   };
+
+  app.post(
+    "/v1/auth/oidc/backchannel/:providerId",
+    {
+      bodyLimit: MAX_BACKCHANNEL_LOGOUT_BODY_BYTES,
+      config: {
+        omnifinSecurity: { kind: "oidc-backchannel" },
+        rateLimit: { max: 120, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (_request, reply) => reply.status(200).send(),
+  );
 
   app.post(
     "/v1/auth/oidc/logout",

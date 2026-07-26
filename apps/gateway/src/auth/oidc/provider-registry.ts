@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { OIDC_ISSUER_MAX_LENGTH } from "@omnifin/contracts/auth";
+import { createRemoteJWKSet, customFetch as joseCustomFetch, jwtVerify } from "jose";
 import {
   ClientSecretBasic,
   ClientSecretPost,
@@ -23,6 +24,7 @@ import type { DatabaseHandle } from "../../db/client.js";
 import { constantTimeTextEqual, EnvelopeCipher } from "../../security/crypto.js";
 import {
   createOidcSafeFetch,
+  OidcSafeFetchError,
   OIDC_MAX_APPROVED_ORIGINS,
   OIDC_MAX_URL_LENGTH,
   OIDC_REQUEST_TIMEOUT_MS,
@@ -49,6 +51,11 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/;
 const WELL_KNOWN_PATH_SEGMENT_PATTERN = /(?:^|\/)\.well-known(?:\/|$)/;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const RUNTIME_BINDING_KEY_CONTEXT = "omnifin:v1:oidc-provider-runtime-binding-key";
+const BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout";
+const MAX_BACKCHANNEL_LOGOUT_TOKEN_BYTES = 32 * 1_024;
+const MAX_BACKCHANNEL_LOGOUT_CLAIM_LENGTH = 512;
+const MAX_BACKCHANNEL_LOGOUT_CLOCK_SKEW_SECONDS = 5 * 60;
+const BACKCHANNEL_JWKS_TIMEOUT_GRACE_MS = 1_000;
 
 const ID_TOKEN_SIGNING_ALGORITHMS = new Set([
   "RS256",
@@ -71,6 +78,7 @@ export type OidcProviderRegistryErrorCode =
   | "oidc_provider_changed"
   | "oidc_provider_disabled"
   | "oidc_provider_discovery_failed"
+  | "oidc_provider_logout_token_invalid"
   | "oidc_provider_misconfigured"
   | "oidc_provider_not_found"
   | "oidc_provider_storage_failed";
@@ -79,6 +87,7 @@ const ERROR_MESSAGES: Readonly<Record<OidcProviderRegistryErrorCode, string>> = 
   oidc_provider_changed: "The identity provider configuration changed during validation.",
   oidc_provider_disabled: "The identity provider is disabled.",
   oidc_provider_discovery_failed: "The identity provider could not be validated.",
+  oidc_provider_logout_token_invalid: "The identity provider logout token is invalid.",
   oidc_provider_misconfigured: "The identity provider configuration is invalid.",
   oidc_provider_not_found: "The identity provider was not found.",
   oidc_provider_storage_failed: "The identity provider validation state could not be saved.",
@@ -159,6 +168,10 @@ interface OidcProviderRuntimeInternals {
 }
 
 const runtimeInternals = new WeakMap<OidcProviderRuntime, OidcProviderRuntimeInternals>();
+const runtimeBackchannelLogoutKeySets = new WeakMap<
+  OidcProviderRuntime,
+  ReturnType<typeof createRemoteJWKSet>
+>();
 
 /**
  * Gateway-only protocol state. Validated client internals are intentionally
@@ -197,6 +210,15 @@ class OidcProviderRuntimeHandle implements OidcProviderRuntime {
 export interface OidcRuntimeAuthorizationCodeGrantResult {
   readonly claims: unknown;
   readonly idToken: string | undefined;
+}
+
+export interface VerifiedOidcRuntimeBackchannelLogoutToken {
+  readonly expiresAt: Date;
+  readonly issuedAt: Date;
+  readonly issuer: string;
+  readonly sessionId?: string;
+  readonly subject?: string;
+  readonly tokenId: string;
 }
 
 function requireRuntimeInternals(runtime: OidcProviderRuntime): OidcProviderRuntimeInternals {
@@ -258,6 +280,141 @@ export function buildOidcRuntimeEndSessionUrl(
     throw registryError("oidc_provider_misconfigured");
   }
   return endSessionUrl;
+}
+
+function runtimeBackchannelLogoutKeySet(runtime: OidcProviderRuntime) {
+  const cached = runtimeBackchannelLogoutKeySets.get(runtime);
+  if (cached) return cached;
+
+  const internals = requireRuntimeInternals(runtime);
+  const providerFetch = internals.configuration[customFetch];
+  if (!providerFetch) throw registryError("oidc_provider_logout_token_invalid");
+  const keySet = createRemoteJWKSet(new URL(internals.endpoints.jwks), {
+    cacheMaxAge: OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS,
+    cooldownDuration: 30_000,
+    timeoutDuration: OIDC_REQUEST_TIMEOUT_MS + BACKCHANNEL_JWKS_TIMEOUT_GRACE_MS,
+    [joseCustomFetch]: async (url, options) => {
+      const headers: Record<string, string> = {};
+      for (const [name, value] of options.headers) headers[name] = value;
+      return providerFetch(url, {
+        body: undefined,
+        headers,
+        method: "GET",
+        redirect: "manual",
+        signal: options.signal,
+      });
+    },
+  });
+  runtimeBackchannelLogoutKeySets.set(runtime, keySet);
+  return keySet;
+}
+
+function boundedBackchannelClaim(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_BACKCHANNEL_LOGOUT_CLAIM_LENGTH
+    ? value
+    : undefined;
+}
+
+function validBackchannelNumericDate(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 8_640_000_000_000
+  );
+}
+
+/**
+ * Verifies a provider-initiated Logout Token with the same issuer, audience,
+ * signing algorithm, JWKS transport, and runtime binding as interactive OIDC.
+ * The compact assertion is dropped and only bounded revocation coordinates are
+ * returned.
+ */
+export async function verifyOidcRuntimeBackchannelLogoutToken(
+  runtime: OidcProviderRuntime,
+  logoutToken: unknown,
+  currentDate: Date = new Date(),
+): Promise<VerifiedOidcRuntimeBackchannelLogoutToken> {
+  try {
+    const currentTime = currentDate instanceof Date ? currentDate.getTime() : Number.NaN;
+    if (
+      typeof logoutToken !== "string" ||
+      Buffer.byteLength(logoutToken, "utf8") > MAX_BACKCHANNEL_LOGOUT_TOKEN_BYTES ||
+      !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(logoutToken) ||
+      !Number.isSafeInteger(currentTime) ||
+      currentTime < 0
+    ) {
+      throw registryError("oidc_provider_logout_token_invalid");
+    }
+    const provider = runtime.provider;
+    const verified = await jwtVerify(logoutToken, runtimeBackchannelLogoutKeySet(runtime), {
+      algorithms: [provider.capabilities.idTokenSigningAlg],
+      audience: provider.clientId,
+      clockTolerance: 0,
+      currentDate: new Date(currentTime),
+      issuer: provider.issuer,
+    });
+    if (
+      verified.protectedHeader.alg !== provider.capabilities.idTokenSigningAlg ||
+      (verified.protectedHeader.typ !== undefined && verified.protectedHeader.typ !== "logout+jwt")
+    ) {
+      throw registryError("oidc_provider_logout_token_invalid");
+    }
+
+    const payload = verified.payload;
+    const audienceIsExact =
+      payload.aud === provider.clientId ||
+      (Array.isArray(payload.aud) &&
+        payload.aud.length === 1 &&
+        payload.aud[0] === provider.clientId);
+    const event =
+      payload.events !== null &&
+      typeof payload.events === "object" &&
+      !Array.isArray(payload.events) &&
+      Object.hasOwn(payload.events, BACKCHANNEL_LOGOUT_EVENT)
+        ? (payload.events as Record<string, unknown>)[BACKCHANNEL_LOGOUT_EVENT]
+        : undefined;
+    const subject = payload.sub === undefined ? undefined : boundedBackchannelClaim(payload.sub);
+    const sessionId = payload.sid === undefined ? undefined : boundedBackchannelClaim(payload.sid);
+    const tokenId = boundedBackchannelClaim(payload.jti);
+    const nowSeconds = Math.floor(currentTime / 1_000);
+    if (
+      payload.iss !== provider.issuer ||
+      !audienceIsExact ||
+      !validBackchannelNumericDate(payload.iat) ||
+      !validBackchannelNumericDate(payload.exp) ||
+      payload.iat < nowSeconds - MAX_BACKCHANNEL_LOGOUT_CLOCK_SKEW_SECONDS ||
+      payload.iat > nowSeconds + MAX_BACKCHANNEL_LOGOUT_CLOCK_SKEW_SECONDS ||
+      payload.exp <= nowSeconds ||
+      payload.exp <= payload.iat ||
+      tokenId === undefined ||
+      (subject === undefined && sessionId === undefined) ||
+      (payload.sub !== undefined && subject === undefined) ||
+      (payload.sid !== undefined && sessionId === undefined) ||
+      event === null ||
+      typeof event !== "object" ||
+      Array.isArray(event) ||
+      Object.hasOwn(payload, "nonce")
+    ) {
+      throw registryError("oidc_provider_logout_token_invalid");
+    }
+
+    return Object.freeze({
+      expiresAt: new Date(payload.exp * 1_000),
+      issuedAt: new Date(payload.iat * 1_000),
+      issuer: provider.issuer,
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(subject === undefined ? {} : { subject }),
+      tokenId,
+    });
+  } catch (error) {
+    throw registryError(
+      "oidc_provider_logout_token_invalid",
+      error instanceof OidcSafeFetchError && error.retryable,
+    );
+  }
 }
 
 export interface OidcProviderRegistryConfig {

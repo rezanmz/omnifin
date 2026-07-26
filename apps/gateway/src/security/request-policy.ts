@@ -103,7 +103,7 @@ export function installRequestPolicy(app: FastifyInstance, options: RequestPolic
       throw new SafeHttpError({
         code: "backchannel_authentication_denied",
         message: "The logout request could not be verified.",
-        statusCode: 401,
+        statusCode: 400,
       });
     }
   });

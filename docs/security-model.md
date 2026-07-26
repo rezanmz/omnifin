@@ -8,8 +8,9 @@ design and review.
 > [!IMPORTANT]
 > The current checkpoint implements defensive foundations plus OIDC authentication,
 > opaque local sessions, identity resolution, authentication audit records, and hidden
-> recovery access. Password and Quick Connect Jellyfin linking and RP-initiated logout
-> are implemented, while provider-initiated OIDC logout, complete permission enforcement, connector
+> recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
+> and provider-initiated OIDC back-channel logout are implemented, while front-channel
+> logout, complete permission enforcement, connector
 > administration, media proxying, and upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
@@ -115,6 +116,11 @@ diagnostic.
   logout. The gateway atomically revokes and audits the local session before releasing
   non-serializable provider material, uses only the validated discovered end-session
   endpoint, and falls back to a completed local logout if discovery is unavailable.
+  Provider-initiated back-channel requests use no browser authority: the gateway
+  validates a signed, issuer/client-bound, time-bounded Logout Token through the
+  approved JWKS transport. It requires the logout event, rejects `nonce`, scopes
+  revocation by the private `sid` hash and/or immutable subject, and commits the replay
+  receipt, revocation, and sanitized audit event in one immediate transaction.
 - **Denial of service:** bounded request targets, per-client start and callback limits,
   a server-wide start limit, separate non-blocking server-wide start and callback
   audit-write budgets, and durable no-write caps for duplicate and saturated failure
@@ -138,7 +144,7 @@ diagnostic.
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
 erasure, revocation, relinking, and secret-preservation tests. Provider-initiated
-OIDC logout and full permission enforcement still need completed
+front-channel OIDC logout and full permission enforcement still need completed
 threat-model gates before Phase 1 can pass.
 
 When media proxying is implemented, responses must enforce an approved upstream

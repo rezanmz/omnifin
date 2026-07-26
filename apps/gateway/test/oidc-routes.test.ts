@@ -13,6 +13,8 @@ import {
   OIDC_FAILURE_AUDIT_MAX_ROWS_PER_WINDOW,
   OidcFailureAuditService,
 } from "../src/auth/oidc/failure-audit.js";
+import type { OidcBackchannelLogoutDependencies } from "../src/auth/oidc/backchannel-logout.js";
+import { OidcProviderRegistryError } from "../src/auth/oidc/provider-registry.js";
 import type { OidcProtocolDependencies } from "../src/auth/oidc/protocol.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
@@ -89,7 +91,11 @@ function discoveredConfiguration(
 }
 
 async function openRouteHarness(
-  options: { config?: Partial<AppConfig>; createBrowserBinding?: () => string } = {},
+  options: {
+    config?: Partial<AppConfig>;
+    createBrowserBinding?: () => string;
+    verifyBackchannelLogoutToken?: OidcBackchannelLogoutDependencies["verifyLogoutToken"];
+  } = {},
 ) {
   const database = openDatabase(":memory:");
   database.migrate();
@@ -117,6 +123,14 @@ async function openRouteHarness(
     config: testConfig(options.config),
     database,
     oidcDependencies: {
+      ...(options.verifyBackchannelLogoutToken
+        ? {
+            backchannelLogout: {
+              clock: () => new Date(routeTime),
+              verifyLogoutToken: options.verifyBackchannelLogoutToken,
+            },
+          }
+        : {}),
       authorizationTransaction: {
         clock: () => new Date(routeTime),
         ...(options.createBrowserBinding
@@ -197,6 +211,142 @@ async function issueBrowserOidcSession(
 }
 
 describe("OIDC browser routes", () => {
+  it("accepts a verified provider back-channel logout without browser credentials", async () => {
+    const verifyBackchannelLogoutToken = vi.fn(async () => ({
+      expiresAt: new Date(routeTime.getTime() + 5 * 60_000),
+      issuedAt: new Date(routeTime.getTime() - 1_000),
+      issuer,
+      subject: "immutable-viewer-subject",
+      tokenId: "provider-logout-token-route-1",
+    }));
+    const { app, database } = await openRouteHarness({ verifyBackchannelLogoutToken });
+    try {
+      const session = await issueBrowserOidcSession(app);
+      const response = await app.inject({
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+        payload: new URLSearchParams({
+          logout_token: "header.provider-logout.signature",
+          provider_extension: "ignored-by-specification",
+        }).toString(),
+        url: `/v1/auth/oidc/backchannel/${providerId}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.body).toBe("");
+      expect(verifyBackchannelLogoutToken).toHaveBeenCalledWith(
+        providerId,
+        "header.provider-logout.signature",
+        new Date(routeTime),
+      );
+      expect(app.sessionService.resolveAndRefresh(session.cookie.split("=", 2)[1])).toBeNull();
+      expect(
+        database.sqlite.prepare("select count(*) as count from oidc_logout_receipts").get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects invalid back-channel assertions without revoking the target session", async () => {
+    const verifyBackchannelLogoutToken = vi.fn(async () => {
+      throw new Error("private-provider-verification-failure");
+    });
+    const { app, database } = await openRouteHarness({ verifyBackchannelLogoutToken });
+    try {
+      const session = await issueBrowserOidcSession(app);
+      const response = await app.inject({
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+        payload: new URLSearchParams({
+          logout_token: "header.invalid-provider-logout.signature",
+        }).toString(),
+        url: `/v1/auth/oidc/backchannel/${providerId}`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: { code: "backchannel_authentication_denied" },
+      });
+      expect(app.sessionService.resolveAndRefresh(session.cookie.split("=", 2)[1])).not.toBeNull();
+      expect(
+        database.sqlite.prepare("select count(*) as count from oidc_logout_receipts").get(),
+      ).toEqual({ count: 0 });
+      expect(response.body).not.toContain("private-provider-verification-failure");
+      expect(database.sqlite.serialize().toString("utf8")).not.toContain(
+        "private-provider-verification-failure",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires one form-encoded logout_token before invoking back-channel verification", async () => {
+    const verifyBackchannelLogoutToken = vi.fn(async () => ({
+      expiresAt: new Date(routeTime.getTime() + 5 * 60_000),
+      issuedAt: new Date(routeTime.getTime() - 1_000),
+      issuer,
+      subject: "immutable-viewer-subject",
+      tokenId: "unused-provider-logout-token",
+    }));
+    const { app } = await openRouteHarness({ verifyBackchannelLogoutToken });
+    try {
+      const requests = [
+        {
+          headers: { "content-type": "application/json" },
+          payload: JSON.stringify({ logout_token: "header.json.signature" }),
+        },
+        {
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          payload: "",
+        },
+        {
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          payload: "logout_token=header.first.signature&logout_token=header.second.signature",
+        },
+      ];
+      for (const request of requests) {
+        const response = await app.inject({
+          headers: request.headers,
+          method: "POST",
+          payload: request.payload,
+          url: `/v1/auth/oidc/backchannel/${providerId}`,
+        });
+        expect(response.statusCode).toBe(400);
+      }
+      expect(verifyBackchannelLogoutToken).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a retryable response when provider verification is temporarily unavailable", async () => {
+    const verifyBackchannelLogoutToken = vi.fn(async () => {
+      throw new OidcProviderRegistryError("oidc_provider_discovery_failed", true);
+    });
+    const { app } = await openRouteHarness({ verifyBackchannelLogoutToken });
+    try {
+      const response = await app.inject({
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+        payload: new URLSearchParams({
+          logout_token: "header.retryable-provider.signature",
+        }).toString(),
+        url: `/v1/auth/oidc/backchannel/${providerId}`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        error: { code: "backchannel_temporarily_unavailable" },
+      });
+      expect(response.body).not.toContain("oidc_provider_discovery_failed");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("revokes locally before redirecting a form-submitted logout to the validated provider", async () => {
     const { app, database, discover } = await openRouteHarness();
     try {

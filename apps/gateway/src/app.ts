@@ -13,6 +13,10 @@ import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-
 import type { JellyfinQuickConnectServiceDependencies } from "./auth/jellyfin/quick-connect-service.js";
 import { jellyfinRoutes, type JellyfinRoutesOptions } from "./auth/jellyfin/routes.js";
 import { oidcRoutes, type OidcRoutesDependencies } from "./auth/oidc/routes.js";
+import {
+  OidcBackchannelLogoutError,
+  OidcBackchannelLogoutService,
+} from "./auth/oidc/backchannel-logout.js";
 import { recoveryRoutes } from "./auth/recovery-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 import { SESSION_CSRF_HEADER, sessionCookieName } from "./auth/session-cookie.js";
@@ -25,7 +29,7 @@ import {
 import { type AppConfig, loadConfig } from "./config.js";
 import { type DatabaseHandle, openDatabase } from "./db/client.js";
 import { healthRoutes } from "./health.js";
-import { isSafeHttpError } from "./http-error.js";
+import { isSafeHttpError, SafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
 import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
@@ -88,6 +92,41 @@ function sessionCsrfProof(request: FastifyRequest) {
     : undefined;
 }
 
+function oidcBackchannelRequest(request: FastifyRequest) {
+  if (
+    request.method !== "POST" ||
+    request.routeOptions.url !== "/v1/auth/oidc/backchannel/:providerId"
+  ) {
+    return undefined;
+  }
+  const contentType = request.headers["content-type"];
+  if (
+    typeof contentType !== "string" ||
+    !/^application\/x-www-form-urlencoded(?:\s*;\s*charset=utf-8)?$/iu.test(contentType.trim()) ||
+    !request.body ||
+    typeof request.body !== "object" ||
+    Array.isArray(request.body) ||
+    !request.params ||
+    typeof request.params !== "object" ||
+    Array.isArray(request.params)
+  ) {
+    return undefined;
+  }
+  const logoutToken = Object.getOwnPropertyDescriptor(request.body, "logout_token");
+  const providerId = Object.getOwnPropertyDescriptor(request.params, "providerId");
+  if (
+    !logoutToken ||
+    !("value" in logoutToken) ||
+    typeof logoutToken.value !== "string" ||
+    !providerId ||
+    !("value" in providerId) ||
+    typeof providerId.value !== "string"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ logoutToken: logoutToken.value, providerId: providerId.value });
+}
+
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
   const database = options.database ?? openDatabase(config.databaseUrl);
@@ -144,6 +183,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     app.decorate("appConfig", config);
     app.decorate("database", database);
     const sessionService = new SessionService(database, config, options.sessionDependencies);
+    const backchannelDependencies = options.oidcDependencies?.backchannelLogout;
+    const oidcBackchannelLogout = new OidcBackchannelLogoutService(database, config, {
+      ...(backchannelDependencies ?? {}),
+      ...(options.oidcDependencies?.providerRegistry === undefined
+        ? {}
+        : { providerRegistry: options.oidcDependencies.providerRegistry }),
+    });
     app.decorate("sessionService", sessionService);
     app.decorateRequest("validatedSession", null);
 
@@ -192,6 +238,26 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     installRequestPolicy(app, {
       allowedOrigin: config.baseUrl.origin,
+      validateOidcBackchannel: async (request) => {
+        const input = oidcBackchannelRequest(request);
+        if (!input) return false;
+        try {
+          await oidcBackchannelLogout.process({ ...input, requestId: request.id });
+          return true;
+        } catch (error) {
+          if (
+            error instanceof OidcBackchannelLogoutError &&
+            error.code === "logout_storage_failed"
+          ) {
+            throw new SafeHttpError({
+              code: "backchannel_temporarily_unavailable",
+              message: "The logout request could not be completed.",
+              statusCode: 503,
+            });
+          }
+          return false;
+        }
+      },
       validateSessionCsrf: (request) => {
         const validatedSession = sessionService.validateSessionCsrf(
           request.cookies[sessionCookieName(config)],

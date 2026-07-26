@@ -279,7 +279,7 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
   expect(readyProviders.status()).toBe(200);
   expectNoStore(readyProviders);
   expect(await readyProviders.json()).toEqual({
-    providers: [{ ...providerObject, state: "available" }],
+    providers: [{ ...providerObject, state: "available", supportsBackChannelLogout: true }],
   });
 
   const callbackQuery = new URLSearchParams({
@@ -345,6 +345,23 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
       role: "viewer",
     },
   });
+
+  const providerLogout = await request.post(`/api/auth/oidc/backchannel/${providerId}`, {
+    data: new URLSearchParams({
+      logout_token: "header.synthetic-provider-logout.signature",
+      provider_extension: "ignored-by-specification",
+    }).toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(providerLogout.status()).toBe(200);
+  expectNoStore(providerLogout);
+  expect(providerLogout.headers().pragma).toBe("no-cache");
+  expect(await providerLogout.text()).toBe("");
+
+  const revokedSession = await request.get("/api/auth/session", { maxRedirects: 0 });
+  expect(revokedSession.status()).toBe(200);
+  expectNoStore(revokedSession);
+  await expect(revokedSession.json()).resolves.toEqual({ csrfToken: null, principal: null });
 });
 
 test("returns a bounded callback outage response without logging query secrets", async () => {

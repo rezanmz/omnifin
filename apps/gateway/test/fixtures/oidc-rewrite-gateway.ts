@@ -70,6 +70,8 @@ function testConfig(baseUrl: URL, port: number): AppConfig {
 function providerMetadata(): ServerMetadata {
   return {
     authorization_endpoint: "https://identity.example.test/application/o/authorize/",
+    backchannel_logout_session_supported: true,
+    backchannel_logout_supported: true,
     code_challenge_methods_supported: ["S256"],
     grant_types_supported: ["authorization_code"],
     id_token_signing_alg_values_supported: ["RS256"],
@@ -131,6 +133,7 @@ function syntheticAuthorizationCodeGrant(
         email: "viewer@example.test",
         email_verified: true,
         name: "Synthetic Viewer",
+        sid: SYNTHETIC_PROVIDER_SESSION,
         sub: "synthetic-immutable-subject",
       },
       idToken: "header.payload.signature",
@@ -166,6 +169,26 @@ async function main() {
     migrate: false,
     oidcDependencies: {
       authorizationTransaction: { clock: () => new Date(startedAt) },
+      backchannelLogout: {
+        clock: () => new Date(startedAt),
+        verifyLogoutToken: async (providerId, logoutToken, operationTime) => {
+          if (
+            providerId !== PROVIDER_ID ||
+            logoutToken !== "header.synthetic-provider-logout.signature" ||
+            operationTime.getTime() !== startedAt.getTime()
+          ) {
+            throw new Error("The synthetic back-channel assertion is invalid.");
+          }
+          return {
+            expiresAt: new Date(startedAt.getTime() + 5 * 60_000),
+            issuedAt: new Date(startedAt.getTime() - 1_000),
+            issuer: PROVIDER_ISSUER,
+            sessionId: SYNTHETIC_PROVIDER_SESSION,
+            subject: "synthetic-immutable-subject",
+            tokenId: "synthetic-provider-logout-token",
+          };
+        },
+      },
       failureAudit: { clock: () => new Date(startedAt) },
       identity: { clock: () => new Date(startedAt) },
       protocol: { authorizationCodeGrant: syntheticAuthorizationCodeGrant(publicOrigin) },

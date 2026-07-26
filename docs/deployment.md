@@ -9,8 +9,9 @@ untagged image or default branch build as a production support promise.
 > support promise. It can run the OIDC browser flow for an already configured provider,
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
-> provide RP-initiated logout and hidden recovery access. There is not yet a supported
-> provider-administration path, provider-initiated OIDC logout, complete authorization, connector
+> provide RP-initiated logout, provider-initiated back-channel logout, and hidden
+> recovery access. There is not yet a supported provider-administration path,
+> front-channel OIDC logout, complete authorization, connector
 > administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 
@@ -47,7 +48,8 @@ Before operating a release that advertises the corresponding capabilities, prepa
   in Compose configuration;
 - a separately generated break-glass recovery secret;
 - dedicated connector credentials where upstream services support them; and
-- exact OIDC callback and logout URLs when using an identity provider.
+- exact OIDC callback, back-channel logout, and post-logout URLs when using an identity
+  provider.
 
 Keep the master key and recovery secret outside the database backup. Anyone holding
 both the database and master key may be able to recover upstream credentials.
@@ -130,8 +132,9 @@ must require an explicit, service-specific administrative acknowledgement.
 4. Confirm provider discovery returns only safe metadata. Without a provider configured
    through test tooling, the login screen must remain explicitly unconfigured.
 5. If validating the OIDC development flow with an isolated synthetic provider,
-   confirm the exact callback, PKCE, replay rejection, session inspection, and logout
-   behavior. Do not use a personal identity provider or manually edit production data.
+   confirm the exact callback, PKCE, authorization replay rejection, session inspection,
+   RP-initiated logout, signed back-channel logout, and Logout Token replay behavior.
+   Do not use a personal identity provider or manually edit production data.
 6. Confirm recovery remains absent from the ordinary login interface and rejects a
    missing or incorrect secret without revealing whether recovery is configured.
 7. Confirm a gateway restart revokes the active recovery session, then reauthenticate

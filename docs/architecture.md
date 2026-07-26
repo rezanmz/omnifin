@@ -32,8 +32,8 @@ provides isolated connector fixture and probe tooling.
 There is not yet a supported provider-administration workflow. Direct Jellyfin password
 and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
-Provider-coordinated OIDC logout, connector administration, and media operations remain
-unavailable.
+RP-initiated and provider-initiated back-channel OIDC logout are implemented;
+front-channel logout, connector administration, and media operations remain unavailable.
 
 ## Target system shape
 
@@ -140,7 +140,8 @@ signed-in user's authority.
 The SQLite schema stores or reserves storage for:
 
 - users, external identities, service identity links, and role mappings;
-- opaque session digests and short-lived authentication transactions;
+- opaque session digests, short-lived authentication transactions, and bounded OIDC
+  logout replay receipts;
 - connector configuration and capability snapshots;
 - encrypted Jellyfin tokens and connector credentials;
 - durable audit records and persisted failure state; and
@@ -151,7 +152,9 @@ external identities, service identity links, encrypted Jellyfin tokens, sessions
 authorization transactions, connector bootstrap records, and authentication audit
 events. Password and Quick Connect pairing, normalized link health, relinking,
 revocation, and account-wide local session logout are available; connector
-administration is not yet available.
+administration is not yet available. Signed provider back-channel logout can revoke an
+exact OIDC session or immutable external identity without storing the raw Logout Token,
+`sid`, or `jti`.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the

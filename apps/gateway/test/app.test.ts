@@ -447,18 +447,13 @@ describe("gateway application", () => {
     await app.close();
   });
 
-  it("fails closed on the dedicated signed-logout surface until validation is wired", async () => {
+  it("fails closed on the dedicated signed-logout surface without a verified form assertion", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
-    app.post(
-      "/v1/auth/oidc/backchannel/:providerId",
-      { config: { omnifinSecurity: { kind: "oidc-backchannel" } } },
-      async () => ({ accepted: true }),
-    );
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/oidc/backchannel/provider",
     });
-    expect(response.statusCode).toBe(401);
+    expect(response.statusCode).toBe(400);
     expect(apiErrorSchema.parse(response.json()).error.code).toBe(
       "backchannel_authentication_denied",
     );
