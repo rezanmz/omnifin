@@ -14,11 +14,13 @@ import { buildSessionPrincipal, type SessionPrincipalRecord } from "./principal.
 
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const OIDC_SESSION_ID_HASH_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const MAX_RECOVERY_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_TOKEN_GENERATION_ATTEMPTS = 8;
 const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
 const SESSION_REPLACEMENT_CAPABILITY_BRAND = Symbol("session-replacement-capability");
+const VALIDATED_OIDC_PAIRING_SESSION_BRAND = Symbol("validated-oidc-pairing-session");
 
 export const MAX_ACTIVE_SESSIONS_PER_USER = 16;
 export const MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW = 8;
@@ -98,6 +100,16 @@ export interface ValidatedSession {
   readonly [VALIDATED_SESSION_BRAND]: true;
 }
 
+/** @internal A transaction-ready proof of the exact pending OIDC session being paired. */
+export interface ValidatedOidcPairingSession {
+  readonly externalIdentityId: string;
+  readonly oidcProviderId: string;
+  readonly operationTime: number;
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true;
+}
+
 /** @internal An opaque, transaction-scoped proof of a replaceable session token. */
 export interface SessionReplacementCapability {
   readonly [SESSION_REPLACEMENT_CAPABILITY_BRAND]: true;
@@ -111,6 +123,7 @@ interface SessionJoinedRow {
   csrfTokenHash: string;
   encryptedCsrfToken: string;
   expiresAt: number;
+  encryptedIdTokenHint: string | null;
   externalIdentityId: string | null;
   joinedConnectorEnabled: number | null;
   joinedConnectorId: string | null;
@@ -139,11 +152,17 @@ interface SessionJoinedRow {
   lastRotatedAt: number;
   lastSeenAt: number;
   oidcProviderId: string | null;
+  oidcSessionIdHash: string | null;
   revokedAt: number | null;
   serviceIdentityLinkId: string | null;
   sessionId: string;
   sessionUserId: string | null;
   tokenHash: string;
+}
+
+interface OidcSessionIssuanceOverride {
+  absoluteExpiresAt: Date;
+  oidcSessionIdHash: string | null;
 }
 
 interface RefreshedSessionRow {
@@ -494,8 +513,20 @@ export class SessionService {
     disallowedTokenHashes: ReadonlySet<string>,
     now: Date,
     replacingSessionId?: string,
+    oidcOverride?: OidcSessionIssuanceOverride,
   ): IssuedSession {
     const attribution = this.validateAttribution(input.attribution);
+    if (
+      oidcOverride !== undefined &&
+      (attribution.authMethod !== "oidc" ||
+        !validDate(oidcOverride.absoluteExpiresAt) ||
+        oidcOverride.absoluteExpiresAt.getTime() <= now.getTime() ||
+        oidcOverride.absoluteExpiresAt.getTime() > now.getTime() + this.absoluteTtlMs ||
+        (oidcOverride.oidcSessionIdHash !== null &&
+          !OIDC_SESSION_ID_HASH_PATTERN.test(oidcOverride.oidcSessionIdHash)))
+    ) {
+      throw new TypeError("OIDC session attribution is invalid.");
+    }
     const ipAddress = optionalBoundedText(input.ipAddress, 256, "IP address");
     const requestId = optionalBoundedText(input.requestId, 128, "Request identifier");
     const userAgent = optionalBoundedText(input.userAgent, 2_048, "User agent");
@@ -508,7 +539,8 @@ export class SessionService {
     const sessionId = assertIdentifier(this.createId(), "Session identifier");
     const absoluteTtlMs =
       attribution.authMethod === "recovery" ? this.recoveryAbsoluteTtlMs : this.absoluteTtlMs;
-    const absoluteExpiresAt = new Date(now.getTime() + absoluteTtlMs);
+    const absoluteExpiresAt =
+      oidcOverride?.absoluteExpiresAt ?? new Date(now.getTime() + absoluteTtlMs);
     const inactivityExpiresAt = new Date(
       Math.min(now.getTime() + this.inactivityTtlMs, absoluteExpiresAt.getTime()),
     );
@@ -547,8 +579,12 @@ export class SessionService {
             lastSeenAt: now,
             oidcProviderId: attribution.authMethod === "oidc" ? attribution.oidcProviderId : null,
             oidcSessionIdHash:
-              attribution.authMethod === "oidc" && attribution.oidcSessionId
-                ? privacyHash("oidc_session_id", attribution.oidcSessionId, this.privacyKey)
+              attribution.authMethod === "oidc"
+                ? oidcOverride !== undefined
+                  ? oidcOverride.oidcSessionIdHash
+                  : attribution.oidcSessionId
+                    ? privacyHash("oidc_session_id", attribution.oidcSessionId, this.privacyKey)
+                    : null
                 : null,
             serviceIdentityLinkId:
               attribution.authMethod === "recovery"
@@ -673,6 +709,7 @@ export class SessionService {
     issued: IssuedSession,
     input: CreateSessionInput,
     now: Date,
+    reason = "reauthentication",
   ) {
     this.insertAuditEvent(revoked, {
       context: {
@@ -682,7 +719,7 @@ export class SessionService {
       eventType: "auth.session.replaced",
       metadata: {
         authenticationMethod: input.attribution.authMethod,
-        reason: "reauthentication",
+        reason,
         replacementSessionId: issued.principal.sessionId,
       },
       occurredAt: now,
@@ -850,6 +887,142 @@ export class SessionService {
       [VALIDATED_SESSION_BRAND]: true as const,
       sessionId: row.sessionId,
     });
+  }
+
+  /** @internal Resolves a CSRF-validated session only when it is eligible for first-time pairing. */
+  public beginValidatedOidcPairingSession(
+    validatedSession: unknown,
+  ): ValidatedOidcPairingSession | null {
+    if (
+      !validatedSession ||
+      typeof validatedSession !== "object" ||
+      (validatedSession as Partial<ValidatedSession>)[VALIDATED_SESSION_BRAND] !== true ||
+      !SESSION_ID_PATTERN.test((validatedSession as Partial<ValidatedSession>).sessionId ?? "")
+    ) {
+      return null;
+    }
+    const operationTime = this.currentTime();
+    const row = this.loadJoinedSessionById((validatedSession as ValidatedSession).sessionId);
+    const principalRecord = row && mapPrincipalRecord(row);
+    const principal = principalRecord && buildSessionPrincipal(principalRecord, operationTime);
+    if (
+      !row ||
+      !principal ||
+      !this.sessionLifecycleIsActive(row, operationTime) ||
+      row.authMethod !== "oidc" ||
+      row.serviceIdentityLinkId !== null ||
+      row.joinedUserStatus !== "pending_link" ||
+      principal.accountState !== "pending_link" ||
+      principal.authenticationMethod.kind !== "oidc" ||
+      principal.linkedServices.length !== 0 ||
+      !row.sessionUserId ||
+      !row.externalIdentityId ||
+      !row.oidcProviderId
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true as const,
+      externalIdentityId: row.externalIdentityId,
+      oidcProviderId: row.oidcProviderId,
+      operationTime: operationTime.getTime(),
+      sessionId: row.sessionId,
+      userId: row.sessionUserId,
+    });
+  }
+
+  /** @internal Atomically replaces a proven pending OIDC session after its link is established. */
+  public completeValidatedOidcPairingSession(
+    pairingSession: unknown,
+    serviceIdentityLinkId: string,
+    input: Omit<CreateSessionInput, "attribution"> = {},
+  ): IssuedSession {
+    if (!this.database.sqlite.inTransaction) {
+      throw new Error("A surrounding pairing transaction is required.");
+    }
+    if (
+      !pairingSession ||
+      typeof pairingSession !== "object" ||
+      (pairingSession as Partial<ValidatedOidcPairingSession>)[
+        VALIDATED_OIDC_PAIRING_SESSION_BRAND
+      ] !== true
+    ) {
+      throw new Error("The OIDC pairing session is invalid.");
+    }
+    const proof = pairingSession as ValidatedOidcPairingSession;
+    assertIdentifier(serviceIdentityLinkId, "Service identity link identifier");
+    const now = new Date(proof.operationTime);
+    const row = this.loadJoinedSessionById(proof.sessionId);
+    if (
+      !row ||
+      !this.sessionLifecycleIsActive(row, now) ||
+      row.authMethod !== "oidc" ||
+      row.sessionUserId !== proof.userId ||
+      row.externalIdentityId !== proof.externalIdentityId ||
+      row.oidcProviderId !== proof.oidcProviderId ||
+      row.serviceIdentityLinkId !== null ||
+      row.joinedUserStatus !== "active" ||
+      row.joinedLinkId !== serviceIdentityLinkId ||
+      row.joinedLinkUserId !== proof.userId ||
+      row.joinedLinkHealthState !== "linked" ||
+      row.joinedConnectorEnabled !== 1
+    ) {
+      throw new Error("The OIDC pairing session could not be upgraded.");
+    }
+
+    let idTokenHint: string | undefined;
+    if (row.encryptedIdTokenHint !== null) {
+      idTokenHint = this.cipher.decrypt(
+        row.encryptedIdTokenHint,
+        idTokenHintContext(row.sessionId),
+      );
+      optionalBoundedText(idTokenHint, 16_384, "OIDC ID token hint");
+    }
+    const sessionInput: CreateSessionInput = {
+      attribution: {
+        authMethod: "oidc",
+        externalIdentityId: proof.externalIdentityId,
+        ...(idTokenHint === undefined ? {} : { idTokenHint }),
+        oidcProviderId: proof.oidcProviderId,
+        serviceIdentityLinkId,
+        userId: proof.userId,
+      },
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+    };
+    const issued = this.issueSessionInCurrentTransaction(
+      sessionInput,
+      new Set([row.tokenHash]),
+      now,
+      row.sessionId,
+      {
+        absoluteExpiresAt: new Date(row.absoluteExpiresAt),
+        oidcSessionIdHash: row.oidcSessionIdHash,
+      },
+    );
+    const revoked = this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where user_id = @userId
+           and id <> @replacementSessionId
+           and revoked_at is null
+         returning
+           id as sessionId,
+           user_id as userId,
+           auth_method as authMethod,
+           created_at as createdAt`,
+      )
+      .all({
+        now: now.getTime(),
+        replacementSessionId: issued.principal.sessionId,
+        userId: proof.userId,
+      }) as RevokedSessionRow[];
+    const replaced = revoked.find((candidate) => candidate.sessionId === row.sessionId);
+    if (!replaced) throw new Error("The pending OIDC session could not be replaced.");
+    this.auditSessionReplacement(replaced, issued, sessionInput, now, "identity_pairing");
+    return issued;
   }
 
   public revokeValidatedSession(
@@ -1196,6 +1369,8 @@ export class SessionService {
       s.user_id as sessionUserId,
       s.auth_method as authMethod,
       s.oidc_provider_id as oidcProviderId,
+      s.oidc_session_id_hash as oidcSessionIdHash,
+      s.encrypted_id_token_hint as encryptedIdTokenHint,
       s.external_identity_id as externalIdentityId,
       s.service_identity_link_id as serviceIdentityLinkId,
       s.csrf_token_hash as csrfTokenHash,

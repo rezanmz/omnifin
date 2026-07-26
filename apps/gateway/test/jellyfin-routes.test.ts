@@ -6,6 +6,7 @@ import { createApp } from "../src/app.js";
 import type { JellyfinSignInServiceDependencies } from "../src/auth/jellyfin/sign-in-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
+import { externalIdentities, oidcProviders, users } from "../src/db/schema.js";
 
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -71,6 +72,50 @@ function cookieHeader(setCookie: string | string[] | undefined) {
   const value = Array.isArray(setCookie) ? setCookie[0] : setCookie;
   if (!value) throw new Error("Expected a session cookie.");
   return value.split(";", 1)[0]!;
+}
+
+function pendingOidcSession(app: Awaited<ReturnType<typeof createApp>>) {
+  app.database.db
+    .insert(oidcProviders)
+    .values({
+      clientId: "omnifin",
+      displayName: "Home identity",
+      enabled: true,
+      id: "oidc-home",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      slug: "home",
+    })
+    .run();
+  app.database.db
+    .insert(users)
+    .values({
+      displayName: "Riley from OIDC",
+      id: "oidc-user-1",
+      role: "requester",
+      roleSource: "oidc_mapping",
+      status: "pending_link",
+    })
+    .run();
+  app.database.db
+    .insert(externalIdentities)
+    .values({
+      displayClaimsJson: JSON.stringify({ displayName: "Riley from OIDC" }),
+      id: "oidc-identity-1",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      lastLoginAt: new Date(),
+      providerId: "oidc-home",
+      subject: "immutable-oidc-subject",
+      userId: "oidc-user-1",
+    })
+    .run();
+  return app.sessionService.createSession({
+    attribution: {
+      authMethod: "oidc",
+      externalIdentityId: "oidc-identity-1",
+      oidcProviderId: "oidc-home",
+      userId: "oidc-user-1",
+    },
+  });
 }
 
 describe("POST /v1/auth/jellyfin/password", () => {
@@ -232,6 +277,101 @@ describe("POST /v1/auth/jellyfin/password", () => {
       expect(auditPayload).not.toMatch(/private-password|riley/);
       expect(auditPayload).toContain("authentication_denied");
       expect(auditPayload).toContain("rate_limited");
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("POST /v1/auth/jellyfin/link/password", () => {
+  it("pairs only through a CSRF-validated pending OIDC session", async () => {
+    const fixture = dependencyFixture();
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const pending = pendingOidcSession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${pending.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": pending.csrfToken,
+        },
+        url: "/v1/auth/jellyfin/link/password",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = authenticatedSessionResponseSchema.parse(response.json());
+      expect(body.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "oidc", providerId: "oidc-home" },
+        userId: "oidc-user-1",
+      });
+      expect(body.principal.linkedServices).toEqual([
+        expect.objectContaining({ externalUserId: "jellyfin-user-1", health: "linked" }),
+      ]);
+      expect(cookieHeader(response.headers["set-cookie"])).not.toContain(pending.sessionToken);
+      expect(response.body).not.toMatch(/private-password|private-jellyfin-access-token/);
+      expect(fixture.calls).toEqual({ authentication: 1, publicInfo: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a missing CSRF proof before credential parsing or upstream contact", async () => {
+    const fixture = dependencyFixture();
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const pending = pendingOidcSession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${pending.sessionToken}`,
+          origin: "https://omnifin.example",
+        },
+        url: "/v1/auth/jellyfin/link/password",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "csrf_denied" } });
+      expect(fixture.calls).toEqual({ authentication: 0, publicInfo: 0 });
+      expect(
+        app.database.sqlite
+          .prepare(
+            `select event_type as eventType
+             from audit_events
+             where event_type in (
+               'auth.session.csrf_denied',
+               'auth.jellyfin.identity.pairing_attempt'
+             )
+             order by event_type`,
+          )
+          .all(),
+      ).toEqual([{ eventType: "auth.session.csrf_denied" }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects an authenticated non-pending session before another upstream exchange", async () => {
+    const fixture = dependencyFixture();
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const signedIn = await app.inject(request());
+      const signedInBody = authenticatedSessionResponseSchema.parse(signedIn.json());
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: cookieHeader(signedIn.headers["set-cookie"]),
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": signedInBody.csrfToken,
+        },
+        url: "/v1/auth/jellyfin/link/password",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: { code: "pairing_not_available" } });
+      expect(fixture.calls).toEqual({ authentication: 1, publicInfo: 1 });
     } finally {
       await app.close();
     }

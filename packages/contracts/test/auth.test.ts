@@ -7,7 +7,9 @@ import {
   authenticatedSessionResponseSchema,
   authProviderSchema,
   externalIdentitySchema,
+  jellyfinIdentityPairingResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
+  jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
@@ -86,6 +88,28 @@ describe("Jellyfin authentication contracts", () => {
     expect(
       authenticatedSessionResponseSchema.safeParse({ csrfToken: null, principal: null }).success,
     ).toBe(false);
+  });
+
+  it("keeps pairing credentials strict and returns only the upgraded session", () => {
+    expect(
+      jellyfinPasswordPairingRequestSchema.parse({
+        password: "private-password",
+        username: "riley",
+      }),
+    ).toEqual({ password: "private-password", username: "riley" });
+    expect(
+      jellyfinPasswordPairingRequestSchema.safeParse({
+        password: "private-password",
+        sessionId: "attacker-selected-session",
+        username: "riley",
+      }).success,
+    ).toBe(false);
+    expect(
+      jellyfinIdentityPairingResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        principal: activePrincipal,
+      }),
+    ).not.toHaveProperty("accessToken");
   });
 
   it("keeps Quick Connect transactions opaque and rejects extended requests", () => {

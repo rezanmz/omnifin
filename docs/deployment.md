@@ -7,9 +7,10 @@ untagged image or default branch build as a production support promise.
 > [!IMPORTANT]
 > The current development branch is not an operable media control plane or a production
 > support promise. It can run the OIDC browser flow for an already configured provider,
-> establish local sessions, authenticate by password or Quick Connect with a configured Jellyfin server,
-> and provide hidden recovery access, but there is not yet a supported
-> provider-administration path, OIDC-to-Jellyfin pairing, complete logout and
+> establish local sessions, authenticate by password or Quick Connect with a configured
+> Jellyfin server, pair a pending OIDC user through fresh Jellyfin credentials, and
+> provide hidden recovery access. There is not yet a supported provider-administration
+> path, Quick Connect pairing, link lifecycle management, complete logout and
 > authorization, connector administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 

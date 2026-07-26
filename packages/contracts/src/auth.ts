@@ -370,11 +370,17 @@ export type JellyfinPasswordAuthenticationRequest = z.infer<
   typeof jellyfinPasswordAuthenticationRequestSchema
 >;
 
+export const jellyfinPasswordPairingRequestSchema = jellyfinPasswordAuthenticationRequestSchema;
+export type JellyfinPasswordPairingRequest = z.infer<typeof jellyfinPasswordPairingRequestSchema>;
+
 export const authenticatedSessionResponseSchema = z.object({
   principal: sessionPrincipalSchema,
   csrfToken: csrfTokenSchema,
 });
 export type AuthenticatedSessionResponse = z.infer<typeof authenticatedSessionResponseSchema>;
+
+export const jellyfinIdentityPairingResponseSchema = authenticatedSessionResponseSchema;
+export type JellyfinIdentityPairingResponse = z.infer<typeof jellyfinIdentityPairingResponseSchema>;
 
 export const jellyfinQuickConnectInitiationRequestSchema = z.strictObject({});
 export type JellyfinQuickConnectInitiationRequest = z.infer<

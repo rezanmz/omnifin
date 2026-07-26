@@ -13,8 +13,15 @@ import { JellyfinSignInService } from "../src/auth/jellyfin/sign-in-service.js";
 import { SessionService } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
-import { EnvelopeCipher } from "../src/security/crypto.js";
+import {
+  connectorConfigs,
+  externalIdentities,
+  oidcProviders,
+  serviceIdentityLinks,
+  sessions as sessionRows,
+  users,
+} from "../src/db/schema.js";
+import { EnvelopeCipher, privacyHash } from "../src/security/crypto.js";
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 const EARLIER = new Date("2026-07-26T11:00:00.000Z");
@@ -125,6 +132,62 @@ function credentials(overrides: Record<string, unknown> = {}) {
     username: "riley",
     ...overrides,
   };
+}
+
+function seedPendingOidcSession(handle: DatabaseHandle, sessions: SessionService) {
+  handle.db
+    .insert(oidcProviders)
+    .values({
+      clientId: "omnifin",
+      displayName: "Home identity",
+      enabled: true,
+      id: "oidc-home",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      slug: "home",
+    })
+    .run();
+  handle.db
+    .insert(users)
+    .values({
+      createdAt: EARLIER,
+      displayName: "Riley from OIDC",
+      id: "oidc-user-1",
+      role: "requester",
+      roleSource: "oidc_mapping",
+      status: "pending_link",
+      updatedAt: EARLIER,
+    })
+    .run();
+  handle.db
+    .insert(externalIdentities)
+    .values({
+      createdAt: EARLIER,
+      displayClaimsJson: JSON.stringify({
+        displayName: "Riley from OIDC",
+        email: "riley@example.test",
+      }),
+      id: "oidc-identity-1",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      lastLoginAt: EARLIER,
+      providerId: "oidc-home",
+      subject: "immutable-oidc-subject",
+      updatedAt: EARLIER,
+      userId: "oidc-user-1",
+    })
+    .run();
+  const session = sessions.createSession({
+    attribution: {
+      authMethod: "oidc",
+      externalIdentityId: "oidc-identity-1",
+      idTokenHint: "signed-id-token-hint",
+      oidcProviderId: "oidc-home",
+      oidcSessionId: "upstream-session-1",
+      userId: "oidc-user-1",
+    },
+  });
+  const validated = sessions.validateSessionCsrf(session.sessionToken, session.csrfToken);
+  if (!validated) throw new Error("Expected a validated pending OIDC session.");
+  return { session, validated };
 }
 
 describe("JellyfinSignInService", () => {
@@ -333,6 +396,159 @@ describe("JellyfinSignInService", () => {
       await expect(service(handle).signIn.signInWithPassword(credentials())).rejects.toMatchObject({
         reason: "configuration_invalid",
       });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("pairs a proven Jellyfin identity to the exact pending OIDC user and rotates attribution", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { sessions, signIn } = service(handle);
+    try {
+      const pending = seedPendingOidcSession(handle, sessions);
+
+      const result = await signIn.pairWithPassword({
+        ...credentials({ requestId: "request-jellyfin-pair" }),
+        validatedSession: pending.validated,
+      });
+
+      expect(result.status).toBe("paired");
+      if (result.status !== "paired") throw new Error("Expected pairing success.");
+      expect(result.session.sessionToken).not.toBe(pending.session.sessionToken);
+      expect(result.session.absoluteExpiresAt).toEqual(pending.session.absoluteExpiresAt);
+      expect(result.session.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "oidc", providerId: "oidc-home" },
+        role: "requester",
+        userId: "oidc-user-1",
+      });
+      expect(result.session.principal.linkedServices).toEqual([
+        expect.objectContaining({
+          externalUserId: "jellyfin-user-1",
+          health: "linked",
+          username: "Riley",
+        }),
+      ]);
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ id: "oidc-user-1", status: "active" }),
+      ]);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toEqual([
+        expect.objectContaining({
+          externalServerId: "server-1",
+          externalUserId: "jellyfin-user-1",
+          userId: "oidc-user-1",
+        }),
+      ]);
+      expect(sessions.resolveAndRefresh(pending.session.sessionToken)).toBeNull();
+
+      const persistedSession = handle.db
+        .select()
+        .from(sessionRows)
+        .all()
+        .find((row) => row.id === result.session.principal.sessionId);
+      expect(persistedSession).toMatchObject({
+        authMethod: "oidc",
+        externalIdentityId: "oidc-identity-1",
+        oidcProviderId: "oidc-home",
+        oidcSessionIdHash: privacyHash("oidc_session_id", "upstream-session-1", ENCRYPTION_KEY),
+        userId: "oidc-user-1",
+      });
+      expect(persistedSession?.serviceIdentityLinkId).toBeTruthy();
+      expect(
+        new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
+          persistedSession!.encryptedIdTokenHint!,
+          `session:${persistedSession!.id}:oidc-id-token-hint`,
+        ),
+      ).toBe("signed-id-token-hint");
+      expect(
+        handle.sqlite
+          .prepare(
+            `select event_type as eventType, metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.jellyfin.identity.paired'`,
+          )
+          .get(),
+      ).toEqual({
+        eventType: "auth.jellyfin.identity.paired",
+        metadataJson: JSON.stringify({ proof: "password", provisioned: true }),
+      });
+      expect(() => JSON.stringify(result)).toThrow(/cannot be serialized/i);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("refuses to pair a Jellyfin identity already owned by another Omnifin user", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { sessions, signIn } = service(handle);
+    try {
+      const pending = seedPendingOidcSession(handle, sessions);
+      handle.db
+        .insert(users)
+        .values({
+          createdAt: EARLIER,
+          displayName: "Existing owner",
+          id: "existing-owner",
+          role: "viewer",
+          status: "active",
+          updatedAt: EARLIER,
+        })
+        .run();
+      handle.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          createdAt: EARLIER,
+          deviceId: "existing-device",
+          encryptedAccessToken: "v2.existing-token",
+          externalDisplayName: "Riley",
+          externalServerId: "server-1",
+          externalUserId: "jellyfin-user-1",
+          externalUsername: "Riley",
+          healthState: "linked",
+          id: "existing-link",
+          lastVerifiedAt: EARLIER,
+          service: "jellyfin",
+          tokenCreatedAt: EARLIER,
+          updatedAt: EARLIER,
+          userId: "existing-owner",
+        })
+        .run();
+
+      const result = await signIn.pairWithPassword({
+        ...credentials(),
+        validatedSession: pending.validated,
+      });
+
+      expect(result).toMatchObject({ reason: "identity_already_linked", status: "denied" });
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ id: "oidc-user-1", status: "pending_link" }),
+        expect.objectContaining({ id: "existing-owner", status: "active" }),
+      ]);
+      expect(sessions.resolveAndRefresh(pending.session.sessionToken)?.principal).toMatchObject({
+        accountState: "pending_link",
+        userId: "oidc-user-1",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("requires a CSRF-validated pending OIDC session for pairing", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { signIn } = service(handle);
+    try {
+      const result = await signIn.pairWithPassword({
+        ...credentials(),
+        validatedSession: undefined,
+      });
+
+      expect(result).toMatchObject({ reason: "pairing_session_required", status: "denied" });
+      expect(handle.db.select().from(users).all()).toEqual([]);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toEqual([]);
     } finally {
       handle.close();
     }

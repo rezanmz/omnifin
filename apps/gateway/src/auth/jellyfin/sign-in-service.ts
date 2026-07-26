@@ -14,6 +14,7 @@ import {
   type CreateSessionInput,
   type IssuedSession,
   type SessionService,
+  type ValidatedOidcPairingSession,
 } from "../session-service.js";
 import {
   JellyfinConnectorConfigurationError,
@@ -50,6 +51,13 @@ export interface JellyfinPasswordSignInInput {
   readonly username: string;
 }
 
+export interface JellyfinPasswordPairingInput extends Omit<
+  JellyfinPasswordSignInInput,
+  "currentSessionToken"
+> {
+  readonly validatedSession?: unknown;
+}
+
 export interface JellyfinAuthenticatedSignInInput {
   readonly authentication: JellyfinAuthenticationResult;
   readonly currentSessionToken?: unknown;
@@ -76,6 +84,27 @@ export interface JellyfinSignInSuccessResult {
 }
 
 export type JellyfinSignInResult = JellyfinSignInDeniedResult | JellyfinSignInSuccessResult;
+
+export type JellyfinPairingDenialReason =
+  | "account_disabled"
+  | "identity_already_linked"
+  | "invalid_credentials"
+  | "link_already_exists"
+  | "pairing_session_required";
+
+export interface JellyfinPairingDeniedResult {
+  readonly reason: JellyfinPairingDenialReason;
+  readonly status: "denied";
+  toJSON(): never;
+}
+
+export interface JellyfinPairingSuccessResult {
+  readonly session: IssuedSession;
+  readonly status: "paired";
+  toJSON(): never;
+}
+
+export type JellyfinPairingResult = JellyfinPairingDeniedResult | JellyfinPairingSuccessResult;
 
 export interface JellyfinSignInServiceDependencies {
   readonly clock?: () => Date;
@@ -232,6 +261,96 @@ export class JellyfinSignInService {
     });
   }
 
+  public async pairWithPassword(
+    input: JellyfinPasswordPairingInput,
+  ): Promise<JellyfinPairingResult> {
+    this.#validatePasswordInput(input);
+    if (!input.validatedSession) {
+      return internalResult({
+        reason: "pairing_session_required" as const,
+        status: "denied" as const,
+      });
+    }
+    if (!this.#sessionService.beginValidatedOidcPairingSession(input.validatedSession)) {
+      return internalResult({
+        reason: "pairing_session_required" as const,
+        status: "denied" as const,
+      });
+    }
+    let target: JellyfinConnectorTarget;
+    try {
+      target = this.#registry.resolve();
+    } catch (error) {
+      if (error instanceof JellyfinConnectorConfigurationError) {
+        throw new JellyfinSignInServiceError("configuration_invalid", { cause: error });
+      }
+      throw error;
+    }
+    const deviceId = this.#nextIdentifier(this.#createDeviceId());
+    const client = this.#createClient(target);
+    let publicInfo: JellyfinPublicSystemInfo;
+    let authentication: JellyfinAuthenticationResult;
+    try {
+      publicInfo = await client.getPublicSystemInfo();
+      authentication = await client.authenticateByName({
+        deviceId,
+        password: input.password,
+        username: input.username,
+      });
+    } catch (error) {
+      if (error instanceof SafeConnectorError && error.code === "invalid_credentials") {
+        return internalResult({
+          reason: "invalid_credentials" as const,
+          status: "denied" as const,
+        });
+      }
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+    if (publicInfo.Id !== authentication.ServerId) {
+      throw new JellyfinSignInServiceError("server_mismatch");
+    }
+
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const pairingSession = this.#sessionService.beginValidatedOidcPairingSession(
+            input.validatedSession,
+          );
+          if (!pairingSession) {
+            return internalResult({
+              reason: "pairing_session_required" as const,
+              status: "denied" as const,
+            });
+          }
+          const identity = this.#pairIdentity({
+            authentication,
+            deviceId,
+            occurredAt: pairingSession.operationTime,
+            pairingSession,
+            proof: "password",
+            requestContext: input,
+            target,
+          });
+          if (identity.status === "denied") return identity;
+          const session = this.#sessionService.completeValidatedOidcPairingSession(
+            pairingSession,
+            identity.linkId,
+            {
+              ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+              ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+            },
+          );
+          return internalResult({ session, status: "paired" as const });
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof JellyfinSignInServiceError) throw error;
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+  }
+
   public completeAuthenticatedSignIn(
     input: JellyfinAuthenticatedSignInInput,
   ): JellyfinSignInResult {
@@ -303,6 +422,159 @@ export class JellyfinSignInService {
       if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
+  }
+
+  #pairIdentity(input: {
+    authentication: JellyfinAuthenticationResult;
+    deviceId: string;
+    occurredAt: number;
+    pairingSession: ValidatedOidcPairingSession;
+    proof: "password" | "quick_connect";
+    requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
+    target: JellyfinConnectorTarget;
+  }): JellyfinPairingDeniedResult | { readonly linkId: string; readonly status: "resolved" } {
+    if (!this.#database.sqlite.inTransaction || !this.#registry.bindingIsCurrent(input.target)) {
+      throw new JellyfinSignInServiceError("configuration_invalid");
+    }
+    const externalUserId = normalizedDisplayText(input.authentication.User.Id, 256);
+    const externalUsername = normalizedDisplayText(input.authentication.User.Name, 160);
+    const existingIdentity = this.#database.sqlite
+      .prepare(
+        `select
+          l.id,
+          l.user_id as linkUserId,
+          l.service,
+          l.connector_id as connectorId,
+          l.external_server_id as externalServerId,
+          l.external_user_id as externalUserId,
+          l.health_state as healthState,
+          l.revision,
+          l.created_at as createdAt,
+          u.id as userId,
+          u.role as userRole,
+          u.role_source as userRoleSource,
+          u.status as userStatus
+         from service_identity_links l
+         left join users u on u.id = l.user_id
+         where l.connector_id = ?
+           and l.external_server_id = ?
+           and l.external_user_id = ?`,
+      )
+      .get(
+        input.target.connectorId,
+        input.authentication.ServerId,
+        input.authentication.User.Id,
+      ) as ExistingLinkRow | undefined;
+    if (existingIdentity) {
+      if (!this.#existingLinkIsValid(existingIdentity, input, externalUserId)) {
+        throw new JellyfinSignInServiceError("provider_unavailable");
+      }
+      this.#insertAudit({
+        actorUserId: input.pairingSession.userId,
+        eventType: "auth.jellyfin.identity.pairing_denied",
+        metadata: { reason: "identity_already_linked" },
+        occurredAt: input.occurredAt,
+        outcome: "denied",
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        targetId: existingIdentity.id,
+        targetType: "service_identity_link",
+      });
+      return internalResult({
+        reason: "identity_already_linked" as const,
+        status: "denied" as const,
+      });
+    }
+
+    const existingUserLink = this.#database.sqlite
+      .prepare(
+        `select id
+         from service_identity_links
+         where user_id = ? and service = 'jellyfin'
+         limit 1`,
+      )
+      .get(input.pairingSession.userId) as { id: string } | undefined;
+    if (existingUserLink) {
+      this.#insertAudit({
+        actorUserId: input.pairingSession.userId,
+        eventType: "auth.jellyfin.identity.pairing_denied",
+        metadata: { reason: "link_already_exists" },
+        occurredAt: input.occurredAt,
+        outcome: "denied",
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        targetId: existingUserLink.id,
+        targetType: "service_identity_link",
+      });
+      return internalResult({ reason: "link_already_exists" as const, status: "denied" as const });
+    }
+
+    const linkId = this.#nextIdentifier(this.#createId());
+    const encryptedAccessToken = this.#cipher.encrypt(
+      input.authentication.AccessToken,
+      accessTokenContext(linkId),
+    );
+    this.#database.sqlite
+      .prepare(
+        `insert into service_identity_links (
+          id,
+          user_id,
+          service,
+          connector_id,
+          external_server_id,
+          external_user_id,
+          external_username,
+          external_display_name,
+          encrypted_access_token,
+          device_id,
+          token_created_at,
+          health_state,
+          last_verified_at,
+          revision,
+          created_at,
+          updated_at
+        ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
+      )
+      .run(
+        linkId,
+        input.pairingSession.userId,
+        input.target.connectorId,
+        input.authentication.ServerId,
+        input.authentication.User.Id,
+        externalUsername,
+        externalUsername,
+        encryptedAccessToken,
+        input.deviceId,
+        input.occurredAt,
+        input.occurredAt,
+        input.occurredAt,
+        input.occurredAt,
+      );
+    const userUpdate = this.#database.sqlite
+      .prepare(
+        `update users
+         set status = 'active', updated_at = ?
+         where id = ? and status = 'pending_link'`,
+      )
+      .run(input.occurredAt, input.pairingSession.userId);
+    if (userUpdate.changes !== 1) {
+      throw new JellyfinSignInServiceError("provider_unavailable");
+    }
+    this.#insertAudit({
+      actorUserId: input.pairingSession.userId,
+      eventType: "auth.jellyfin.identity.paired",
+      metadata: { proof: input.proof, provisioned: true },
+      occurredAt: input.occurredAt,
+      outcome: "success",
+      ...(input.requestContext.requestId === undefined
+        ? {}
+        : { requestId: input.requestContext.requestId }),
+      targetId: linkId,
+      targetType: "service_identity_link",
+    });
+    return Object.freeze({ linkId, status: "resolved" as const });
   }
 
   #reconcileIdentity(input: {

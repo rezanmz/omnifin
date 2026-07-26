@@ -130,8 +130,10 @@ diagnostic.
   require an explicit validated claim mapping, and identity plus session changes commit
   atomically.
 
-OIDC logout, Jellyfin proof-of-control pairing, and full permission enforcement need
-their own completed threat-model tests before Phase 1 can pass.
+Password-based Jellyfin proof-of-control pairing now has immutable-ownership, CSRF,
+session-rotation, and secret-preservation tests. Quick Connect pairing, the complete
+link lifecycle, OIDC logout, and full permission enforcement still need completed
+threat-model gates before Phase 1 can pass.
 
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and

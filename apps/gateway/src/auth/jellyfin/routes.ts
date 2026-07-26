@@ -1,6 +1,8 @@
 import {
   authenticatedSessionResponseSchema,
+  jellyfinIdentityPairingResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
+  jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
@@ -100,6 +102,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       | "invalid_request"
       | "rate_limited"
       | "upstream_unavailable",
+    operation: "pairing" | "sign_in" = "sign_in",
   ) => {
     if (recordedRequests.has(request)) return;
     recordedRequests.add(request);
@@ -116,10 +119,13 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
             metadata_json,
             ip_hash,
             created_at
-          ) values (?, 'auth.jellyfin.sign_in', 'denied', 'connector', 'jellyfin', ?, ?, ?, ?)`,
+          ) values (?, ?, 'denied', 'connector', 'jellyfin', ?, ?, ?, ?)`,
         )
         .run(
           randomUUID(),
+          operation === "pairing"
+            ? "auth.jellyfin.identity.pairing_attempt"
+            : "auth.jellyfin.sign_in",
           request.id,
           JSON.stringify({ reason }),
           privacyHash("ip_address", request.ip, app.appConfig.encryptionKey),
@@ -159,6 +165,14 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         rateLimit: { max: 30, timeWindow: "1 minute" },
       },
       onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
         const statusCode =
           typeof error === "object" && error !== null && "statusCode" in error
             ? error.statusCode
@@ -247,6 +261,143 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
 
       recordedRequests.add(request);
       const response = authenticatedSessionResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/jellyfin/link/password",
+    {
+      bodyLimit: PASSWORD_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        const statusCode =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      const clientLimit = await clientCredentialRateLimit(request);
+      if (!clientLimit.isAllowed && clientLimit.isExceeded) {
+        setRateLimitHeaders(reply, clientLimit);
+        recordFailure(request, "rate_limited", "pairing");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Too many Jellyfin pairing attempts were received.",
+          statusCode: 429,
+        });
+      }
+      const globalLimit = await globalCredentialRateLimit(request);
+      if (!globalLimit.isAllowed && globalLimit.isExceeded) {
+        setRateLimitHeaders(reply, globalLimit);
+        recordFailure(request, "rate_limited", "pairing");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Jellyfin pairing is temporarily rate limited.",
+          statusCode: 429,
+        });
+      }
+      const parsed = jellyfinPasswordPairingRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        recordFailure(request, "invalid_request", "pairing");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin pairing request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let result;
+      try {
+        result = await signIn.pairWithPassword({
+          ...parsed.data,
+          ...requestContext(request),
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited", "pairing");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Jellyfin pairing is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinSignInServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "pairing",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin authentication is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      if (result.status === "denied") {
+        if (
+          result.reason === "identity_already_linked" ||
+          result.reason === "link_already_exists"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "identity_link_conflict",
+            message: "That Jellyfin identity cannot be linked to this account.",
+            statusCode: 409,
+          });
+        }
+        if (result.reason === "pairing_session_required") {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "pairing_not_available",
+            message: "This session is not eligible for Jellyfin pairing.",
+            statusCode: 409,
+          });
+        }
+        recordFailure(request, "authentication_denied", "pairing");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin username or password was not accepted.",
+          statusCode: 401,
+        });
+      }
+
+      recordedRequests.add(request);
+      const response = jellyfinIdentityPairingResponseSchema.parse({
         csrfToken: result.session.csrfToken,
         principal: result.session.principal,
       });
