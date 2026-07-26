@@ -140,6 +140,11 @@ Register the exact callback
 query, or fragment. Start requests accept at most one `returnPath`, currently `/` or
 `/settings`; all other redirect targets fail closed.
 
+For a newly created provider, `providerId` is predictably reserved as `oidc-{slug}`. This lets an
+operator register the exact callback and logout URLs at the identity provider before submitting
+client credentials to Omnifin. The identifier remains stable if the display slug is renamed later;
+an old identifier cannot be silently reused by another provider.
+
 The first start request may issue a short-lived preflight binding cookie and redirect
 once to the same start route before contacting the identity provider. Each created
 transaction then receives its own state-named HttpOnly binding cookie. A callback can

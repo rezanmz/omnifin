@@ -174,13 +174,13 @@ export class OidcProviderAdminService {
     if (!parsedInput.success || !this.#validContext(context)) {
       throw new OidcProviderAdminError("integrity_failure");
     }
-    const providerId = `oidc-${this.#nextId()}`;
+    const provider = parsedInput.data;
+    const providerId = `oidc-${provider.slug}`;
     const auditId = this.#nextId();
     if (!validIdentifier(providerId) || !validIdentifier(auditId)) {
       throw new OidcProviderAdminError("integrity_failure");
     }
     const now = this.#currentTime();
-    const provider = parsedInput.data;
     const encryptedClientSecret = provider.clientSecret
       ? this.#cipher.encrypt(provider.clientSecret, oidcClientSecretEncryptionContext(providerId))
       : null;
@@ -194,8 +194,8 @@ export class OidcProviderAdminService {
       this.#database.sqlite
         .transaction(() => {
           const conflict = this.#database.sqlite
-            .prepare("select id from oidc_providers where slug = ? or issuer = ? limit 1")
-            .get(provider.slug, provider.issuer);
+            .prepare("select id from oidc_providers where id = ? or slug = ? or issuer = ? limit 1")
+            .get(providerId, provider.slug, provider.issuer);
           if (conflict) throw new OidcProviderAdminError("provider_conflict");
           const count = this.#database.sqlite
             .prepare("select count(*) as count from oidc_providers")

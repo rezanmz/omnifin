@@ -305,7 +305,7 @@ describe("OIDC provider administration routes", () => {
         clientSecretConfigured: true,
         discoveryCheckedAt: null,
         discoveryState: "unchecked",
-        id: "oidc-admin-1",
+        id: "oidc-home-identity",
         slug: "home-identity",
       });
       expect(response.body).not.toContain(providerRequest.clientSecret);
@@ -439,10 +439,37 @@ describe("OIDC provider administration routes", () => {
         method: "POST" as const,
         url: "/v1/admin/auth/oidc/providers",
       };
-      expect((await app.inject(request)).statusCode).toBe(201);
+      const createdResponse = await app.inject(request);
+      expect(createdResponse.statusCode).toBe(201);
+      const created = oidcProviderAdminSchema.parse(createdResponse.json());
       const duplicate = await app.inject(request);
       expect(duplicate.statusCode).toBe(409);
       expect(duplicate.json()).toMatchObject({ error: { code: "oidc_provider_conflict" } });
+      expect(
+        app.database.sqlite.prepare("select count(*) as count from oidc_providers").get(),
+      ).toEqual({ count: 1 });
+
+      const renamed = await app.inject({
+        body: { ...providerRequest, slug: "renamed-identity" },
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(renamed.statusCode, renamed.body).toBe(200);
+      const staleIdCollision = await app.inject({
+        body: {
+          ...providerRequest,
+          approvedEndpointOrigins: ["https://replacement-id.example.test"],
+          issuer: "https://replacement-id.example.test/application/o/omnifin/",
+        },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      expect(staleIdCollision.statusCode).toBe(409);
+      expect(staleIdCollision.json()).toMatchObject({
+        error: { code: "oidc_provider_conflict" },
+      });
       expect(
         app.database.sqlite.prepare("select count(*) as count from oidc_providers").get(),
       ).toEqual({ count: 1 });

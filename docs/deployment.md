@@ -74,7 +74,8 @@ preview. The production container permits that HTTP exception only when
 default port binding is loopback-only. Do not carry that exception into a published
 network deployment. Register
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` exactly at the OIDC provider;
-do not derive it from proxy forwarding headers. The current branch deliberately has no
+for a new configuration, the administration UI can calculate `providerId` as `oidc-{slug}` before
+credentials are submitted. Do not derive callback URLs from proxy forwarding headers. The current branch deliberately has no
 environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
 client secrets and audits provider creation, replacement, validation, and guarded deletion. Role-mapping administration and the
 role-derived session invalidation boundary are implemented; mapping updates and the
