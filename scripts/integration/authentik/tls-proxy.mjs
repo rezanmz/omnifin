@@ -43,8 +43,22 @@ function remoteAddress(request) {
   return (request.socket.remoteAddress ?? "").replace(/^::ffff:/u, "");
 }
 
-function forward(targetPort) {
+function isBackchannelRequest(request) {
+  if (request.method !== "POST" || typeof request.url !== "string") return false;
+  try {
+    return (
+      new URL(request.url, "https://fixture.invalid").pathname ===
+      "/api/auth/oidc/backchannel/oidc-authentik"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function forward(targetPort, observeBackchannel = false) {
   return (request, response) => {
+    const backchannel = observeBackchannel && isBackchannelRequest(request);
+    if (backchannel) process.stdout.write('{"event":"fixture_backchannel_received"}\n');
     const host = request.headers.host ?? "";
     const upstream = httpRequest({
       headers: {
@@ -63,6 +77,11 @@ function forward(targetPort) {
     });
 
     upstream.once("response", (upstreamResponse) => {
+      if (backchannel) {
+        process.stdout.write(
+          `${JSON.stringify({ event: "fixture_backchannel_response", status: upstreamResponse.statusCode ?? 0 })}\n`,
+        );
+      }
       response.writeHead(
         upstreamResponse.statusCode ?? 502,
         upstreamResponse.statusMessage,
@@ -90,7 +109,7 @@ const tls = {
   key: readFileSync(required("OMNIFIN_FIXTURE_TLS_KEY")),
 };
 const servers = [
-  createServer(tls, forward(port("OMNIFIN_FIXTURE_WEB_UPSTREAM_PORT"))),
+  createServer(tls, forward(port("OMNIFIN_FIXTURE_WEB_UPSTREAM_PORT"), true)),
   createServer(tls, forward(port("OMNIFIN_FIXTURE_AUTHENTIK_UPSTREAM_PORT"))),
 ];
 for (const server of servers) {

@@ -94,6 +94,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(runnerSource, /allowedStages/u);
   assert.match(runnerSource, /\[a-z_\]\+/u);
   assert.doesNotMatch(runnerSource, /throw new FixtureError\([^)]*stderr/u);
+  assert.match(runnerSource, /backchannel_not_delivered/u);
+  assert.match(runnerSource, /backchannel_response_missing/u);
+  assert.match(runnerSource, /backchannel_response_\$\{responseMatch\[1\]\}/u);
 });
 
 test("pins an isolated Authentik topology without privileged host mounts", () => {

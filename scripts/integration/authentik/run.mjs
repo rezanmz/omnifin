@@ -446,56 +446,75 @@ async function main() {
       120_000,
     );
 
-    const browser = await runCommand("node", [browserScript], {
-      classifyFailure: ({ stderr }) => {
-        const match = stderr.match(
-          /"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u,
+    const classifyBrowserFailure = ({ stderr }) => {
+      const match = stderr.match(/"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u);
+      const allowedStages = new Set([
+        "backchannel_revocation",
+        "backchannel_trigger",
+        "configuration",
+        "first_browser_login",
+        "first_login_callback",
+        "first_login_consent",
+        "first_login_navigation",
+        "first_login_password",
+        "first_login_unrecognized",
+        "first_login_username",
+        "first_session",
+        "provider_create",
+        "provider_enable",
+        "provider_validate",
+        "public_provider",
+        "recovery_session",
+        "role_mapping",
+        "rp_logout",
+        "rp_session_revocation",
+        "second_browser_login",
+        "second_login_callback",
+        "second_login_consent",
+        "second_login_navigation",
+        "second_login_password",
+        "second_login_unrecognized",
+        "second_login_username",
+        "second_session",
+        "secret_leak_inspection",
+      ]);
+      return match && allowedStages.has(match[1])
+        ? `browser_flow_failed_${match[1]}`
+        : "browser_flow_failed";
+    };
+    let browser;
+    try {
+      browser = await runCommand("node", [browserScript], {
+        classifyFailure: classifyBrowserFailure,
+        env: {
+          OMNIFIN_FIXTURE_AUTHENTIK_ISSUER: issuer,
+          OMNIFIN_FIXTURE_AUTHENTIK_PASSWORD: secrets.authentikPassword,
+          OMNIFIN_FIXTURE_AUTHENTIK_TOKEN: secrets.authentikToken,
+          OMNIFIN_FIXTURE_CLIENT_ID: clientId,
+          OMNIFIN_FIXTURE_CLIENT_SECRET: secrets.clientSecret,
+          OMNIFIN_FIXTURE_RECOVERY_SECRET: secrets.recoverySecret,
+          OMNIFIN_FIXTURE_WEB_ORIGIN: webOrigin,
+        },
+        failureCategory: "browser_flow_failed",
+      });
+    } catch (error) {
+      if (
+        error instanceof FixtureError &&
+        error.category === "browser_flow_failed_backchannel_revocation"
+      ) {
+        const responseMatch = proxy.stdout.match(
+          /"event":"fixture_backchannel_response","status":(\d{3})/u,
         );
-        const allowedStages = new Set([
-          "backchannel_revocation",
-          "backchannel_trigger",
-          "configuration",
-          "first_browser_login",
-          "first_login_callback",
-          "first_login_consent",
-          "first_login_navigation",
-          "first_login_password",
-          "first_login_unrecognized",
-          "first_login_username",
-          "first_session",
-          "provider_create",
-          "provider_enable",
-          "provider_validate",
-          "public_provider",
-          "recovery_session",
-          "role_mapping",
-          "rp_logout",
-          "rp_session_revocation",
-          "second_browser_login",
-          "second_login_callback",
-          "second_login_consent",
-          "second_login_navigation",
-          "second_login_password",
-          "second_login_unrecognized",
-          "second_login_username",
-          "second_session",
-          "secret_leak_inspection",
-        ]);
-        return match && allowedStages.has(match[1])
-          ? `browser_flow_failed_${match[1]}`
-          : "browser_flow_failed";
-      },
-      env: {
-        OMNIFIN_FIXTURE_AUTHENTIK_ISSUER: issuer,
-        OMNIFIN_FIXTURE_AUTHENTIK_PASSWORD: secrets.authentikPassword,
-        OMNIFIN_FIXTURE_AUTHENTIK_TOKEN: secrets.authentikToken,
-        OMNIFIN_FIXTURE_CLIENT_ID: clientId,
-        OMNIFIN_FIXTURE_CLIENT_SECRET: secrets.clientSecret,
-        OMNIFIN_FIXTURE_RECOVERY_SECRET: secrets.recoverySecret,
-        OMNIFIN_FIXTURE_WEB_ORIGIN: webOrigin,
-      },
-      failureCategory: "browser_flow_failed",
-    });
+        if (responseMatch) {
+          throw new FixtureError(`backchannel_response_${responseMatch[1]}`);
+        }
+        if (proxy.stdout.includes("fixture_backchannel_received")) {
+          throw new FixtureError("backchannel_response_missing");
+        }
+        throw new FixtureError("backchannel_not_delivered");
+      }
+      throw error;
+    }
     if (!browser.stdout.includes("authentik_browser_checks_passed")) {
       throw new FixtureError("browser_flow_failed");
     }
