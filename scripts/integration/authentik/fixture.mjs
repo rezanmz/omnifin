@@ -87,6 +87,21 @@ export function reportFor(checks = CHECKS) {
   };
 }
 
+export function failureReportFor(category) {
+  if (typeof category !== "string" || !/^[a-z][a-z0-9_]{0,127}$/u.test(category)) {
+    throw new Error("fixture_error_category_invalid");
+  }
+  return {
+    checks: [],
+    errorCategory: category,
+    mode: "isolated_fixture",
+    passed: false,
+    schemaVersion: 1,
+    service: "authentik",
+    upstreamVersion: AUTHENTIK_VERSION,
+  };
+}
+
 export function secretLeakDetected(logs, secrets) {
   if (!Array.isArray(logs) || !Array.isArray(secrets)) throw new Error("leak_input_invalid");
   return secrets

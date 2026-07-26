@@ -14,6 +14,7 @@ import {
   authentikFixture,
   djangoPasswordHash,
   dotenv,
+  failureReportFor,
   reportFor,
   secretLeakDetected,
   selectPrivateHost,
@@ -142,6 +143,16 @@ async function reservePort(host) {
 function writePrivateFile(path, contents, mode = 0o600) {
   writeFileSync(path, contents, { encoding: "utf8", mode });
   chmodSync(path, mode);
+}
+
+function writeReport(output, report) {
+  if (isAbsolute(output)) throw new FixtureError("output_path_invalid");
+  const outputPath = resolve(root, output);
+  if (relative(root, outputPath).startsWith("..")) {
+    throw new FixtureError("output_path_invalid");
+  }
+  mkdirSync(dirname(outputPath), { recursive: true });
+  writePrivateFile(outputPath, `${JSON.stringify(report, null, 2)}\n`);
 }
 
 async function generateCertificate(directory, host) {
@@ -299,8 +310,7 @@ async function waitForHttp(url, runtime) {
   );
 }
 
-async function main() {
-  const options = parseArguments(process.argv.slice(2));
+async function main(options) {
   if (!options.skipBuild) {
     await runCommand("pnpm", ["build"], {
       failureCategory: "application_build_failed",
@@ -544,13 +554,7 @@ async function main() {
     }
 
     const report = reportFor(authentikFixture.checks);
-    if (isAbsolute(options.output)) throw new FixtureError("output_path_invalid");
-    const outputPath = resolve(root, options.output);
-    if (relative(root, outputPath).startsWith("..")) {
-      throw new FixtureError("output_path_invalid");
-    }
-    mkdirSync(dirname(outputPath), { recursive: true });
-    writePrivateFile(outputPath, `${JSON.stringify(report, null, 2)}\n`);
+    writeReport(options.output, report);
     process.stdout.write(`${JSON.stringify(report)}\n`);
   } finally {
     for (const runtime of [...runtimes].reverse()) await stopRuntime(runtime);
@@ -565,10 +569,19 @@ async function main() {
   }
 }
 
+let parsedOptions;
 try {
-  await main();
+  parsedOptions = parseArguments(process.argv.slice(2));
+  await main(parsedOptions);
 } catch (error) {
   const category = error instanceof FixtureError ? error.category : "fixture_failed";
+  if (parsedOptions) {
+    try {
+      writeReport(parsedOptions.output, failureReportFor(category));
+    } catch {
+      // Invalid output destinations fail closed without creating another artifact.
+    }
+  }
   process.stderr.write(`${JSON.stringify({ category, event: "authentik_fixture_failed" })}\n`);
   process.exitCode = 1;
 }

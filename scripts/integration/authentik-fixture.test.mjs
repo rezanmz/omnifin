@@ -8,6 +8,7 @@ import {
   authentikFixture,
   djangoPasswordHash,
   dotenv,
+  failureReportFor,
   isPrivateIpv4,
   reportFor,
   secretLeakDetected,
@@ -78,6 +79,13 @@ test("emits only the bounded, sanitized Authentik report contract", () => {
   const serialized = JSON.stringify(report);
   assert.doesNotMatch(serialized, /https?:\/\/|@|-----BEGIN/iu);
   assert.throws(() => reportFor(["authorization_code_pkce"]), /fixture_checks_incomplete/u);
+
+  const failure = failureReportFor("backchannel_send_failed");
+  assert.equal(failure.passed, false);
+  assert.deepEqual(failure.checks, []);
+  assert.equal(failure.errorCategory, "backchannel_send_failed");
+  assert.doesNotMatch(JSON.stringify(failure), /https?:\/\/|@|-----BEGIN/iu);
+  assert.throws(() => failureReportFor("invalid category"), /fixture_error_category_invalid/u);
 });
 
 test("detects generated secrets before runtime logs can be retained", () => {
