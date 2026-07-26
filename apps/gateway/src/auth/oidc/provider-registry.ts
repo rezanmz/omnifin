@@ -1,15 +1,20 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import {
   ClientSecretBasic,
   ClientSecretPost,
+  Configuration,
   None,
+  authorizationCodeGrant,
+  buildAuthorizationUrl,
+  buildEndSessionUrl,
   customFetch,
   discovery,
   enableNonRepudiationChecks,
   type ClientAuth,
   type ClientMetadata,
-  type Configuration,
+  type AuthorizationCodeGrantChecks,
+  type DiscoveryRequestOptions,
   type ServerMetadata,
 } from "openid-client";
 import { oidcProviders } from "../../db/schema.js";
@@ -38,6 +43,8 @@ const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SCOPE_TOKEN_PATTERN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/;
 const WELL_KNOWN_PATH_SEGMENT_PATTERN = /(?:^|\/)\.well-known(?:\/|$)/;
+const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const RUNTIME_BINDING_KEY_CONTEXT = "omnifin:v1:oidc-provider-runtime-binding-key";
 
 const ID_TOKEN_SIGNING_ALGORITHMS = new Set([
   "RS256",
@@ -116,30 +123,126 @@ export interface DiscoveredOidcProvider {
 }
 
 const runtimeConstructorToken = Symbol("oidc-provider-runtime");
+declare const runtimeBindingBrand: unique symbol;
+
+export type OidcProviderRuntimeBinding = string & {
+  readonly [runtimeBindingBrand]: true;
+};
+
+interface ValidatedOidcRuntimeEndpoints {
+  readonly authorization: string;
+  readonly endSession: string | null;
+  readonly jwks: string;
+  readonly token: string;
+  readonly userInfo: string | null;
+}
+
+interface OidcProviderRuntimeInternals {
+  readonly binding: OidcProviderRuntimeBinding;
+  readonly configuration: Configuration;
+  readonly endpoints: ValidatedOidcRuntimeEndpoints;
+}
+
+const runtimeInternals = new WeakMap<OidcProviderRuntime, OidcProviderRuntimeInternals>();
 
 /**
- * Gateway-only protocol state. The validated Configuration is intentionally
- * non-enumerable and the handle refuses JSON serialization; HTTP responses must
+ * Gateway-only protocol state. Validated client internals are intentionally
+ * unreachable and the handle refuses JSON serialization; HTTP responses must
  * select the sanitized `provider` snapshot explicitly.
  */
-export class OidcProviderRuntime {
-  readonly #configuration: Configuration;
+export interface OidcProviderRuntime {
+  readonly provider: DiscoveredOidcProvider;
+  toJSON(): never;
+}
+
+class OidcProviderRuntimeHandle implements OidcProviderRuntime {
   public readonly provider: DiscoveredOidcProvider;
 
   public constructor(
     token: typeof runtimeConstructorToken,
     configuration: Configuration,
     provider: DiscoveredOidcProvider,
+    binding: OidcProviderRuntimeBinding,
+    endpoints: ValidatedOidcRuntimeEndpoints,
   ) {
     if (token !== runtimeConstructorToken) throw registryError("oidc_provider_misconfigured");
-    this.#configuration = configuration;
     this.provider = provider;
+    runtimeInternals.set(
+      this,
+      Object.freeze({ binding, configuration, endpoints: Object.freeze(endpoints) }),
+    );
     Object.freeze(this);
   }
 
   public toJSON(): never {
     throw new TypeError("OIDC provider runtime handles cannot be serialized.");
   }
+}
+
+export interface OidcRuntimeAuthorizationCodeGrantResult {
+  readonly claims: unknown;
+  readonly idToken: string | undefined;
+}
+
+function requireRuntimeInternals(runtime: OidcProviderRuntime): OidcProviderRuntimeInternals {
+  const internals = runtimeInternals.get(runtime);
+  if (!internals) throw registryError("oidc_provider_misconfigured");
+  return internals;
+}
+
+/** Gateway-internal protocol capability. Do not re-export from the package root. */
+export function oidcProviderRuntimeBinding(
+  runtime: OidcProviderRuntime,
+): OidcProviderRuntimeBinding {
+  return requireRuntimeInternals(runtime).binding;
+}
+
+/** Gateway-internal protocol capability. Do not re-export from the package root. */
+export function buildOidcRuntimeAuthorizationUrl(
+  runtime: OidcProviderRuntime,
+  parameters: Readonly<Record<string, string>>,
+): URL {
+  const internals = requireRuntimeInternals(runtime);
+  const authorizationUrl = buildAuthorizationUrl(internals.configuration, parameters);
+  const expectedEndpoint = new URL(internals.endpoints.authorization);
+  const actualEndpoint = new URL(authorizationUrl);
+  expectedEndpoint.search = "";
+  actualEndpoint.search = "";
+  if (actualEndpoint.href !== expectedEndpoint.href) {
+    throw registryError("oidc_provider_misconfigured");
+  }
+  return authorizationUrl;
+}
+
+/** Gateway-internal protocol capability. It deliberately drops access and refresh tokens. */
+export async function executeOidcRuntimeAuthorizationCodeGrant(
+  runtime: OidcProviderRuntime,
+  currentUrl: URL,
+  checks: Readonly<AuthorizationCodeGrantChecks>,
+): Promise<OidcRuntimeAuthorizationCodeGrantResult> {
+  const { configuration } = requireRuntimeInternals(runtime);
+  const tokens = await authorizationCodeGrant(configuration, currentUrl, checks);
+  return Object.freeze({ claims: tokens.claims(), idToken: tokens.id_token });
+}
+
+/** Gateway-internal protocol capability. Do not re-export from the package root. */
+export function buildOidcRuntimeEndSessionUrl(
+  runtime: OidcProviderRuntime,
+  parameters: Readonly<Record<string, string>>,
+): URL {
+  const internals = requireRuntimeInternals(runtime);
+  if (internals.endpoints.endSession === null) {
+    throw registryError("oidc_provider_misconfigured");
+  }
+  const endSessionUrl = buildEndSessionUrl(internals.configuration, parameters);
+  const expectedEndpoint = new URL(internals.endpoints.endSession);
+  const actualEndpoint = new URL(endSessionUrl);
+  expectedEndpoint.search = "";
+  actualEndpoint.search = "";
+  if (actualEndpoint.href !== expectedEndpoint.href) {
+    throw registryError("oidc_provider_misconfigured");
+  }
+  return endSessionUrl;
 }
 
 export interface OidcProviderRegistryConfig {
@@ -149,7 +252,13 @@ export interface OidcProviderRegistryConfig {
 export interface OidcProviderRegistryDependencies {
   readonly clock?: () => Date;
   readonly createSafeFetch?: typeof createOidcSafeFetch;
-  readonly discover?: typeof discovery;
+  readonly discover?: (
+    server: URL,
+    clientId: string,
+    metadata?: Partial<ClientMetadata> | string,
+    clientAuthentication?: ClientAuth,
+    options?: DiscoveryRequestOptions,
+  ) => Promise<unknown>;
 }
 
 interface ParsedProviderBase {
@@ -456,13 +565,12 @@ function requireApprovedEndpoint(value: unknown, approvedOrigins: ReadonlySet<st
   return endpoint.href;
 }
 
-function validateOptionalApprovedEndpoint(
+function optionalApprovedEndpoint(
   value: unknown,
   approvedOrigins: ReadonlySet<string>,
-): boolean {
-  if (value === undefined) return false;
-  requireApprovedEndpoint(value, approvedOrigins);
-  return true;
+): string | null {
+  if (value === undefined) return null;
+  return requireApprovedEndpoint(value, approvedOrigins);
 }
 
 function optionalMetadataBoolean(value: unknown): boolean {
@@ -474,7 +582,10 @@ function optionalMetadataBoolean(value: unknown): boolean {
 function validateMetadata(
   configuration: Configuration,
   provider: ParsedProvider,
-): OidcProviderCapabilities {
+): {
+  readonly capabilities: OidcProviderCapabilities;
+  readonly endpoints: ValidatedOidcRuntimeEndpoints;
+} {
   const metadata: Readonly<ServerMetadata> = configuration.serverMetadata();
   const client: Readonly<ClientMetadata> = configuration.clientMetadata();
   if (
@@ -490,9 +601,12 @@ function validateMetadata(
   requireMetadataArray(client.grant_types, "authorization_code");
 
   const approvedOrigins = new Set(provider.approvedOrigins);
-  requireApprovedEndpoint(metadata.authorization_endpoint, approvedOrigins);
-  requireApprovedEndpoint(metadata.token_endpoint, approvedOrigins);
-  requireApprovedEndpoint(metadata.jwks_uri, approvedOrigins);
+  const authorizationEndpoint = requireApprovedEndpoint(
+    metadata.authorization_endpoint,
+    approvedOrigins,
+  );
+  const tokenEndpoint = requireApprovedEndpoint(metadata.token_endpoint, approvedOrigins);
+  const jwksEndpoint = requireApprovedEndpoint(metadata.jwks_uri, approvedOrigins);
   requireMetadataArray(metadata.response_types_supported, "code");
   requireMetadataArray(metadata.grant_types_supported, "authorization_code");
   requireMetadataArray(metadata.code_challenge_methods_supported, "S256");
@@ -508,6 +622,11 @@ function validateMetadata(
     metadata.frontchannel_logout_session_supported,
   );
   const backChannelSession = optionalMetadataBoolean(metadata.backchannel_logout_session_supported);
+  const endSessionEndpoint = optionalApprovedEndpoint(
+    metadata.end_session_endpoint,
+    approvedOrigins,
+  );
+  const userInfoEndpoint = optionalApprovedEndpoint(metadata.userinfo_endpoint, approvedOrigins);
   const capabilities: OidcProviderCapabilities = {
     authorizationCodeFlow: true,
     idTokenSigningAlg: provider.idTokenSigningAlg,
@@ -516,14 +635,23 @@ function validateMetadata(
       backChannelSession: backChannel && backChannelSession,
       frontChannel,
       frontChannelSession: frontChannel && frontChannelSession,
-      rpInitiated: validateOptionalApprovedEndpoint(metadata.end_session_endpoint, approvedOrigins),
+      rpInitiated: endSessionEndpoint !== null,
     }),
     pkceS256: true,
     schemaVersion: 1,
     tokenEndpointAuthMethod: provider.tokenEndpointAuthMethod,
-    userInfo: validateOptionalApprovedEndpoint(metadata.userinfo_endpoint, approvedOrigins),
+    userInfo: userInfoEndpoint !== null,
   };
-  return Object.freeze(capabilities);
+  return Object.freeze({
+    capabilities: Object.freeze(capabilities),
+    endpoints: Object.freeze({
+      authorization: authorizationEndpoint,
+      endSession: endSessionEndpoint,
+      jwks: jwksEndpoint,
+      token: tokenEndpoint,
+      userInfo: userInfoEndpoint,
+    }),
+  });
 }
 
 function validatedTimestampMilliseconds(value: unknown): number {
@@ -576,6 +704,33 @@ function providerConfigFingerprint(record: ProviderRecord): string {
   return digest.digest("base64url");
 }
 
+function createProviderRuntimeBinding(
+  record: ProviderRecord,
+  capabilities: OidcProviderCapabilities,
+  endpoints: ValidatedOidcRuntimeEndpoints,
+  key: Buffer,
+): OidcProviderRuntimeBinding {
+  const digest = createHmac("sha256", key);
+  const fields: ReadonlyArray<readonly [string, string]> = [
+    ["providerConfigFingerprint", providerConfigFingerprint(record)],
+    ["capabilities", JSON.stringify(capabilities)],
+    ["authorizationEndpoint", endpoints.authorization],
+    ["tokenEndpoint", endpoints.token],
+    ["jwksEndpoint", endpoints.jwks],
+    ["endSessionEndpoint", endpoints.endSession ?? ""],
+    ["userInfoEndpoint", endpoints.userInfo ?? ""],
+  ];
+  for (const [name, value] of fields) {
+    digest.update(`${name}:${Buffer.byteLength(value, "utf8")}:`, "utf8");
+    digest.update(value, "utf8");
+  }
+  const binding = digest.digest("base64url");
+  if (!OPAQUE_256_BIT_TOKEN_PATTERN.test(binding)) {
+    throw registryError("oidc_provider_misconfigured");
+  }
+  return binding as OidcProviderRuntimeBinding;
+}
+
 function providerSnapshot(record: ProviderRecord) {
   return and(
     eq(oidcProviders.id, record.id),
@@ -608,8 +763,9 @@ export class OidcProviderRegistry {
   readonly #clock: () => Date;
   readonly #createSafeFetch: typeof createOidcSafeFetch;
   readonly #database: DatabaseHandle;
-  readonly #discover: typeof discovery;
+  readonly #discover: NonNullable<OidcProviderRegistryDependencies["discover"]>;
   readonly #inFlightDiscoveries = new Map<string, InFlightOidcProviderDiscovery>();
+  readonly #runtimeBindingKey: Buffer;
   readonly #runtimeCache = new Map<string, CachedOidcProviderRuntime>();
 
   public constructor(
@@ -622,6 +778,9 @@ export class OidcProviderRegistry {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createSafeFetch = dependencies.createSafeFetch ?? createOidcSafeFetch;
     this.#discover = dependencies.discover ?? discovery;
+    this.#runtimeBindingKey = createHmac("sha256", config.encryptionKey)
+      .update(RUNTIME_BINDING_KEY_CONTEXT, "utf8")
+      .digest();
   }
 
   public async discover(providerId: string): Promise<OidcProviderRuntime> {
@@ -701,7 +860,7 @@ export class OidcProviderRegistry {
 
     let configuration: Configuration;
     try {
-      configuration = await this.#discover(
+      const discoveredConfiguration = await this.#discover(
         new URL(provider.issuerUrl),
         provider.clientId,
         {
@@ -717,14 +876,22 @@ export class OidcProviderRegistry {
           timeout: OIDC_REQUEST_TIMEOUT_MS / 1_000,
         },
       );
+      if (
+        !(discoveredConfiguration instanceof Configuration) ||
+        Object.getPrototypeOf(discoveredConfiguration) !== Configuration.prototype
+      ) {
+        throw registryError("oidc_provider_discovery_failed", true);
+      }
+      configuration = discoveredConfiguration;
     } catch {
       this.#persistFailed(record);
       throw registryError("oidc_provider_discovery_failed", true);
     }
 
     let capabilities: OidcProviderCapabilities;
+    let endpoints: ValidatedOidcRuntimeEndpoints;
     try {
-      capabilities = validateMetadata(configuration, provider);
+      ({ capabilities, endpoints } = validateMetadata(configuration, provider));
       enableNonRepudiationChecks(configuration);
     } catch {
       this.#persistFailed(record);
@@ -748,10 +915,12 @@ export class OidcProviderRegistry {
       issuer: provider.issuerIdentifier,
       scopes: provider.scopes,
     });
-    const runtime = new OidcProviderRuntime(
+    const runtime = new OidcProviderRuntimeHandle(
       runtimeConstructorToken,
       configuration,
       sanitizedProvider,
+      createProviderRuntimeBinding(record, capabilities, endpoints, this.#runtimeBindingKey),
+      endpoints,
     );
     this.#cacheRuntime(record.id, fingerprint, runtime, cacheTime);
     return runtime;

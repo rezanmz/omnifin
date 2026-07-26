@@ -5,6 +5,7 @@ import { TextDecoder } from "node:util";
 import type { AppConfig } from "../../config.js";
 import type { DatabaseHandle } from "../../db/client.js";
 import { EnvelopeCipher, hashToken, randomToken } from "../../security/crypto.js";
+import type { OidcProviderRuntimeBinding } from "./provider-registry.js";
 
 export const OIDC_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 export const OIDC_BROWSER_BINDING_COOKIE_NAME = "__Host-omnifin_oidc_binding";
@@ -58,6 +59,7 @@ export interface OidcAuthorizationTransactionDependencies {
 export interface CreateOidcAuthorizationTransactionInput {
   browserBindingToken?: string;
   providerId: string;
+  providerRuntimeBinding: OidcProviderRuntimeBinding;
   returnPath?: string;
 }
 
@@ -67,6 +69,8 @@ export interface CreatedOidcAuthorizationTransaction {
   codeChallengeMethod: "S256";
   expiresAt: Date;
   nonce: string;
+  providerId: string;
+  providerRuntimeBinding: OidcProviderRuntimeBinding;
   redirectUri: string;
   returnPath: string;
   state: string;
@@ -82,8 +86,10 @@ export interface ConsumedOidcAuthorizationTransaction {
   codeVerifier: string;
   createdAt: Date;
   expiresAt: Date;
+  expectedState: string;
   nonce: string;
   providerId: string;
+  providerRuntimeBinding: OidcProviderRuntimeBinding;
   redirectUri: string;
   returnPath: string;
   transactionId: string;
@@ -114,6 +120,13 @@ interface StoredOidcAuthorizationTransaction {
   returnPath: string;
 }
 
+interface EncryptedOidcAuthorizationTransactionPayload {
+  readonly nonce: string;
+  readonly providerId: string;
+  readonly providerRuntimeBinding: OidcProviderRuntimeBinding;
+  readonly schemaVersion: 1;
+}
+
 function invalidTransaction(): never {
   throw new OidcAuthorizationTransactionError("oidc_transaction_invalid");
 }
@@ -134,6 +147,10 @@ function validProviderId(value: unknown): value is string {
 
 function validCodeVerifier(value: unknown): value is string {
   return typeof value === "string" && PKCE_CODE_VERIFIER_PATTERN.test(value);
+}
+
+function validRuntimeBinding(value: unknown): value is OidcProviderRuntimeBinding {
+  return isCanonical256BitToken(value);
 }
 
 function currentTime(clock: () => Date) {
@@ -287,6 +304,45 @@ function nonceContext(transactionId: string) {
   return `oidc-transaction:${transactionId}:nonce`;
 }
 
+function serializeEncryptedTransactionPayload(
+  nonce: string,
+  providerId: string,
+  providerRuntimeBinding: OidcProviderRuntimeBinding,
+) {
+  return JSON.stringify({ nonce, providerId, providerRuntimeBinding, schemaVersion: 1 });
+}
+
+function parseEncryptedTransactionPayload(
+  plaintext: string,
+): EncryptedOidcAuthorizationTransactionPayload {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(plaintext) as unknown;
+  } catch {
+    invalidTransaction();
+  }
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    Object.getPrototypeOf(payload) !== Object.prototype ||
+    Object.keys(payload).sort().join(",") !==
+      "nonce,providerId,providerRuntimeBinding,schemaVersion"
+  ) {
+    invalidTransaction();
+  }
+  const candidate = payload as Record<string, unknown>;
+  if (
+    candidate.schemaVersion !== 1 ||
+    !isCanonical256BitToken(candidate.nonce) ||
+    !validProviderId(candidate.providerId) ||
+    !validRuntimeBinding(candidate.providerRuntimeBinding)
+  ) {
+    invalidTransaction();
+  }
+  return candidate as unknown as EncryptedOidcAuthorizationTransactionPayload;
+}
+
 export class OidcAuthorizationTransactionService {
   private readonly baseUrl: URL;
   private readonly calculateCodeChallenge: (codeVerifier: string) => Promise<string>;
@@ -320,7 +376,12 @@ export class OidcAuthorizationTransactionService {
   public async create(
     input: CreateOidcAuthorizationTransactionInput,
   ): Promise<CreatedOidcAuthorizationTransaction> {
-    if (!input || typeof input !== "object" || !validProviderId(input.providerId)) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !validProviderId(input.providerId) ||
+      !validRuntimeBinding(input.providerRuntimeBinding)
+    ) {
       invalidTransaction();
     }
     const returnPath = canonicalLocalReturnPath(
@@ -364,7 +425,14 @@ export class OidcAuthorizationTransactionService {
           codeVerifier,
           codeVerifierContext(transactionId),
         ),
-        encryptedNonce: this.cipher.encrypt(nonce, nonceContext(transactionId)),
+        encryptedNonce: this.cipher.encrypt(
+          serializeEncryptedTransactionPayload(
+            nonce,
+            input.providerId,
+            input.providerRuntimeBinding,
+          ),
+          nonceContext(transactionId),
+        ),
         expiresAt: expiresAt.getTime(),
         id: transactionId,
         providerId: input.providerId,
@@ -380,6 +448,8 @@ export class OidcAuthorizationTransactionService {
         codeChallengeMethod: "S256",
         expiresAt,
         nonce,
+        providerId: input.providerId,
+        providerRuntimeBinding: input.providerRuntimeBinding,
         redirectUri,
         returnPath,
         state,
@@ -456,16 +526,18 @@ export class OidcAuthorizationTransactionService {
     // Decrypt only after the atomic update has committed. Authentication-tag
     // failures therefore cannot make a compromised transaction replayable.
     let codeVerifier: string;
-    let nonce: string;
+    let encryptedPayload: EncryptedOidcAuthorizationTransactionPayload;
     try {
       codeVerifier = this.cipher.decrypt(row.encryptedCodeVerifier, codeVerifierContext(row.id));
-      nonce = this.cipher.decrypt(row.encryptedNonce, nonceContext(row.id));
+      encryptedPayload = parseEncryptedTransactionPayload(
+        this.cipher.decrypt(row.encryptedNonce, nonceContext(row.id)),
+      );
     } catch {
       invalidTransaction();
     }
     if (
       !validCodeVerifier(codeVerifier) ||
-      !isCanonical256BitToken(nonce) ||
+      encryptedPayload.providerId !== input.providerId ||
       row.providerId !== input.providerId ||
       row.redirectUri !== canonicalOidcCallbackUri(this.baseUrl, row.providerId)
     ) {
@@ -486,8 +558,10 @@ export class OidcAuthorizationTransactionService {
       codeVerifier,
       createdAt: new Date(row.createdAt),
       expiresAt: new Date(row.expiresAt),
-      nonce,
+      expectedState: input.state,
+      nonce: encryptedPayload.nonce,
       providerId: row.providerId,
+      providerRuntimeBinding: encryptedPayload.providerRuntimeBinding,
       redirectUri: row.redirectUri,
       returnPath,
       transactionId: row.id,

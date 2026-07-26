@@ -7,6 +7,7 @@ import {
   OIDC_BROWSER_BINDING_COOKIE_NAME,
   OidcAuthorizationTransactionError,
   OidcAuthorizationTransactionService,
+  type CreateOidcAuthorizationTransactionInput,
   type OidcAuthorizationTransactionDependencies,
   writeOidcBrowserBindingCookie,
 } from "../src/auth/oidc/authorization-transaction.js";
@@ -14,6 +15,7 @@ import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { authTransactions, oidcProviders } from "../src/db/schema.js";
 import { EnvelopeCipher, hashToken } from "../src/security/crypto.js";
+import type { OidcProviderRuntimeBinding } from "../src/auth/oidc/provider-registry.js";
 
 const initialTime = new Date("2026-07-25T12:00:00.000Z");
 
@@ -46,6 +48,18 @@ function opaqueToken(fill: number) {
   return Buffer.alloc(32, fill).toString("base64url");
 }
 
+const providerRuntimeBinding = opaqueToken(200) as OidcProviderRuntimeBinding;
+
+class TestOidcAuthorizationTransactionService extends OidcAuthorizationTransactionService {
+  public override create(
+    input: Omit<CreateOidcAuthorizationTransactionInput, "providerRuntimeBinding"> & {
+      providerRuntimeBinding?: OidcProviderRuntimeBinding;
+    },
+  ) {
+    return super.create({ providerRuntimeBinding, ...input });
+  }
+}
+
 function createHarness(database: DatabaseHandle) {
   let now = new Date(initialTime);
   let identifier = 0;
@@ -65,7 +79,11 @@ function createHarness(database: DatabaseHandle) {
     advance(milliseconds: number) {
       now = new Date(now.getTime() + milliseconds);
     },
-    service: new OidcAuthorizationTransactionService(database, transactionConfig(), dependencies),
+    service: new TestOidcAuthorizationTransactionService(
+      database,
+      transactionConfig(),
+      dependencies,
+    ),
   };
 }
 
@@ -134,6 +152,8 @@ describe("OidcAuthorizationTransactionService", () => {
       expect(created).toMatchObject({
         codeChallengeMethod: "S256",
         expiresAt: new Date("2026-07-25T12:10:00.000Z"),
+        providerId: "oidc-home",
+        providerRuntimeBinding,
         redirectUri: "https://omnifin.example/api/auth/oidc/callback/oidc-home",
         returnPath: "/library?tab=movies",
       });
@@ -162,7 +182,9 @@ describe("OidcAuthorizationTransactionService", () => {
 
       expect(consumed).toMatchObject({
         codeVerifier: opaqueToken(81),
+        expectedState: created.state,
         nonce: created.nonce,
+        providerRuntimeBinding,
         redirectUri: created.redirectUri,
         returnPath: created.returnPath,
       });
@@ -174,6 +196,16 @@ describe("OidcAuthorizationTransactionService", () => {
           `oidc-transaction:${stored?.id}:code-verifier`,
         ),
       ).toBe(opaqueToken(81));
+      expect(
+        JSON.parse(
+          cipher.decrypt(stored?.encryptedNonce ?? "", `oidc-transaction:${stored?.id}:nonce`),
+        ),
+      ).toEqual({
+        nonce: created.nonce,
+        providerId: "oidc-home",
+        providerRuntimeBinding,
+        schemaVersion: 1,
+      });
     } finally {
       database.close();
     }
@@ -226,7 +258,7 @@ describe("OidcAuthorizationTransactionService", () => {
     try {
       database.migrate();
       seedProvider(database);
-      const service = new OidcAuthorizationTransactionService(database, transactionConfig());
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig());
 
       const created = await service.create({
         browserBindingToken: "malformed-cookie",
@@ -447,6 +479,16 @@ describe("OidcAuthorizationTransactionService", () => {
         [oversizedProvider],
       );
       await expectInvalidTransactionAsync(() =>
+        service.create({
+          providerId: "oidc-home",
+          providerRuntimeBinding: "malformed" as OidcProviderRuntimeBinding,
+        }),
+      );
+      const strictService = new OidcAuthorizationTransactionService(database, transactionConfig());
+      await expectInvalidTransactionAsync(() =>
+        strictService.create({ providerId: "oidc-home" } as never),
+      );
+      await expectInvalidTransactionAsync(() =>
         service.create({ providerId: "oidc-home", returnPath: null as never }),
       );
       expect(database.db.select().from(authTransactions).all()).toHaveLength(0);
@@ -481,6 +523,35 @@ describe("OidcAuthorizationTransactionService", () => {
         [created.browserBindingToken, created.nonce, created.state],
       );
 
+      expect(database.db.select().from(authTransactions).get()?.consumedAt).toEqual(initialTime);
+      expectInvalidTransaction(() => service.consume(input), [created.state]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed after atomically consuming a legacy nonce-only encrypted payload", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const created = await service.create({ providerId: "oidc-home" });
+      const stored = database.db.select().from(authTransactions).get();
+      const legacyPayload = new EnvelopeCipher(transactionConfig().encryptionKey).encrypt(
+        created.nonce,
+        `oidc-transaction:${stored?.id}:nonce`,
+      );
+      database.sqlite
+        .prepare("update auth_transactions set encrypted_nonce = ? where id = ?")
+        .run(legacyPayload, stored?.id);
+
+      const input = {
+        browserBindingToken: created.browserBindingToken,
+        providerId: "oidc-home",
+        state: created.state,
+      };
+      expectInvalidTransaction(() => service.consume(input), [created.nonce, created.state]);
       expect(database.db.select().from(authTransactions).get()?.consumedAt).toEqual(initialTime);
       expectInvalidTransaction(() => service.consume(input), [created.state]);
     } finally {
@@ -578,7 +649,7 @@ describe("OidcAuthorizationTransactionService", () => {
         environment: "development",
         secureCookies: false,
       });
-      const localService = new OidcAuthorizationTransactionService(database, localConfig, {
+      const localService = new TestOidcAuthorizationTransactionService(database, localConfig, {
         createBrowserBinding: () => opaqueToken(201),
         createCodeVerifier: () => opaqueToken(202),
         createId: () => "oidc-local-transaction",
@@ -641,7 +712,7 @@ describe("OidcAuthorizationTransactionService", () => {
       const ids = ["transaction-1", "transaction-1", "transaction-2", "transaction-2"];
       const states = [opaqueToken(1), opaqueToken(1), opaqueToken(1), opaqueToken(2)];
       let index = -1;
-      const service = new OidcAuthorizationTransactionService(database, transactionConfig(), {
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
         clock: () => new Date(initialTime),
         createBrowserBinding: () => opaqueToken(44),
         createCodeVerifier: () => opaqueToken(90 + Math.max(index, 0)),
@@ -719,7 +790,7 @@ describe("OidcAuthorizationTransactionService", () => {
       const privateNonce = opaqueToken(223);
       const privateState = opaqueToken(224);
       const privateReturnPath = "/private?continuation=classified";
-      const service = new OidcAuthorizationTransactionService(database, transactionConfig(), {
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
         clock: () => new Date(initialTime),
         createBrowserBinding: () => privateBinding,
         createCodeVerifier: () => privateVerifier,

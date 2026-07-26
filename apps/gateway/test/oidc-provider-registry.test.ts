@@ -13,6 +13,7 @@ import {
   OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS,
   OidcProviderRegistry,
   oidcClientSecretEncryptionContext,
+  oidcProviderRuntimeBinding,
   type OidcProviderRegistryDependencies,
 } from "../src/auth/oidc/provider-registry.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
@@ -217,6 +218,8 @@ describe("OidcProviderRegistry", () => {
       expect(Object.isFrozen(runtime.provider.capabilities)).toBe(true);
       expect(Object.isFrozen(runtime.provider.capabilities.logout)).toBe(true);
       expect(Object.keys(runtime)).toEqual(["provider"]);
+      expect(Reflect.ownKeys(runtime)).toEqual(["provider"]);
+      expect(oidcProviderRuntimeBinding(runtime)).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect("configuration" in runtime).toBe(false);
       expect((runtime as unknown as Record<PropertyKey, unknown>)[customFetch]).toBeUndefined();
       expect(
