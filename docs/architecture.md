@@ -11,8 +11,8 @@ the roadmap records when each area has passed its verification gate.
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
-> authentication audits, recovery access, and encrypted OIDC provider and role-mapping
-> administration now exist, while provider updates, complete authorization,
+> authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
+> administration now exist, while mapping updates, complete authorization,
 > connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -30,8 +30,8 @@ direct Jellyfin password and Quick Connect exchanges, recovery access, and authe
 also migrates SQLite, validates public configuration, redacts structured logs, and
 provides isolated connector fixture and probe tooling.
 
-The provider-administration boundary can create, list, and freshly validate encrypted, audited
-OIDC records and can list, create, and delete exact role mappings. Provider/mapping updates and its
+The provider-administration boundary can create, list, replace, freshly validate, and safely delete
+encrypted, audited OIDC records and can list, create, and delete exact role mappings. Mapping updates and its
 operator interface remain incomplete.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
@@ -169,6 +169,11 @@ Role-mapping mutations are serialized with sanitized audit writes and session re
 change invalidates active authority derived from the affected provider's default or mapped role;
 manual roles and recovery sessions are not changed. Mapping resolution remains deterministic by
 priority and denies ambiguous highest-priority roles.
+
+Provider replacement resets discovery evidence and pending authorization transactions whenever
+runtime inputs change, then revokes active OIDC sessions for that provider. Linked issuer changes
+are rejected. Provider deletion is restricted to disabled records without external identities, so
+the operation cannot silently orphan or relink an account.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the

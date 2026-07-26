@@ -12,6 +12,9 @@ import {
   identityLinksResponseSchema,
   oidcProviderAdminSchema,
   oidcProviderCreateRequestSchema,
+  oidcProviderDeleteResponseSchema,
+  oidcProviderMutationResponseSchema,
+  oidcProviderUpdateRequestSchema,
   oidcProviderValidationParamsSchema,
   oidcProviderValidationResponseSchema,
   oidcProvidersAdminResponseSchema,
@@ -284,6 +287,21 @@ describe("authentication contracts", () => {
         },
       }).success,
     ).toBe(false);
+    expect(oidcProviderMutationResponseSchema.parse({ provider, revokedSessions: 2 })).toEqual({
+      provider,
+      revokedSessions: 2,
+    });
+    expect(
+      oidcProviderDeleteResponseSchema.parse({
+        deletedProviderId: provider.id,
+        deletedRoleMappings: 3,
+        revokedSessions: 0,
+      }),
+    ).toEqual({
+      deletedProviderId: provider.id,
+      deletedRoleMappings: 3,
+      revokedSessions: 0,
+    });
   });
 
   it("rejects unsafe or internally inconsistent OIDC provider configuration", () => {
@@ -323,6 +341,24 @@ describe("authentication contracts", () => {
     ).toBe(false);
     expect(
       oidcProviderCreateRequestSchema.safeParse({ ...base, slug: "Home Identity" }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderUpdateRequestSchema.safeParse({
+        ...base,
+        tokenEndpointAuthMethod: "client_secret_basic",
+      }).success,
+    ).toBe(true);
+    expect(
+      oidcProviderUpdateRequestSchema.safeParse({
+        ...base,
+        clientSecret: "must-not-be-retained",
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderUpdateRequestSchema.safeParse({
+        ...base,
+        providerId: "attacker-selected-provider",
+      }).success,
     ).toBe(false);
   });
 

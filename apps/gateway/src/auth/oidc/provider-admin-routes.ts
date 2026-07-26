@@ -2,6 +2,9 @@ import {
   oidcProviderCapabilitiesSchema,
   oidcProviderAdminSchema,
   oidcProviderCreateRequestSchema,
+  oidcProviderDeleteResponseSchema,
+  oidcProviderMutationResponseSchema,
+  oidcProviderUpdateRequestSchema,
   oidcProviderValidationParamsSchema,
   oidcProviderValidationResponseSchema,
   oidcProvidersAdminResponseSchema,
@@ -139,6 +142,16 @@ const capabilitiesResponseJsonSchema = {
   },
 } as const;
 
+const providerMutationResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["provider", "revokedSessions"],
+  properties: {
+    provider: providerResponseJsonSchema,
+    revokedSessions: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
+  },
+} as const;
+
 async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: unknown) {
   reply.header("cache-control", "no-store");
   reply.header("pragma", "no-cache");
@@ -168,6 +181,30 @@ function administrationError(error: OidcProviderAdminError): SafeHttpError {
       code: "oidc_provider_limit_reached",
       message: "The identity provider limit has been reached.",
       statusCode: 409,
+    });
+  }
+  if (error.reason === "provider_in_use") {
+    return new SafeHttpError({
+      cause: error,
+      code: "oidc_provider_in_use",
+      message: "The identity provider is linked to existing identities.",
+      statusCode: 409,
+    });
+  }
+  if (error.reason === "provider_must_be_disabled") {
+    return new SafeHttpError({
+      cause: error,
+      code: "oidc_provider_must_be_disabled",
+      message: "Disable the identity provider before deleting it.",
+      statusCode: 409,
+    });
+  }
+  if (error.reason === "client_secret_required") {
+    return new SafeHttpError({
+      cause: error,
+      code: "oidc_provider_client_secret_required",
+      message: "A client secret is required for this token endpoint authentication method.",
+      statusCode: 422,
     });
   }
   return new SafeHttpError({
@@ -301,6 +338,117 @@ export const oidcProviderAdminRoutes: FastifyPluginAsync<OidcProviderAdminRoutes
         });
         reply.status(201);
         return oidcProviderAdminSchema.parse(provider);
+      } catch (error) {
+        if (error instanceof OidcProviderAdminError) throw administrationError(error);
+        throw error;
+      }
+    },
+  );
+
+  app.put(
+    "/v1/admin/auth/oidc/providers/:providerId",
+    {
+      bodyLimit: 16 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["providerId"],
+          properties: {
+            providerId: {
+              type: "string",
+              minLength: 1,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            },
+          },
+        },
+        response: { 200: providerMutationResponseJsonSchema },
+      },
+    },
+    async (request) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.oidc.manage",
+      );
+      const { providerId } = oidcProviderValidationParamsSchema.parse(request.params);
+      const input = oidcProviderUpdateRequestSchema.parse(request.body);
+      try {
+        return oidcProviderMutationResponseSchema.parse(
+          providers.update(providerId, input, {
+            ipAddress: request.ip,
+            principal,
+            requestId: request.id,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof OidcProviderAdminError) throw administrationError(error);
+        throw error;
+      }
+    },
+  );
+
+  app.delete(
+    "/v1/admin/auth/oidc/providers/:providerId",
+    {
+      bodyLimit: 1,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["providerId"],
+          properties: {
+            providerId: {
+              type: "string",
+              minLength: 1,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            additionalProperties: false,
+            required: ["deletedProviderId", "deletedRoleMappings", "revokedSessions"],
+            properties: {
+              deletedProviderId: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              },
+              deletedRoleMappings: { type: "integer", minimum: 0, maximum: 512 },
+              revokedSessions: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
+            },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.oidc.manage",
+      );
+      const { providerId } = oidcProviderValidationParamsSchema.parse(request.params);
+      try {
+        return oidcProviderDeleteResponseSchema.parse(
+          providers.delete(providerId, {
+            ipAddress: request.ip,
+            principal,
+            requestId: request.id,
+          }),
+        );
       } catch (error) {
         if (error instanceof OidcProviderAdminError) throw administrationError(error);
         throw error;

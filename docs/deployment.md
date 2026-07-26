@@ -11,7 +11,7 @@ untagged image or default branch build as a production support promise.
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
 > provide RP-initiated logout, provider-initiated back- and front-channel logout, and
 > hidden recovery access. An initial API can create, inspect, and safely validate encrypted OIDC
-> provider records and administer explicit role mappings, but provider/mapping updates, its operator interface,
+> provider records, manage their safe lifecycle, and administer explicit role mappings, but mapping updates, its operator interface,
 > live Authentik verification, complete authorization, connector
 > administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
@@ -76,8 +76,8 @@ network deployment. Register
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` exactly at the OIDC provider;
 do not derive it from proxy forwarding headers. The current branch deliberately has no
 environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
-client secrets and audits provider creation and validation. Role-mapping administration and the
-role-derived session invalidation boundary are implemented; provider/mapping updates and the
+client secrets and audits provider creation, replacement, validation, and guarded deletion. Role-mapping administration and the
+role-derived session invalidation boundary are implemented; mapping updates and the
 operator interface are not complete. Operators should not edit SQLite manually to bypass that
 boundary.
 

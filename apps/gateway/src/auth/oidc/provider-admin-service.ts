@@ -1,9 +1,12 @@
 import {
   AUTH_PROVIDERS_MAX_COUNT,
+  OIDC_ROLE_MAPPINGS_MAX_COUNT,
   oidcProviderAdminSchema,
   oidcProviderCreateRequestSchema,
+  oidcProviderUpdateRequestSchema,
   type OidcProviderAdmin,
   type OidcProviderCreateRequest,
+  type OidcProviderUpdateRequest,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { asc, eq } from "drizzle-orm";
@@ -26,9 +29,12 @@ const VALIDATION_AUDIT_REASONS = new Set<OidcProviderValidationAuditReason>([
 ]);
 
 export type OidcProviderAdminErrorReason =
+  | "client_secret_required"
   | "integrity_failure"
   | "provider_conflict"
+  | "provider_in_use"
   | "provider_limit_reached"
+  | "provider_must_be_disabled"
   | "provider_not_found"
   | "storage_failure";
 
@@ -60,6 +66,17 @@ export interface OidcProviderAdminContext {
   ipAddress?: string;
   principal: SessionPrincipal;
   requestId?: string;
+}
+
+export interface OidcProviderMutationResult {
+  provider: OidcProviderAdmin;
+  revokedSessions: number;
+}
+
+export interface OidcProviderDeletionResult {
+  deletedProviderId: string;
+  deletedRoleMappings: number;
+  revokedSessions: number;
 }
 
 function validIdentifier(value: unknown): value is string {
@@ -268,6 +285,219 @@ export class OidcProviderAdminService {
     }
   }
 
+  public update(
+    providerId: string,
+    input: OidcProviderUpdateRequest,
+    context: OidcProviderAdminContext,
+  ): OidcProviderMutationResult {
+    const parsedInput = oidcProviderUpdateRequestSchema.safeParse(input);
+    if (!validIdentifier(providerId) || !parsedInput.success || !this.#validContext(context)) {
+      throw new OidcProviderAdminError("integrity_failure");
+    }
+    const auditId = this.#nextId();
+    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const now = this.#currentTime();
+    const provider = parsedInput.data;
+    let revokedSessions = 0;
+
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          const row = this.#database.db
+            .select()
+            .from(oidcProviders)
+            .where(eq(oidcProviders.id, providerId))
+            .get();
+          if (!row) throw new OidcProviderAdminError("provider_not_found");
+          const previous = presentProvider(row);
+
+          const conflict = this.#database.sqlite
+            .prepare(
+              `select id from oidc_providers
+               where id <> ? and (slug = ? or issuer = ?)
+               limit 1`,
+            )
+            .get(providerId, provider.slug, provider.issuer);
+          if (conflict) throw new OidcProviderAdminError("provider_conflict");
+
+          if (provider.issuer !== previous.issuer) {
+            const identity = this.#database.sqlite
+              .prepare("select id from external_identities where provider_id = ? limit 1")
+              .get(providerId);
+            if (identity) throw new OidcProviderAdminError("provider_in_use");
+          }
+
+          let encryptedClientSecret: string | null;
+          if (provider.tokenEndpointAuthMethod === "none") {
+            encryptedClientSecret = null;
+          } else if (provider.clientSecret !== undefined) {
+            encryptedClientSecret = this.#cipher.encrypt(
+              provider.clientSecret,
+              oidcClientSecretEncryptionContext(providerId),
+            );
+          } else if (row.encryptedClientSecret !== null) {
+            encryptedClientSecret = row.encryptedClientSecret;
+          } else {
+            throw new OidcProviderAdminError("client_secret_required");
+          }
+
+          const approvedEndpointOriginsJson = JSON.stringify(provider.approvedEndpointOrigins);
+          const scopes = provider.scopes.join(" ");
+          const changedFields: string[] = [];
+          if (provider.allowJitProvisioning !== previous.allowJitProvisioning) {
+            changedFields.push("allowJitProvisioning");
+          }
+          if (approvedEndpointOriginsJson !== row.approvedEndpointOriginsJson) {
+            changedFields.push("approvedEndpointOrigins");
+          }
+          if (provider.clientId !== previous.clientId) changedFields.push("clientId");
+          if (
+            provider.clientSecret !== undefined ||
+            encryptedClientSecret !== row.encryptedClientSecret
+          ) {
+            changedFields.push("clientSecret");
+          }
+          if (provider.displayName !== previous.displayName) changedFields.push("displayName");
+          if (provider.enabled !== previous.enabled) changedFields.push("enabled");
+          if (provider.idTokenSigningAlg !== previous.idTokenSigningAlg) {
+            changedFields.push("idTokenSigningAlg");
+          }
+          if (provider.issuer !== previous.issuer) changedFields.push("issuer");
+          if (scopes !== row.scopes) changedFields.push("scopes");
+          if (provider.slug !== previous.slug) changedFields.push("slug");
+          if (provider.tokenEndpointAuthMethod !== previous.tokenEndpointAuthMethod) {
+            changedFields.push("tokenEndpointAuthMethod");
+          }
+          const runtimeReset = changedFields.some((field) =>
+            [
+              "approvedEndpointOrigins",
+              "clientId",
+              "clientSecret",
+              "idTokenSigningAlg",
+              "issuer",
+              "scopes",
+              "tokenEndpointAuthMethod",
+            ].includes(field),
+          );
+
+          if (changedFields.length > 0) {
+            const updateChanges = this.#database.db
+              .update(oidcProviders)
+              .set({
+                allowJitProvisioning: provider.allowJitProvisioning,
+                approvedEndpointOriginsJson,
+                clientId: provider.clientId,
+                discoveryCapabilitiesJson: runtimeReset ? "{}" : row.discoveryCapabilitiesJson,
+                discoveryCheckedAt: runtimeReset ? null : row.discoveryCheckedAt,
+                discoveryState: runtimeReset ? "unchecked" : row.discoveryState,
+                displayName: provider.displayName,
+                enabled: provider.enabled,
+                encryptedClientSecret,
+                idTokenSigningAlg: provider.idTokenSigningAlg,
+                issuer: provider.issuer,
+                scopes,
+                slug: provider.slug,
+                tokenEndpointAuthMethod: provider.tokenEndpointAuthMethod,
+                updatedAt: now,
+              })
+              .where(eq(oidcProviders.id, providerId))
+              .run().changes;
+            if (updateChanges !== 1) {
+              throw new OidcProviderAdminError("integrity_failure");
+            }
+            this.#database.sqlite
+              .prepare("delete from auth_transactions where provider_id = ?")
+              .run(providerId);
+            revokedSessions = this.#revokeProviderSessions(providerId, now);
+          }
+
+          this.#insertSuccessAudit(
+            auditId,
+            "auth.oidc.provider.updated",
+            providerId,
+            {
+              changedFields,
+              runtimeReset,
+              revokedSessions,
+            },
+            context,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof OidcProviderAdminError) throw error;
+      throw new OidcProviderAdminError("storage_failure", { cause: error });
+    }
+
+    return { provider: this.get(providerId), revokedSessions };
+  }
+
+  public delete(providerId: string, context: OidcProviderAdminContext): OidcProviderDeletionResult {
+    if (!validIdentifier(providerId) || !this.#validContext(context)) {
+      throw new OidcProviderAdminError("integrity_failure");
+    }
+    const auditId = this.#nextId();
+    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const now = this.#currentTime();
+    let deletedRoleMappings = 0;
+    let revokedSessions = 0;
+
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          const row = this.#database.db
+            .select()
+            .from(oidcProviders)
+            .where(eq(oidcProviders.id, providerId))
+            .get();
+          if (!row) throw new OidcProviderAdminError("provider_not_found");
+          if (row.enabled) throw new OidcProviderAdminError("provider_must_be_disabled");
+
+          const identities = this.#database.sqlite
+            .prepare("select count(*) as count from external_identities where provider_id = ?")
+            .get(providerId) as { count: number };
+          if (!Number.isSafeInteger(identities.count) || identities.count < 0) {
+            throw new OidcProviderAdminError("integrity_failure");
+          }
+          if (identities.count > 0) throw new OidcProviderAdminError("provider_in_use");
+
+          const mappings = this.#database.sqlite
+            .prepare("select count(*) as count from role_mappings where provider_id = ?")
+            .get(providerId) as { count: number };
+          if (
+            !Number.isSafeInteger(mappings.count) ||
+            mappings.count < 0 ||
+            mappings.count > OIDC_ROLE_MAPPINGS_MAX_COUNT
+          ) {
+            throw new OidcProviderAdminError("integrity_failure");
+          }
+          deletedRoleMappings = mappings.count;
+          revokedSessions = this.#revokeProviderSessions(providerId, now);
+          const changes = this.#database.db
+            .delete(oidcProviders)
+            .where(eq(oidcProviders.id, providerId))
+            .run().changes;
+          if (changes !== 1) throw new OidcProviderAdminError("integrity_failure");
+
+          this.#insertSuccessAudit(
+            auditId,
+            "auth.oidc.provider.deleted",
+            providerId,
+            { deletedRoleMappings, revokedSessions },
+            context,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof OidcProviderAdminError) throw error;
+      throw new OidcProviderAdminError("storage_failure", { cause: error });
+    }
+
+    return { deletedProviderId: providerId, deletedRoleMappings, revokedSessions };
+  }
+
   public recordValidation(
     providerId: string,
     context: OidcProviderAdminContext,
@@ -324,6 +554,65 @@ export class OidcProviderAdminService {
     } catch (error) {
       throw new OidcProviderAdminError("storage_failure", { cause: error });
     }
+  }
+
+  #revokeProviderSessions(providerId: string, now: Date): number {
+    const result = this.#database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where revoked_at is null
+           and auth_method = 'oidc'
+           and oidc_provider_id = @providerId`,
+      )
+      .run({ now: now.getTime(), providerId });
+    if (!Number.isSafeInteger(result.changes) || result.changes < 0) {
+      throw new OidcProviderAdminError("integrity_failure");
+    }
+    return result.changes;
+  }
+
+  #insertSuccessAudit(
+    auditId: string,
+    eventType: "auth.oidc.provider.deleted" | "auth.oidc.provider.updated",
+    providerId: string,
+    metadata: Readonly<Record<string, unknown>>,
+    context: OidcProviderAdminContext,
+    now: Date,
+  ): void {
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+          id,
+          actor_user_id,
+          session_id,
+          actor_session_id,
+          actor_auth_method,
+          event_type,
+          outcome,
+          target_type,
+          target_id,
+          request_id,
+          metadata_json,
+          ip_hash,
+          created_at
+        ) values (?, ?, ?, ?, ?, ?, 'success', 'oidc_provider', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        auditId,
+        context.principal.userId,
+        context.principal.sessionId,
+        context.principal.sessionId,
+        context.principal.authenticationMethod.kind,
+        eventType,
+        providerId,
+        context.requestId ?? null,
+        JSON.stringify(metadata),
+        context.ipAddress
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        now.getTime(),
+      );
   }
 
   #currentTime() {

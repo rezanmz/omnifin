@@ -1,5 +1,7 @@
 import {
   oidcProviderAdminSchema,
+  oidcProviderDeleteResponseSchema,
+  oidcProviderMutationResponseSchema,
   oidcProviderValidationResponseSchema,
   oidcProvidersAdminResponseSchema,
 } from "@omnifin/contracts/auth";
@@ -19,7 +21,9 @@ import {
   connectorConfigs,
   externalIdentities,
   oidcProviders,
+  roleMappings,
   serviceIdentityLinks,
+  sessions,
   users,
 } from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
@@ -67,11 +71,10 @@ function providerDependencies() {
   };
 }
 
-const providerRequest = {
+const providerConfiguration = {
   allowJitProvisioning: true,
   approvedEndpointOrigins: ["https://id.example.test"],
   clientId: "omnifin",
-  clientSecret: "private-client-secret",
   displayName: "Home identity",
   enabled: true,
   idTokenSigningAlg: "RS256",
@@ -79,6 +82,11 @@ const providerRequest = {
   scopes: ["openid", "profile", "email", "groups"],
   slug: "home-identity",
   tokenEndpointAuthMethod: "client_secret_basic",
+} as const;
+
+const providerRequest = {
+  ...providerConfiguration,
+  clientSecret: "private-client-secret",
 } as const;
 
 function validationMetadata(overrides: Readonly<Record<string, unknown>> = {}): ServerMetadata {
@@ -381,6 +389,27 @@ describe("OIDC provider administration routes", () => {
         app.database.sqlite.prepare("select count(*) as count from oidc_providers").get(),
       ).toEqual({ count: 0 });
 
+      const missingUpdateCsrf = await app.inject({
+        body: providerRequest,
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "PUT",
+        url: "/v1/admin/auth/oidc/providers/oidc-missing",
+      });
+      expect(missingUpdateCsrf.statusCode).toBe(403);
+
+      const missingDeleteCsrf = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "DELETE",
+        url: "/v1/admin/auth/oidc/providers/oidc-missing",
+      });
+      expect(missingDeleteCsrf.statusCode).toBe(403);
+
       const viewer = pendingViewerSession(app);
       const forbidden = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
@@ -417,6 +446,300 @@ describe("OIDC provider administration routes", () => {
       expect(
         app.database.sqlite.prepare("select count(*) as count from oidc_providers").get(),
       ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("updates a provider atomically, retains omitted secrets, and revokes its OIDC sessions", async () => {
+    const { app, config, session } = await harness();
+    try {
+      const createdResponse = await app.inject({
+        body: providerRequest,
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const created = oidcProviderAdminSchema.parse(createdResponse.json());
+      app.database.db
+        .update(oidcProviders)
+        .set({
+          discoveryCapabilitiesJson: JSON.stringify({ schemaVersion: 1 }),
+          discoveryCheckedAt: now,
+          discoveryState: "ready",
+        })
+        .run();
+      app.database.db
+        .insert(users)
+        .values({
+          createdAt: now,
+          displayName: "Managed viewer",
+          id: "managed-viewer",
+          role: "viewer",
+          roleSource: "default",
+          status: "active",
+          updatedAt: now,
+        })
+        .run();
+      app.database.db
+        .insert(externalIdentities)
+        .values({
+          createdAt: now,
+          displayClaimsJson: JSON.stringify({ displayName: "Managed viewer" }),
+          id: "managed-viewer-identity",
+          issuer: providerRequest.issuer,
+          lastLoginAt: now,
+          providerId: created.id,
+          subject: "immutable-managed-viewer",
+          updatedAt: now,
+          userId: "managed-viewer",
+        })
+        .run();
+      app.database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://managed-jellyfin.example.test",
+          createdAt: now,
+          displayName: "Managed Jellyfin",
+          encryptedCredentials: "v2.fixture-managed-credentials",
+          healthState: "healthy",
+          id: "managed-jellyfin",
+          type: "jellyfin",
+          updatedAt: now,
+        })
+        .run();
+      app.database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "managed-jellyfin",
+          createdAt: now,
+          deviceId: "managed-device",
+          encryptedAccessToken: "v2.fixture-managed-token",
+          externalDisplayName: "Managed viewer",
+          externalServerId: "managed-server",
+          externalUserId: "managed-external-user",
+          externalUsername: "managed-viewer",
+          healthState: "linked",
+          id: "managed-viewer-link",
+          lastVerifiedAt: now,
+          service: "jellyfin",
+          tokenCreatedAt: now,
+          updatedAt: now,
+          userId: "managed-viewer",
+        })
+        .run();
+      const affectedSession = app.sessionService.createSession({
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "managed-viewer-identity",
+          oidcProviderId: created.id,
+          serviceIdentityLinkId: "managed-viewer-link",
+          userId: "managed-viewer",
+        },
+      });
+      const directJellyfinSession = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "managed-viewer-link",
+          userId: "managed-viewer",
+        },
+      });
+
+      const enabledDelete = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "DELETE",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(enabledDelete.statusCode).toBe(409);
+      expect(enabledDelete.json()).toMatchObject({
+        error: { code: "oidc_provider_must_be_disabled" },
+      });
+
+      const updateBase = providerConfiguration;
+      const updatedResponse = await app.inject({
+        body: {
+          ...updateBase,
+          clientId: "omnifin-reconfigured",
+          displayName: "Home identity control",
+          enabled: false,
+          slug: "home-identity-control",
+          tokenEndpointAuthMethod: "client_secret_post",
+        },
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(updatedResponse.statusCode, updatedResponse.body).toBe(200);
+      expect(updatedResponse.headers["cache-control"]).toBe("no-store");
+      const updated = oidcProviderMutationResponseSchema.parse(updatedResponse.json());
+      expect(updated).toMatchObject({
+        provider: {
+          clientId: "omnifin-reconfigured",
+          clientSecretConfigured: true,
+          discoveryCheckedAt: null,
+          discoveryState: "unchecked",
+          displayName: "Home identity control",
+          enabled: false,
+          id: created.id,
+          slug: "home-identity-control",
+          tokenEndpointAuthMethod: "client_secret_post",
+        },
+        revokedSessions: 1,
+      });
+      const stored = app.database.sqlite
+        .prepare(
+          `select encrypted_client_secret as encryptedClientSecret
+           from oidc_providers where id = ?`,
+        )
+        .get(created.id) as { encryptedClientSecret: string };
+      expect(
+        new EnvelopeCipher(config.encryptionKey).decrypt(
+          stored.encryptedClientSecret,
+          oidcClientSecretEncryptionContext(created.id),
+        ),
+      ).toBe(providerRequest.clientSecret);
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === affectedSession.principal.sessionId)?.revokedAt,
+      ).toEqual(now);
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === session.principal.sessionId)?.revokedAt,
+      ).toBeNull();
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === directJellyfinSession.principal.sessionId)?.revokedAt,
+      ).toBeNull();
+
+      const issuerChange = await app.inject({
+        body: {
+          ...updateBase,
+          approvedEndpointOrigins: ["https://replacement-id.example.test"],
+          enabled: false,
+          issuer: "https://replacement-id.example.test/application/o/omnifin/",
+        },
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(issuerChange.statusCode).toBe(409);
+      expect(issuerChange.json()).toMatchObject({ error: { code: "oidc_provider_in_use" } });
+
+      const inUseDelete = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "DELETE",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(inUseDelete.statusCode).toBe(409);
+      expect(inUseDelete.json()).toMatchObject({ error: { code: "oidc_provider_in_use" } });
+
+      const audit = app.database.sqlite
+        .prepare(
+          `select metadata_json as metadataJson
+           from audit_events where event_type = 'auth.oidc.provider.updated'`,
+        )
+        .get() as { metadataJson: string };
+      expect(JSON.parse(audit.metadataJson)).toEqual({
+        changedFields: ["clientId", "displayName", "enabled", "slug", "tokenEndpointAuthMethod"],
+        revokedSessions: 1,
+        runtimeReset: true,
+      });
+      expect(audit.metadataJson).not.toContain("omnifin-reconfigured");
+      expect(audit.metadataJson).not.toContain(providerRequest.clientSecret);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("deletes only disabled unused providers and cascades their unbound mappings", async () => {
+    const { app, session } = await harness();
+    try {
+      const createdResponse = await app.inject({
+        body: { ...providerRequest, enabled: false },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const provider = oidcProviderAdminSchema.parse(createdResponse.json());
+      app.database.db
+        .insert(roleMappings)
+        .values({
+          claimPathJson: JSON.stringify(["groups"]),
+          createdAt: now,
+          enabled: true,
+          id: "deletion-mapping",
+          operator: "contains_any",
+          priority: 500,
+          providerId: provider.id,
+          role: "operator",
+          updatedAt: now,
+          valuesJson: JSON.stringify(["operators"]),
+        })
+        .run();
+
+      const deletedResponse = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "DELETE",
+        url: `/v1/admin/auth/oidc/providers/${provider.id}`,
+      });
+      expect(deletedResponse.statusCode, deletedResponse.body).toBe(200);
+      expect(oidcProviderDeleteResponseSchema.parse(deletedResponse.json())).toEqual({
+        deletedProviderId: provider.id,
+        deletedRoleMappings: 1,
+        revokedSessions: 0,
+      });
+      expect(app.database.db.select().from(oidcProviders).all()).toEqual([]);
+      expect(app.database.db.select().from(roleMappings).all()).toEqual([]);
+      const audit = app.database.sqlite
+        .prepare(
+          `select metadata_json as metadataJson, target_id as targetId
+           from audit_events where event_type = 'auth.oidc.provider.deleted'`,
+        )
+        .get() as { metadataJson: string; targetId: string };
+      expect(audit.targetId).toBe(provider.id);
+      expect(JSON.parse(audit.metadataJson)).toEqual({
+        deletedRoleMappings: 1,
+        revokedSessions: 0,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires a fresh secret when a public client becomes confidential", async () => {
+    const { app, session } = await harness();
+    try {
+      const publicRequest = providerConfiguration;
+      const createdResponse = await app.inject({
+        body: { ...publicRequest, tokenEndpointAuthMethod: "none" },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const provider = oidcProviderAdminSchema.parse(createdResponse.json());
+      const update = await app.inject({
+        body: publicRequest,
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${provider.id}`,
+      });
+      expect(update.statusCode).toBe(422);
+      expect(update.json()).toMatchObject({
+        error: { code: "oidc_provider_client_secret_required" },
+      });
+      expect(app.database.db.select().from(oidcProviders).get()).toMatchObject({
+        encryptedClientSecret: null,
+        tokenEndpointAuthMethod: "none",
+      });
     } finally {
       await app.close();
     }
