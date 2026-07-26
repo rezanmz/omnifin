@@ -1,0 +1,104 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import { parse } from "yaml";
+
+import {
+  authentikFixture,
+  dotenv,
+  isPrivateIpv4,
+  reportFor,
+  secretLeakDetected,
+  selectPrivateHost,
+} from "./authentik/fixture.mjs";
+
+const composeSource = readFileSync(new URL("./authentik/compose.yaml", import.meta.url), "utf8");
+const blueprintSource = readFileSync(
+  new URL("./authentik/blueprint.yaml", import.meta.url),
+  "utf8",
+);
+
+test("selects only a non-loopback RFC1918 fixture host", () => {
+  assert.equal(isPrivateIpv4("10.4.5.6"), true);
+  assert.equal(isPrivateIpv4("172.31.9.8"), true);
+  assert.equal(isPrivateIpv4("192.168.1.4"), true);
+  assert.equal(isPrivateIpv4("127.0.0.1"), false);
+  assert.equal(isPrivateIpv4("169.254.1.2"), false);
+  assert.equal(
+    selectPrivateHost({
+      docker: [{ address: "172.20.0.1", family: "IPv4", internal: false }],
+      loopback: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      public: [{ address: "203.0.113.10", family: "IPv4", internal: false }],
+    }),
+    "172.20.0.1",
+  );
+  assert.throws(
+    () =>
+      selectPrivateHost({
+        loopback: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      }),
+    /private_host_unavailable/u,
+  );
+});
+
+test("serializes a deterministic quoted environment without multiline injection", () => {
+  assert.equal(dotenv({ SECOND: "two$", FIRST: "one" }), "FIRST='one'\nSECOND='two$'\n");
+  assert.throws(() => dotenv({ INVALID: "line\nbreak" }), /environment_value_invalid/u);
+  assert.throws(() => dotenv({ invalid: "value" }), /environment_name_invalid/u);
+});
+
+test("emits only the bounded, sanitized Authentik report contract", () => {
+  const report = reportFor();
+  assert.equal(report.passed, true);
+  assert.equal(report.upstreamVersion, authentikFixture.version);
+  assert.deepEqual(report.checks, authentikFixture.checks);
+  assert.deepEqual(Object.keys(report).sort(), [
+    "checks",
+    "mode",
+    "passed",
+    "schemaVersion",
+    "service",
+    "upstreamVersion",
+  ]);
+  const serialized = JSON.stringify(report);
+  assert.doesNotMatch(serialized, /https?:\/\/|@|-----BEGIN/iu);
+  assert.throws(() => reportFor(["authorization_code_pkce"]), /fixture_checks_incomplete/u);
+});
+
+test("detects generated secrets before runtime logs can be retained", () => {
+  assert.equal(secretLeakDetected(["gateway ready"], ["private-value"]), false);
+  assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
+});
+
+test("pins an isolated Authentik topology without privileged host mounts", () => {
+  const compose = parse(composeSource);
+  assert.match(
+    compose.services.postgresql.image,
+    /^docker\.io\/library\/postgres:16-alpine@sha256:[a-f0-9]{64}$/u,
+  );
+  for (const service of [compose.services.server, compose.services.worker]) {
+    assert.match(service.image, /^ghcr\.io\/goauthentik\/server:2026\.5\.6@sha256:[a-f0-9]{64}$/u);
+    assert.equal(service.restart, "no");
+  }
+  assert.equal(compose.services.server.environment.AUTHENTIK_ERROR_REPORTING__ENABLED, "false");
+  assert.equal(compose.services.server.environment.AUTHENTIK_DISABLE_UPDATE_CHECK, "true");
+  assert.match(JSON.stringify(compose.services.worker.environment), /BOOTSTRAP_PASSWORD_HASH/u);
+  assert.doesNotMatch(
+    composeSource,
+    /docker\.sock|:\s*latest(?:\s|$)|\/etc\/(?:localtime|timezone)/u,
+  );
+});
+
+test("blueprint limits the provider to a confidential authorization-code client", () => {
+  assert.match(blueprintSource, /grant_types:\n\s+- authorization_code/u);
+  assert.match(blueprintSource, /client_type: confidential/u);
+  assert.match(blueprintSource, /matching_mode: strict/u);
+  assert.match(blueprintSource, /logout_method: backchannel/u);
+  assert.match(blueprintSource, /issuer_mode: per_provider/u);
+  assert.match(blueprintSource, /scope_name, profile/u);
+  assert.doesNotMatch(
+    blueprintSource,
+    /implicit|password|refresh_token|offline_access|matching_mode: regex/u,
+  );
+});

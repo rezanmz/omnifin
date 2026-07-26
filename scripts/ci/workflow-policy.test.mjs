@@ -261,6 +261,29 @@ test("fixture integration reports pending work without weakening the strict read
   assert.match(aggregate.run, /job\.result !== "success"/u);
 });
 
+test("fixture integration makes real Authentik OIDC behavior a protected aggregate dependency", () => {
+  const document = workflowDocument("integration.yml");
+  const authentik = document.jobs.authentik;
+  const gate = document.jobs.gate;
+
+  assert.equal(authentik.name, "Authentik OIDC integration");
+  assert.equal(authentik["timeout-minutes"], 45);
+  assert.equal(JSON.stringify(authentik).includes("secrets."), false);
+  assert.equal(JSON.stringify(authentik).includes("vars."), false);
+
+  const browser = namedStep(authentik.steps, "Install isolated browser runtime");
+  assert.match(browser.run, /playwright install --with-deps chromium/u);
+  const run = namedStep(authentik.steps, "Run isolated Authentik authorization-code gate");
+  assert.match(run.run, /pnpm test:authentik/u);
+  assert.match(run.run, /artifacts\/integration\/authentik\/report\.json/u);
+  assert.equal(run["continue-on-error"], undefined);
+
+  const upload = namedStep(authentik.steps, "Upload sanitized Authentik report");
+  assert.equal(upload.with.path, "artifacts/integration/authentik/report.json");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.ok(gate.needs.includes("authentik"));
+});
+
 test("edge promotion revalidates protected main immediately before moving aliases", () => {
   const source = workflow("edge.yml");
   const promotionStart = source.indexOf("- name: Preserve immutable SHA identity");

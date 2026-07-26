@@ -1,0 +1,47 @@
+version: 1
+metadata:
+  name: Omnifin isolated OIDC fixture
+entries:
+  - id: omnifin-authentik-provider
+    model: authentik_providers_oauth2.oauth2provider
+    state: present
+    identifiers:
+      name: Omnifin isolated OIDC fixture
+    attrs:
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+      client_type: confidential
+      grant_types:
+        - authorization_code
+      client_id: !Env OMNIFIN_AUTHENTIK_CLIENT_ID
+      client_secret: !Env OMNIFIN_AUTHENTIK_CLIENT_SECRET
+      include_claims_in_id_token: true
+      signing_key:
+        !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      redirect_uris:
+        - matching_mode: strict
+          redirect_uri_type: authorization
+          url: !Env OMNIFIN_AUTHENTIK_CALLBACK_URL
+        - matching_mode: strict
+          redirect_uri_type: logout
+          url: !Env OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL
+      logout_uri: !Env OMNIFIN_AUTHENTIK_BACKCHANNEL_URL
+      logout_method: backchannel
+      sub_mode: hashed_user_id
+      issuer_mode: per_provider
+
+  - model: authentik_core.application
+    state: present
+    identifiers:
+      slug: omnifin
+    attrs:
+      name: Omnifin
+      provider: !KeyOf omnifin-authentik-provider
+      meta_description: Isolated integration fixture
+      meta_hide: true
