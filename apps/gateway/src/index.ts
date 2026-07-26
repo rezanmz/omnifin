@@ -19,6 +19,20 @@ export {
   type OidcBrowserBindingCookieWriter,
   writeOidcBrowserBindingCookie,
 } from "./auth/oidc/authorization-transaction.js";
+export {
+  OidcProviderRegistry,
+  OidcProviderRegistryError,
+  OIDC_PROVIDER_RUNTIME_CACHE_MAX_ENTRIES,
+  OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS,
+  oidcClientSecretEncryptionContext,
+  type DiscoveredOidcProvider,
+  type IdTokenSigningAlgorithm,
+  type OidcProviderCapabilities,
+  type OidcProviderRegistryConfig,
+  type OidcProviderRegistryDependencies,
+  type OidcProviderRegistryErrorCode,
+  type TokenEndpointAuthMethod,
+} from "./auth/oidc/provider-registry.js";
 export { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 export {
   clearSessionCookie,
