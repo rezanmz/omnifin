@@ -152,7 +152,7 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     currentStage = `${attempt}_submit`;
     await retryInteraction(page, async () => {
       await action.waitFor({ state: "visible", timeout: 5_000 });
-      await action.click({ timeout: 5_000 });
+      await action.click({ noWaitAfter: true, timeout: 5_000 });
     });
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await page.waitForTimeout(250);
