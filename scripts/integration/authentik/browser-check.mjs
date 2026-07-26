@@ -7,6 +7,7 @@ const { chromium } = requireFromWeb("@playwright/test");
 
 const providerSlug = "authentik";
 const expectedProviderId = `oidc-${providerSlug}`;
+const INTERACTION_RETRY_ATTEMPTS = 4;
 
 class BrowserCheckError extends Error {
   constructor() {
@@ -70,6 +71,26 @@ async function waitForInteraction(page, webOrigin, locators) {
   return "unrecognized";
 }
 
+async function retryInteraction(page, action) {
+  for (let attempt = 0; attempt < INTERACTION_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await action();
+    } catch {
+      if (attempt === INTERACTION_RETRY_ATTEMPTS - 1) throw new BrowserCheckError();
+      await page.waitForTimeout(150);
+    }
+  }
+  throw new BrowserCheckError();
+}
+
+async function fillStable(page, locator, value) {
+  await retryInteraction(page, async () => {
+    await locator.waitFor({ state: "visible", timeout: 5_000 });
+    await locator.fill(value, { timeout: 5_000 });
+    assert((await locator.inputValue()) === value);
+  });
+}
+
 async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
   currentStage = `${attempt}_navigation`;
   await page.goto(startPath, { waitUntil: "domcontentloaded" });
@@ -113,12 +134,12 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     let completedField = false;
     if (await visible(usernameInput)) {
       currentStage = `${attempt}_username`;
-      await usernameInput.fill(username);
+      await fillStable(page, usernameInput, username);
       completedField = true;
     }
     if (await visible(passwordInput)) {
       currentStage = `${attempt}_password`;
-      await passwordInput.fill(password);
+      await fillStable(page, passwordInput, password);
       completedField = true;
     }
 
@@ -128,7 +149,11 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       currentStage = `${attempt}_unrecognized`;
       throw new BrowserCheckError();
     }
-    await action.click();
+    currentStage = `${attempt}_submit`;
+    await retryInteraction(page, async () => {
+      await action.waitFor({ state: "visible", timeout: 5_000 });
+      await action.click({ timeout: 5_000 });
+    });
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await page.waitForTimeout(250);
   }

@@ -91,7 +91,11 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
     "utf8",
   );
   assert.match(browserSource, /authentik_browser_checks_failed/u);
+  assert.match(browserSource, /INTERACTION_RETRY_ATTEMPTS = 4/u);
+  assert.match(browserSource, /retryInteraction/u);
   assert.match(runnerSource, /allowedStages/u);
+  assert.match(runnerSource, /first_login_submit/u);
+  assert.match(runnerSource, /second_login_submit/u);
   assert.match(runnerSource, /\[a-z_\]\+/u);
   assert.doesNotMatch(runnerSource, /throw new FixtureError\([^)]*stderr/u);
   assert.match(runnerSource, /backchannel_not_delivered/u);
