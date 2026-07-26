@@ -208,7 +208,14 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
   const initialProviders = await request.get("/api/auth/providers", { maxRedirects: 0 });
   expect(initialProviders.status()).toBe(200);
   expectNoStore(initialProviders);
-  expect(await initialProviders.json()).toEqual({ providers: [providerObject] });
+  expect(await initialProviders.json()).toEqual({
+    providers: [
+      {
+        ...providerObject,
+        state: expect.stringMatching(/^(?:available|unavailable)$/u),
+      },
+    ],
+  });
   expect(await initialProviders.text()).not.toContain("omnifin-rewrite-client");
 
   const startPath = `/api/auth/oidc/${providerId}/start?returnPath=%2Fsettings`;
@@ -289,7 +296,7 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
   expect(callback.status()).toBe(303);
   expectNoStore(callback);
   expect(callback.headers().pragma).toBe("no-cache");
-  expect(headerValues(callback, "location")).toEqual(["/settings"]);
+  expect(headerValues(callback, "location")).toEqual(["/link/jellyfin"]);
 
   const callbackCookies = headerValues(callback, "set-cookie");
   expect(callbackCookies).toHaveLength(2);
