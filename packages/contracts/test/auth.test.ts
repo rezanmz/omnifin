@@ -15,6 +15,10 @@ import {
   oidcProviderValidationParamsSchema,
   oidcProviderValidationResponseSchema,
   oidcProvidersAdminResponseSchema,
+  oidcRoleMappingCreateRequestSchema,
+  oidcRoleMappingDeleteResponseSchema,
+  oidcRoleMappingMutationResponseSchema,
+  oidcRoleMappingsAdminResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
@@ -319,6 +323,44 @@ describe("authentication contracts", () => {
     ).toBe(false);
     expect(
       oidcProviderCreateRequestSchema.safeParse({ ...base, slug: "Home Identity" }).success,
+    ).toBe(false);
+  });
+
+  it("keeps OIDC role-mapping administration bounded and exact", () => {
+    const create = oidcRoleMappingCreateRequestSchema.parse({
+      claimPath: ["groups"],
+      enabled: true,
+      operator: "contains_any",
+      priority: 500,
+      role: "operator",
+      values: ["media-operators", 7, true],
+    });
+    const mapping = {
+      ...create,
+      id: "mapping-1",
+      providerId: "oidc-home",
+    };
+    expect(oidcRoleMappingsAdminResponseSchema.parse({ mappings: [mapping] })).toEqual({
+      mappings: [mapping],
+    });
+    expect(oidcRoleMappingMutationResponseSchema.parse({ mapping, revokedSessions: 3 })).toEqual({
+      mapping,
+      revokedSessions: 3,
+    });
+    expect(
+      oidcRoleMappingDeleteResponseSchema.parse({
+        deletedMappingId: mapping.id,
+        revokedSessions: 2,
+      }),
+    ).toEqual({ deletedMappingId: mapping.id, revokedSessions: 2 });
+    expect(
+      oidcRoleMappingCreateRequestSchema.safeParse({
+        ...create,
+        values: ["duplicate", "duplicate"],
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcRoleMappingCreateRequestSchema.safeParse({ ...create, providerId: "forged" }).success,
     ).toBe(false);
   });
 

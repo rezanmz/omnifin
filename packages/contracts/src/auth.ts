@@ -3,6 +3,7 @@ import { z } from "zod";
 export const AUTH_PROVIDERS_MAX_COUNT = 50;
 export const AUTH_PROVIDERS_RESPONSE_MAX_BYTES = 1_048_576;
 export const OIDC_ISSUER_MAX_LENGTH = 2_048;
+export const OIDC_ROLE_MAPPINGS_MAX_COUNT = 512;
 
 const identifierSchema = z.string().trim().min(1).max(128);
 const displayNameSchema = z.string().trim().min(1).max(160);
@@ -519,17 +520,65 @@ const claimPathSegmentSchema = z
   .max(128)
   .refine((segment) => !blockedClaimPathSegments.has(segment), "Unsafe claim path segment");
 
-export const roleMappingSchema = z.object({
+const roleMappingConfigurationShape = {
+  claimPath: z.array(claimPathSegmentSchema).min(1).max(12),
+  enabled: z.boolean(),
+  operator: z.enum(["equals", "contains_any", "contains_all"]),
+  priority: z.int().min(0).max(10_000),
+  role: roleSchema,
+  values: z.array(claimScalarSchema).min(1).max(64),
+} as const;
+
+export const roleMappingSchema = z.strictObject({
+  ...roleMappingConfigurationShape,
   id: identifierSchema,
   providerId: identifierSchema,
-  claimPath: z.array(claimPathSegmentSchema).min(1).max(12),
-  operator: z.enum(["equals", "contains_any", "contains_all"]),
-  values: z.array(claimScalarSchema).min(1).max(64),
-  role: roleSchema,
-  priority: z.int().min(0).max(10_000),
-  enabled: z.boolean(),
 });
 export type RoleMapping = z.infer<typeof roleMappingSchema>;
+
+export const oidcRoleMappingCreateRequestSchema = z
+  .strictObject(roleMappingConfigurationShape)
+  .superRefine((mapping, context) => {
+    const keys = mapping.values.map((value) => `${typeof value}:${JSON.stringify(value)}`);
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Role mapping values cannot contain duplicates.",
+        path: ["values"],
+      });
+    }
+  });
+export type OidcRoleMappingCreateRequest = z.infer<typeof oidcRoleMappingCreateRequestSchema>;
+
+export const oidcRoleMappingsAdminParamsSchema = z.strictObject({
+  providerId: identifierSchema,
+});
+export type OidcRoleMappingsAdminParams = z.infer<typeof oidcRoleMappingsAdminParamsSchema>;
+
+export const oidcRoleMappingAdminParamsSchema = z.strictObject({
+  mappingId: identifierSchema,
+  providerId: identifierSchema,
+});
+export type OidcRoleMappingAdminParams = z.infer<typeof oidcRoleMappingAdminParamsSchema>;
+
+export const oidcRoleMappingsAdminResponseSchema = z.strictObject({
+  mappings: z.array(roleMappingSchema).max(OIDC_ROLE_MAPPINGS_MAX_COUNT),
+});
+export type OidcRoleMappingsAdminResponse = z.infer<typeof oidcRoleMappingsAdminResponseSchema>;
+
+const revokedSessionsSchema = z.int().min(0).max(2_147_483_647);
+
+export const oidcRoleMappingMutationResponseSchema = z.strictObject({
+  mapping: roleMappingSchema,
+  revokedSessions: revokedSessionsSchema,
+});
+export type OidcRoleMappingMutationResponse = z.infer<typeof oidcRoleMappingMutationResponseSchema>;
+
+export const oidcRoleMappingDeleteResponseSchema = z.strictObject({
+  deletedMappingId: identifierSchema,
+  revokedSessions: revokedSessionsSchema,
+});
+export type OidcRoleMappingDeleteResponse = z.infer<typeof oidcRoleMappingDeleteResponseSchema>;
 
 export const authProvidersResponseSchema = z.object({
   providers: z.array(authProviderSchema).max(AUTH_PROVIDERS_MAX_COUNT),

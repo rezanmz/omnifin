@@ -10,8 +10,8 @@ and contributors changing a security-sensitive flow.
 > Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
 > front-channel logout, opaque sessions, and break-glass
 > recovery. The permission-checked provider administration API can create, list, and validate
-> encrypted configurations, but role-mapping administration, the operator interface, and the
-> live Authentik gate remain incomplete. Phase 1 has not passed its release
+> encrypted configurations and administer explicit role mappings, but provider updates, the
+> operator interface, and the live Authentik gate remain incomplete. Phase 1 has not passed its release
 > gate; treat this document as development evidence, not a production support claim.
 
 ## Current development surface
@@ -35,11 +35,19 @@ security seals. Disabled providers can be validated without becoming sign-in eli
 success and failure are audit-logged with bounded reason codes, and repeated failures use the
 registry's retry backoff instead of repeatedly contacting the issuer.
 
+Provider role mappings can be listed, created, and deleted through the same administrative
+boundary. Mapping inputs use bounded, prototype-safe claim paths and exact typed scalar values;
+string, numeric, and boolean values are never coerced. Higher numeric priority wins, while
+conflicting roles at the same highest matching priority deny sign-in. Successful mapping changes
+write sanitized audit records and immediately revoke active sessions for users whose authority
+came from that provider's default or mapped role. Claim paths and expected values are deliberately
+excluded from audit metadata.
+
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
-when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide role-mapping administration, live Authentik compatibility evidence, or the complete
-application permission surface. The
+when JIT is enabled, and creates an opaque server-side session atomically. It does not yet provide
+provider/mapping updates, live Authentik compatibility evidence, or the complete application
+permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
 
@@ -86,29 +94,32 @@ Browsers and configured identity providers use the public web routes below. The 
 process forwards them to the versioned gateway API; operators must not expose the
 gateway directly.
 
-| Route                                                             | Purpose                                                                   |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `GET /api/auth/providers`                                         | Return the bounded browser-safe provider list.                            |
-| `GET /api/auth/oidc/{providerId}/start`                           | Bind the browser, create a one-time transaction, and start OIDC.          |
-| `GET /api/auth/oidc/callback/{providerId}`                        | Consume the transaction, validate the grant, and establish a session.     |
-| `POST /api/auth/oidc/logout`                                      | Revoke locally, then request RP-initiated provider logout when available. |
-| `POST /api/auth/oidc/backchannel/{providerId}`                    | Verify a provider Logout Token and revoke its exact local session scope.  |
-| `GET /api/auth/oidc/frontchannel/{providerId}`                    | Accept exact session-aware provider logout in a restricted iframe.        |
-| `POST /api/auth/jellyfin/password`                                | Verify credentials with Jellyfin and establish a local session.           |
-| `POST /api/auth/jellyfin/link/password`                           | Pair fresh credentials to the exact pending OIDC session.                 |
-| `POST /api/auth/jellyfin/link/quick-connect`                      | Create Quick Connect proof bound to the exact pending OIDC session.       |
-| `POST /api/auth/jellyfin/link/quick-connect/{transactionId}/poll` | Complete pairing only for the originating OIDC session.                   |
-| `POST /api/auth/jellyfin/quick-connect`                           | Create a browser-bound Quick Connect code transaction.                    |
-| `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll`      | Poll by opaque ID and establish a session only after approval.            |
-| `GET /api/auth/session`                                           | Inspect and, when due, rotate the current local session.                  |
-| `DELETE /api/auth/session`                                        | Revoke the current session; requires same-origin CSRF protection.         |
-| `DELETE /api/auth/sessions`                                       | Revoke every local session owned by the current user.                     |
-| `GET /api/auth/identity-links`                                    | Inspect the current user's normalized Jellyfin link and health.           |
-| `DELETE /api/auth/identity-links/{linkId}`                        | Revoke an owned link, erase its token, and reduce local authority.        |
-| `POST /api/auth/recovery/session`                                 | Hidden, rate-limited recovery endpoint; never linked from the login UI.   |
-| `GET /api/admin/auth/oidc/providers`                              | List secret-free OIDC configuration for an authorized administrator.      |
-| `POST /api/admin/auth/oidc/providers`                             | Create an encrypted, audited OIDC configuration; requires session CSRF.   |
-| `POST /api/admin/auth/oidc/providers/{providerId}/validate`       | Freshly validate discovery and return only safe capability information.   |
+| Route                                                                          | Purpose                                                                   |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `GET /api/auth/providers`                                                      | Return the bounded browser-safe provider list.                            |
+| `GET /api/auth/oidc/{providerId}/start`                                        | Bind the browser, create a one-time transaction, and start OIDC.          |
+| `GET /api/auth/oidc/callback/{providerId}`                                     | Consume the transaction, validate the grant, and establish a session.     |
+| `POST /api/auth/oidc/logout`                                                   | Revoke locally, then request RP-initiated provider logout when available. |
+| `POST /api/auth/oidc/backchannel/{providerId}`                                 | Verify a provider Logout Token and revoke its exact local session scope.  |
+| `GET /api/auth/oidc/frontchannel/{providerId}`                                 | Accept exact session-aware provider logout in a restricted iframe.        |
+| `POST /api/auth/jellyfin/password`                                             | Verify credentials with Jellyfin and establish a local session.           |
+| `POST /api/auth/jellyfin/link/password`                                        | Pair fresh credentials to the exact pending OIDC session.                 |
+| `POST /api/auth/jellyfin/link/quick-connect`                                   | Create Quick Connect proof bound to the exact pending OIDC session.       |
+| `POST /api/auth/jellyfin/link/quick-connect/{transactionId}/poll`              | Complete pairing only for the originating OIDC session.                   |
+| `POST /api/auth/jellyfin/quick-connect`                                        | Create a browser-bound Quick Connect code transaction.                    |
+| `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll`                   | Poll by opaque ID and establish a session only after approval.            |
+| `GET /api/auth/session`                                                        | Inspect and, when due, rotate the current local session.                  |
+| `DELETE /api/auth/session`                                                     | Revoke the current session; requires same-origin CSRF protection.         |
+| `DELETE /api/auth/sessions`                                                    | Revoke every local session owned by the current user.                     |
+| `GET /api/auth/identity-links`                                                 | Inspect the current user's normalized Jellyfin link and health.           |
+| `DELETE /api/auth/identity-links/{linkId}`                                     | Revoke an owned link, erase its token, and reduce local authority.        |
+| `POST /api/auth/recovery/session`                                              | Hidden, rate-limited recovery endpoint; never linked from the login UI.   |
+| `GET /api/admin/auth/oidc/providers`                                           | List secret-free OIDC configuration for an authorized administrator.      |
+| `POST /api/admin/auth/oidc/providers`                                          | Create an encrypted, audited OIDC configuration; requires session CSRF.   |
+| `POST /api/admin/auth/oidc/providers/{providerId}/validate`                    | Freshly validate discovery and return only safe capability information.   |
+| `GET /api/admin/auth/oidc/providers/{providerId}/role-mappings`                | List exact claim-to-role rules for an authorized administrator.           |
+| `POST /api/admin/auth/oidc/providers/{providerId}/role-mappings`               | Create an audited rule and revoke affected role-derived sessions.         |
+| `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}` | Delete a rule and revoke affected role-derived sessions.                  |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect

@@ -258,7 +258,6 @@ export const oidcProviderAdminRoutes: FastifyPluginAsync<OidcProviderAdminRoutes
       const session = app.sessionService.resolveAndRefresh(
         request.cookies[sessionCookieName(app.appConfig)],
       );
-      const principal = requirePermission(session?.principal, "recovery.oidc.manage");
       if (session?.rotatedSessionToken) {
         writeSessionCookie(
           reply,
@@ -267,7 +266,7 @@ export const oidcProviderAdminRoutes: FastifyPluginAsync<OidcProviderAdminRoutes
           session.absoluteExpiresAt,
         );
       }
-      void principal;
+      requirePermission(session?.principal, "recovery.oidc.manage");
       try {
         return oidcProvidersAdminResponseSchema.parse({ providers: providers.list() });
       } catch (error) {

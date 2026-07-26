@@ -11,8 +11,8 @@ the roadmap records when each area has passed its verification gate.
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
-> authentication audits, recovery access, and encrypted OIDC provider creation and validation now
-> exist, while role-mapping controls, complete authorization,
+> authentication audits, recovery access, and encrypted OIDC provider and role-mapping
+> administration now exist, while provider updates, complete authorization,
 > connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -31,7 +31,8 @@ also migrates SQLite, validates public configuration, redacts structured logs, a
 provides isolated connector fixture and probe tooling.
 
 The provider-administration boundary can create, list, and freshly validate encrypted, audited
-OIDC records, but updates, role mappings, and its operator interface remain incomplete.
+OIDC records and can list, create, and delete exact role mappings. Provider/mapping updates and its
+operator interface remain incomplete.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented;
@@ -163,6 +164,11 @@ exact OIDC session or immutable external identity without storing the raw Logout
 Session-aware front-channel logout can revoke an exact provider-scoped session while
 restricting iframe access to the validated issuer origin. Raw `sid` and `jti` values
 are not persisted.
+
+Role-mapping mutations are serialized with sanitized audit writes and session revocation. A
+change invalidates active authority derived from the affected provider's default or mapped role;
+manual roles and recovery sessions are not changed. Mapping resolution remains deterministic by
+priority and denies ambiguous highest-priority roles.
 
 When product workflows begin writing sensitive values, they must use authenticated
 encryption with a deployment-provided master key. The key must never be stored in the

@@ -57,8 +57,13 @@ describe("authentication persistence invariants", () => {
     const stored = database.db.select().from(roleMappings).get();
     expect(
       roleMappingSchema.parse({
-        ...stored,
         claimPath: JSON.parse(stored?.claimPathJson ?? "null"),
+        enabled: stored?.enabled,
+        id: stored?.id,
+        operator: stored?.operator,
+        priority: stored?.priority,
+        providerId: stored?.providerId,
+        role: stored?.role,
         values: JSON.parse(stored?.valuesJson ?? "null"),
       }),
     ).toEqual(mapping);

@@ -18,6 +18,10 @@ import {
   type OidcProviderAdminRoutesOptions,
 } from "./auth/oidc/provider-admin-routes.js";
 import {
+  oidcRoleMappingAdminRoutes,
+  type OidcRoleMappingAdminRoutesOptions,
+} from "./auth/oidc/role-mapping-admin-routes.js";
+import {
   OidcBackchannelLogoutError,
   OidcBackchannelLogoutService,
 } from "./auth/oidc/backchannel-logout.js";
@@ -57,6 +61,7 @@ export interface CreateAppOptions {
   migrate?: boolean;
   oidcDependencies?: OidcRoutesDependencies;
   oidcProviderAdminDependencies?: OidcProviderAdminRoutesOptions["dependencies"];
+  oidcRoleMappingAdminDependencies?: OidcRoleMappingAdminRoutesOptions["dependencies"];
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
@@ -346,6 +351,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.oidcProviderAdminDependencies === undefined
         ? {}
         : { dependencies: options.oidcProviderAdminDependencies }),
+    });
+    await app.register(oidcRoleMappingAdminRoutes, {
+      ...(options.oidcRoleMappingAdminDependencies === undefined
+        ? {}
+        : { dependencies: options.oidcRoleMappingAdminDependencies }),
     });
     await app.register(jellyfinRoutes, {
       ...(options.jellyfinDependencies === undefined

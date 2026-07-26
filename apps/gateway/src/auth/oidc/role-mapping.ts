@@ -1,4 +1,9 @@
-import { roleMappingSchema, type Role, type RoleMapping } from "@omnifin/contracts/auth";
+import {
+  OIDC_ROLE_MAPPINGS_MAX_COUNT,
+  roleMappingSchema,
+  type Role,
+  type RoleMapping,
+} from "@omnifin/contracts/auth";
 import {
   isOidcClaimScalar,
   isValidatedOidcClaims,
@@ -7,8 +12,6 @@ import {
   type OidcClaimValue,
   type ValidatedOidcClaims,
 } from "./claims.js";
-
-const MAX_ROLE_MAPPINGS = 512;
 
 export type OidcRoleResolution =
   | {
@@ -88,7 +91,7 @@ export function resolveOidcRole(input: ResolveOidcRoleInput): OidcRoleResolution
     input.providerId.length > 128 ||
     input.providerId.trim() !== input.providerId ||
     !Array.isArray(input.mappings) ||
-    input.mappings.length > MAX_ROLE_MAPPINGS
+    input.mappings.length > OIDC_ROLE_MAPPINGS_MAX_COUNT
   ) {
     return invalidResolution("invalid_mapping_contract");
   }
