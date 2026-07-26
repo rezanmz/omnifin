@@ -166,10 +166,14 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       throw new BrowserCheckError();
     }
     currentStage = `${attempt}_submit`;
-    await retryInteraction(page, async () => {
-      await action.waitFor({ state: "visible", timeout: 5_000 });
-      await action.click({ noWaitAfter: true, timeout: 5_000 });
-    });
+    if (completedField) {
+      await retryInteraction(page, () => page.keyboard.press("Enter"));
+    } else {
+      await retryInteraction(page, async () => {
+        await action.waitFor({ state: "visible", timeout: 5_000 });
+        await action.click({ noWaitAfter: true, timeout: 5_000 });
+      });
+    }
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await page.waitForTimeout(250);
   }
