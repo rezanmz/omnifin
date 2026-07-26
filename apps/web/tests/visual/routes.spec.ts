@@ -181,6 +181,26 @@ test("account security provider-logout confirmation visual baseline", async ({
   });
 });
 
+test("identity provider control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Identity controls cover representative desktop and phone geometry",
+  );
+  await page.goto("/settings/identity-providers?test-view=ready");
+  await page.getByRole("heading", { name: "Authentik" }).waitFor();
+  await expect(page).toHaveScreenshot("identity-providers.png", { fullPage: true });
+});
+
+test("guided identity provider connection visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Provider onboarding covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/identity-providers?test-view=empty");
+  await page.getByRole("heading", { name: "Connect Authentik" }).waitFor();
+  await expect(page).toHaveScreenshot("identity-providers-empty.png", { fullPage: true });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

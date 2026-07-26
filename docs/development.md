@@ -37,8 +37,9 @@ safe provider metadata, OIDC browser routes, RP-initiated logout, provider-initi
 back- and front-channel logout, individual and account-wide local session
 revocation, recovery access,
 migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pending OIDC users,
-and connector fixture/probe tooling. There is no supported provider, account, or connector
-administration yet; live Authentik verification, complete permission enforcement, and
+the permission-checked OIDC provider and role-mapping control room, and connector fixture/probe
+tooling. Account and provider administration are available as pre-release development surfaces;
+connector administration, live Authentik verification, complete permission enforcement, and
 upstream media operations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still

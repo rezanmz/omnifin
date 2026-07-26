@@ -10,10 +10,10 @@ untagged image or default branch build as a production support promise.
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
 > provide RP-initiated logout, provider-initiated back- and front-channel logout, and
-> hidden recovery access. An initial API can create, inspect, and safely validate encrypted OIDC
-> provider records, manage their safe lifecycle, and administer explicit role mappings, but mapping updates, its operator interface,
-> live Authentik verification, complete authorization, connector
-> administration, or upstream media operations. Tagged phase
+> hidden recovery access. A permission-checked interface and API can create, inspect, and safely
+> validate encrypted OIDC provider records, manage their guarded lifecycle, and administer explicit
+> role mappings. Mapping updates, live Authentik verification, complete authorization, connector
+> administration, and upstream media operations remain incomplete. Tagged phase
 > releases define supported deployment claims.
 
 ## Deployment model
@@ -77,10 +77,13 @@ network deployment. Register
 for a new configuration, the administration UI can calculate `providerId` as `oidc-{slug}` before
 credentials are submitted. Do not derive callback URLs from proxy forwarding headers. The current branch deliberately has no
 environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
-client secrets and audits provider creation, replacement, validation, and guarded deletion. Role-mapping administration and the
-role-derived session invalidation boundary are implemented; mapping updates and the
-operator interface are not complete. Operators should not edit SQLite manually to bypass that
-boundary.
+client secrets and audits provider creation, replacement, validation, and guarded deletion.
+Authorized administrators and recovery sessions reach the guided control room through
+**Account & access → Identity providers**. It previews exact callback and logout endpoints before
+the first credential is submitted, saves new providers disabled, requires fresh discovery
+validation before offering enablement, and manages exact typed role mappings. Role-mapping
+administration and the role-derived session invalidation boundary are implemented; mapping
+updates are not yet available. Operators should not edit SQLite manually to bypass that boundary.
 
 ## Target production network layout
 

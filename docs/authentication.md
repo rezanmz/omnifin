@@ -9,9 +9,9 @@ and contributors changing a security-sensitive flow.
 > resolution, direct Jellyfin password and Quick Connect sign-in, password and Quick
 > Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
 > front-channel logout, opaque sessions, and break-glass
-> recovery. The permission-checked provider administration API can create, list, and validate
-> encrypted configurations and administer provider lifecycles and explicit role mappings, but mapping updates, the
-> operator interface, and the live Authentik gate remain incomplete. Phase 1 has not passed its release
+> recovery. The permission-checked identity control room and API can create, list, and validate
+> encrypted configurations and administer provider lifecycles and explicit role mappings. Mapping
+> updates and the live Authentik gate remain incomplete. Phase 1 has not passed its release
 > gate; treat this document as development evidence, not a production support claim.
 
 ## Current development surface
@@ -50,6 +50,14 @@ conflicting roles at the same highest matching priority deny sign-in. Successful
 write sanitized audit records and immediately revoke active sessions for users whose authority
 came from that provider's default or mapped role. Claim paths and expected values are deliberately
 excluded from audit metadata.
+
+The browser control room is available only when the current principal holds
+`recovery.oidc.manage`. It uses the same normalized contracts and CSRF boundary as the API, never
+receives stored client-secret values, and converts a changed administrative session into a
+signed-out state. Its guided Authentik path reserves `oidc-{slug}` before creation so the exact
+callback and logout URLs can be registered without a temporary provider or wildcard redirect.
+Empty, loading, offline, permission-denied, validation-failure, and destructive-confirmation states
+are explicit.
 
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default

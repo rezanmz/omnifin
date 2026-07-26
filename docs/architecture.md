@@ -12,7 +12,8 @@ the roadmap records when each area has passed its verification gate.
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
-> administration now exist, while mapping updates, complete authorization,
+> administration now exist through both normalized APIs and a permission-checked control room,
+> while mapping updates, complete authorization,
 > connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -31,8 +32,9 @@ also migrates SQLite, validates public configuration, redacts structured logs, a
 provides isolated connector fixture and probe tooling.
 
 The provider-administration boundary can create, list, replace, freshly validate, and safely delete
-encrypted, audited OIDC records and can list, create, and delete exact role mappings. Mapping updates and its
-operator interface remain incomplete.
+encrypted, audited OIDC records and can list, create, and delete exact role mappings. Its browser
+control room exposes only normalized secret-free records, reserves exact provider endpoints before
+creation, and requires validation before offering enablement. Mapping updates remain incomplete.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented;

@@ -457,6 +457,14 @@ export function AccountSecurityPanel({
                     </div>
                   ) : (
                     <div className="account-card__actions">
+                      {snapshot!.principal.permissions.includes("recovery.oidc.manage") ? (
+                        <Link
+                          className="account-action account-action--primary"
+                          href="/settings/identity-providers"
+                        >
+                          <KeyRound aria-hidden="true" size={17} /> Identity providers
+                        </Link>
+                      ) : null}
                       {snapshot!.principal.authenticationMethod.kind === "oidc" ? (
                         <button
                           className="account-action account-action--quiet"

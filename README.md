@@ -63,10 +63,11 @@ normalized contracts, connector probes, migration tooling, and the application s
 and sign-in experience.
 
 All upstream access crosses the gateway boundary. Phase 1 is still in development:
-supported provider administration, live Authentik verification, complete
-permission enforcement, and encrypted connector administration remain
-release-gate work. Later phases add live events, media proxying, and complete upstream
-workflows.
+live Authentik verification, complete permission enforcement, and encrypted connector
+administration remain release-gate work. The permission-checked identity control room
+now guides provider configuration, fresh validation, guarded enablement and deletion,
+and exact typed role mappings. Later phases add live events, media proxying, and
+complete upstream workflows.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the

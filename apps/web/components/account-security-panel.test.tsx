@@ -79,6 +79,33 @@ describe("AccountSecurityPanel", () => {
     );
   });
 
+  it("reveals identity-provider administration only to authorized principals", () => {
+    const { rerender } = render(<AccountSecurityPanel initialOutcome={ready} />);
+    expect(screen.queryByRole("link", { name: "Identity providers" })).not.toBeInTheDocument();
+
+    rerender(
+      <AccountSecurityPanel
+        key="authorized-administrator"
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              permissions: [...principal.permissions, "recovery.oidc.manage"],
+              role: "admin",
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Identity providers" })).toHaveAttribute(
+      "href",
+      "/settings/identity-providers",
+    );
+  });
+
   it("requires deliberate confirmation before revoking an identity link", async () => {
     const user = userEvent.setup();
     const pendingPrincipal: SessionPrincipal = {

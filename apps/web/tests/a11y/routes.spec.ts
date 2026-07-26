@@ -16,6 +16,18 @@ const routes = [
   { label: "Jellyfin Quick Connect pairing", path: "/link/jellyfin?test-view=quick-connect" },
   { label: "account security", path: "/settings" },
   {
+    label: "identity provider administration",
+    path: "/settings/identity-providers?test-view=ready",
+  },
+  {
+    label: "identity provider onboarding",
+    path: "/settings/identity-providers?test-view=empty",
+  },
+  {
+    label: "restricted identity provider administration",
+    path: "/settings/identity-providers?test-view=forbidden",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
