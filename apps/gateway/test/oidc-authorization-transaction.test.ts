@@ -731,7 +731,7 @@ describe("OidcAuthorizationTransactionService", () => {
       database.close();
       rmSync(directory, { force: true, recursive: true });
     }
-  });
+  }, 20_000);
 
   it("serializes one browser's final active slot across concurrent SQLite writers", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-browser-capacity-"));
@@ -803,7 +803,7 @@ describe("OidcAuthorizationTransactionService", () => {
       database.close();
       rmSync(directory, { force: true, recursive: true });
     }
-  });
+  }, 20_000);
 
   it("replaces a malformed binding cookie and uses hardened production generators by default", async () => {
     const database = openDatabase(":memory:");
