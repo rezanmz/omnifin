@@ -57,6 +57,19 @@ async function visible(locator) {
   }
 }
 
+async function waitForInteraction(page, webOrigin, locators) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const current = new URL(page.url());
+    if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return "callback";
+    for (const locator of locators) {
+      if (await visible(locator)) return "interaction";
+    }
+    await page.waitForTimeout(100);
+  }
+  return "unrecognized";
+}
+
 async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
   currentStage = `${attempt}_navigation`;
   await page.goto(startPath, { waitUntil: "domcontentloaded" });
@@ -79,6 +92,24 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
         'input[name="password"], input[autocomplete="current-password"], input[type="password"]',
       )
       .first();
+    const namedAction = page
+      .getByRole("button", {
+        name: /^(?:allow|authorize|continue|log in|sign in|submit)$/iu,
+      })
+      .first();
+    const submitAction = page.locator('button[type="submit"], input[type="submit"]').last();
+    const readiness = await waitForInteraction(page, webOrigin, [
+      usernameInput,
+      passwordInput,
+      namedAction,
+      submitAction,
+    ]);
+    if (readiness === "callback") return;
+    if (readiness === "unrecognized") {
+      currentStage = `${attempt}_unrecognized`;
+      throw new BrowserCheckError();
+    }
+
     let completedField = false;
     if (await visible(usernameInput)) {
       currentStage = `${attempt}_username`;
@@ -91,12 +122,6 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       completedField = true;
     }
 
-    const namedAction = page
-      .getByRole("button", {
-        name: /^(?:allow|authorize|continue|log in|sign in|submit)$/iu,
-      })
-      .first();
-    const submitAction = page.locator('button[type="submit"], input[type="submit"]').last();
     const action = (await visible(namedAction)) ? namedAction : submitAction;
     if (!completedField) currentStage = `${attempt}_consent`;
     if (!(completedField || (await visible(action)))) {
