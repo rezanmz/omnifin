@@ -237,7 +237,9 @@ function assertPrincipal(current, issuer, subject) {
 }
 
 async function logoutAtAuthentik(page, issuerOrigin) {
-  await page.goto(`${issuerOrigin}/if/flow/default-invalidation-flow/`, {
+  // Enter the provider's OIDC session endpoint directly so this path cannot
+  // accidentally exercise Omnifin's RP-initiated logout route.
+  await page.goto(`${issuerOrigin}/application/o/omnifin/end-session/`, {
     waitUntil: "domcontentloaded",
   });
   assert(new URL(page.url()).origin === issuerOrigin);
@@ -283,6 +285,13 @@ async function authentikTaskOutcome(request, issuerOrigin, token, actorName) {
 
 async function backchannelTaskFailureStage(request, issuerOrigin, token) {
   try {
+    const delivery = await authentikTaskOutcome(
+      request,
+      issuerOrigin,
+      token,
+      "send_backchannel_logout_request",
+    );
+    if (delivery !== "missing") return `backchannel_send_${delivery}`;
     const dispatch = await authentikTaskOutcome(
       request,
       issuerOrigin,
@@ -290,13 +299,7 @@ async function backchannelTaskFailureStage(request, issuerOrigin, token) {
       "backchannel_logout_notification_dispatch",
     );
     if (dispatch !== "completed") return `backchannel_dispatch_${dispatch}`;
-    const delivery = await authentikTaskOutcome(
-      request,
-      issuerOrigin,
-      token,
-      "send_backchannel_logout_request",
-    );
-    return `backchannel_send_${delivery}`;
+    return "backchannel_send_missing";
   } catch {
     return "backchannel_task_status_unavailable";
   }
