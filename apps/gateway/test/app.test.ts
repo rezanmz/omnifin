@@ -478,6 +478,13 @@ describe("gateway application", () => {
         async () => ({ accepted: true }),
       ),
     ).toThrow(/limited to its dedicated POST route/i);
+    expect(() =>
+      app.post(
+        "/v1/unsafe-session-form",
+        { config: { omnifinSecurity: { kind: "session-form" } } },
+        async () => ({ accepted: true }),
+      ),
+    ).toThrow(/limited to the OIDC logout POST route/i);
     await app.close();
   });
 

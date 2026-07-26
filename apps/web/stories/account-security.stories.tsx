@@ -53,6 +53,12 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Connected: Story = {};
+export const ProviderLogoutConfirmation: Story = {
+  args: { initialConfirmation: "provider" },
+};
+export const LogoutEverywhereConfirmation: Story = {
+  args: { initialConfirmation: "logout" },
+};
 export const LinkRequired: Story = {
   args: {
     initialOutcome: {

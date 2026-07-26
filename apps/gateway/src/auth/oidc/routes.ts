@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { sessionCookieName, writeSessionCookie } from "../session-cookie.js";
+import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SessionIssuanceLimitError } from "../session-service.js";
 import { SafeHttpError } from "../../http-error.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
@@ -33,6 +33,7 @@ import {
   type OidcProtocolDependencies,
 } from "./protocol.js";
 import {
+  buildOidcRuntimeEndSessionUrl,
   createOidcProviderRuntimeBindingVerifier,
   OidcProviderRegistry,
   oidcProviderRuntimeBinding,
@@ -43,6 +44,7 @@ import { OidcSignInService } from "./sign-in-service.js";
 
 const ALLOWED_RETURN_PATHS = new Set(["/", "/settings"]);
 const MAX_CALLBACK_REQUEST_TARGET_LENGTH = 16_384;
+const MAX_PROVIDER_LOGOUT_LOCATION_LENGTH = 16_384;
 const MAX_START_REQUEST_TARGET_LENGTH = 4_096;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -390,6 +392,53 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
       statusCode: 429,
     });
   };
+
+  app.post(
+    "/v1/auth/oidc/logout",
+    {
+      config: {
+        omnifinSecurity: { kind: "session-form" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      const material = app.sessionService.beginValidatedOidcLogout(request.validatedSession, {
+        ipAddress: request.ip,
+        requestId: request.id,
+      });
+      if (!material) {
+        throw new SafeHttpError({
+          code: "invalid_logout_request",
+          message: "The OIDC logout request could not be completed.",
+          statusCode: 400,
+        });
+      }
+      clearSessionCookie(reply, app.appConfig);
+      const localLogoutLocation = "/login?loggedOut=1";
+      try {
+        const runtime = await providerRegistry.discover(material.providerId);
+        const parameters: Record<string, string> = {
+          client_id: runtime.provider.clientId,
+          post_logout_redirect_uri: new URL(localLogoutLocation, app.appConfig.baseUrl).href,
+        };
+        if (material.idTokenHint !== undefined) {
+          parameters.id_token_hint = material.idTokenHint;
+        }
+        const providerLogoutLocation = buildOidcRuntimeEndSessionUrl(runtime, parameters);
+        if (providerLogoutLocation.href.length > MAX_PROVIDER_LOGOUT_LOCATION_LENGTH) {
+          throw new OidcBrowserRouteError();
+        }
+        return reply.redirect(providerLogoutLocation.href, 303);
+      } catch {
+        return reply.redirect(localLogoutLocation, 303);
+      }
+    },
+  );
 
   app.get<{
     Params: { providerId: string };

@@ -21,6 +21,7 @@ const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
 const SESSION_REPLACEMENT_CAPABILITY_BRAND = Symbol("session-replacement-capability");
 const VALIDATED_OIDC_PAIRING_SESSION_BRAND = Symbol("validated-oidc-pairing-session");
+const OIDC_LOGOUT_MATERIAL_BRAND = Symbol("oidc-logout-material");
 
 export const MAX_ACTIVE_SESSIONS_PER_USER = 16;
 export const MAX_RECOVERY_SESSION_ISSUANCES_PER_WINDOW = 8;
@@ -109,6 +110,14 @@ export interface ValidatedOidcPairingSession {
   readonly sessionId: string;
   readonly userId: string;
   readonly [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true;
+}
+
+/** @internal Non-serializable provider material released only after local session revocation. */
+export interface OidcLogoutMaterial {
+  readonly idTokenHint: string | undefined;
+  readonly providerId: string;
+  readonly [OIDC_LOGOUT_MATERIAL_BRAND]: true;
+  toJSON(): never;
 }
 
 /** @internal An opaque, transaction-scoped proof of a replaceable session token. */
@@ -231,6 +240,42 @@ function createSessionReplacementCapability(): SessionReplacementCapability {
     writable: false,
   });
   return Object.freeze(capability);
+}
+
+function createOidcLogoutMaterial(
+  providerId: string,
+  idTokenHint: string | undefined,
+): OidcLogoutMaterial {
+  const material = Object.create(null) as OidcLogoutMaterial;
+  Object.defineProperties(material, {
+    [OIDC_LOGOUT_MATERIAL_BRAND]: {
+      configurable: false,
+      enumerable: false,
+      value: true,
+      writable: false,
+    },
+    idTokenHint: {
+      configurable: false,
+      enumerable: false,
+      value: idTokenHint,
+      writable: false,
+    },
+    providerId: {
+      configurable: false,
+      enumerable: false,
+      value: providerId,
+      writable: false,
+    },
+    toJSON: {
+      configurable: false,
+      enumerable: false,
+      value: () => {
+        throw new TypeError("OIDC logout material cannot be serialized.");
+      },
+      writable: false,
+    },
+  });
+  return Object.freeze(material);
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -1074,6 +1119,86 @@ export class SessionService {
       return false;
     }
     return this.revokeSessionById(validatedSession.sessionId, context);
+  }
+
+  /** @internal Atomically revokes a CSRF-proven OIDC session before releasing provider hints. */
+  public beginValidatedOidcLogout(
+    validatedSession: unknown,
+    context: SessionRequestContext = {},
+  ): OidcLogoutMaterial | null {
+    if (
+      !validatedSession ||
+      typeof validatedSession !== "object" ||
+      (validatedSession as Partial<ValidatedSession>)[VALIDATED_SESSION_BRAND] !== true ||
+      !SESSION_ID_PATTERN.test((validatedSession as Partial<ValidatedSession>).sessionId ?? "")
+    ) {
+      return null;
+    }
+
+    return this.withImmediateTransaction(() => {
+      const now = this.currentTime();
+      const row = this.loadJoinedSessionById((validatedSession as ValidatedSession).sessionId);
+      const principalRecord = row && mapPrincipalRecord(row);
+      const principal = principalRecord && buildSessionPrincipal(principalRecord, now);
+      if (
+        !row ||
+        !principal ||
+        !this.sessionLifecycleIsActive(row, now) ||
+        row.authMethod !== "oidc" ||
+        principal.authenticationMethod.kind !== "oidc" ||
+        !row.oidcProviderId ||
+        principal.authenticationMethod.providerId !== row.oidcProviderId
+      ) {
+        return null;
+      }
+
+      let idTokenHint: string | undefined;
+      if (row.encryptedIdTokenHint !== null) {
+        try {
+          idTokenHint = optionalBoundedText(
+            this.cipher.decrypt(row.encryptedIdTokenHint, idTokenHintContext(row.sessionId)),
+            16_384,
+            "OIDC ID token hint",
+          );
+        } catch {
+          idTokenHint = undefined;
+        }
+      }
+
+      const revoked = this.database.sqlite
+        .prepare(
+          `update sessions
+           set revoked_at = max(@now, created_at)
+           where id = @sessionId
+             and auth_method = 'oidc'
+             and oidc_provider_id = @providerId
+             and revoked_at is null
+             and created_at <= @now
+           returning
+             id as sessionId,
+             user_id as userId,
+             auth_method as authMethod,
+             created_at as createdAt`,
+        )
+        .get({
+          now: now.getTime(),
+          providerId: row.oidcProviderId,
+          sessionId: row.sessionId,
+        }) as RevokedSessionRow | undefined;
+      if (!revoked) return null;
+      this.insertAuditEvent(revoked, {
+        context,
+        eventType: "auth.oidc.logout_started",
+        metadata: {
+          reason: "rp_initiated_oidc_logout",
+          idTokenHintAvailable: idTokenHint !== undefined,
+        },
+        occurredAt: now,
+        outcome: "success",
+        targetId: revoked.sessionId,
+      });
+      return createOidcLogoutMaterial(row.oidcProviderId, idTokenHint);
+    });
   }
 
   public revokeAllValidatedSessions(

@@ -112,3 +112,56 @@ test("account settings confirms revocation and sends no request body", async ({ 
     "/link/jellyfin",
   );
 });
+
+test("OIDC account settings submits provider logout as an exact native form", async ({ page }) => {
+  await page.route("**/api/auth/session", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({ csrfToken, principal }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("**/api/auth/identity-links", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({ links: [link] }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  let logoutRequest:
+    | {
+        body: string | null;
+        contentType: string;
+        csrfHeader: string;
+        method: string;
+        origin: string;
+      }
+    | undefined;
+  await page.route("**/api/auth/oidc/logout", async (route) => {
+    const request = route.request();
+    logoutRequest = {
+      body: request.postData(),
+      contentType: request.headers()["content-type"] ?? "",
+      csrfHeader: request.headers()["x-omnifin-csrf"] ?? "",
+      method: request.method(),
+      origin: request.headers().origin ?? "",
+    };
+    await route.fulfill({ body: "", status: 204 });
+  });
+
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "Sign out through provider" }).click();
+  await expect(page.getByRole("group", { name: "Confirm identity provider logout" })).toContainText(
+    "Other Omnifin devices stay signed in",
+  );
+  await page.getByRole("button", { name: "Continue sign out" }).click();
+
+  await expect.poll(() => logoutRequest).toBeDefined();
+  expect(logoutRequest).toEqual({
+    body: `csrfToken=${csrfToken}`,
+    contentType: "application/x-www-form-urlencoded",
+    csrfHeader: "",
+    method: "POST",
+    origin: "http://127.0.0.1:3000",
+  });
+});

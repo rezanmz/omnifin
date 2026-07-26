@@ -8,8 +8,8 @@ design and review.
 > [!IMPORTANT]
 > The current checkpoint implements defensive foundations plus OIDC authentication,
 > opaque local sessions, identity resolution, authentication audit records, and hidden
-> recovery access. Password and Quick Connect Jellyfin linking are implemented, while
-> provider-coordinated OIDC logout, complete permission enforcement, connector
+> recovery access. Password and Quick Connect Jellyfin linking and RP-initiated logout
+> are implemented, while provider-initiated OIDC logout, complete permission enforcement, connector
 > administration, media proxying, and upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
@@ -111,6 +111,10 @@ diagnostic.
 - **Information disclosure:** fixed browser error codes, response-schema allowlists,
   encrypted client secrets, no-store responses, and structured-log redaction keep
   provider details and assertions server-side.
+- **Logout integrity:** an exact same-origin form CSRF proof authorizes RP-initiated
+  logout. The gateway atomically revokes and audits the local session before releasing
+  non-serializable provider material, uses only the validated discovered end-session
+  endpoint, and falls back to a completed local logout if discovery is unavailable.
 - **Denial of service:** bounded request targets, per-client start and callback limits,
   a server-wide start limit, separate non-blocking server-wide start and callback
   audit-write budgets, and durable no-write caps for duplicate and saturated failure
@@ -133,7 +137,7 @@ diagnostic.
 
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
-erasure, revocation, relinking, and secret-preservation tests. Provider-coordinated
+erasure, revocation, relinking, and secret-preservation tests. Provider-initiated
 OIDC logout and full permission enforcement still need completed
 threat-model gates before Phase 1 can pass.
 

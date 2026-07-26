@@ -2514,6 +2514,170 @@ describe("SessionService", () => {
     }
   });
 
+  it("atomically begins RP-initiated OIDC logout with opaque provider material", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const harness = createHarness(database);
+      const current = issueOidcSession(harness.service);
+      const sibling = issueOidcSession(harness.service);
+      const validated = harness.service.validateSessionCsrf(
+        current.sessionToken,
+        current.csrfToken,
+      );
+
+      const material = harness.service.beginValidatedOidcLogout(validated, {
+        ipAddress: "192.0.2.25",
+        requestId: "request_oidc_logout_123",
+      });
+
+      expect(material).toMatchObject({
+        idTokenHint: "private-id-token-hint",
+        providerId: "oidc-home",
+      });
+      expect(Object.keys(material!)).toEqual([]);
+      expect(() => JSON.stringify(material)).toThrow(/cannot be serialized/i);
+      expect(harness.service.resolveAndRefresh(current.sessionToken)).toBeNull();
+      expect(harness.service.resolveAndRefresh(sibling.sessionToken)).toMatchObject({
+        principal: { sessionId: sibling.principal.sessionId },
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+              actor_user_id as actorUserId,
+              actor_session_id as actorSessionId,
+              actor_auth_method as actorAuthMethod,
+              event_type as eventType,
+              outcome,
+              request_id as requestId,
+              metadata_json as metadataJson,
+              ip_hash as ipHash
+             from audit_events
+             where event_type = 'auth.oidc.logout_started'`,
+          )
+          .get(),
+      ).toEqual({
+        actorAuthMethod: "oidc",
+        actorSessionId: current.principal.sessionId,
+        actorUserId: "user-1",
+        eventType: "auth.oidc.logout_started",
+        ipHash: expect.any(String),
+        metadataJson: '{"reason":"rp_initiated_oidc_logout","idTokenHintAvailable":true}',
+        outcome: "success",
+        requestId: "request_oidc_logout_123",
+      });
+      const persisted = JSON.stringify({
+        audits: database.sqlite.prepare("select * from audit_events").all(),
+        sessions: database.db.select().from(sessions).all(),
+      });
+      expect(persisted).not.toContain("private-id-token-hint");
+      expect(persisted).not.toContain(current.sessionToken);
+      expect(persisted).not.toContain(current.csrfToken);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects non-OIDC, stale, and unbranded logout proofs without writing", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const harness = createHarness(database);
+      const oidc = issueOidcSession(harness.service);
+      const direct = harness.service.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "link-1",
+          userId: "user-1",
+        },
+      });
+      const directValidated = harness.service.validateSessionCsrf(
+        direct.sessionToken,
+        direct.csrfToken,
+      );
+      const staleValidated = harness.service.validateSessionCsrf(oidc.sessionToken, oidc.csrfToken);
+      harness.advance(11 * 60 * 1_000);
+      const before = totalChanges(database);
+
+      expect(harness.service.beginValidatedOidcLogout(directValidated)).toBeNull();
+      expect(harness.service.beginValidatedOidcLogout(staleValidated)).toBeNull();
+      expect(
+        harness.service.beginValidatedOidcLogout({ sessionId: oidc.principal.sessionId }),
+      ).toBeNull();
+      expect(totalChanges(database)).toBe(before);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rolls back OIDC logout revocation when its audit cannot be persisted", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const harness = createHarness(database);
+      const issued = issueOidcSession(harness.service);
+      const validated = harness.service.validateSessionCsrf(issued.sessionToken, issued.csrfToken);
+      database.sqlite.exec(`create trigger fail_oidc_logout_audit
+        before insert on audit_events
+        when new.event_type = 'auth.oidc.logout_started'
+        begin
+          select raise(abort, 'fixture OIDC logout audit failure');
+        end`);
+
+      expect(() => harness.service.beginValidatedOidcLogout(validated)).toThrow(
+        "fixture OIDC logout audit failure",
+      );
+      expect(harness.service.resolveAndRefresh(issued.sessionToken)).toMatchObject({
+        principal: { sessionId: issued.principal.sessionId },
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.oidc.logout_started'",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("still revokes locally when a stored OIDC logout hint fails integrity checks", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      const harness = createHarness(database);
+      const issued = issueOidcSession(harness.service);
+      const validated = harness.service.validateSessionCsrf(issued.sessionToken, issued.csrfToken);
+      database.sqlite
+        .prepare(
+          "update sessions set encrypted_id_token_hint = 'v2.corrupted' where id = @sessionId",
+        )
+        .run({ sessionId: issued.principal.sessionId });
+
+      const material = harness.service.beginValidatedOidcLogout(validated);
+
+      expect(material).toMatchObject({ idTokenHint: undefined, providerId: "oidc-home" });
+      expect(harness.service.resolveAndRefresh(issued.sessionToken)).toBeNull();
+      expect(
+        database.sqlite
+          .prepare(
+            "select metadata_json as metadataJson from audit_events where event_type = 'auth.oidc.logout_started'",
+          )
+          .get(),
+      ).toEqual({
+        metadataJson: '{"reason":"rp_initiated_oidc_logout","idTokenHintAvailable":false}',
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("revokes every session owned by the validated user without affecting another account", () => {
     const database = openDatabase(":memory:");
     try {

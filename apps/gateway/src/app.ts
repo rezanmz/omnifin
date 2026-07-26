@@ -4,7 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { createApiError } from "@omnifin/contracts/errors";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
@@ -63,6 +63,29 @@ function frameworkErrorStatus(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599
     ? value
     : 500;
+}
+
+function sessionCsrfProof(request: FastifyRequest) {
+  if (request.method !== "POST" || request.routeOptions.url !== "/v1/auth/oidc/logout") {
+    return request.headers[SESSION_CSRF_HEADER];
+  }
+  if (request.headers[SESSION_CSRF_HEADER] !== undefined) return undefined;
+  const contentType = request.headers["content-type"];
+  if (
+    typeof contentType !== "string" ||
+    !/^application\/x-www-form-urlencoded(?:\s*;\s*charset=utf-8)?$/iu.test(contentType.trim())
+  ) {
+    return undefined;
+  }
+  if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)) {
+    return undefined;
+  }
+  const body = request.body as Record<string, unknown>;
+  if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "csrfToken")) return undefined;
+  const csrfToken = Object.getOwnPropertyDescriptor(body, "csrfToken");
+  return csrfToken && "value" in csrfToken && typeof csrfToken.value === "string"
+    ? csrfToken.value
+    : undefined;
 }
 
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
@@ -172,7 +195,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       validateSessionCsrf: (request) => {
         const validatedSession = sessionService.validateSessionCsrf(
           request.cookies[sessionCookieName(config)],
-          request.headers[SESSION_CSRF_HEADER],
+          sessionCsrfProof(request),
           { ipAddress: request.ip, requestId: request.id },
         );
         request.validatedSession = validatedSession;

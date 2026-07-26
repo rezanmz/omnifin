@@ -43,6 +43,7 @@ export type IdentityRevocationOutcome =
 
 interface AccountSecurityPanelProperties {
   displayProfile?: DisplayProfile;
+  initialConfirmation?: "logout" | "provider" | "revoke" | null;
   initialOutcome?: AccountSecurityLoadOutcome;
   loadAccount?: () => Promise<AccountSecurityLoadOutcome>;
   onSignedOut?: () => void;
@@ -201,6 +202,7 @@ function verifiedLabel(timestamp: string | null) {
 
 export function AccountSecurityPanel({
   displayProfile = "standard",
+  initialConfirmation = null,
   initialOutcome,
   loadAccount = defaultLoadAccount,
   onSignedOut = defaultSignedOutNavigation,
@@ -208,8 +210,10 @@ export function AccountSecurityPanel({
   revokeIdentity = defaultRevokeIdentity,
 }: AccountSecurityPanelProperties) {
   const [outcome, setOutcome] = useState<AccountSecurityLoadOutcome | null>(initialOutcome ?? null);
-  const [operation, setOperation] = useState<"idle" | "logout" | "revoke">("idle");
-  const [confirmation, setConfirmation] = useState<"logout" | "revoke" | null>(null);
+  const [operation, setOperation] = useState<"idle" | "logout" | "provider" | "revoke">("idle");
+  const [confirmation, setConfirmation] = useState<"logout" | "provider" | "revoke" | null>(
+    initialConfirmation,
+  );
   const [operationError, setOperationError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -374,7 +378,53 @@ export function AccountSecurityPanel({
                   </div>
                 </dl>
                 <div className="account-card__footer">
-                  {confirmation === "logout" ? (
+                  {confirmation === "provider" ? (
+                    <div
+                      className="account-confirmation"
+                      role="group"
+                      aria-label="Confirm identity provider logout"
+                    >
+                      <p>
+                        Omnifin closes this browser session, then asks your identity provider to
+                        close its browser session. Other Omnifin devices stay signed in.
+                      </p>
+                      <div>
+                        <button
+                          className="account-action account-action--quiet"
+                          disabled={operation !== "idle"}
+                          onClick={() => setConfirmation(null)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <form
+                          action="/api/auth/oidc/logout"
+                          aria-label="Identity provider logout"
+                          className="account-provider-logout"
+                          method="post"
+                          onSubmit={() => setOperation("provider")}
+                        >
+                          <input name="csrfToken" type="hidden" value={snapshot!.csrfToken} />
+                          <button
+                            className="account-action account-action--danger"
+                            disabled={operation !== "idle"}
+                            type="submit"
+                          >
+                            {operation === "provider" ? (
+                              <LoaderCircle
+                                aria-hidden="true"
+                                className="jellyfin-login-form__spinner"
+                                size={16}
+                              />
+                            ) : (
+                              <LogOut aria-hidden="true" size={16} />
+                            )}
+                            Continue sign out
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  ) : confirmation === "logout" ? (
                     <div className="account-confirmation" role="group" aria-label="Confirm logout">
                       <p>This signs you out on every browser and device using Omnifin.</p>
                       <div>
@@ -406,13 +456,24 @@ export function AccountSecurityPanel({
                       </div>
                     </div>
                   ) : (
-                    <button
-                      className="account-action account-action--danger-outline"
-                      onClick={() => setConfirmation("logout")}
-                      type="button"
-                    >
-                      <LogOut aria-hidden="true" size={17} /> Sign out everywhere
-                    </button>
+                    <div className="account-card__actions">
+                      {snapshot!.principal.authenticationMethod.kind === "oidc" ? (
+                        <button
+                          className="account-action account-action--quiet"
+                          onClick={() => setConfirmation("provider")}
+                          type="button"
+                        >
+                          <LogOut aria-hidden="true" size={17} /> Sign out through provider
+                        </button>
+                      ) : null}
+                      <button
+                        className="account-action account-action--danger-outline"
+                        onClick={() => setConfirmation("logout")}
+                        type="button"
+                      >
+                        <LogOut aria-hidden="true" size={17} /> Sign out everywhere
+                      </button>
+                    </div>
                   )}
                 </div>
               </article>

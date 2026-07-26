@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ServiceIdentityLink, SessionPrincipal } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -127,6 +127,58 @@ describe("AccountSecurityPanel", () => {
 
     await waitFor(() => expect(revokeAllSessions).toHaveBeenCalledWith(csrfToken));
     expect(onSignedOut).toHaveBeenCalledOnce();
+  });
+
+  it("uses a native exact-body form for identity-provider logout", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AccountSecurityPanel initialOutcome={ready} />);
+
+    await user.click(screen.getByRole("button", { name: "Sign out through provider" }));
+
+    expect(
+      screen.getByRole("group", { name: "Confirm identity provider logout" }),
+    ).toHaveTextContent("Other Omnifin devices stay signed in");
+    const form = screen.getByRole("form", { name: "Identity provider logout" });
+    expect(form).toHaveAttribute("action", "/api/auth/oidc/logout");
+    expect(form).toHaveAttribute("method", "post");
+    const fields = form.querySelectorAll("input");
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toHaveAttribute("name", "csrfToken");
+    expect(fields[0]).toHaveAttribute("type", "hidden");
+    expect(fields[0]).toHaveValue(csrfToken);
+    expect(container.querySelector('[name="csrfToken"]')).toBe(fields[0]);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Sign out through provider" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Sign out through provider" }));
+    const submittedForm = screen.getByRole("form", { name: "Identity provider logout" });
+    fireEvent.submit(submittedForm);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Continue sign out" })).toBeDisabled(),
+    );
+  });
+
+  it("does not offer provider logout for a direct Jellyfin session", () => {
+    render(
+      <AccountSecurityPanel
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              authenticationMethod: { kind: "jellyfin" },
+              externalIdentity: null,
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Sign out through provider" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out everywhere" })).toBeVisible();
   });
 
   it("sends no body and includes the in-memory CSRF proof on link revocation", async () => {

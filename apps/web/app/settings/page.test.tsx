@@ -6,13 +6,13 @@ import SettingsPage from "./page";
 describe("SettingsPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("opens the account-and-access center with geometry-preserving loading states", () => {
+  it("opens the account-and-access center with geometry-preserving loading states", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => new Promise<Response>(() => undefined)),
     );
 
-    render(<SettingsPage />);
+    render(await SettingsPage({ searchParams: Promise.resolve({}) }));
 
     expect(
       screen.getByRole("heading", { level: 1, name: "Your identity, under your control." }),

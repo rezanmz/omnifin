@@ -2367,6 +2367,10 @@ a {
   gap: 9px;
 }
 
+.account-provider-logout {
+  display: inline-flex;
+}
+
 .account-action {
   align-items: center;
   background: transparent;

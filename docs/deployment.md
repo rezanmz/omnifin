@@ -9,8 +9,8 @@ untagged image or default branch build as a production support promise.
 > support promise. It can run the OIDC browser flow for an already configured provider,
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
-> provide hidden recovery access. There is not yet a supported provider-administration
-> path, provider-coordinated OIDC logout, complete authorization, connector
+> provide RP-initiated logout and hidden recovery access. There is not yet a supported
+> provider-administration path, provider-initiated OIDC logout, complete authorization, connector
 > administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 

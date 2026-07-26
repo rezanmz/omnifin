@@ -5,6 +5,7 @@ import {
   type CustomFetch,
   type ServerMetadata,
 } from "openid-client";
+import { sessionResponseSchema } from "@omnifin/contracts/auth";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import {
@@ -50,6 +51,7 @@ function providerMetadata(): ServerMetadata {
   return {
     authorization_endpoint: "https://identity.example.test/application/o/authorize/",
     code_challenge_methods_supported: ["S256"],
+    end_session_endpoint: "https://identity.example.test/application/o/omnifin/end-session/",
     grant_types_supported: ["authorization_code"],
     id_token_signing_alg_values_supported: ["RS256"],
     issuer,
@@ -166,7 +168,300 @@ function transactionBindingCookie(
   return `${cookie.name}=${value ?? cookie.value}`;
 }
 
+async function issueBrowserOidcSession(
+  app: Awaited<ReturnType<typeof createApp>>,
+  binding = browserBindingToken,
+) {
+  const started = await app.inject({
+    headers: { cookie: `__Host-omnifin_oidc_binding=${binding}` },
+    method: "GET",
+    url: `/v1/auth/oidc/${providerId}/start`,
+  });
+  const state = new URL(started.headers.location!).searchParams.get("state");
+  const callback = await app.inject({
+    headers: { cookie: transactionBindingCookie(started, state) },
+    method: "GET",
+    url: `/v1/auth/oidc/callback/${providerId}?code=authorization-code&state=${state}`,
+  });
+  const session = callback.cookies.find(({ name }) => name === "__Host-omnifin_session");
+  if (!session) throw new Error("Expected an OIDC session cookie.");
+  const cookie = `${session.name}=${session.value}`;
+  const inspected = await app.inject({
+    headers: { cookie },
+    method: "GET",
+    url: "/v1/auth/session",
+  });
+  const body = sessionResponseSchema.parse(inspected.json());
+  if (!body.csrfToken || !body.principal) throw new Error("Expected an active OIDC session.");
+  return { cookie, csrfToken: body.csrfToken, principal: body.principal };
+}
+
 describe("OIDC browser routes", () => {
+  it("revokes locally before redirecting a form-submitted logout to the validated provider", async () => {
+    const { app, database, discover } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+
+      const response = await app.inject({
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: session.cookie,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: new URLSearchParams({ csrfToken: session.csrfToken }).toString(),
+        url: "/v1/auth/oidc/logout",
+      });
+
+      expect(response.statusCode).toBe(303);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(setCookieHeader(response.headers["set-cookie"])).toContain("__Host-omnifin_session=;");
+      const providerLogout = new URL(response.headers.location!);
+      expect(providerLogout.origin + providerLogout.pathname).toBe(
+        "https://identity.example.test/application/o/omnifin/end-session/",
+      );
+      expect(providerLogout.searchParams.get("client_id")).toBe("omnifin-client");
+      expect(providerLogout.searchParams.get("id_token_hint")).toBe("header.payload.signature");
+      expect(providerLogout.searchParams.get("post_logout_redirect_uri")).toBe(
+        "https://omnifin.example/login?loggedOut=1",
+      );
+      expect(response.body).not.toContain("header.payload.signature");
+      expect(response.body).not.toContain(session.csrfToken);
+      expect(discover).toHaveBeenCalledOnce();
+      expect(
+        database.sqlite
+          .prepare("select revoked_at is not null as revoked from sessions where id = @sessionId")
+          .get({ sessionId: session.principal.sessionId }),
+      ).toEqual({ revoked: 1 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select event_type as eventType, metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.oidc.logout_started'`,
+          )
+          .get(),
+      ).toEqual({
+        eventType: "auth.oidc.logout_started",
+        metadataJson: '{"reason":"rp_initiated_oidc_logout","idTokenHintAvailable":true}',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("accepts only an exact same-origin form CSRF proof for browser logout", async () => {
+    const { app } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+      const baseHeaders = {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: session.cookie,
+        origin: "https://omnifin.example",
+      };
+      const requests = [
+        {
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            cookie: session.cookie,
+          },
+          payload: new URLSearchParams({ csrfToken: session.csrfToken }).toString(),
+        },
+        {
+          headers: { ...baseHeaders, "content-type": "application/json" },
+          payload: JSON.stringify({ csrfToken: session.csrfToken }),
+        },
+        { headers: baseHeaders, payload: "" },
+        {
+          headers: baseHeaders,
+          payload: new URLSearchParams({
+            csrfToken: session.csrfToken,
+            extra: "denied",
+          }).toString(),
+        },
+        {
+          headers: baseHeaders,
+          payload: `csrfToken=${session.csrfToken}&csrfToken=${session.csrfToken}`,
+        },
+        {
+          headers: { ...baseHeaders, "x-omnifin-csrf": session.csrfToken },
+          payload: new URLSearchParams({ csrfToken: session.csrfToken }).toString(),
+        },
+        {
+          headers: baseHeaders,
+          payload: new URLSearchParams({
+            csrfToken: Buffer.alloc(32, 91).toString("base64url"),
+          }).toString(),
+        },
+      ];
+
+      for (const request of requests) {
+        const response = await app.inject({
+          headers: request.headers,
+          method: "POST",
+          payload: request.payload,
+          url: "/v1/auth/oidc/logout",
+        });
+        expect(response.statusCode).toBe(403);
+      }
+      const inspected = await app.inject({
+        headers: { cookie: session.cookie },
+        method: "GET",
+        url: "/v1/auth/session",
+      });
+      expect(sessionResponseSchema.parse(inspected.json()).principal?.sessionId).toBe(
+        session.principal.sessionId,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not apply provider logout semantics to a direct Jellyfin session", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const oidcSession = await issueBrowserOidcSession(app);
+      const linkedAt = new Date(routeTime);
+      database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin.example.test",
+          createdAt: linkedAt,
+          displayName: "Home Jellyfin",
+          encryptedCredentials: "v2.fixture-connector-credentials",
+          healthState: "healthy",
+          id: "jellyfin-home",
+          type: "jellyfin",
+          updatedAt: linkedAt,
+        })
+        .run();
+      database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          createdAt: linkedAt,
+          deviceId: "direct-route-device",
+          encryptedAccessToken: "v2.fixture-jellyfin-token",
+          externalDisplayName: "Cinematic Viewer",
+          externalServerId: "jellyfin-server",
+          externalUserId: "jellyfin-user",
+          externalUsername: "viewer",
+          healthState: "linked",
+          id: "jellyfin-link",
+          lastVerifiedAt: linkedAt,
+          service: "jellyfin",
+          tokenCreatedAt: linkedAt,
+          updatedAt: linkedAt,
+          userId: oidcSession.principal.userId!,
+        })
+        .run();
+      database.db.update(users).set({ status: "active", updatedAt: linkedAt }).run();
+      const direct = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "jellyfin-link",
+          userId: oidcSession.principal.userId!,
+        },
+      });
+
+      const response = await app.inject({
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: `__Host-omnifin_session=${direct.sessionToken}`,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: new URLSearchParams({ csrfToken: direct.csrfToken }).toString(),
+        url: "/v1/auth/oidc/logout",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: "invalid_logout_request" } });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(app.sessionService.resolveAndRefresh(direct.sessionToken)).toMatchObject({
+        principal: { authenticationMethod: { kind: "jellyfin" } },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("finishes local logout when provider rediscovery is unavailable", async () => {
+    const { app, database, discover } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+      database.db
+        .update(oidcProviders)
+        .set({ displayName: "Changed identity", updatedAt: new Date(routeTime.getTime() + 1) })
+        .run();
+      discover.mockRejectedValueOnce(new Error("private-provider-logout-failure"));
+
+      const response = await app.inject({
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: session.cookie,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: new URLSearchParams({ csrfToken: session.csrfToken }).toString(),
+        url: "/v1/auth/oidc/logout",
+      });
+
+      expect(response.statusCode).toBe(303);
+      expect(response.headers.location).toBe("/login?loggedOut=1");
+      expect(setCookieHeader(response.headers["set-cookie"])).toContain("__Host-omnifin_session=;");
+      expect(
+        database.sqlite
+          .prepare("select revoked_at is not null as revoked from sessions where id = @sessionId")
+          .get({ sessionId: session.principal.sessionId }),
+      ).toEqual({ revoked: 1 });
+      expect(database.sqlite.serialize().toString("utf8")).not.toContain(
+        "private-provider-logout-failure",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("finishes local logout instead of emitting an oversized provider redirect", async () => {
+    const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    try {
+      authorizationCodeGrant.mockResolvedValueOnce({
+        claims: {
+          email: "viewer@example.test",
+          email_verified: true,
+          name: "Cinematic Viewer",
+          sub: "immutable-viewer-subject",
+        },
+        idToken: `a.${"x".repeat(16_380)}.b`,
+      });
+      const session = await issueBrowserOidcSession(app);
+
+      const response = await app.inject({
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: session.cookie,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: new URLSearchParams({ csrfToken: session.csrfToken }).toString(),
+        url: "/v1/auth/oidc/logout",
+      });
+
+      expect(response.statusCode).toBe(303);
+      expect(response.headers.location).toBe("/login?loggedOut=1");
+      expect(response.body).not.toContain("x".repeat(128));
+      expect(
+        database.sqlite
+          .prepare("select revoked_at is not null as revoked from sessions where id = @sessionId")
+          .get({ sessionId: session.principal.sessionId }),
+      ).toEqual({ revoked: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("completes a bound callback against the configured public URL and issues a session", async () => {
     const { app, authorizationCodeGrant, database } = await openRouteHarness();
     const privateCode = "private-authorization-code-canary";
