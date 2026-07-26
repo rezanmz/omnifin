@@ -135,6 +135,9 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       })
       .first();
     const submitAction = page.locator('button[type="submit"], input[type="submit"]').last();
+    const credentialForm = page
+      .locator("ak-stage-identification form, ak-stage-password form")
+      .first();
     const readiness = await waitForInteraction(page, webOrigin, [
       usernameInput,
       passwordInput,
@@ -165,15 +168,25 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       currentStage = `${attempt}_unrecognized`;
       throw new BrowserCheckError();
     }
-    currentStage = `${attempt}_submit`;
     if (completedField) {
-      await retryInteraction(page, () => page.keyboard.press("Enter"));
+      currentStage = `${attempt}_form_submit`;
+      await retryInteraction(page, async () => {
+        await credentialForm.waitFor({ state: "visible", timeout: 5_000 });
+        await credentialForm.evaluate((form) => {
+          if (form.tagName !== "FORM" || typeof form.requestSubmit !== "function") {
+            throw new Error("fixture_form_unavailable");
+          }
+          form.requestSubmit();
+        });
+      });
     } else {
+      currentStage = `${attempt}_consent_submit`;
       await retryInteraction(page, async () => {
         await action.waitFor({ state: "visible", timeout: 5_000 });
         await action.click({ noWaitAfter: true, timeout: 5_000 });
       });
     }
+    currentStage = `${attempt}_transition`;
     await page.waitForLoadState("domcontentloaded").catch(() => undefined);
     await page.waitForTimeout(250);
   }
