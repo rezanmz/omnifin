@@ -19,7 +19,7 @@ import {
 } from "openid-client";
 import { oidcProviders } from "../../db/schema.js";
 import type { DatabaseHandle } from "../../db/client.js";
-import { EnvelopeCipher } from "../../security/crypto.js";
+import { constantTimeTextEqual, EnvelopeCipher } from "../../security/crypto.js";
 import {
   createOidcSafeFetch,
   OIDC_MAX_APPROVED_ORIGINS,
@@ -135,6 +135,12 @@ interface ValidatedOidcRuntimeEndpoints {
   readonly jwks: string;
   readonly token: string;
   readonly userInfo: string | null;
+}
+
+interface PersistedOidcDiscoverySecuritySnapshot {
+  readonly capabilities: OidcProviderCapabilities;
+  readonly runtimeSecuritySeal: OidcProviderRuntimeBinding;
+  readonly schemaVersion: 1;
 }
 
 interface OidcProviderRuntimeInternals {
@@ -704,15 +710,36 @@ function providerConfigFingerprint(record: ProviderRecord): string {
   return digest.digest("base64url");
 }
 
-function createProviderRuntimeBinding(
-  record: ProviderRecord,
+function providerSecurityFingerprint(record: ProviderRecord): string {
+  const digest = createHash("sha256");
+  const fields: ReadonlyArray<readonly [string, string]> = [
+    ["id", record.id],
+    ["issuer", record.issuer],
+    ["clientId", record.clientId],
+    ["encryptedClientSecret", record.encryptedClientSecret ?? ""],
+    ["tokenEndpointAuthMethod", record.tokenEndpointAuthMethod],
+    ["idTokenSigningAlg", record.idTokenSigningAlg],
+    ["scopes", record.scopes],
+    ["claimConfigJson", record.claimConfigJson],
+    ["approvedEndpointOriginsJson", record.approvedEndpointOriginsJson],
+    ["allowJitProvisioning", record.allowJitProvisioning ? "1" : "0"],
+    ["enabled", record.enabled ? "1" : "0"],
+  ];
+
+  for (const [name, value] of fields) {
+    digest.update(`${name}:${Buffer.byteLength(value, "utf8")}:`, "utf8");
+    digest.update(value, "utf8");
+  }
+  return digest.digest("base64url");
+}
+
+function createRuntimeSecuritySeal(
   capabilities: OidcProviderCapabilities,
   endpoints: ValidatedOidcRuntimeEndpoints,
   key: Buffer,
 ): OidcProviderRuntimeBinding {
   const digest = createHmac("sha256", key);
   const fields: ReadonlyArray<readonly [string, string]> = [
-    ["providerConfigFingerprint", providerConfigFingerprint(record)],
     ["capabilities", JSON.stringify(capabilities)],
     ["authorizationEndpoint", endpoints.authorization],
     ["tokenEndpoint", endpoints.token],
@@ -724,11 +751,227 @@ function createProviderRuntimeBinding(
     digest.update(`${name}:${Buffer.byteLength(value, "utf8")}:`, "utf8");
     digest.update(value, "utf8");
   }
+  const seal = digest.digest("base64url");
+  if (!OPAQUE_256_BIT_TOKEN_PATTERN.test(seal)) {
+    throw registryError("oidc_provider_misconfigured");
+  }
+  return seal as OidcProviderRuntimeBinding;
+}
+
+function createProviderRuntimeBinding(
+  record: ProviderRecord,
+  capabilities: OidcProviderCapabilities,
+  runtimeSecuritySeal: OidcProviderRuntimeBinding,
+  key: Buffer,
+): OidcProviderRuntimeBinding {
+  const digest = createHmac("sha256", key);
+  const fields: ReadonlyArray<readonly [string, string]> = [
+    ["providerSecurityFingerprint", providerSecurityFingerprint(record)],
+    ["capabilities", JSON.stringify(capabilities)],
+    ["runtimeSecuritySeal", runtimeSecuritySeal],
+  ];
+  for (const [name, value] of fields) {
+    digest.update(`${name}:${Buffer.byteLength(value, "utf8")}:`, "utf8");
+    digest.update(value, "utf8");
+  }
   const binding = digest.digest("base64url");
   if (!OPAQUE_256_BIT_TOKEN_PATTERN.test(binding)) {
     throw registryError("oidc_provider_misconfigured");
   }
   return binding as OidcProviderRuntimeBinding;
+}
+
+function runtimeBindingKey(encryptionKey: Buffer): Buffer {
+  return createHmac("sha256", encryptionKey).update(RUNTIME_BINDING_KEY_CONTEXT, "utf8").digest();
+}
+
+function isCanonicalRuntimeBinding(value: unknown): value is OidcProviderRuntimeBinding {
+  if (typeof value !== "string" || !OPAQUE_256_BIT_TOKEN_PATTERN.test(value)) return false;
+  const decoded = Buffer.from(value, "base64url");
+  return decoded.length === 32 && decoded.toString("base64url") === value;
+}
+
+function exactObjectKeys(
+  value: unknown,
+  expectedKeys: readonly string[],
+): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function parsePersistedDiscoverySecuritySnapshot(
+  record: ProviderRecord,
+): PersistedOidcDiscoverySecuritySnapshot {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(record.discoveryCapabilitiesJson) as unknown;
+  } catch {
+    throw registryError("oidc_provider_changed");
+  }
+  if (
+    !exactObjectKeys(raw, ["capabilities", "runtimeSecuritySeal", "schemaVersion"]) ||
+    raw.schemaVersion !== 1 ||
+    !isCanonicalRuntimeBinding(raw.runtimeSecuritySeal)
+  ) {
+    throw registryError("oidc_provider_changed");
+  }
+  const capabilities = raw.capabilities;
+  if (
+    !exactObjectKeys(capabilities, [
+      "authorizationCodeFlow",
+      "idTokenSigningAlg",
+      "logout",
+      "pkceS256",
+      "schemaVersion",
+      "tokenEndpointAuthMethod",
+      "userInfo",
+    ]) ||
+    capabilities.authorizationCodeFlow !== true ||
+    capabilities.pkceS256 !== true ||
+    capabilities.schemaVersion !== 1 ||
+    capabilities.idTokenSigningAlg !== record.idTokenSigningAlg ||
+    capabilities.tokenEndpointAuthMethod !== record.tokenEndpointAuthMethod ||
+    typeof capabilities.userInfo !== "boolean"
+  ) {
+    throw registryError("oidc_provider_changed");
+  }
+  const logout = capabilities.logout;
+  if (
+    !exactObjectKeys(logout, [
+      "backChannel",
+      "backChannelSession",
+      "frontChannel",
+      "frontChannelSession",
+      "rpInitiated",
+    ]) ||
+    typeof logout.backChannel !== "boolean" ||
+    typeof logout.backChannelSession !== "boolean" ||
+    typeof logout.frontChannel !== "boolean" ||
+    typeof logout.frontChannelSession !== "boolean" ||
+    typeof logout.rpInitiated !== "boolean" ||
+    (logout.backChannelSession && !logout.backChannel) ||
+    (logout.frontChannelSession && !logout.frontChannel)
+  ) {
+    throw registryError("oidc_provider_changed");
+  }
+
+  return Object.freeze({
+    capabilities: Object.freeze({
+      authorizationCodeFlow: true,
+      idTokenSigningAlg: record.idTokenSigningAlg,
+      logout: Object.freeze({
+        backChannel: logout.backChannel,
+        backChannelSession: logout.backChannelSession,
+        frontChannel: logout.frontChannel,
+        frontChannelSession: logout.frontChannelSession,
+        rpInitiated: logout.rpInitiated,
+      }),
+      pkceS256: true,
+      schemaVersion: 1,
+      tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+      userInfo: capabilities.userInfo,
+    }),
+    runtimeSecuritySeal: raw.runtimeSecuritySeal,
+    schemaVersion: 1,
+  });
+}
+
+/**
+ * Gateway-internal, database-only verification capability. It proves that a
+ * consumed grant was minted for the current persisted provider security
+ * configuration without rediscovering or exposing remote endpoints.
+ */
+function verifyCurrentOidcProviderRuntimeBinding(
+  database: DatabaseHandle,
+  cipher: EnvelopeCipher,
+  bindingKey: Buffer,
+  providerId: string,
+  presentedBinding: unknown,
+): void {
+  if (!isExactProviderId(providerId) || !isCanonicalRuntimeBinding(presentedBinding)) {
+    throw registryError("oidc_provider_changed");
+  }
+  let record: ProviderRecord | undefined;
+  try {
+    record = database.db.select().from(oidcProviders).where(eq(oidcProviders.id, providerId)).get();
+  } catch {
+    throw registryError("oidc_provider_storage_failed", true);
+  }
+  if (!record || record.discoveryState !== "ready" || record.discoveryCheckedAt === null) {
+    throw registryError("oidc_provider_changed");
+  }
+
+  try {
+    validateProviderRecordTimestamps(record);
+    parseProvider(record, cipher);
+    const snapshot = parsePersistedDiscoverySecuritySnapshot(record);
+    const expectedBinding = createProviderRuntimeBinding(
+      record,
+      snapshot.capabilities,
+      snapshot.runtimeSecuritySeal,
+      bindingKey,
+    );
+    if (!constantTimeTextEqual(expectedBinding, presentedBinding)) {
+      throw registryError("oidc_provider_changed");
+    }
+  } catch (error) {
+    if (error instanceof OidcProviderRegistryError) throw error;
+    throw registryError("oidc_provider_changed");
+  }
+}
+
+export interface OidcProviderRuntimeBindingVerifier {
+  verify(providerId: string, presentedBinding: unknown): void;
+  toJSON(): never;
+}
+
+/**
+ * Gateway-internal verifier capability. Root key material is copied into
+ * closure-owned cryptographic primitives and is never attached to the
+ * returned object. Do not re-export this factory from the package root.
+ */
+export function createOidcProviderRuntimeBindingVerifier(
+  database: DatabaseHandle,
+  config: OidcProviderRegistryConfig,
+): OidcProviderRuntimeBindingVerifier {
+  const rootKey = Buffer.from(config.encryptionKey);
+  let cipher: EnvelopeCipher;
+  let bindingKey: Buffer;
+  try {
+    cipher = new EnvelopeCipher(rootKey);
+    bindingKey = runtimeBindingKey(rootKey);
+  } finally {
+    rootKey.fill(0);
+  }
+
+  const verifier = Object.create(null) as OidcProviderRuntimeBindingVerifier;
+  Object.defineProperties(verifier, {
+    toJSON: {
+      configurable: false,
+      enumerable: false,
+      value: () => {
+        throw new TypeError("OIDC provider binding verifiers cannot be serialized.");
+      },
+      writable: false,
+    },
+    verify: {
+      configurable: false,
+      enumerable: false,
+      value: (providerId: string, presentedBinding: unknown) =>
+        verifyCurrentOidcProviderRuntimeBinding(
+          database,
+          cipher,
+          bindingKey,
+          providerId,
+          presentedBinding,
+        ),
+      writable: false,
+    },
+  });
+  return Object.freeze(verifier);
 }
 
 function providerSnapshot(record: ProviderRecord) {
@@ -778,9 +1021,7 @@ export class OidcProviderRegistry {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createSafeFetch = dependencies.createSafeFetch ?? createOidcSafeFetch;
     this.#discover = dependencies.discover ?? discovery;
-    this.#runtimeBindingKey = createHmac("sha256", config.encryptionKey)
-      .update(RUNTIME_BINDING_KEY_CONTEXT, "utf8")
-      .digest();
+    this.#runtimeBindingKey = runtimeBindingKey(config.encryptionKey);
   }
 
   public async discover(providerId: string): Promise<OidcProviderRuntime> {
@@ -898,9 +1139,18 @@ export class OidcProviderRegistry {
       throw registryError("oidc_provider_misconfigured");
     }
 
+    const runtimeSecuritySeal = createRuntimeSecuritySeal(
+      capabilities,
+      endpoints,
+      this.#runtimeBindingKey,
+    );
     const checkedAt = this.#nextCheckedAt(record);
     this.#persistState(record, {
-      discoveryCapabilitiesJson: JSON.stringify(capabilities),
+      discoveryCapabilitiesJson: JSON.stringify({
+        capabilities,
+        runtimeSecuritySeal,
+        schemaVersion: 1,
+      } satisfies PersistedOidcDiscoverySecuritySnapshot),
       discoveryCheckedAt: checkedAt,
       discoveryState: "ready",
     });
@@ -919,7 +1169,12 @@ export class OidcProviderRegistry {
       runtimeConstructorToken,
       configuration,
       sanitizedProvider,
-      createProviderRuntimeBinding(record, capabilities, endpoints, this.#runtimeBindingKey),
+      createProviderRuntimeBinding(
+        record,
+        capabilities,
+        runtimeSecuritySeal,
+        this.#runtimeBindingKey,
+      ),
       endpoints,
     );
     this.#cacheRuntime(record.id, fingerprint, runtime, cacheTime);

@@ -160,7 +160,7 @@ function expectFailedWithoutDetails(database: DatabaseHandle): void {
 }
 
 describe("OidcProviderRegistry", () => {
-  it("discovers from the exact issuer through the bounded custom fetch and persists only capabilities", async () => {
+  it("discovers from the exact issuer and persists a sealed endpoint-free security snapshot", async () => {
     const database = openHarness();
     try {
       seedProvider(database);
@@ -234,9 +234,11 @@ describe("OidcProviderRegistry", () => {
         discoveryState: "ready",
         updatedAt: initialTime,
       });
-      expect(JSON.parse(stored?.discoveryCapabilitiesJson ?? "null")).toEqual(
-        runtime.provider.capabilities,
-      );
+      expect(JSON.parse(stored?.discoveryCapabilitiesJson ?? "null")).toEqual({
+        capabilities: runtime.provider.capabilities,
+        runtimeSecuritySeal: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        schemaVersion: 1,
+      });
       const publicAndPersisted = `${JSON.stringify(runtime.provider)}${JSON.stringify(stored)}`;
       expect(publicAndPersisted).not.toContain(clientSecret);
       expect(publicAndPersisted).not.toContain("authorization_endpoint");
