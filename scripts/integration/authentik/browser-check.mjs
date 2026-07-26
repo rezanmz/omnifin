@@ -2,7 +2,11 @@
 
 import { createRequire } from "node:module";
 
-import { PROVIDER_VALIDATION_MAX_ATTEMPTS, providerValidationRetryDelay } from "./fixture.mjs";
+import {
+  httpFailureStage,
+  PROVIDER_VALIDATION_MAX_ATTEMPTS,
+  providerValidationRetryDelay,
+} from "./fixture.mjs";
 
 const requireFromWeb = createRequire(new URL("../../../apps/web/package.json", import.meta.url));
 const { chromium } = requireFromWeb("@playwright/test");
@@ -30,16 +34,20 @@ function assert(condition) {
   if (!condition) throw new BrowserCheckError();
 }
 
-async function json(response, expectedStatus) {
-  assert(response.status() === expectedStatus);
+async function json(response, expectedStatus, failureStage) {
+  if (response.status() !== expectedStatus) {
+    if (failureStage) currentStage = httpFailureStage(failureStage, response.status());
+    throw new BrowserCheckError();
+  }
   try {
     return await response.json();
   } catch {
+    if (failureStage) currentStage = `${failureStage}_invalid_response`;
     throw new BrowserCheckError();
   }
 }
 
-async function mutate(request, webOrigin, path, csrfToken, data, method = "POST") {
+async function mutate(request, webOrigin, path, csrfToken, data, method = "POST", failureStage) {
   const response = await request.fetch(path, {
     data,
     headers: {
@@ -49,7 +57,7 @@ async function mutate(request, webOrigin, path, csrfToken, data, method = "POST"
     method,
     maxRedirects: 0,
   });
-  return json(response, method === "POST" ? 201 : 200);
+  return json(response, method === "POST" ? 201 : 200, failureStage);
 }
 
 async function validateProvider(request, path, webOrigin, csrfToken) {
@@ -409,7 +417,9 @@ async function run() {
       csrfToken,
       { ...providerInput, clientSecret: undefined, enabled: true },
       "PUT",
+      "provider_enable",
     );
+    currentStage = "provider_enable_response";
     assert(enabled.provider?.enabled === true);
 
     currentStage = "public_provider";

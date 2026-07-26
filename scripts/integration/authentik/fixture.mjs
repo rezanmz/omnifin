@@ -105,6 +105,22 @@ export function failureReportFor(category) {
   };
 }
 
+export function httpFailureStage(prefix, status) {
+  if (
+    typeof prefix !== "string" ||
+    !/^[a-z][a-z_]{0,95}$/u.test(prefix) ||
+    !Number.isInteger(status) ||
+    status < 100 ||
+    status > 599
+  ) {
+    throw new Error("http_failure_stage_invalid");
+  }
+  if (status >= 300 && status < 400) return `${prefix}_redirect`;
+  if (status >= 400 && status < 500) return `${prefix}_client_error`;
+  if (status >= 500) return `${prefix}_server_error`;
+  return `${prefix}_unexpected_status`;
+}
+
 export function providerValidationRetryDelay({ attempt, elapsedMs, retryAfterSeconds, status }) {
   if (status !== 503) return null;
   if (

@@ -9,6 +9,7 @@ import {
   djangoPasswordHash,
   dotenv,
   failureReportFor,
+  httpFailureStage,
   isPrivateIpv4,
   PROVIDER_VALIDATION_MAX_ATTEMPTS,
   PROVIDER_VALIDATION_MAX_WAIT_MS,
@@ -143,6 +144,15 @@ test("bounds transient provider validation retries without weakening fail-closed
   );
 });
 
+test("normalizes HTTP diagnostics without retaining response details", () => {
+  assert.equal(httpFailureStage("provider_enable", 302), "provider_enable_redirect");
+  assert.equal(httpFailureStage("provider_enable", 422), "provider_enable_client_error");
+  assert.equal(httpFailureStage("provider_enable", 503), "provider_enable_server_error");
+  assert.equal(httpFailureStage("provider_enable", 204), "provider_enable_unexpected_status");
+  assert.throws(() => httpFailureStage("unsafe-stage", 503), /http_failure_stage_invalid/u);
+  assert.throws(() => httpFailureStage("provider_enable", 700), /http_failure_stage_invalid/u);
+});
+
 test("detects generated secrets before runtime logs can be retained", () => {
   assert.equal(secretLeakDetected(["gateway ready"], ["private-value"]), false);
   assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
@@ -162,6 +172,8 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /ak-stage-identification form/u);
   assert.match(browserSource, /ak-stage-consent form/u);
   assert.match(browserSource, /providerValidationRetryDelay/u);
+  assert.match(browserSource, /httpFailureStage/u);
+  assert.match(runnerSource, /provider_enable_server_error/u);
   assert.match(browserSource, /backchannelTaskFailureStage/u);
   assert.match(browserSource, /backchannel_logout_notification_dispatch/u);
   assert.match(browserSource, /send_backchannel_logout_request/u);
