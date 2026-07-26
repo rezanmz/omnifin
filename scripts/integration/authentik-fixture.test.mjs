@@ -85,6 +85,17 @@ test("detects generated secrets before runtime logs can be retained", () => {
   assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
 });
 
+test("browser failure diagnostics are restricted to allowlisted stage identifiers", () => {
+  const browserSource = readFileSync(
+    new URL("./authentik/browser-check.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(browserSource, /authentik_browser_checks_failed/u);
+  assert.match(runnerSource, /allowedStages/u);
+  assert.match(runnerSource, /\[a-z_\]\+/u);
+  assert.doesNotMatch(runnerSource, /throw new FixtureError\([^)]*stderr/u);
+});
+
 test("pins an isolated Authentik topology without privileged host mounts", () => {
   const compose = parse(composeSource);
   assert.match(

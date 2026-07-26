@@ -86,7 +86,8 @@ async function runCommand(command, arguments_, options = {}) {
   }
   const [code] = await once(child, "close");
   if (spawnFailed || code !== 0) {
-    throw new FixtureError(options.failureCategory ?? "command_failed");
+    const classified = options.classifyFailure?.({ stderr, stdout });
+    throw new FixtureError(classified ?? options.failureCategory ?? "command_failed");
   }
   return { stderr, stdout };
 }
@@ -446,6 +447,32 @@ async function main() {
     );
 
     const browser = await runCommand("node", [browserScript], {
+      classifyFailure: ({ stderr }) => {
+        const match = stderr.match(
+          /"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u,
+        );
+        const allowedStages = new Set([
+          "backchannel_revocation",
+          "backchannel_trigger",
+          "configuration",
+          "first_browser_login",
+          "first_session",
+          "provider_create",
+          "provider_enable",
+          "provider_validate",
+          "public_provider",
+          "recovery_session",
+          "role_mapping",
+          "rp_logout",
+          "rp_session_revocation",
+          "second_browser_login",
+          "second_session",
+          "secret_leak_inspection",
+        ]);
+        return match && allowedStages.has(match[1])
+          ? `browser_flow_failed_${match[1]}`
+          : "browser_flow_failed";
+      },
       env: {
         OMNIFIN_FIXTURE_AUTHENTIK_ISSUER: issuer,
         OMNIFIN_FIXTURE_AUTHENTIK_PASSWORD: secrets.authentikPassword,

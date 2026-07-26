@@ -15,6 +15,8 @@ class BrowserCheckError extends Error {
   }
 }
 
+let currentStage = "configuration";
+
 function required(name) {
   const value = process.env[name];
   if (!value) throw new BrowserCheckError();
@@ -173,6 +175,7 @@ async function run() {
     page.on("pageerror", () => observedBrowserText.push("browser_page_error"));
     page.on("request", (request) => observedBrowserText.push(request.url()));
 
+    currentStage = "recovery_session";
     const recovery = await context.request.post("/api/auth/recovery/session", {
       data: { secret: recoverySecret },
       headers: { origin: webOrigin },
@@ -196,6 +199,7 @@ async function run() {
       slug: providerSlug,
       tokenEndpointAuthMethod: "client_secret_basic",
     };
+    currentStage = "provider_create";
     const created = await mutate(
       context.request,
       webOrigin,
@@ -206,6 +210,7 @@ async function run() {
     assert(created.id === expectedProviderId);
     assert(created.enabled === false);
 
+    currentStage = "provider_validate";
     const validationResponse = await context.request.post(
       `/api/admin/auth/oidc/providers/${expectedProviderId}/validate`,
       { headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken }, maxRedirects: 0 },
@@ -216,6 +221,7 @@ async function run() {
     assert(validation.capabilities?.logout?.backChannel === true);
     assert(validation.capabilities?.logout?.rpInitiated === true);
 
+    currentStage = "role_mapping";
     const mapping = await mutate(
       context.request,
       webOrigin,
@@ -232,6 +238,7 @@ async function run() {
     );
     assert(mapping.mapping?.providerId === expectedProviderId);
 
+    currentStage = "provider_enable";
     const enabled = await mutate(
       context.request,
       webOrigin,
@@ -242,6 +249,7 @@ async function run() {
     );
     assert(enabled.provider?.enabled === true);
 
+    currentStage = "public_provider";
     const providersResponse = await context.request.get("/api/auth/providers", {
       maxRedirects: 0,
     });
@@ -254,17 +262,24 @@ async function run() {
     assert(publicProvider.supportsRpInitiatedLogout === true);
 
     const startPath = `/api/auth/oidc/${expectedProviderId}/start`;
+    currentStage = "first_browser_login";
     await completeAuthentikFlow(page, startPath, "akadmin", authentikPassword, webOrigin);
+    currentStage = "first_session";
     const firstSession = await session(context.request);
     const subject = assertPrincipal(firstSession, issuer);
 
+    currentStage = "backchannel_trigger";
     await revokeAuthentikSessions(context.request, issuerOrigin, authentikToken);
+    currentStage = "backchannel_revocation";
     await waitForRevokedSession(context.request);
 
+    currentStage = "second_browser_login";
     await completeAuthentikFlow(page, startPath, "akadmin", authentikPassword, webOrigin);
+    currentStage = "second_session";
     const secondSession = await session(context.request);
     assertPrincipal(secondSession, issuer, subject);
 
+    currentStage = "rp_logout";
     const logout = await context.request.post("/api/auth/oidc/logout", {
       form: { csrfToken: secondSession.csrfToken },
       headers: { origin: webOrigin },
@@ -276,8 +291,10 @@ async function run() {
     const providerLogout = new URL(logoutLocation);
     assert(providerLogout.origin === issuerOrigin);
     assert(providerLogout.pathname.includes("/application/o/omnifin/end-session/"));
+    currentStage = "rp_session_revocation";
     await waitForRevokedSession(context.request);
 
+    currentStage = "secret_leak_inspection";
     assert(
       !sensitiveValues.some((secret) =>
         observedBrowserText.some((observation) => observation.includes(secret)),
@@ -293,6 +310,8 @@ try {
   await run();
   process.stdout.write('{"event":"authentik_browser_checks_passed"}\n');
 } catch {
-  process.stderr.write('{"event":"authentik_browser_checks_failed"}\n');
+  process.stderr.write(
+    `${JSON.stringify({ event: "authentik_browser_checks_failed", stage: currentStage })}\n`,
+  );
   process.exitCode = 1;
 }
