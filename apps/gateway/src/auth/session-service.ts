@@ -18,6 +18,7 @@ const MAX_RECOVERY_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_TOKEN_GENERATION_ATTEMPTS = 8;
 const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
+const SESSION_REPLACEMENT_CAPABILITY_BRAND = Symbol("session-replacement-capability");
 
 type SessionAuthMethod = "jellyfin" | "oidc" | "recovery";
 
@@ -79,6 +80,12 @@ export interface ValidatedSession {
   readonly [VALIDATED_SESSION_BRAND]: true;
 }
 
+/** @internal An opaque, transaction-scoped proof of a replaceable session token. */
+export interface SessionReplacementCapability {
+  readonly [SESSION_REPLACEMENT_CAPABILITY_BRAND]: true;
+  toJSON(): never;
+}
+
 interface SessionJoinedRow {
   absoluteExpiresAt: number;
   authMethod: SessionAuthMethod;
@@ -133,6 +140,25 @@ interface RevokedSessionRow {
   userId: string | null;
 }
 
+interface SessionReplacementCandidate {
+  proof: {
+    kind: "current" | "rotation_grace";
+    presentedTokenHash: string;
+    sessionId: string;
+  };
+  row: SessionJoinedRow;
+}
+
+interface SessionReplacementCapabilityState {
+  active: boolean;
+  database: DatabaseHandle;
+  identityOutcome: "denied" | "pending" | "resolved" | "unused";
+  operationTime: number;
+  proof: SessionReplacementCandidate["proof"];
+  replacementAttempted: boolean;
+  replacementConsumed: boolean;
+}
+
 function validDate(value: Date) {
   return Number.isFinite(value.getTime());
 }
@@ -154,6 +180,26 @@ function optionalBoundedText(value: string | undefined, maximum: number, name: s
     throw new TypeError(`${name} is invalid.`);
   }
   return value;
+}
+
+function createSessionReplacementCapability(): SessionReplacementCapability {
+  const capability = Object.create(null) as SessionReplacementCapability;
+  Object.defineProperty(capability, "toJSON", {
+    configurable: false,
+    enumerable: false,
+    value: () => {
+      throw new TypeError("Session replacement capabilities cannot be serialized.");
+    },
+    writable: false,
+  });
+  return Object.freeze(capability);
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    ((typeof value === "object" && value !== null) || typeof value === "function") &&
+    typeof (value as PromiseLike<unknown>).then === "function"
+  );
 }
 
 function csrfContext(sessionId: string) {
@@ -269,6 +315,10 @@ function mapPrincipalRecord(row: SessionJoinedRow): SessionPrincipalRecord | nul
 }
 
 export class SessionService {
+  readonly #replacementCapabilities = new WeakMap<
+    SessionReplacementCapability,
+    SessionReplacementCapabilityState
+  >();
   private readonly absoluteTtlMs: number;
   private readonly cipher: EnvelopeCipher;
   private readonly clock: () => Date;
@@ -302,6 +352,116 @@ export class SessionService {
       MAX_RECOVERY_SESSION_TTL_MS,
     );
     this.rotationIntervalMs = config.session.rotationIntervalMs;
+  }
+
+  /** @internal Verifies composition without exposing the bound database handle. */
+  public isBoundToDatabase(database: DatabaseHandle): boolean {
+    return this.database === database;
+  }
+
+  /** @internal Keeps a replacement capability live only for this synchronous transaction scope. */
+  public withSessionReplacementCapability<T>(
+    sessionToken: unknown,
+    operation: (capability: SessionReplacementCapability | undefined) => T,
+  ): T {
+    if (!this.database.sqlite.inTransaction) {
+      throw new Error("A surrounding session transaction is required.");
+    }
+    const operationTime = this.currentTime();
+    const candidate = this.loadSessionReplacementCandidate(sessionToken, operationTime);
+    if (!candidate) {
+      const result = operation(undefined);
+      if (isThenable(result)) {
+        void Promise.resolve(result).catch(() => undefined);
+        throw new Error("Session replacement callbacks must be synchronous.");
+      }
+      return result;
+    }
+
+    const capability = createSessionReplacementCapability();
+    const state: SessionReplacementCapabilityState = {
+      active: true,
+      database: this.database,
+      identityOutcome: "unused",
+      operationTime: operationTime.getTime(),
+      proof: candidate.proof,
+      replacementAttempted: false,
+      replacementConsumed: false,
+    };
+    this.#replacementCapabilities.set(capability, state);
+    try {
+      const result = operation(capability);
+      if (isThenable(result)) {
+        void Promise.resolve(result).catch(() => undefined);
+        throw new Error("Session replacement callbacks must be synchronous.");
+      }
+      if (
+        state.identityOutcome === "pending" ||
+        (state.identityOutcome === "resolved" && !state.replacementConsumed)
+      ) {
+        throw new Error("Proven session replacement did not complete.");
+      }
+      return result;
+    } finally {
+      state.active = false;
+      this.#replacementCapabilities.delete(capability);
+    }
+  }
+
+  /** @internal Verifies the identity-reconciliation use of an opaque replacement capability. */
+  public verifyReplacementCapabilityForIdentity(capability: unknown): {
+    operationTime: number;
+    sessionId: string;
+  } {
+    const state = this.requireReplacementCapability(capability);
+    if (state.identityOutcome !== "unused" || state.replacementAttempted) {
+      throw new Error("Session replacement capability was already used.");
+    }
+    state.identityOutcome = "pending";
+    return Object.freeze({
+      operationTime: state.operationTime,
+      sessionId: state.proof.sessionId,
+    });
+  }
+
+  /** @internal Completes the identity phase before denial or exact replacement. */
+  public completeReplacementIdentityResolution(
+    capability: unknown,
+    outcome: "denied" | "resolved",
+  ): void {
+    const state = this.requireReplacementCapability(capability);
+    if (state.identityOutcome !== "pending" || state.replacementAttempted) {
+      throw new Error("Session replacement identity resolution is invalid.");
+    }
+    state.identityOutcome = outcome;
+  }
+
+  /** @internal Consumes the exact session proven for identity reconciliation. */
+  public replaceSessionWithCapability(
+    capability: unknown,
+    input: CreateSessionInput,
+  ): IssuedSession {
+    const state = this.requireReplacementCapability(capability);
+    if (state.identityOutcome !== "resolved" || state.replacementAttempted) {
+      throw new Error("Session replacement capability is not ready for replacement.");
+    }
+    state.replacementAttempted = true;
+
+    return this.withImmediateTransaction(() => {
+      const now = new Date(state.operationTime);
+      const currentSession = this.loadProvenReplacementSession(state, now);
+      if (!currentSession) throw new Error("Proven session could not be replaced.");
+      const issued = this.issueSessionInCurrentTransaction(
+        input,
+        new Set([state.proof.presentedTokenHash]),
+        now,
+      );
+      const revoked = this.revokeSessionForReplacement(currentSession, now);
+      if (!revoked) throw new Error("Proven session could not be replaced.");
+      this.auditSessionReplacement(revoked, issued, input, now);
+      state.replacementConsumed = true;
+      return issued;
+    });
   }
 
   public createSession(input: CreateSessionInput): IssuedSession {
@@ -424,43 +584,56 @@ export class SessionService {
       const issued = this.issueSessionInCurrentTransaction(input, disallowedTokenHashes, now);
       if (!currentSession) return issued;
 
-      const revoked = this.database.sqlite
-        .prepare(
-          `update sessions
-           set revoked_at = @now
-           where id = @sessionId
-             and revoked_at is null
-             and created_at <= @now
-             and last_rotated_at <= @now
-             and last_seen_at <= @now
-             and expires_at > @now
-             and absolute_expires_at > @now
-           returning
-             id as sessionId,
-             user_id as userId,
-             auth_method as authMethod,
-             created_at as createdAt`,
-        )
-        .get({ now: now.getTime(), sessionId: currentSession.sessionId }) as
-        RevokedSessionRow | undefined;
+      const revoked = this.revokeSessionForReplacement(currentSession, now);
       if (!revoked) throw new Error("Current session could not be replaced.");
 
-      this.insertAuditEvent(revoked, {
-        context: {
-          ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
-          ...(input.requestId ? { requestId: input.requestId } : {}),
-        },
-        eventType: "auth.session.replaced",
-        metadata: {
-          authenticationMethod: input.attribution.authMethod,
-          reason: "reauthentication",
-          replacementSessionId: issued.principal.sessionId,
-        },
-        occurredAt: now,
-        outcome: "success",
-        targetId: revoked.sessionId,
-      });
+      this.auditSessionReplacement(revoked, issued, input, now);
       return issued;
+    });
+  }
+
+  private revokeSessionForReplacement(currentSession: SessionJoinedRow, now: Date) {
+    return this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = @now
+         where id = @sessionId
+           and revoked_at is null
+           and created_at <= @now
+           and last_rotated_at <= @now
+           and last_seen_at <= @now
+           and expires_at > @now
+           and absolute_expires_at > @now
+         returning
+           id as sessionId,
+           user_id as userId,
+           auth_method as authMethod,
+           created_at as createdAt`,
+      )
+      .get({ now: now.getTime(), sessionId: currentSession.sessionId }) as
+      RevokedSessionRow | undefined;
+  }
+
+  private auditSessionReplacement(
+    revoked: RevokedSessionRow,
+    issued: IssuedSession,
+    input: CreateSessionInput,
+    now: Date,
+  ) {
+    this.insertAuditEvent(revoked, {
+      context: {
+        ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
+        ...(input.requestId ? { requestId: input.requestId } : {}),
+      },
+      eventType: "auth.session.replaced",
+      metadata: {
+        authenticationMethod: input.attribution.authMethod,
+        reason: "reauthentication",
+        replacementSessionId: issued.principal.sessionId,
+      },
+      occurredAt: now,
+      outcome: "success",
+      targetId: revoked.sessionId,
     });
   }
 
@@ -874,11 +1047,31 @@ export class SessionService {
   }
 
   private loadReplaceableSession(sessionToken: unknown, now: Date) {
+    return this.loadSessionReplacementCandidate(sessionToken, now)?.row;
+  }
+
+  private loadSessionReplacementCandidate(
+    sessionToken: unknown,
+    now: Date,
+  ): SessionReplacementCandidate | undefined {
     if (!this.validSessionToken(sessionToken)) return undefined;
-    const tokenHash = hashToken(sessionToken);
-    const row =
-      this.loadJoinedSessionByTokenHash(tokenHash) ?? this.loadRotationGraceSession(tokenHash, now);
+    const presentedTokenHash = hashToken(sessionToken);
+    const current = this.loadJoinedSessionByTokenHash(presentedTokenHash);
+    const row = current ?? this.loadRotationGraceSession(presentedTokenHash, now);
     if (!row) return undefined;
+    if (!this.replaceableSessionIsValid(row, now)) return undefined;
+
+    return {
+      proof: {
+        kind: current ? "current" : "rotation_grace",
+        presentedTokenHash,
+        sessionId: row.sessionId,
+      },
+      row,
+    };
+  }
+
+  private replaceableSessionIsValid(row: SessionJoinedRow, now: Date) {
     if (
       row.revokedAt !== null ||
       row.createdAt > now.getTime() ||
@@ -888,10 +1081,10 @@ export class SessionService {
       row.absoluteExpiresAt <= now.getTime() ||
       !this.recoveryLifetimeIsValid(row)
     ) {
-      return undefined;
+      return false;
     }
     const principalRecord = mapPrincipalRecord(row);
-    if (!principalRecord || !buildSessionPrincipal(principalRecord, now)) return undefined;
+    if (!principalRecord || !buildSessionPrincipal(principalRecord, now)) return false;
 
     try {
       const csrfToken = this.cipher.decrypt(row.encryptedCsrfToken, csrfContext(row.sessionId));
@@ -899,9 +1092,24 @@ export class SessionService {
         !csrfTokenSchema.safeParse(csrfToken).success ||
         !constantTimeTextEqual(hashToken(csrfToken), row.csrfTokenHash)
       ) {
-        return undefined;
+        return false;
       }
     } catch {
+      return false;
+    }
+    return true;
+  }
+
+  private loadProvenReplacementSession(state: SessionReplacementCapabilityState, now: Date) {
+    const row =
+      state.proof.kind === "current"
+        ? this.loadJoinedSession(state.proof.sessionId, state.proof.presentedTokenHash)
+        : this.loadRotationGraceSession(state.proof.presentedTokenHash, now);
+    if (
+      !row ||
+      row.sessionId !== state.proof.sessionId ||
+      !this.replaceableSessionIsValid(row, now)
+    ) {
       return undefined;
     }
     return row;
@@ -1017,6 +1225,21 @@ export class SessionService {
 
   private isSecretReservationCollision(error: unknown) {
     return error instanceof Error && error.message === SECRET_RESERVATION_COLLISION;
+  }
+
+  private requireReplacementCapability(capability: unknown) {
+    if (
+      !this.database.sqlite.inTransaction ||
+      typeof capability !== "object" ||
+      capability === null
+    ) {
+      throw new Error("Session replacement capability is invalid.");
+    }
+    const state = this.#replacementCapabilities.get(capability as SessionReplacementCapability);
+    if (!state?.active || state.database !== this.database) {
+      throw new Error("Session replacement capability is invalid.");
+    }
+    return state;
   }
 
   private withImmediateTransaction<T>(operation: () => T): T {

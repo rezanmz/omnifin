@@ -1,7 +1,11 @@
 import { roleSchema, type Role, type RoleMapping } from "@omnifin/contracts/auth";
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../../db/client.js";
-import type { SessionAttribution } from "../session-service.js";
+import {
+  SessionService,
+  type SessionAttribution,
+  type SessionReplacementCapability,
+} from "../session-service.js";
 import { isValidatedOidcClaims, type ValidatedOidcClaims } from "./claims.js";
 import {
   consumeVerifiedOidcGrant,
@@ -43,6 +47,20 @@ export type OidcIdentityDenialReason =
 export interface ResolveOidcIdentityInput {
   readonly grant: VerifiedOidcGrant;
   readonly requestId?: string;
+}
+
+interface ResolveOidcIdentityTransactionOptions {
+  readonly sessionReplacement: {
+    readonly capability: SessionReplacementCapability;
+    readonly sessionService: SessionService;
+  };
+}
+
+interface VerifiedSessionReplacement {
+  readonly capability: SessionReplacementCapability;
+  readonly operationTime: number;
+  readonly sessionService: SessionService;
+  readonly sessionId: string;
 }
 
 type OidcSessionAttribution = Extract<SessionAttribution, { authMethod: "oidc" }>;
@@ -296,8 +314,52 @@ export class OidcIdentityService {
     throw new TypeError("OIDC identity services cannot be serialized.");
   }
 
+  /** @internal Verifies composition without exposing the bound database handle. */
+  public isBoundToDatabase(database: DatabaseHandle): boolean {
+    return this.database === database;
+  }
+
   public resolve(input: ResolveOidcIdentityInput): OidcIdentityResolution {
-    const occurredAt = this.currentTime();
+    try {
+      return this.database.sqlite
+        .transaction(() => this.resolveInExistingTransaction(input))
+        .immediate();
+    } catch (error) {
+      if (error instanceof OidcIdentityServiceError) throw error;
+      throw new OidcIdentityServiceError({ cause: error });
+    }
+  }
+
+  /** @internal This path is reserved for a caller that owns the surrounding transaction. */
+  public resolveInExistingTransaction(
+    input: ResolveOidcIdentityInput,
+    options?: ResolveOidcIdentityTransactionOptions,
+  ): OidcIdentityResolution {
+    if (!this.database.sqlite.inTransaction) {
+      throw new OidcIdentityServiceError();
+    }
+
+    try {
+      const replacement = this.verifySessionReplacement(options);
+      const resolution = this.resolveInCurrentTransaction(input, replacement);
+      if (replacement) {
+        replacement.sessionService.completeReplacementIdentityResolution(
+          replacement.capability,
+          resolution.status,
+        );
+      }
+      return resolution;
+    } catch (error) {
+      if (error instanceof OidcIdentityServiceError) throw error;
+      throw new OidcIdentityServiceError({ cause: error });
+    }
+  }
+
+  private resolveInCurrentTransaction(
+    input: ResolveOidcIdentityInput,
+    replacement: VerifiedSessionReplacement | undefined,
+  ): OidcIdentityResolution {
+    const occurredAt = replacement?.operationTime ?? this.currentTime();
     let grant: unknown;
     let grantWasExtracted = false;
     try {
@@ -315,30 +377,27 @@ export class OidcIdentityService {
     }
     const requestId = validRequestId(requestIdInput) ? requestIdInput : undefined;
 
+    let identity: ConsumedVerifiedOidcGrant;
     try {
-      return this.database.sqlite
-        .transaction(() => {
-          let identity: ConsumedVerifiedOidcGrant;
-          try {
-            identity = consumeVerifiedOidcGrant(grantWasExtracted ? grant : undefined);
-          } catch {
-            return this.deny("invalid_verified_context", occurredAt, requestId);
-          }
-          if (!requestEnvelopeValid || !validRequestId(requestIdInput)) {
-            return this.deny("invalid_request", occurredAt, requestId);
-          }
-          if (
-            !isValidatedOidcClaims(identity.claims) ||
-            !validIdentifier(identity.providerId) ||
-            !validIssuer(identity.issuer) ||
-            !validClientId(identity.clientId)
-          ) {
-            return this.deny("invalid_verified_context", occurredAt, requestId);
-          }
+      identity = consumeVerifiedOidcGrant(grantWasExtracted ? grant : undefined);
+    } catch {
+      return this.deny("invalid_verified_context", occurredAt, requestId);
+    }
+    if (!requestEnvelopeValid || !validRequestId(requestIdInput)) {
+      return this.deny("invalid_request", occurredAt, requestId);
+    }
+    if (
+      !isValidatedOidcClaims(identity.claims) ||
+      !validIdentifier(identity.providerId) ||
+      !validIssuer(identity.issuer) ||
+      !validClientId(identity.clientId)
+    ) {
+      return this.deny("invalid_verified_context", occurredAt, requestId);
+    }
 
-          const provider = this.database.sqlite
-            .prepare(
-              `select
+    const provider = this.database.sqlite
+      .prepare(
+        `select
               id,
               issuer,
               client_id as clientId,
@@ -347,29 +406,29 @@ export class OidcIdentityService {
               enabled
              from oidc_providers
              where id = ?`,
-            )
-            .get(identity.providerId) as ProviderRow | undefined;
-          if (!provider) {
-            return this.deny("provider_not_found", occurredAt, requestId, identity.providerId);
-          }
-          if (provider.issuer !== identity.issuer || provider.clientId !== identity.clientId) {
-            return this.deny("provider_context_mismatch", occurredAt, requestId, provider.id);
-          }
-          if (provider.enabled !== 1) {
-            return this.deny("provider_disabled", occurredAt, requestId, provider.id);
-          }
-          if (provider.discoveryState !== "ready") {
-            return this.deny("provider_not_ready", occurredAt, requestId, provider.id);
-          }
-          try {
-            this.#providerBindingVerifier.verify(provider.id, identity.providerRuntimeBinding);
-          } catch {
-            return this.deny("invalid_verified_context", occurredAt, requestId);
-          }
+      )
+      .get(identity.providerId) as ProviderRow | undefined;
+    if (!provider) {
+      return this.deny("provider_not_found", occurredAt, requestId, identity.providerId);
+    }
+    if (provider.issuer !== identity.issuer || provider.clientId !== identity.clientId) {
+      return this.deny("provider_context_mismatch", occurredAt, requestId, provider.id);
+    }
+    if (provider.enabled !== 1) {
+      return this.deny("provider_disabled", occurredAt, requestId, provider.id);
+    }
+    if (provider.discoveryState !== "ready") {
+      return this.deny("provider_not_ready", occurredAt, requestId, provider.id);
+    }
+    try {
+      this.#providerBindingVerifier.verify(provider.id, identity.providerRuntimeBinding);
+    } catch {
+      return this.deny("invalid_verified_context", occurredAt, requestId);
+    }
 
-          const mappingRows = this.database.sqlite
-            .prepare(
-              `select
+    const mappingRows = this.database.sqlite
+      .prepare(
+        `select
               id,
               provider_id as providerId,
               claim_path_json as claimPathJson,
@@ -381,21 +440,21 @@ export class OidcIdentityService {
              from role_mappings
              where provider_id = ?
              order by priority desc, id asc`,
-            )
-            .all(provider.id) as RoleMappingRow[];
-          const mappings = parseRoleMappings(mappingRows);
-          const expectedResolution = mappings
-            ? resolveOidcRole({ claims: identity.claims, mappings, providerId: provider.id })
-            : undefined;
-          if (!expectedResolution || expectedResolution.status !== "resolved") {
-            return this.deny("role_mapping_denied", occurredAt, requestId, provider.id);
-          }
+      )
+      .all(provider.id) as RoleMappingRow[];
+    const mappings = parseRoleMappings(mappingRows);
+    const expectedResolution = mappings
+      ? resolveOidcRole({ claims: identity.claims, mappings, providerId: provider.id })
+      : undefined;
+    if (!expectedResolution || expectedResolution.status !== "resolved") {
+      return this.deny("role_mapping_denied", occurredAt, requestId, provider.id);
+    }
 
-          const displayClaims = normalizedDisplayClaims(identity.claims);
-          const displayClaimsJson = JSON.stringify(displayClaims);
-          const existing = this.database.sqlite
-            .prepare(
-              `select
+    const displayClaims = normalizedDisplayClaims(identity.claims);
+    const displayClaimsJson = JSON.stringify(displayClaims);
+    const existing = this.database.sqlite
+      .prepare(
+        `select
               e.id as externalIdentityId,
               e.provider_id as identityProviderId,
               e.last_login_at as lastLoginAt,
@@ -410,100 +469,95 @@ export class OidcIdentityService {
              from external_identities e
              left join users u on u.id = e.user_id
              where e.issuer = ? and e.subject = ?`,
-            )
-            .get(provider.issuer, identity.claims.subject) as ExistingIdentityRow | undefined;
+      )
+      .get(provider.issuer, identity.claims.subject) as ExistingIdentityRow | undefined;
 
-          if (!existing) {
-            if (provider.allowJitProvisioning !== 1) {
-              return this.deny("jit_provisioning_disabled", occurredAt, requestId, provider.id);
-            }
-            return this.provision({
-              claims: identity.claims,
-              displayClaimsJson,
-              displayName: displayNameFallback(displayClaims),
-              occurredAt,
-              provider,
-              ...(requestId ? { requestId } : {}),
-              resolution: expectedResolution,
-              sessionProof: {
-                idTokenHint: identity.idTokenHint,
-                ...(identity.sessionId ? { oidcSessionId: identity.sessionId } : {}),
-              },
-            });
-          }
-
-          if (existing.identityProviderId !== provider.id) {
-            return this.deny("identity_provider_mismatch", occurredAt, requestId, provider.id);
-          }
-          if (
-            !existing.userId ||
-            !validIdentifier(existing.externalIdentityId) ||
-            !validIdentifier(existing.identityProviderId) ||
-            !validIdentifier(existing.userId) ||
-            !validDatabaseRole(existing.role) ||
-            !validDatabaseRoleSource(existing.roleSource) ||
-            !validDatabaseStatus(existing.status) ||
-            !validTimestamp(existing.identityCreatedAt, occurredAt) ||
-            !validTimestamp(existing.identityUpdatedAt, occurredAt) ||
-            !validTimestamp(existing.lastLoginAt, occurredAt) ||
-            !validTimestamp(existing.userCreatedAt, occurredAt) ||
-            !validTimestamp(existing.userUpdatedAt, occurredAt) ||
-            existing.identityCreatedAt > existing.identityUpdatedAt ||
-            existing.identityCreatedAt > existing.lastLoginAt ||
-            existing.userCreatedAt > existing.userUpdatedAt
-          ) {
-            return this.deny("identity_integrity_failure", occurredAt, requestId, provider.id);
-          }
-          if (existing.status === "disabled") {
-            return this.deny(
-              "disabled_user",
-              occurredAt,
-              requestId,
-              existing.externalIdentityId,
-              existing.userId,
-              "external_identity",
-            );
-          }
-          const serviceIdentityLinkId =
-            existing.status === "active"
-              ? this.loadActiveServiceLink(existing.userId, occurredAt)
-              : undefined;
-          if (existing.status === "active" && serviceIdentityLinkId === undefined) {
-            return this.deny(
-              "active_service_link_required",
-              occurredAt,
-              requestId,
-              existing.externalIdentityId,
-              existing.userId,
-              "external_identity",
-            );
-          }
-          return this.loginExisting({
-            claims: identity.claims,
-            displayClaimsJson,
-            existing: {
-              ...existing,
-              role: existing.role,
-              roleSource: existing.roleSource,
-              status: existing.status,
-              userId: existing.userId,
-            },
-            occurredAt,
-            provider,
-            ...(requestId ? { requestId } : {}),
-            resolution: expectedResolution,
-            ...(serviceIdentityLinkId ? { serviceIdentityLinkId } : {}),
-            sessionProof: {
-              idTokenHint: identity.idTokenHint,
-              ...(identity.sessionId ? { oidcSessionId: identity.sessionId } : {}),
-            },
-          });
-        })
-        .immediate();
-    } catch (error) {
-      if (error instanceof OidcIdentityServiceError) throw error;
-      throw new OidcIdentityServiceError({ cause: error });
+    if (!existing) {
+      if (provider.allowJitProvisioning !== 1) {
+        return this.deny("jit_provisioning_disabled", occurredAt, requestId, provider.id);
+      }
+      return this.provision({
+        claims: identity.claims,
+        displayClaimsJson,
+        displayName: displayNameFallback(displayClaims),
+        occurredAt,
+        provider,
+        ...(requestId ? { requestId } : {}),
+        resolution: expectedResolution,
+        sessionProof: {
+          idTokenHint: identity.idTokenHint,
+          ...(identity.sessionId ? { oidcSessionId: identity.sessionId } : {}),
+        },
+      });
     }
+
+    if (existing.identityProviderId !== provider.id) {
+      return this.deny("identity_provider_mismatch", occurredAt, requestId, provider.id);
+    }
+    if (
+      !existing.userId ||
+      !validIdentifier(existing.externalIdentityId) ||
+      !validIdentifier(existing.identityProviderId) ||
+      !validIdentifier(existing.userId) ||
+      !validDatabaseRole(existing.role) ||
+      !validDatabaseRoleSource(existing.roleSource) ||
+      !validDatabaseStatus(existing.status) ||
+      !validTimestamp(existing.identityCreatedAt, occurredAt) ||
+      !validTimestamp(existing.identityUpdatedAt, occurredAt) ||
+      !validTimestamp(existing.lastLoginAt, occurredAt) ||
+      !validTimestamp(existing.userCreatedAt, occurredAt) ||
+      !validTimestamp(existing.userUpdatedAt, occurredAt) ||
+      existing.identityCreatedAt > existing.identityUpdatedAt ||
+      existing.identityCreatedAt > existing.lastLoginAt ||
+      existing.userCreatedAt > existing.userUpdatedAt
+    ) {
+      return this.deny("identity_integrity_failure", occurredAt, requestId, provider.id);
+    }
+    if (existing.status === "disabled") {
+      return this.deny(
+        "disabled_user",
+        occurredAt,
+        requestId,
+        existing.externalIdentityId,
+        existing.userId,
+        "external_identity",
+      );
+    }
+    const serviceIdentityLinkId =
+      existing.status === "active"
+        ? this.loadActiveServiceLink(existing.userId, occurredAt)
+        : undefined;
+    if (existing.status === "active" && serviceIdentityLinkId === undefined) {
+      return this.deny(
+        "active_service_link_required",
+        occurredAt,
+        requestId,
+        existing.externalIdentityId,
+        existing.userId,
+        "external_identity",
+      );
+    }
+    return this.loginExisting({
+      claims: identity.claims,
+      displayClaimsJson,
+      existing: {
+        ...existing,
+        role: existing.role,
+        roleSource: existing.roleSource,
+        status: existing.status,
+        userId: existing.userId,
+      },
+      occurredAt,
+      ...(replacement ? { replacementSessionId: replacement.sessionId } : {}),
+      provider,
+      ...(requestId ? { requestId } : {}),
+      resolution: expectedResolution,
+      ...(serviceIdentityLinkId ? { serviceIdentityLinkId } : {}),
+      sessionProof: {
+        idTokenHint: identity.idTokenHint,
+        ...(identity.sessionId ? { oidcSessionId: identity.sessionId } : {}),
+      },
+    });
   }
 
   private loadActiveServiceLink(userId: string, occurredAt: number) {
@@ -561,6 +615,54 @@ export class OidcIdentityService {
       return undefined;
     }
     return link.id;
+  }
+
+  private verifySessionReplacement(
+    options: ResolveOidcIdentityTransactionOptions | undefined,
+  ): VerifiedSessionReplacement | undefined {
+    if (options === undefined) return undefined;
+    if (typeof options !== "object" || options === null) {
+      throw new OidcIdentityServiceError();
+    }
+    const optionKeys = Reflect.ownKeys(options);
+    if (optionKeys.length !== 1 || optionKeys[0] !== "sessionReplacement") {
+      throw new OidcIdentityServiceError();
+    }
+    const replacement = options.sessionReplacement;
+    if (typeof replacement !== "object" || replacement === null) {
+      throw new OidcIdentityServiceError();
+    }
+    const replacementKeys = Reflect.ownKeys(replacement).sort((left, right) =>
+      String(left).localeCompare(String(right)),
+    );
+    if (
+      replacementKeys.length !== 2 ||
+      replacementKeys[0] !== "capability" ||
+      replacementKeys[1] !== "sessionService"
+    ) {
+      throw new OidcIdentityServiceError();
+    }
+    const sessionService = replacement.sessionService;
+    if (
+      !(sessionService instanceof SessionService) ||
+      !sessionService.isBoundToDatabase(this.database)
+    ) {
+      throw new OidcIdentityServiceError();
+    }
+    const verified = sessionService.verifyReplacementCapabilityForIdentity(replacement.capability);
+    if (
+      !validIdentifier(verified.sessionId) ||
+      !Number.isSafeInteger(verified.operationTime) ||
+      verified.operationTime < 0
+    ) {
+      throw new OidcIdentityServiceError();
+    }
+    return Object.freeze({
+      capability: replacement.capability,
+      operationTime: verified.operationTime,
+      sessionService,
+      sessionId: verified.sessionId,
+    });
   }
 
   private currentTime() {
@@ -727,6 +829,7 @@ export class OidcIdentityService {
       userId: string;
     };
     occurredAt: number;
+    replacementSessionId?: string;
     provider: ProviderRow;
     requestId?: string;
     resolution: Extract<OidcRoleResolution, { status: "resolved" }>;
@@ -764,9 +867,16 @@ export class OidcIdentityService {
         .prepare(
           `update sessions
            set revoked_at = max(?, created_at)
-           where user_id = ? and revoked_at is null`,
+           where user_id = ?
+             and revoked_at is null
+             and (? is null or id <> ?)`,
         )
-        .run(input.occurredAt, input.existing.userId);
+        .run(
+          input.occurredAt,
+          input.existing.userId,
+          input.replacementSessionId ?? null,
+          input.replacementSessionId ?? null,
+        );
       this.insertAudit({
         actorUserId: input.existing.userId,
         eventType: "auth.oidc.role.changed",

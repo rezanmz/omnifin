@@ -377,6 +377,53 @@ function seedJellyfinLink(
 }
 
 describe("OidcIdentityService", () => {
+  it("rejects the internal resolution path outside a transaction without consuming the grant", async () => {
+    const { database, service } = createHarness();
+    try {
+      seedProvider(database);
+      const grant = await verifiedGrant(database, claims());
+
+      expect(() =>
+        service.resolveInExistingTransaction({ grant, requestId: "guarded-request" }),
+      ).toThrow(OidcIdentityServiceError);
+
+      expect(service.resolve({ grant, requestId: "root-request" })).toMatchObject({
+        status: "resolved",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a raw session identifier on the internal path without consuming the grant", async () => {
+    const { database, service } = createHarness();
+    try {
+      seedProvider(database);
+      const grant = await verifiedGrant(database, claims());
+      const unsafeResolve = service.resolveInExistingTransaction.bind(service) as unknown as (
+        input: { grant: typeof grant; requestId: string },
+        options: { preserveSessionId: string },
+      ) => unknown;
+
+      database.sqlite
+        .transaction(() => {
+          expect(() =>
+            unsafeResolve(
+              { grant, requestId: "raw-preservation-request" },
+              { preserveSessionId: "attacker-selected-session" },
+            ),
+          ).toThrow(OidcIdentityServiceError);
+        })
+        .immediate();
+
+      expect(service.resolve({ grant, requestId: "safe-root-request" })).toMatchObject({
+        status: "resolved",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("keeps the root key and verifier capability outside reflective service state", () => {
     const database = openDatabase(":memory:");
     try {
