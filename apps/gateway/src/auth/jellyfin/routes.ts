@@ -1,6 +1,9 @@
 import {
   authenticatedSessionResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
+  jellyfinQuickConnectInitiationRequestSchema,
+  jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectPollResponseSchema,
 } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
@@ -11,15 +14,25 @@ import { privacyHash } from "../../security/crypto.js";
 import { sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "../session-service.js";
 import {
+  jellyfinQuickConnectBrowserBindingCookieName,
+  JellyfinQuickConnectService,
+  JellyfinQuickConnectServiceError,
+  type JellyfinQuickConnectServiceDependencies,
+  writeJellyfinQuickConnectBrowserBindingCookie,
+} from "./quick-connect-service.js";
+import {
   JellyfinSignInService,
   JellyfinSignInServiceError,
   type JellyfinSignInServiceDependencies,
 } from "./sign-in-service.js";
 
 const PASSWORD_REQUEST_BODY_LIMIT_BYTES = 2_048;
+const QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES = 16;
+const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export interface JellyfinRoutesOptions {
   dependencies?: JellyfinSignInServiceDependencies;
+  quickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
 }
 
 function requestContext(request: FastifyRequest) {
@@ -46,6 +59,12 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
     app.sessionService,
     options.dependencies,
   );
+  const quickConnect = new JellyfinQuickConnectService(
+    app.database,
+    app.appConfig,
+    signIn,
+    options.quickConnectDependencies,
+  );
   const globalCredentialRateLimit = app.createRateLimit({
     keyGenerator: () => "jellyfin-password-global:v1",
     max: 512,
@@ -55,6 +74,21 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
     keyGenerator: (request) => clientNetworkGroup(request.ip),
     max: 10,
     timeWindow: "1 minute",
+  });
+  const globalQuickConnectStartRateLimit = app.createRateLimit({
+    keyGenerator: () => "jellyfin-quick-connect-start-global:v1",
+    max: 256,
+    timeWindow: "10 minutes",
+  });
+  const clientQuickConnectStartRateLimit = app.createRateLimit({
+    keyGenerator: (request) => clientNetworkGroup(request.ip),
+    max: 6,
+    timeWindow: "1 minute",
+  });
+  const globalQuickConnectPollRateLimit = app.createRateLimit({
+    keyGenerator: () => "jellyfin-quick-connect-poll-global:v1",
+    max: 8_192,
+    timeWindow: "10 minutes",
   });
   const recordedRequests = new WeakSet<FastifyRequest>();
 
@@ -97,6 +131,23 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         "Request failed",
       );
     }
+  };
+
+  const enforceRateLimit = async (
+    limiter: ReturnType<typeof app.createRateLimit>,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    message: string,
+  ) => {
+    const result = await limiter(request);
+    if (result.isAllowed || !result.isExceeded) return;
+    setRateLimitHeaders(reply, result);
+    recordFailure(request, "rate_limited");
+    throw new SafeHttpError({
+      code: "rate_limit_exceeded",
+      message,
+      statusCode: 429,
+    });
   };
 
   app.post(
@@ -198,6 +249,211 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       const response = authenticatedSessionResponseSchema.parse({
         csrfToken: result.session.csrfToken,
         principal: result.session.principal,
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/jellyfin/quick-connect",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        const statusCode =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        clientQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Too many Jellyfin Quick Connect attempts were started.",
+      );
+      await enforceRateLimit(
+        globalQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect is temporarily rate limited.",
+      );
+      const parsed = jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        recordFailure(request, "invalid_request");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let started;
+      try {
+        started = await quickConnect.start({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+        });
+      } catch (error) {
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      recordedRequests.add(request);
+      writeJellyfinQuickConnectBrowserBindingCookie(
+        reply,
+        app.appConfig,
+        started.browserBindingToken,
+        started.expiresAt,
+      );
+      return jellyfinQuickConnectInitiationResponseSchema.parse({
+        code: started.code,
+        expiresAt: started.expiresAt.toISOString(),
+        pollAfterMs: started.pollAfterMs,
+        transactionId: started.transactionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { transactionId: string } }>(
+    "/v1/auth/jellyfin/quick-connect/:transactionId/poll",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 90, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        const statusCode =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        globalQuickConnectPollRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect polling is temporarily rate limited.",
+      );
+      if (
+        !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||
+        !jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success
+      ) {
+        recordFailure(request, "invalid_request");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect poll request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let result;
+      try {
+        result = await quickConnect.poll({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
+          ...requestContext(request),
+          transactionId: request.params.transactionId,
+        });
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Jellyfin sign-in is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          if (error.reason === "invalid_transaction") {
+            recordFailure(request, "invalid_request");
+            throw new SafeHttpError({
+              cause: error,
+              code: "authentication_attempt_invalid",
+              message: "The Jellyfin Quick Connect attempt is invalid or has expired.",
+              statusCode: 400,
+            });
+          }
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+
+      if (result.status === "expired") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPollResponseSchema.parse({ status: "expired" });
+      }
+      if (result.status === "pending") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPollResponseSchema.parse({
+          expiresAt: result.expiresAt.toISOString(),
+          pollAfterMs: result.pollAfterMs,
+          status: "pending",
+        });
+      }
+      if (result.status === "denied") {
+        recordFailure(request, "authentication_denied");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin account is not permitted to sign in.",
+          statusCode: 401,
+        });
+      }
+
+      recordedRequests.add(request);
+      const response = jellyfinQuickConnectPollResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+        status: "signed_in",
       });
       writeSessionCookie(
         reply,

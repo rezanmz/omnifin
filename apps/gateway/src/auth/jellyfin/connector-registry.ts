@@ -196,4 +196,45 @@ export class JellyfinConnectorRegistry {
       );
     return Boolean(row);
   }
+
+  public quickConnectIsAdvertisable() {
+    const rows = this.#database.sqlite
+      .prepare(
+        `select json_extract(capability_snapshot_json, '$.authentication.quickConnect') as quickConnect
+         from connector_configs
+         where type = 'jellyfin' and enabled = 1
+         order by id asc
+         limit 2`,
+      )
+      .all() as { quickConnect: unknown }[];
+    if (rows.length !== 1) return false;
+    return rows[0]?.quickConnect !== 0;
+  }
+
+  public recordQuickConnectCapability(target: JellyfinConnectorTarget, available: boolean) {
+    const result = this.#database.sqlite
+      .prepare(
+        `update connector_configs
+         set capability_snapshot_json = json_set(
+           capability_snapshot_json,
+           '$.schemaVersion', 1,
+           '$.authentication.password', json('true'),
+           '$.authentication.quickConnect', json(?)
+         )
+         where id = ?
+           and type = 'jellyfin'
+           and enabled = 1
+           and base_url = ?
+           and insecure_http_approved = ?
+           and updated_at = ?`,
+      )
+      .run(
+        available ? "true" : "false",
+        target.connectorId,
+        target.baseUrl,
+        target.insecureHttpApproved ? 1 : 0,
+        target.updatedAt,
+      );
+    if (result.changes !== 1) throw new JellyfinConnectorConfigurationError();
+  }
 }

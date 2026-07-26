@@ -376,6 +376,41 @@ export const authenticatedSessionResponseSchema = z.object({
 });
 export type AuthenticatedSessionResponse = z.infer<typeof authenticatedSessionResponseSchema>;
 
+export const jellyfinQuickConnectInitiationRequestSchema = z.strictObject({});
+export type JellyfinQuickConnectInitiationRequest = z.infer<
+  typeof jellyfinQuickConnectInitiationRequestSchema
+>;
+
+export const jellyfinQuickConnectInitiationResponseSchema = z.strictObject({
+  transactionId: identifierSchema,
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .regex(/^[A-Za-z0-9-]+$/),
+  expiresAt: z.iso.datetime({ offset: true }),
+  pollAfterMs: z.int().min(1_000).max(30_000),
+});
+export type JellyfinQuickConnectInitiationResponse = z.infer<
+  typeof jellyfinQuickConnectInitiationResponseSchema
+>;
+
+export const jellyfinQuickConnectPollResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("pending"),
+    expiresAt: z.iso.datetime({ offset: true }),
+    pollAfterMs: z.int().min(1_000).max(30_000),
+  }),
+  authenticatedSessionResponseSchema.extend({ status: z.literal("signed_in") }).strict(),
+  z.strictObject({
+    status: z.literal("expired"),
+  }),
+]);
+export type JellyfinQuickConnectPollResponse = z.infer<
+  typeof jellyfinQuickConnectPollResponseSchema
+>;
+
 export const sessionResponseSchema = z.union([
   authenticatedSessionResponseSchema,
   z.object({

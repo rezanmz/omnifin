@@ -897,7 +897,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 6 });
+      ).toEqual({ count: 7 });
       expect(
         database.sqlite
           .prepare(

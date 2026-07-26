@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
+import type { JellyfinQuickConnectServiceDependencies } from "./auth/jellyfin/quick-connect-service.js";
 import { jellyfinRoutes, type JellyfinRoutesOptions } from "./auth/jellyfin/routes.js";
 import { oidcRoutes, type OidcRoutesDependencies } from "./auth/oidc/routes.js";
 import { recoveryRoutes } from "./auth/recovery-routes.js";
@@ -47,6 +48,7 @@ export interface CreateAppOptions {
   migrate?: boolean;
   oidcDependencies?: OidcRoutesDependencies;
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
+  jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -244,12 +246,14 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
-    await app.register(
-      jellyfinRoutes,
-      options.jellyfinDependencies === undefined
+    await app.register(jellyfinRoutes, {
+      ...(options.jellyfinDependencies === undefined
         ? {}
-        : { dependencies: options.jellyfinDependencies },
-    );
+        : { dependencies: options.jellyfinDependencies }),
+      ...(options.jellyfinQuickConnectDependencies === undefined
+        ? {}
+        : { quickConnectDependencies: options.jellyfinQuickConnectDependencies }),
+    });
     await app.register(
       oidcRoutes,
       options.oidcDependencies === undefined ? {} : { dependencies: options.oidcDependencies },

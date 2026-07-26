@@ -64,6 +64,16 @@ test("Jellyfin credential denial visual baseline", async ({ page }, testInfo) =>
   });
 });
 
+test("Jellyfin Quick Connect visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Quick Connect covers representative desktop and phone geometry",
+  );
+  await page.goto("/login/jellyfin?test-view=quick-connect");
+  await page.getByText("Waiting for approval", { exact: true }).waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-login-quick-connect.png", { fullPage: true });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

@@ -9,8 +9,8 @@ the roadmap records when each area has passed its verification gate.
 > Phase 0 established the process topology, SQLite migrations, health and readiness,
 > security headers and origin checks, connector contracts and probes, secret-handling
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
-> sessions, direct Jellyfin credential sign-in, identity resolution, authentication
-> audits, and recovery access now exist, while OIDC-to-Jellyfin pairing, Quick Connect,
+> sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
+> authentication audits, and recovery access now exist, while OIDC-to-Jellyfin pairing,
 > complete authorization, connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
@@ -23,12 +23,12 @@ process. Ready OIDC providers can complete the authorization-code flow and creat
 local session; failed or inconsistent providers remain non-interactive. Gateway
 liveness and storage readiness stay private to the Compose network. The gateway owns
 OIDC discovery and backoff, one-time authorization transactions, identities, sessions,
-direct Jellyfin credential exchange, recovery access, and authentication audits. It
+direct Jellyfin password and Quick Connect exchanges, recovery access, and authentication audits. It
 also migrates SQLite, validates public configuration, redacts structured logs, and
 provides isolated connector fixture and probe tooling.
 
 There is not yet a supported provider-administration workflow. Direct Jellyfin password
-login is implemented for the deployment-configured connector; Quick Connect,
+and Quick Connect login are implemented for the deployment-configured connector;
 OIDC-to-Jellyfin linking, OIDC logout, connector administration, and media operations
 remain unavailable.
 

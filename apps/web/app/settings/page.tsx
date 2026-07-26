@@ -23,9 +23,9 @@ export default function SettingsPage() {
         <p>
           OIDC sign-in, local sessions, and recovery now run behind the gateway boundary, but this
           pre-release checkpoint has no supported provider or account administration. Direct
-          Jellyfin password sign-in is available for a deployment-configured server; Quick Connect,
-          OIDC pairing, identity-provider logout, connector setup, and media operations remain
-          gated.
+          Jellyfin password and Quick Connect sign-in are available for a deployment-configured
+          server; OIDC pairing, identity-provider logout, connector setup, and media operations
+          remain gated.
         </p>
         <Link className="button button--glass" href="/">
           <ArrowLeft aria-hidden="true" size={17} /> Return home

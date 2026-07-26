@@ -50,6 +50,17 @@ export interface JellyfinPasswordSignInInput {
   readonly username: string;
 }
 
+export interface JellyfinAuthenticatedSignInInput {
+  readonly authentication: JellyfinAuthenticationResult;
+  readonly currentSessionToken?: unknown;
+  readonly deviceId: string;
+  readonly ipAddress?: string;
+  readonly proof: "password" | "quick_connect";
+  readonly requestId?: string;
+  readonly target: JellyfinConnectorTarget;
+  readonly userAgent?: string;
+}
+
 export type JellyfinSignInDenialReason = "account_disabled" | "invalid_credentials";
 
 export interface JellyfinSignInDeniedResult {
@@ -215,22 +226,40 @@ export class JellyfinSignInService {
     return this.#reconcileAndIssueSession({
       authentication,
       deviceId,
-      input,
+      requestContext: input,
+      proof: "password",
       target,
+    });
+  }
+
+  public completeAuthenticatedSignIn(
+    input: JellyfinAuthenticatedSignInInput,
+  ): JellyfinSignInResult {
+    this.#validateAuthenticatedSignInInput(input);
+    return this.#reconcileAndIssueSession({
+      authentication: input.authentication,
+      deviceId: input.deviceId,
+      proof: input.proof,
+      requestContext: input,
+      target: input.target,
     });
   }
 
   #reconcileAndIssueSession(input: {
     authentication: JellyfinAuthenticationResult;
     deviceId: string;
-    input: JellyfinPasswordSignInInput;
+    proof: "password" | "quick_connect";
+    requestContext: Pick<
+      JellyfinPasswordSignInInput,
+      "currentSessionToken" | "ipAddress" | "requestId" | "userAgent"
+    >;
     target: JellyfinConnectorTarget;
   }): JellyfinSignInResult {
     try {
       return this.#database.sqlite
         .transaction(() =>
           this.#sessionService.withSessionReplacementCapability(
-            input.input.currentSessionToken,
+            input.requestContext.currentSessionToken,
             (capability) => {
               const replacement = capability
                 ? this.#sessionService.verifyReplacementCapabilityForIdentity(capability)
@@ -251,15 +280,15 @@ export class JellyfinSignInService {
                   serviceIdentityLinkId: identity.linkId,
                   userId: identity.userId,
                 },
-                ...(input.input.ipAddress === undefined
+                ...(input.requestContext.ipAddress === undefined
                   ? {}
-                  : { ipAddress: input.input.ipAddress }),
-                ...(input.input.requestId === undefined
+                  : { ipAddress: input.requestContext.ipAddress }),
+                ...(input.requestContext.requestId === undefined
                   ? {}
-                  : { requestId: input.input.requestId }),
-                ...(input.input.userAgent === undefined
+                  : { requestId: input.requestContext.requestId }),
+                ...(input.requestContext.userAgent === undefined
                   ? {}
-                  : { userAgent: input.input.userAgent }),
+                  : { userAgent: input.requestContext.userAgent }),
               };
               const session = capability
                 ? this.#sessionService.replaceSessionWithCapability(capability, sessionInput)
@@ -279,7 +308,8 @@ export class JellyfinSignInService {
   #reconcileIdentity(input: {
     authentication: JellyfinAuthenticationResult;
     deviceId: string;
-    input: JellyfinPasswordSignInInput;
+    proof: "password" | "quick_connect";
+    requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
     occurredAt: number;
     target: JellyfinConnectorTarget;
   }):
@@ -330,7 +360,9 @@ export class JellyfinSignInService {
           metadata: { reason: "account_disabled" },
           occurredAt: input.occurredAt,
           outcome: "denied",
-          ...(input.input.requestId === undefined ? {} : { requestId: input.input.requestId }),
+          ...(input.requestContext.requestId === undefined
+            ? {}
+            : { requestId: input.requestContext.requestId }),
           targetId: existing.id,
           targetType: "service_identity_link",
         });
@@ -382,10 +414,16 @@ export class JellyfinSignInService {
       this.#insertAudit({
         actorUserId: existing.userId!,
         eventType: "auth.jellyfin.sign_in",
-        metadata: { provisioned: false, relinked: existing.healthState !== "linked" },
+        metadata: {
+          proof: input.proof,
+          provisioned: false,
+          relinked: existing.healthState !== "linked",
+        },
         occurredAt: input.occurredAt,
         outcome: "success",
-        ...(input.input.requestId === undefined ? {} : { requestId: input.input.requestId }),
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
         targetId: existing.id,
         targetType: "service_identity_link",
       });
@@ -448,20 +486,24 @@ export class JellyfinSignInService {
     this.#insertAudit({
       actorUserId: userId,
       eventType: "auth.jellyfin.identity.linked",
-      metadata: { proof: "password", provisioned: true },
+      metadata: { proof: input.proof, provisioned: true },
       occurredAt: input.occurredAt,
       outcome: "success",
-      ...(input.input.requestId === undefined ? {} : { requestId: input.input.requestId }),
+      ...(input.requestContext.requestId === undefined
+        ? {}
+        : { requestId: input.requestContext.requestId }),
       targetId: linkId,
       targetType: "service_identity_link",
     });
     this.#insertAudit({
       actorUserId: userId,
       eventType: "auth.jellyfin.sign_in",
-      metadata: { provisioned: true, relinked: false },
+      metadata: { proof: input.proof, provisioned: true, relinked: false },
       occurredAt: input.occurredAt,
       outcome: "success",
-      ...(input.input.requestId === undefined ? {} : { requestId: input.input.requestId }),
+      ...(input.requestContext.requestId === undefined
+        ? {}
+        : { requestId: input.requestContext.requestId }),
       targetId: linkId,
       targetType: "service_identity_link",
     });
@@ -560,6 +602,24 @@ export class JellyfinSignInService {
       typeof input.password !== "string" ||
       input.password.length < 1 ||
       input.password.length > 1_024 ||
+      (input.requestId !== undefined &&
+        (typeof input.requestId !== "string" ||
+          input.requestId.length < 1 ||
+          input.requestId.length > 128))
+    ) {
+      throw new JellyfinSignInServiceError("provider_unavailable");
+    }
+  }
+
+  #validateAuthenticatedSignInInput(input: JellyfinAuthenticatedSignInInput) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !validIdentifier(input.deviceId) ||
+      (input.proof !== "password" && input.proof !== "quick_connect") ||
+      !input.authentication ||
+      typeof input.authentication !== "object" ||
+      !validIdentifier(input.target?.connectorId) ||
       (input.requestId !== undefined &&
         (typeof input.requestId !== "string" ||
           input.requestId.length < 1 ||

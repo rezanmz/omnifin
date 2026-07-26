@@ -56,12 +56,12 @@ and shared contract and connector packages. The first interface primitives remai
 app-local until the design-system API stabilizes during Phase 2. The current
 development checkpoint provides storage-backed health checks, browser-safe provider
 discovery, an OIDC Authorization Code flow with PKCE, opaque local sessions,
-break-glass recovery, direct Jellyfin password authentication with encrypted identity
-links, normalized contracts, connector probes, migration tooling, and the application
-shell and sign-in experience.
+break-glass recovery, direct Jellyfin password and Quick Connect authentication with
+encrypted identity links, normalized contracts, connector probes, migration tooling,
+and the application shell and sign-in experience.
 
 All upstream access crosses the gateway boundary. Phase 1 is still in development:
-supported provider administration, Jellyfin Quick Connect and OIDC pairing, complete
+supported provider administration, OIDC-to-Jellyfin pairing, complete
 logout, permission enforcement, and encrypted connector administration remain
 release-gate work. Later phases add live events, media proxying, and complete upstream
 workflows.

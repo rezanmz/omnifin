@@ -7,8 +7,23 @@ export {
   type JellyfinConnectorTarget,
 } from "./auth/jellyfin/connector-registry.js";
 export {
+  JELLYFIN_QUICK_CONNECT_ACTIVE_PER_BROWSER_LIMIT,
+  JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS,
+  JELLYFIN_QUICK_CONNECT_TRANSACTION_TTL_MS,
+  JELLYFIN_QUICK_CONNECT_UNEXPIRED_ROW_LIMIT,
+  jellyfinQuickConnectBrowserBindingCookieName,
+  JellyfinQuickConnectService,
+  JellyfinQuickConnectServiceError,
+  type JellyfinQuickConnectPollResult,
+  type JellyfinQuickConnectServiceDependencies,
+  type PollJellyfinQuickConnectInput,
+  type StartedJellyfinQuickConnect,
+  type StartJellyfinQuickConnectInput,
+} from "./auth/jellyfin/quick-connect-service.js";
+export {
   JellyfinSignInService,
   JellyfinSignInServiceError,
+  type JellyfinAuthenticatedSignInInput,
   type JellyfinPasswordSignInInput,
   type JellyfinSignInDenialReason,
   type JellyfinSignInResult,

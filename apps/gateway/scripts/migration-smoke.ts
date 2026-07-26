@@ -17,6 +17,7 @@ const requiredTables = [
   "auth_transactions",
   "connector_configs",
   "external_identities",
+  "jellyfin_quick_connect_transactions",
   "oidc_logout_receipts",
   "oidc_providers",
   "operational_failures",
@@ -40,6 +41,16 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  jellyfin_quick_connect_transactions: [
+    "browser_binding_hash",
+    "connector_id",
+    "connector_type",
+    "consumed_at",
+    "encrypted_payload",
+    "expires_at",
+    "next_poll_at",
+    "poll_count",
+  ],
   oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
   oidc_providers: [
     "approved_endpoint_origins_json",
@@ -81,6 +92,10 @@ const requiredIndexes = {
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  jellyfin_quick_connect_transactions: [
+    "jellyfin_quick_connect_transactions_browser_expiry_idx",
+    "jellyfin_quick_connect_transactions_expiry_idx",
+  ],
   oidc_logout_receipts: [
     "oidc_logout_receipts_expiry_idx",
     "oidc_logout_receipts_provider_jti_unique",
@@ -229,7 +244,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0005.",
+  "Current migration journal must contain migration 0006.",
 );
 
 try {
@@ -454,8 +469,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 6, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0005.",
+        JSON.stringify({ count: 7, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0006.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -620,7 +635,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0005, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0006, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

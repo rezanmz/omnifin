@@ -2203,10 +2203,52 @@ a {
   text-wrap: pretty;
 }
 
+.jellyfin-login-methods {
+  background: rgb(2 5 3 / 48%);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 3px;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 24px;
+  padding: 3px;
+}
+
+.jellyfin-login-methods button {
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 4px);
+  color: var(--paper-2);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 680;
+  min-height: 44px;
+  padding: 0 12px;
+  transition:
+    background-color 160ms ease-out,
+    box-shadow 160ms ease-out,
+    color 160ms ease-out,
+    scale 120ms ease-out;
+}
+
+.jellyfin-login-methods button:hover {
+  color: var(--paper-0);
+}
+
+.jellyfin-login-methods button:active {
+  scale: 0.98;
+}
+
+.jellyfin-login-methods button[aria-selected="true"] {
+  background: rgb(238 247 238 / 8%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%);
+  color: var(--paper-0);
+}
+
 .jellyfin-login-form {
   display: grid;
   gap: 18px;
-  margin-top: 30px;
+  margin-top: 18px;
 }
 
 .jellyfin-login-field {
@@ -2341,6 +2383,171 @@ a {
   animation: jellyfin-login-spin 900ms linear infinite;
 }
 
+.jellyfin-quick-connect {
+  margin-top: 18px;
+  min-height: 314px;
+}
+
+.jellyfin-quick-connect__code-card {
+  align-items: center;
+  background: linear-gradient(120deg, rgb(216 255 112 / 10%), transparent 62%), rgb(3 6 4 / 60%);
+  border: 1px solid rgb(216 255 112 / 22%);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px rgb(255 255 255 / 4%);
+  display: flex;
+  justify-content: space-between;
+  min-height: 98px;
+  padding: 18px 16px 18px 20px;
+}
+
+.jellyfin-quick-connect__code-card > div {
+  display: grid;
+  gap: 7px;
+}
+
+.jellyfin-quick-connect__code-card span {
+  color: var(--paper-2);
+  font-size: 0.62rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.jellyfin-quick-connect__code-card output {
+  color: var(--paper-0);
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 4vw, 2.55rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+  letter-spacing: 0.1em;
+  line-height: 1;
+}
+
+.jellyfin-quick-connect__code-card button {
+  align-items: center;
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  height: 44px;
+  justify-content: center;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out,
+    scale 120ms ease-out;
+  width: 44px;
+}
+
+.jellyfin-quick-connect__code-card button:hover {
+  background: rgb(255 255 255 / 10%);
+  color: var(--paper-0);
+}
+
+.jellyfin-quick-connect__code-card button:active {
+  scale: 0.94;
+}
+
+.jellyfin-quick-connect__steps {
+  counter-reset: quick-connect-step;
+  display: grid;
+  gap: 9px;
+  list-style: none;
+  margin: 20px 0;
+  padding: 0;
+}
+
+.jellyfin-quick-connect__steps li {
+  align-items: center;
+  color: var(--paper-2);
+  counter-increment: quick-connect-step;
+  display: grid;
+  font-size: 0.68rem;
+  gap: 10px;
+  grid-template-columns: 24px 1fr;
+  line-height: 1.35;
+}
+
+.jellyfin-quick-connect__steps li::before {
+  align-items: center;
+  background: rgb(255 255 255 / 5%);
+  border: 1px solid var(--line-soft);
+  border-radius: 50%;
+  color: var(--paper-1);
+  content: counter(quick-connect-step);
+  display: flex;
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.jellyfin-quick-connect__waiting {
+  align-items: center;
+  border-top: 1px solid var(--line-soft);
+  color: var(--paper-2);
+  display: grid;
+  font-size: 0.66rem;
+  gap: 9px;
+  grid-template-columns: auto 1fr auto;
+  padding-top: 16px;
+}
+
+.jellyfin-quick-connect__waiting time {
+  color: var(--paper-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.jellyfin-quick-connect__pulse {
+  background: var(--acid);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgb(216 255 112 / 8%);
+  height: 7px;
+  width: 7px;
+}
+
+.jellyfin-quick-connect__start {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  text-align: center;
+}
+
+.jellyfin-quick-connect__device-ring {
+  align-items: center;
+  background: radial-gradient(circle, rgb(216 255 112 / 12%), rgb(216 255 112 / 3%));
+  border: 1px solid rgb(216 255 112 / 15%);
+  border-radius: 50%;
+  color: var(--acid);
+  display: flex;
+  height: 78px;
+  justify-content: center;
+  margin: 12px 0 22px;
+  width: 78px;
+}
+
+.jellyfin-quick-connect__start > p {
+  color: var(--paper-2);
+  font-size: 0.7rem;
+  line-height: 1.55;
+  margin: 0 0 20px;
+  max-width: 38ch;
+  text-wrap: pretty;
+}
+
+.jellyfin-quick-connect__start > .jellyfin-quick-connect__error {
+  color: var(--danger);
+  margin-top: -8px;
+}
+
+.jellyfin-quick-connect__start .jellyfin-login-form__submit {
+  margin-top: auto;
+  width: 100%;
+}
+
 @keyframes jellyfin-login-spin {
   to {
     rotate: 360deg;
@@ -2395,6 +2602,10 @@ a {
     align-content: start;
     border-top: 1px solid var(--line-soft);
     padding-bottom: max(42px, env(safe-area-inset-bottom));
+  }
+
+  .jellyfin-quick-connect {
+    min-height: 300px;
   }
 }
 
@@ -3132,6 +3343,7 @@ html:has([data-display-profile="ten-foot"]) {
 }
 
 [data-display-profile="ten-foot"] .jellyfin-login-card__form-heading > p,
+[data-display-profile="ten-foot"] .jellyfin-login-methods button,
 [data-display-profile="ten-foot"] .jellyfin-login-field > label,
 [data-display-profile="ten-foot"] .jellyfin-login-field > span:first-child,
 [data-display-profile="ten-foot"] .jellyfin-login-form__feedback p,
@@ -3139,8 +3351,15 @@ html:has([data-display-profile="ten-foot"]) {
   font-size: 0.82rem;
 }
 
+[data-display-profile="ten-foot"] .jellyfin-quick-connect__steps li,
+[data-display-profile="ten-foot"] .jellyfin-quick-connect__waiting,
+[data-display-profile="ten-foot"] .jellyfin-quick-connect__start > p {
+  font-size: 0.82rem;
+}
+
 [data-display-profile="ten-foot"] .jellyfin-login-field input,
-[data-display-profile="ten-foot"] .jellyfin-login-form__submit {
+[data-display-profile="ten-foot"] .jellyfin-login-form__submit,
+[data-display-profile="ten-foot"] .jellyfin-login-methods button {
   min-height: 66px;
 }
 

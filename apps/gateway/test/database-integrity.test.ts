@@ -283,6 +283,93 @@ describe("database integrity constraints", () => {
     expectConstraintFailure(statement, constraint);
   });
 
+  it("enforces Quick Connect binding, connector, poll, and timestamp invariants", () => {
+    const database = openSeededDatabase();
+    try {
+      database.sqlite.exec(`
+        insert into connector_configs (
+          id, type, display_name, base_url, encrypted_credentials, created_at, updated_at
+        ) values (
+          'jellyfin-home',
+          'jellyfin',
+          'Home Jellyfin',
+          'https://jellyfin.example.test',
+          'encrypted',
+          1000,
+          1000
+        );
+      `);
+      const statement = database.sqlite.prepare(
+        `insert into jellyfin_quick_connect_transactions (
+          id,
+          connector_id,
+          connector_type,
+          browser_binding_hash,
+          encrypted_payload,
+          expires_at,
+          next_poll_at,
+          poll_count,
+          consumed_at,
+          created_at
+        ) values (?, ?, ?, ?, 'encrypted', ?, ?, ?, ?, ?)`,
+      );
+      expect(() =>
+        statement.run(
+          "invalid-binding",
+          "jellyfin-home",
+          "jellyfin",
+          "short",
+          2000,
+          1500,
+          0,
+          null,
+          1000,
+        ),
+      ).toThrow(/jellyfin_quick_connect_transactions_binding_hash_check/);
+      expect(() =>
+        statement.run(
+          "invalid-poll-count",
+          "jellyfin-home",
+          "jellyfin",
+          "b".repeat(43),
+          2000,
+          1500,
+          513,
+          null,
+          1000,
+        ),
+      ).toThrow(/jellyfin_quick_connect_transactions_poll_count_check/);
+      expect(() =>
+        statement.run(
+          "invalid-timestamp",
+          "jellyfin-home",
+          "jellyfin",
+          "b".repeat(43),
+          2000,
+          999,
+          0,
+          null,
+          1000,
+        ),
+      ).toThrow(/jellyfin_quick_connect_transactions_timestamp_order_check/);
+      expect(() =>
+        statement.run(
+          "wrong-connector-type",
+          "jellyfin-home",
+          "radarr",
+          "b".repeat(43),
+          2000,
+          1500,
+          0,
+          null,
+          1000,
+        ),
+      ).toThrow(/jellyfin_quick_connect_transactions_connector_type_check/);
+    } finally {
+      database.close();
+    }
+  });
+
   it("requires object-shaped JSON for object-bearing records", () => {
     expectConstraintFailure(
       "insert into audit_events (id, event_type, outcome, metadata_json) values ('invalid-audit-shape', 'auth.login', 'success', '[]')",

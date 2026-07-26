@@ -140,3 +140,56 @@ test("Jellyfin credential controls remain keyboard-usable and meet target geomet
   expect(bounds!.width).toBeGreaterThanOrEqual(44);
   expect(bounds!.height).toBeGreaterThanOrEqual(44);
 });
+
+test("Jellyfin Quick Connect keeps protocol secrets server-side and polls by opaque ID", async ({
+  page,
+}) => {
+  let startBody = "";
+  let pollBody = "";
+  await page.route("**/api/auth/jellyfin/quick-connect", async (route) => {
+    startBody = route.request().postData() ?? "";
+    await route.fulfill({
+      body: JSON.stringify({
+        code: "AB-1234",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        pollAfterMs: 1_000,
+        transactionId: "opaque-quick-connect-1",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route(
+    "**/api/auth/jellyfin/quick-connect/opaque-quick-connect-1/poll",
+    async (route) => {
+      pollBody = route.request().postData() ?? "";
+      await route.fulfill({
+        body: JSON.stringify({
+          expiresAt: new Date(Date.now() + 298_000).toISOString(),
+          pollAfterMs: 2_000,
+          status: "pending",
+        }),
+        contentType: "application/json",
+        status: 200,
+      });
+    },
+  );
+  await page.goto("/login/jellyfin");
+
+  const passwordMethod = page.getByRole("tab", { name: "Password sign in" });
+  await passwordMethod.focus();
+  await passwordMethod.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Quick Connect" })).toBeFocused();
+  await page.getByRole("button", { name: "Generate a code" }).click();
+  await expect(page.getByLabel("Jellyfin Quick Connect code")).toHaveText("AB-1234");
+  const copyButton = page.getByRole("button", { name: "Copy Quick Connect code" });
+  const copyBounds = await copyButton.boundingBox();
+  expect(copyBounds).not.toBeNull();
+  expect(copyBounds!.width).toBeGreaterThanOrEqual(44);
+  expect(copyBounds!.height).toBeGreaterThanOrEqual(44);
+  await expect.poll(() => pollBody).toBe("{}");
+
+  expect(startBody).toBe("{}");
+  expect(page.url()).not.toMatch(/AB-1234|opaque-quick-connect-1/);
+  await expect(page.locator("body")).not.toContainText("private-quick-connect-secret");
+});

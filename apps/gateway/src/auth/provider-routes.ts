@@ -8,6 +8,7 @@ import { and, asc, eq, gt, or } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import type { DatabaseHandle } from "../db/client.js";
 import { connectorConfigs, oidcProviders } from "../db/schema.js";
+import { JellyfinConnectorRegistry } from "./jellyfin/connector-registry.js";
 
 const MAX_PUBLIC_AUTH_PROVIDERS = AUTH_PROVIDERS_MAX_COUNT;
 export const OIDC_PROVIDER_PRESENTATION_PAGE_SIZE = 50;
@@ -354,7 +355,9 @@ export const authProviderRoutes: FastifyPluginAsync = async (app) => {
           kind: "jellyfin",
           pairingRequiredAfterOidc: true,
           passwordLoginAvailable: connectorIsUsable,
-          quickConnectAvailable: false,
+          quickConnectAvailable:
+            connectorIsUsable &&
+            new JellyfinConnectorRegistry(app.database).quickConnectIsAdvertisable(),
           state:
             configuredJellyfin.length > 1
               ? "misconfigured"

@@ -7,9 +7,9 @@ untagged image or default branch build as a production support promise.
 > [!IMPORTANT]
 > The current development branch is not an operable media control plane or a production
 > support promise. It can run the OIDC browser flow for an already configured provider,
-> establish local sessions, authenticate directly with a configured Jellyfin server,
+> establish local sessions, authenticate by password or Quick Connect with a configured Jellyfin server,
 > and provide hidden recovery access, but there is not yet a supported
-> provider-administration path, Jellyfin pairing or Quick Connect, complete logout and
+> provider-administration path, OIDC-to-Jellyfin pairing, complete logout and
 > authorization, connector administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 
@@ -18,7 +18,7 @@ untagged image or default branch build as a production support promise.
 The Compose file establishes the intended topology: web and gateway processes
 run from the same source-built image, only the web service is published, and the
 gateway owns the SQLite volume. The gateway currently communicates with Jellyfin only
-for public server identity, password authentication, and connector probes. Other live
+for public server identity, password and Quick Connect authentication, and connector probes. Other live
 upstream workflows remain later-phase capabilities, and the runtime has no supported
 administrative configuration surface.
 

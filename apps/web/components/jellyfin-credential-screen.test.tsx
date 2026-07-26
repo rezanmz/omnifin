@@ -1,10 +1,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import type { AuthenticatedSessionResponse } from "@omnifin/contracts/auth";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { JellyfinCredentialScreen } from "./jellyfin-credential-screen";
 
 describe("JellyfinCredentialScreen", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("submits exact password bytes, clears them after denial, and restores focus", async () => {
     const user = userEvent.setup();
     const submitCredentials = vi.fn(async () => "invalid_credentials" as const);
@@ -86,5 +89,105 @@ describe("JellyfinCredentialScreen", () => {
 
     rerender(<JellyfinCredentialScreen initialStatus="rate_limited" key="rate-limited" />);
     expect(screen.getByRole("alert")).toHaveTextContent("Wait a moment");
+  });
+
+  it("switches methods with tab semantics and starts Quick Connect explicitly", async () => {
+    const user = userEvent.setup();
+    const startQuickConnect = vi.fn(async () => ({
+      status: "started" as const,
+      transaction: {
+        code: "AB-1234",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        pollAfterMs: 2_000,
+        transactionId: "quick-connect-1",
+      },
+    }));
+    render(
+      <JellyfinCredentialScreen
+        autoPollQuickConnect={false}
+        startQuickConnect={startQuickConnect}
+      />,
+    );
+
+    const passwordTab = screen.getByRole("tab", { name: "Password sign in" });
+    passwordTab.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Quick Connect" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tabpanel")).toHaveAccessibleName("Quick Connect panel");
+
+    await user.click(screen.getByRole("button", { name: "Generate a code" }));
+    expect(await screen.findByText("Waiting for approval")).toBeVisible();
+    expect(screen.getByLabelText("Jellyfin Quick Connect code")).toHaveTextContent("AB-1234");
+    expect(startQuickConnect).toHaveBeenCalledOnce();
+    expect(document.body).not.toHaveTextContent("private-quick-connect-secret");
+  });
+
+  it("polls a pending code and navigates only after an authenticated outcome", async () => {
+    vi.useFakeTimers();
+    const onAuthenticated = vi.fn();
+    const pollQuickConnect = vi.fn(async () => ({
+      session: {} as AuthenticatedSessionResponse,
+      status: "signed_in" as const,
+    }));
+    render(
+      <JellyfinCredentialScreen
+        initialMethod="quick-connect"
+        initialNow={Date.parse("2026-07-26T12:00:00.000Z")}
+        initialQuickConnectTransaction={{
+          code: "AB-1234",
+          expiresAt: "2026-07-26T12:05:00.000Z",
+          pollAfterMs: 1_000,
+          transactionId: "quick-connect-1",
+        }}
+        onAuthenticated={onAuthenticated}
+        pollQuickConnect={pollQuickConnect}
+      />,
+    );
+
+    expect(onAuthenticated).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pollQuickConnect).toHaveBeenCalledWith("quick-connect-1");
+    expect(onAuthenticated).toHaveBeenCalledOnce();
+  });
+
+  it("announces expiry and allows a fresh code without retaining the old transaction", async () => {
+    vi.useFakeTimers();
+    const pollQuickConnect = vi.fn(async () => ({ status: "expired" as const }));
+    const startQuickConnect = vi.fn(async () => ({
+      status: "started" as const,
+      transaction: {
+        code: "CD-5678",
+        expiresAt: "2026-07-26T12:10:00.000Z",
+        pollAfterMs: 2_000,
+        transactionId: "quick-connect-2",
+      },
+    }));
+    render(
+      <JellyfinCredentialScreen
+        initialMethod="quick-connect"
+        initialNow={Date.parse("2026-07-26T12:00:00.000Z")}
+        initialQuickConnectTransaction={{
+          code: "AB-1234",
+          expiresAt: "2026-07-26T12:05:00.000Z",
+          pollAfterMs: 1_000,
+          transactionId: "quick-connect-1",
+        }}
+        pollQuickConnect={pollQuickConnect}
+        startQuickConnect={startQuickConnect}
+      />,
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(screen.getByRole("alert")).toHaveTextContent("code expired");
+
+    vi.useRealTimers();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Generate a new code" }));
+    expect(await screen.findByLabelText("Jellyfin Quick Connect code")).toHaveTextContent(
+      "CD-5678",
+    );
+    expect(startQuickConnect).toHaveBeenCalledOnce();
   });
 });

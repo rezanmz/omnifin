@@ -8,6 +8,9 @@ import {
   authProviderSchema,
   externalIdentitySchema,
   jellyfinPasswordAuthenticationRequestSchema,
+  jellyfinQuickConnectInitiationRequestSchema,
+  jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectPollResponseSchema,
   roleMappingSchema,
   serviceIdentityLinkSchema,
   sessionPrincipalSchema,
@@ -82,6 +85,51 @@ describe("Jellyfin authentication contracts", () => {
     ).toMatchObject({ principal: { accountState: "active" } });
     expect(
       authenticatedSessionResponseSchema.safeParse({ csrfToken: null, principal: null }).success,
+    ).toBe(false);
+  });
+
+  it("keeps Quick Connect transactions opaque and rejects extended requests", () => {
+    expect(jellyfinQuickConnectInitiationRequestSchema.parse({})).toEqual({});
+    expect(
+      jellyfinQuickConnectInitiationRequestSchema.safeParse({
+        connectorUrl: "https://attacker.example",
+      }).success,
+    ).toBe(false);
+    expect(
+      jellyfinQuickConnectInitiationResponseSchema.parse({
+        code: "AB-1234",
+        expiresAt: "2026-07-25T12:10:00.000Z",
+        pollAfterMs: 2_000,
+        transactionId: "quick-connect-1",
+      }),
+    ).not.toHaveProperty("secret");
+  });
+
+  it("normalizes pending, expired, and authenticated Quick Connect poll states", () => {
+    expect(
+      jellyfinQuickConnectPollResponseSchema.parse({
+        expiresAt: "2026-07-25T12:10:00.000Z",
+        pollAfterMs: 2_000,
+        status: "pending",
+      }),
+    ).toMatchObject({ status: "pending" });
+    expect(jellyfinQuickConnectPollResponseSchema.parse({ status: "expired" })).toEqual({
+      status: "expired",
+    });
+    expect(
+      jellyfinQuickConnectPollResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        principal: activePrincipal,
+        status: "signed_in",
+      }),
+    ).toMatchObject({ status: "signed_in" });
+    expect(
+      jellyfinQuickConnectPollResponseSchema.safeParse({
+        expiresAt: "2026-07-25T12:10:00.000Z",
+        pollAfterMs: 2_000,
+        secret: "must-not-cross-the-contract",
+        status: "pending",
+      }).success,
     ).toBe(false);
   });
 });

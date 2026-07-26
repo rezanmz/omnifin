@@ -29,6 +29,25 @@ export default async function JellyfinLoginPage({ searchParams }: JellyfinLoginP
         : testView === "submitting"
           ? "submitting"
           : "idle";
+  const quickConnectView = testView === "quick-connect";
 
-  return <JellyfinCredentialScreen displayProfile={displayProfile} initialStatus={initialStatus} />;
+  return (
+    <JellyfinCredentialScreen
+      autoPollQuickConnect={!quickConnectView}
+      displayProfile={displayProfile}
+      initialMethod={quickConnectView ? "quick-connect" : "password"}
+      initialStatus={initialStatus}
+      {...(quickConnectView
+        ? {
+            initialNow: Date.parse("2026-07-26T12:00:00.000Z"),
+            initialQuickConnectTransaction: {
+              code: "AB-1234",
+              expiresAt: "2026-07-26T12:05:00.000Z",
+              pollAfterMs: 2_000,
+              transactionId: "visual-quick-connect",
+            },
+          }
+        : {})}
+    />
+  );
 }

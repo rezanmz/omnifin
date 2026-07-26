@@ -749,6 +749,61 @@ export const authTransactions = sqliteTable(
   ],
 );
 
+export const jellyfinQuickConnectTransactions = sqliteTable(
+  "jellyfin_quick_connect_transactions",
+  {
+    id: text("id").primaryKey(),
+    connectorId: text("connector_id").notNull(),
+    connectorType: text("connector_type", { enum: ["jellyfin"] })
+      .notNull()
+      .default("jellyfin"),
+    browserBindingHash: text("browser_binding_hash").notNull(),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    nextPollAt: integer("next_poll_at", { mode: "timestamp_ms" }).notNull(),
+    pollCount: integer("poll_count").notNull().default(0),
+    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [
+    index("jellyfin_quick_connect_transactions_expiry_idx").on(table.expiresAt),
+    index("jellyfin_quick_connect_transactions_browser_expiry_idx").on(
+      table.browserBindingHash,
+      table.expiresAt,
+    ),
+    foreignKey({
+      columns: [table.connectorId, table.connectorType],
+      foreignColumns: [connectorConfigs.id, connectorConfigs.type],
+      name: "jellyfin_quick_connect_transactions_connector_type_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    check(
+      "jellyfin_quick_connect_transactions_binding_hash_check",
+      sql`length(${table.browserBindingHash}) = 43
+        and ${table.browserBindingHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_quick_connect_transactions_connector_type_check",
+      sql`${table.connectorType} = 'jellyfin'`,
+    ),
+    check(
+      "jellyfin_quick_connect_transactions_poll_count_check",
+      sql`typeof(${table.pollCount}) = 'integer' and ${table.pollCount} between 0 and 512`,
+    ),
+    check(
+      "jellyfin_quick_connect_transactions_timestamp_order_check",
+      sql`${table.createdAt} < ${table.expiresAt}
+        and ${table.nextPollAt} >= ${table.createdAt}
+        and ${table.nextPollAt} <= ${table.expiresAt}
+        and (${table.consumedAt} is null or (
+          ${table.consumedAt} >= ${table.createdAt}
+          and ${table.consumedAt} <= ${table.expiresAt}
+        ))`,
+    ),
+  ],
+);
+
 export const auditEvents = sqliteTable(
   "audit_events",
   {

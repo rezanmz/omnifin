@@ -10,6 +10,7 @@ const routes = [
   { label: "unavailable login", path: "/login?test-view=unavailable" },
   { label: "login authentication error", path: "/login?authError=invalid_request" },
   { label: "Jellyfin credential login", path: "/login/jellyfin" },
+  { label: "Jellyfin Quick Connect", path: "/login/jellyfin?test-view=quick-connect" },
   {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",

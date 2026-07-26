@@ -6,16 +6,16 @@ and contributors changing a security-sensitive flow.
 
 > [!IMPORTANT]
 > The current development branch implements the OIDC browser flow, JIT identity
-> resolution, direct Jellyfin password sign-in, opaque sessions, and break-glass
+> resolution, direct Jellyfin password and Quick Connect sign-in, opaque sessions, and break-glass
 > recovery, but Phase 1 has not passed its release gate. There is not yet a supported
-> operator path for configuring providers, and Jellyfin Quick Connect, account pairing,
+> operator path for configuring providers, and account pairing,
 > and OIDC logout remain incomplete. Treat this
 > document as development evidence, not a production support claim.
 
 ## Current development surface
 
 The gateway exposes browser-safe provider metadata, OIDC start and callback endpoints,
-direct Jellyfin password authentication, session inspection and revocation, and hidden
+direct Jellyfin password and Quick Connect authentication, session inspection and revocation, and hidden
 recovery access. A discovered OIDC
 provider is offered by the sign-in screen only when its persisted capability snapshot
 is internally consistent and ready. Unchecked, failed, or malformed providers fail
@@ -24,7 +24,7 @@ closed as unavailable or misconfigured.
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide supported provider administration, Jellyfin Quick Connect, account pairing,
+yet provide supported provider administration, account pairing,
 RP-initiated or provider-initiated logout, back-channel logout,
 or the complete application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
@@ -62,19 +62,22 @@ unavailable state. Discovery runtimes cache for five minutes; failures back off 
 30 seconds to five minutes, with up to five seconds of bounded jitter. A security-
 relevant provider configuration change bypasses a stale cooldown.
 
-## Current OIDC browser routes
+## Current authentication browser routes
 
 Browsers use the same-origin web routes below. The web process forwards them to the
 versioned gateway API; operators must not expose the gateway directly.
 
-| Route                                      | Purpose                                                                 |
-| ------------------------------------------ | ----------------------------------------------------------------------- |
-| `GET /api/auth/providers`                  | Return the bounded browser-safe provider list.                          |
-| `GET /api/auth/oidc/{providerId}/start`    | Bind the browser, create a one-time transaction, and start OIDC.        |
-| `GET /api/auth/oidc/callback/{providerId}` | Consume the transaction, validate the grant, and establish a session.   |
-| `GET /api/auth/session`                    | Inspect and, when due, rotate the current local session.                |
-| `DELETE /api/auth/session`                 | Revoke the current session; requires same-origin CSRF protection.       |
-| `POST /api/auth/recovery/session`          | Hidden, rate-limited recovery endpoint; never linked from the login UI. |
+| Route                                                        | Purpose                                                                 |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /api/auth/providers`                                    | Return the bounded browser-safe provider list.                          |
+| `GET /api/auth/oidc/{providerId}/start`                      | Bind the browser, create a one-time transaction, and start OIDC.        |
+| `GET /api/auth/oidc/callback/{providerId}`                   | Consume the transaction, validate the grant, and establish a session.   |
+| `POST /api/auth/jellyfin/password`                           | Verify credentials with Jellyfin and establish a local session.         |
+| `POST /api/auth/jellyfin/quick-connect`                      | Create a browser-bound Quick Connect code transaction.                  |
+| `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll` | Poll by opaque ID and establish a session only after approval.          |
+| `GET /api/auth/session`                                      | Inspect and, when due, rotate the current local session.                |
+| `DELETE /api/auth/session`                                   | Revoke the current session; requires same-origin CSRF protection.       |
+| `POST /api/auth/recovery/session`                            | Hidden, rate-limited recovery endpoint; never linked from the login UI. |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` with each identity provider.
@@ -183,7 +186,7 @@ the OIDC identity may remain pending, but media operations must stay denied. Use
 be able to inspect link health, relink, revoke the link, and revoke all of their local
 sessions.
 
-## Current direct Jellyfin password sign-in
+## Current direct Jellyfin sign-in
 
 `POST /v1/auth/jellyfin/password` exchanges a bounded username and byte-preserved
 password directly with the configured server. The gateway verifies that Jellyfin's
@@ -195,8 +198,15 @@ browser storage or the response. Exact-origin enforcement, bounded request bodie
 per-client and global credential limits, connector-binding revalidation, and safe audit
 metadata protect the public route.
 
-Quick Connect remains required Phase 1 work and will reuse the same immutable identity
-reconciliation rather than introduce a second linking path.
+`POST /v1/auth/jellyfin/quick-connect` creates a five-minute, browser-bound transaction
+and returns only an opaque local transaction identifier, a display code, expiry, and
+polling cadence. The Jellyfin secret, device identifier, expected server identity, and
+connector revision are stored in an authenticated-encryption envelope. Polling is
+same-origin, cadence-limited, capped per browser and globally, and consumes an approved
+transaction before exchanging its secret for a Jellyfin token. The resulting identity
+uses the same immutable reconciliation and session path as password sign-in. A stolen
+transaction identifier cannot be polled without the separate `HttpOnly`, `SameSite=Lax`
+browser-binding cookie, and connector changes invalidate outstanding attempts.
 
 An operator disabling direct Jellyfin sign-in must first verify a working OIDC admin
 path or retain the documented recovery secret once those controls are available.
