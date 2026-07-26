@@ -166,8 +166,9 @@ profile.
 ## Current shell and target frontend architecture
 
 The web application provides server-rendered route shells, deterministic preview data,
-responsive navigation, and a live provider-driven sign-in screen with exact loading,
-unconfigured, unavailable, denied, and error states. As media workflows arrive,
+responsive navigation, a live provider-driven sign-in screen, secure Jellyfin pairing,
+and an account-and-access center with exact loading, unconfigured, unavailable, denied,
+and error states. These identity surfaces use only the same-origin API boundary. As media workflows arrive,
 TanStack Query will own remote data and invalidation, while Zustand remains limited to
 ephemeral interface state such as an open drawer or command-palette context. Motion is
 reserved for purposeful, interruptible transitions; reduced-motion users receive

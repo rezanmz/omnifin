@@ -6,7 +6,118 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { JellyfinCredentialScreen } from "./jellyfin-credential-screen";
 
 describe("JellyfinCredentialScreen", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("checks the OIDC session before revealing pairing controls", async () => {
+    const csrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        csrfToken,
+        principal: {
+          accountState: "pending_link",
+          authenticationMethod: { kind: "oidc", providerId: "authentik" },
+        },
+      }),
+    );
+
+    render(<JellyfinCredentialScreen intent="pair" />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Checking your secure session");
+    expect(await screen.findByRole("textbox", { name: "Username" })).toBeVisible();
+    expect(fetch).toHaveBeenCalledWith("/api/auth/session", {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    expect(screen.getByRole("heading", { name: "Bring your library with you." })).toBeVisible();
+  });
+
+  it("pairs with password only through the CSRF-proven linking endpoint", async () => {
+    const user = userEvent.setup();
+    const csrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const onAuthenticated = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        csrfToken,
+        principal: {
+          accountState: "active",
+          authenticationMethod: { kind: "oidc", providerId: "authentik" },
+          sessionId: "paired-session",
+          userId: "oidc-user",
+        },
+      }),
+    );
+    render(
+      <JellyfinCredentialScreen
+        initialPairingSession={{ csrfToken, status: "ready" }}
+        intent="pair"
+        onAuthenticated={onAuthenticated}
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Username" }), "riley");
+    await user.type(screen.getByLabelText("Password"), "private-password");
+    await user.click(screen.getByRole("button", { name: "Link Jellyfin account" }));
+
+    await waitFor(() => expect(onAuthenticated).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/jellyfin/link/password", {
+      body: JSON.stringify({ password: "private-password", username: "riley" }),
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-omnifin-csrf": csrfToken },
+      method: "POST",
+    });
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("keeps pairing controls hidden after a signed-out session check", () => {
+    render(
+      <JellyfinCredentialScreen initialPairingSession={{ status: "signed_out" }} intent="pair" />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Sign in again to continue");
+    expect(screen.getByRole("link", { name: "Return to sign in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
+    expect(screen.queryByRole("textbox", { name: "Username" })).not.toBeInTheDocument();
+  });
+
+  it("starts Quick Connect pairing with the in-memory CSRF proof", async () => {
+    const user = userEvent.setup();
+    const csrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        code: "CD-5678",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        pollAfterMs: 2_000,
+        transactionId: "pairing-quick-connect",
+      }),
+    );
+    render(
+      <JellyfinCredentialScreen
+        autoPollQuickConnect={false}
+        initialMethod="quick-connect"
+        initialPairingSession={{ csrfToken, status: "ready" }}
+        intent="pair"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Generate a code" }));
+
+    expect(await screen.findByLabelText("Jellyfin Quick Connect code")).toHaveTextContent(
+      "CD-5678",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/jellyfin/link/quick-connect", {
+      body: "{}",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-omnifin-csrf": csrfToken },
+      method: "POST",
+    });
+  });
 
   it("submits exact password bytes, clears them after denial, and restores focus", async () => {
     const user = userEvent.setup();

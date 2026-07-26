@@ -15,7 +15,7 @@ import {
 import type { OidcProtocolDependencies } from "../src/auth/oidc/protocol.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { oidcProviders } from "../src/db/schema.js";
+import { connectorConfigs, oidcProviders, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { MAX_ACTIVE_SESSIONS_PER_USER } from "../src/auth/session-service.js";
 
 const providerId = "oidc-home";
@@ -199,7 +199,7 @@ describe("OIDC browser routes", () => {
       });
 
       expect(response.statusCode).toBe(303);
-      expect(response.headers.location).toBe("/settings");
+      expect(response.headers.location).toBe("/link/jellyfin");
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.pragma).toBe("no-cache");
       expect(setCookieHeader(response.headers["set-cookie"])).toContain("__Host-omnifin_session=");
@@ -239,6 +239,81 @@ describe("OIDC browser routes", () => {
       ).toEqual({ consumed: 1 });
       expect(database.sqlite.serialize().toString("utf8")).not.toContain(privateCode);
       expect(database.sqlite.serialize().toString("utf8")).not.toContain(privateProviderSession);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("preserves the requested return path once the OIDC account has a media identity", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const firstStart = await app.inject({
+        headers: { cookie: `__Host-omnifin_oidc_binding=${browserBindingToken}` },
+        method: "GET",
+        url: `/v1/auth/oidc/${providerId}/start`,
+      });
+      const firstState = new URL(firstStart.headers.location!).searchParams.get("state");
+      const firstCallback = await app.inject({
+        headers: { cookie: transactionBindingCookie(firstStart, firstState) },
+        method: "GET",
+        url:
+          `/v1/auth/oidc/callback/${providerId}?code=authorization-code` + `&state=${firstState}`,
+      });
+      expect(firstCallback.headers.location).toBe("/link/jellyfin");
+
+      const user = database.db.select().from(users).get();
+      if (!user) throw new Error("Expected the provisioned OIDC user.");
+      const linkedAt = new Date(routeTime);
+      database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin.example.test",
+          createdAt: linkedAt,
+          displayName: "Home Jellyfin",
+          encryptedCredentials: "v2.fixture-connector-credentials",
+          healthState: "healthy",
+          id: "jellyfin-home",
+          type: "jellyfin",
+          updatedAt: linkedAt,
+        })
+        .run();
+      database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          createdAt: linkedAt,
+          deviceId: "oidc-route-device",
+          encryptedAccessToken: "v2.fixture-jellyfin-token",
+          externalDisplayName: "Cinematic Viewer",
+          externalServerId: "jellyfin-server",
+          externalUserId: "jellyfin-user",
+          externalUsername: "viewer",
+          healthState: "linked",
+          id: "jellyfin-link",
+          lastVerifiedAt: linkedAt,
+          service: "jellyfin",
+          tokenCreatedAt: linkedAt,
+          updatedAt: linkedAt,
+          userId: user.id,
+        })
+        .run();
+      database.db.update(users).set({ status: "active", updatedAt: linkedAt }).run();
+
+      const activeStart = await app.inject({
+        headers: { cookie: `__Host-omnifin_oidc_binding=${browserBindingToken}` },
+        method: "GET",
+        url: `/v1/auth/oidc/${providerId}/start?returnPath=%2Fsettings`,
+      });
+      const activeState = new URL(activeStart.headers.location!).searchParams.get("state");
+      const activeCallback = await app.inject({
+        headers: { cookie: transactionBindingCookie(activeStart, activeState) },
+        method: "GET",
+        url:
+          `/v1/auth/oidc/callback/${providerId}?code=authorization-code` + `&state=${activeState}`,
+      });
+
+      expect(activeCallback.statusCode).toBe(303);
+      expect(activeCallback.headers.location).toBe("/settings");
     } finally {
       await app.close();
     }
@@ -382,7 +457,7 @@ describe("OIDC browser routes", () => {
         url: callbackUrl,
       });
       expect(legitimate.statusCode).toBe(303);
-      expect(legitimate.headers.location).toBe("/");
+      expect(legitimate.headers.location).toBe("/link/jellyfin");
       expect(authorizationCodeGrant).toHaveBeenCalledOnce();
     } finally {
       await app.close();
@@ -505,7 +580,7 @@ describe("OIDC browser routes", () => {
         method: "GET",
         url: `/v1/auth/oidc/callback/${providerId}?code=authorization-code` + `&state=${state}`,
       });
-      expect(legitimate.headers.location).toBe("/");
+      expect(legitimate.headers.location).toBe("/link/jellyfin");
       expect(authorizationCodeGrant).toHaveBeenCalledOnce();
     } finally {
       await app.close();
@@ -618,7 +693,7 @@ describe("OIDC browser routes", () => {
         url:
           `/v1/auth/oidc/callback/${providerId}?code=authorization-code` + `&state=${firstState}`,
       });
-      expect(firstResponse.headers.location).toBe("/");
+      expect(firstResponse.headers.location).toBe("/link/jellyfin");
       const attribution = database.sqlite
         .prepare(
           `select external_identity_id as externalIdentityId, user_id as userId
@@ -774,7 +849,7 @@ describe("OIDC browser routes", () => {
         method: "GET",
         url: `/v1/auth/oidc/callback/${providerId}?code=first-code&state=${firstState}`,
       });
-      expect(firstCallback.headers.location).toBe("/");
+      expect(firstCallback.headers.location).toBe("/link/jellyfin");
       expect(setCookieHeader(firstCallback.headers["set-cookie"])).toContain(
         `${firstTransactionCookie.split("=", 1)[0]}=;`,
       );
@@ -787,7 +862,7 @@ describe("OIDC browser routes", () => {
         method: "GET",
         url: `/v1/auth/oidc/callback/${providerId}?code=second-code&state=${secondState}`,
       });
-      expect(secondCallback.headers.location).toBe("/");
+      expect(secondCallback.headers.location).toBe("/link/jellyfin");
       expect(authorizationCodeGrant).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
@@ -845,7 +920,7 @@ describe("OIDC browser routes", () => {
       const responses = await Promise.all([app.inject(callback), app.inject(callback)]);
 
       expect(responses.map((response) => response.headers.location).sort()).toEqual([
-        "/",
+        "/link/jellyfin",
         "/login?authError=invalid_request",
       ]);
       expect(authorizationCodeGrant).toHaveBeenCalledOnce();
@@ -1406,7 +1481,7 @@ describe("OIDC browser routes", () => {
             `&state=${validState}`,
         });
         expect(valid.statusCode).toBe(303);
-        expect(valid.headers.location).toBe("/");
+        expect(valid.headers.location).toBe("/link/jellyfin");
         expect(authorizationCodeGrant).toHaveBeenCalledOnce();
       } finally {
         await app.close();

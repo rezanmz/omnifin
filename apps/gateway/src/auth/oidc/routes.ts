@@ -573,7 +573,10 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           result.session.sessionToken,
           result.session.absoluteExpiresAt,
         );
-        return reply.redirect(returnPath, 303);
+        return reply.redirect(
+          result.session.principal.accountState === "pending_link" ? "/link/jellyfin" : returnPath,
+          303,
+        );
       } catch (error) {
         if (error instanceof SafeHttpError) throw error;
         const failure = callbackFailure(error);

@@ -74,6 +74,94 @@ test("Jellyfin Quick Connect visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("jellyfin-login-quick-connect.png", { fullPage: true });
 });
 
+test("Jellyfin account pairing visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !visualProjects.has(testInfo.project.name),
+    "Pairing baselines use representative Chromium viewports",
+  );
+  await page.goto(routeForProject("/link/jellyfin", testInfo.project.name));
+  await page.getByRole("button", { name: "Link Jellyfin account" }).waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-pairing.png", { fullPage: true });
+});
+
+test("Jellyfin pairing session-expired visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Pairing errors cover representative desktop and phone geometry",
+  );
+  await page.goto("/link/jellyfin?test-view=session-expired");
+  await page.getByRole("link", { name: "Return to sign in" }).waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-pairing-session-expired.png", {
+    fullPage: true,
+  });
+});
+
+test("Jellyfin Quick Connect pairing visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Quick Connect pairing covers representative desktop and phone geometry",
+  );
+  await page.goto("/link/jellyfin?test-view=quick-connect");
+  await page.getByText("Waiting for approval", { exact: true }).waitFor();
+  await expect(page).toHaveScreenshot("jellyfin-pairing-quick-connect.png", {
+    fullPage: true,
+  });
+});
+
+test("account security visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Account controls cover representative desktop and phone geometry",
+  );
+  await page.route("**/api/auth/session", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        csrfToken: "visual_account_csrf_token_0123456789abcdefghij",
+        principal: {
+          accountState: "active",
+          authenticationMethod: { kind: "oidc", providerId: "authentik" },
+          displayName: "Riley Morgan",
+          linkedServices: [],
+          permissions: [
+            "media.view",
+            "playback.use",
+            "identities.self.manage",
+            "sessions.self.revoke",
+          ],
+          role: "viewer",
+          sessionId: "visual-session",
+          userId: "visual-user",
+        },
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("**/api/auth/identity-links", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        links: [
+          {
+            displayName: "Riley",
+            externalUserId: "jellyfin-user-1",
+            health: "linked",
+            id: "jellyfin-link-1",
+            lastVerifiedAt: "2026-07-26T12:00:00.000Z",
+            linkedAt: "2026-07-25T12:00:00.000Z",
+            service: "jellyfin",
+            username: "riley",
+          },
+        ],
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.goto("/settings");
+  await page.getByText("Riley Morgan", { exact: true }).waitFor();
+  await expect(page).toHaveScreenshot("account-security.png", { fullPage: true });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

@@ -31,6 +31,11 @@ or the complete application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
 
+Successful OIDC callbacks with a pending-link principal are sent directly to
+`/link/jellyfin`; active accounts retain the validated same-origin return path stored
+with the authorization transaction. The pairing screen rechecks the opaque session
+before revealing credential controls and keeps its CSRF proof only in memory.
+
 ## Phase 1 sign-in choices
 
 When Phase 1 is complete, a normal user will be able to sign in through either:
@@ -224,6 +229,10 @@ pending-link permission set so the user can immediately provide fresh password o
 Quick Connect proof; a direct Jellyfin session is revoked because it cannot establish
 independent OIDC ownership. Relinking updates the existing immutable link rather than
 creating a second user or link.
+
+The account-and-access screen exposes link health, proof-appropriate relinking,
+deliberate link revocation, and logout-all controls. Direct Jellyfin sessions relink
+through direct authentication; OIDC sessions use the CSRF-protected pairing endpoints.
 
 ## Current direct Jellyfin sign-in
 

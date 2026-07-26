@@ -10,12 +10,12 @@ describe("OnboardingDashboard", () => {
       screen.getByRole("heading", { level: 1, name: "Your media control room is being prepared." }),
     ).toBeVisible();
     expect(
-      screen.getByText(/can validate OIDC sign-in and recovery in an isolated environment/i),
+      screen.getByText(/Secure sign-in, Jellyfin Quick Connect, account pairing/i),
     ).toBeVisible();
     expect(
-      screen.getByText(/Jellyfin sign-in and proof-based pairing remain gated/i),
+      screen.getByText(/pair, relink, or revoke your media identity with proof/i),
     ).toBeVisible();
-    expect(screen.getByRole("link", { name: /View release readiness/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Review account access/i })).toHaveAttribute(
       "href",
       "/settings",
     );

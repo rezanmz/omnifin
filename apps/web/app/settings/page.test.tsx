@@ -1,23 +1,24 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
 import SettingsPage from "./page";
 
 describe("SettingsPage", () => {
-  it("states the partial identity checkpoint in user language", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("opens the account-and-access center with geometry-preserving loading states", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+
     render(<SettingsPage />);
 
     expect(
-      screen.getByRole("heading", {
-        level: 1,
-        name: "Account setup is still being secured.",
-      }),
+      screen.getByRole("heading", { level: 1, name: "Your identity, under your control." }),
     ).toBeVisible();
-    expect(screen.getByText(/has no supported provider or account administration/i)).toBeVisible();
-    expect(
-      screen.getByText(/Jellyfin password and Quick Connect sign-in are available/i),
-    ).toBeVisible();
-    expect(screen.getByText(/OIDC pairing, identity-provider logout/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: /Return home/i })).toHaveAttribute("href", "/");
-    expect(screen.queryByText(/Phase 0|preview|validation/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Loading account security")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("link", { name: "Back to home" })).toHaveAttribute("href", "/");
+    expect(screen.queryByText(/preview|checkpoint|phase/i)).not.toBeInTheDocument();
   });
 });

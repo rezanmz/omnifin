@@ -11,6 +11,10 @@ const routes = [
   { label: "login authentication error", path: "/login?authError=invalid_request" },
   { label: "Jellyfin credential login", path: "/login/jellyfin" },
   { label: "Jellyfin Quick Connect", path: "/login/jellyfin?test-view=quick-connect" },
+  { label: "Jellyfin account pairing", path: "/link/jellyfin" },
+  { label: "Jellyfin pairing session expired", path: "/link/jellyfin?test-view=session-expired" },
+  { label: "Jellyfin Quick Connect pairing", path: "/link/jellyfin?test-view=quick-connect" },
+  { label: "account security", path: "/settings" },
   {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
@@ -31,7 +35,8 @@ for (const route of routes) {
     );
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(route.path);
-    await page.locator("main").waitFor();
+    await expect(page.locator("main")).toHaveCount(1);
+    await expect(page.locator("main")).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);
