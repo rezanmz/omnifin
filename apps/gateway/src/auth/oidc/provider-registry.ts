@@ -236,20 +236,12 @@ function parseClientId(value: unknown): string {
 }
 
 function parseScopes(value: unknown): readonly string[] {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_SCOPE_TEXT_LENGTH
-  ) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_SCOPE_TEXT_LENGTH) {
     throw registryError("oidc_provider_misconfigured");
   }
 
   const scopes = value.split(" ");
-  if (
-    scopes.length === 0 ||
-    scopes.length > MAX_SCOPE_COUNT ||
-    scopes.join(" ") !== value
-  ) {
+  if (scopes.length === 0 || scopes.length > MAX_SCOPE_COUNT || scopes.join(" ") !== value) {
     throw registryError("oidc_provider_misconfigured");
   }
 
@@ -282,11 +274,7 @@ function parseApprovedOrigins(value: unknown): readonly string[] {
   } catch {
     throw registryError("oidc_provider_misconfigured");
   }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length === 0 ||
-    parsed.length > OIDC_MAX_APPROVED_ORIGINS
-  ) {
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > OIDC_MAX_APPROVED_ORIGINS) {
     throw registryError("oidc_provider_misconfigured");
   }
 
@@ -424,11 +412,7 @@ function selectClientAuthentication(provider: ParsedProvider): ClientAuth {
 }
 
 function requireMetadataArray(value: unknown, expected: string): void {
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.length > MAX_METADATA_ARRAY_LENGTH
-  ) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_METADATA_ARRAY_LENGTH) {
     throw registryError("oidc_provider_misconfigured");
   }
 
@@ -449,10 +433,7 @@ function requireMetadataArray(value: unknown, expected: string): void {
   if (!entries.has(expected)) throw registryError("oidc_provider_misconfigured");
 }
 
-function requireApprovedEndpoint(
-  value: unknown,
-  approvedOrigins: ReadonlySet<string>,
-): string {
+function requireApprovedEndpoint(value: unknown, approvedOrigins: ReadonlySet<string>): string {
   if (typeof value !== "string" || value.length === 0 || value.length > OIDC_MAX_URL_LENGTH) {
     throw registryError("oidc_provider_misconfigured");
   }
@@ -519,10 +500,7 @@ function validateMetadata(
     metadata.token_endpoint_auth_methods_supported,
     provider.tokenEndpointAuthMethod,
   );
-  requireMetadataArray(
-    metadata.id_token_signing_alg_values_supported,
-    provider.idTokenSigningAlg,
-  );
+  requireMetadataArray(metadata.id_token_signing_alg_values_supported, provider.idTokenSigningAlg);
 
   const frontChannel = optionalMetadataBoolean(metadata.frontchannel_logout_supported);
   const backChannel = optionalMetadataBoolean(metadata.backchannel_logout_supported);
@@ -538,10 +516,7 @@ function validateMetadata(
       backChannelSession: backChannel && backChannelSession,
       frontChannel,
       frontChannelSession: frontChannel && frontChannelSession,
-      rpInitiated: validateOptionalApprovedEndpoint(
-        metadata.end_session_endpoint,
-        approvedOrigins,
-      ),
+      rpInitiated: validateOptionalApprovedEndpoint(metadata.end_session_endpoint, approvedOrigins),
     }),
     pkceS256: true,
     schemaVersion: 1,
@@ -708,7 +683,6 @@ export class OidcProviderRegistry {
     fingerprint: string,
     cacheTime: number,
   ): Promise<OidcProviderRuntime> {
-
     let provider: ParsedProvider;
     try {
       provider = parseProvider(record, this.#cipher);
@@ -816,10 +790,7 @@ export class OidcProviderRegistry {
     cachedAtMs: number,
   ): void {
     const expiresAtMs = cachedAtMs + OIDC_PROVIDER_RUNTIME_CACHE_TTL_MS;
-    if (
-      !Number.isSafeInteger(expiresAtMs) ||
-      new Date(expiresAtMs).getTime() !== expiresAtMs
-    ) {
+    if (!Number.isSafeInteger(expiresAtMs) || new Date(expiresAtMs).getTime() !== expiresAtMs) {
       return;
     }
 

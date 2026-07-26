@@ -64,7 +64,8 @@ function metadataForIssuer(issuerValue: string): ServerMetadata {
 
 function unverifiableIdToken(): string {
   const now = Math.floor(Date.now() / 1_000);
-  const encode = (value: object) => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
   return [
     encode({ alg: "RS256", kid: "missing-key", typ: "JWT" }),
     encode({
@@ -85,10 +86,7 @@ function openHarness(): DatabaseHandle {
   return database;
 }
 
-function seedProvider(
-  database: DatabaseHandle,
-  overrides: Partial<ProviderInsert> = {},
-): void {
+function seedProvider(database: DatabaseHandle, overrides: Partial<ProviderInsert> = {}): void {
   const id = overrides.id ?? providerId;
   const tokenEndpointAuthMethod = overrides.tokenEndpointAuthMethod ?? "client_secret_basic";
   const encryptedClientSecret = Object.hasOwn(overrides, "encryptedClientSecret")
@@ -184,8 +182,7 @@ describe("OidcProviderRegistry", () => {
 
       expect(requests).toEqual([
         {
-          input:
-            "https://id.example.test/application/o/omnifin/.well-known/openid-configuration",
+          input: "https://id.example.test/application/o/omnifin/.well-known/openid-configuration",
           method: "GET",
           redirect: "manual",
         },
@@ -343,62 +340,62 @@ describe("OidcProviderRegistry", () => {
       },
       method: "none" as const,
     },
-  ])("selects $method explicitly without putting the secret in client metadata", async (fixture) => {
-    const database = openHarness();
-    try {
-      seedProvider(database, { tokenEndpointAuthMethod: fixture.method });
-      let capturedAuthentication: ClientAuth | undefined;
-      let capturedConfiguration: Configuration | undefined;
-      let capturedMetadata: Partial<ClientMetadata> | string | undefined;
-      let capturedOptions: Parameters<NonNullable<OidcProviderRegistryDependencies["discover"]>>[4];
-      const providerFetch = vi.fn<CustomFetch>();
-      const service = registry(
-        database,
-        metadata({ token_endpoint_auth_methods_supported: [fixture.method] }),
-        {
-          createSafeFetch: () => providerFetch,
-          discover: async (_server, clientId, clientMetadata, clientAuthentication, options) => {
-            capturedAuthentication = clientAuthentication;
-            capturedMetadata = clientMetadata;
-            capturedOptions = options;
-            capturedConfiguration = configuration(
-              metadata({ token_endpoint_auth_methods_supported: [fixture.method] }),
-              clientId,
-              clientMetadata,
-              clientAuthentication,
-            );
-            return capturedConfiguration;
+  ])(
+    "selects $method explicitly without putting the secret in client metadata",
+    async (fixture) => {
+      const database = openHarness();
+      try {
+        seedProvider(database, { tokenEndpointAuthMethod: fixture.method });
+        let capturedAuthentication: ClientAuth | undefined;
+        let capturedConfiguration: Configuration | undefined;
+        let capturedMetadata: Partial<ClientMetadata> | string | undefined;
+        let capturedOptions: Parameters<
+          NonNullable<OidcProviderRegistryDependencies["discover"]>
+        >[4];
+        const providerFetch = vi.fn<CustomFetch>();
+        const service = registry(
+          database,
+          metadata({ token_endpoint_auth_methods_supported: [fixture.method] }),
+          {
+            createSafeFetch: () => providerFetch,
+            discover: async (_server, clientId, clientMetadata, clientAuthentication, options) => {
+              capturedAuthentication = clientAuthentication;
+              capturedMetadata = clientMetadata;
+              capturedOptions = options;
+              capturedConfiguration = configuration(
+                metadata({ token_endpoint_auth_methods_supported: [fixture.method] }),
+                clientId,
+                clientMetadata,
+                clientAuthentication,
+              );
+              return capturedConfiguration;
+            },
           },
-        },
-      );
+        );
 
-      const runtime = await service.discover(providerId);
+        const runtime = await service.discover(providerId);
 
-      expect(capturedConfiguration?.clientMetadata().client_secret).toBeUndefined();
-      expect(Object.values(runtime)).not.toContain(capturedConfiguration);
-      expect(capturedMetadata).toEqual({
-        grant_types: ["authorization_code"],
-        id_token_signed_response_alg: "RS256",
-        response_types: ["code"],
-        token_endpoint_auth_method: fixture.method,
-      });
-      expect(JSON.stringify(capturedMetadata)).not.toContain(clientSecret);
-      expect(capturedOptions).toMatchObject({ algorithm: "oidc", timeout: 8 });
-      expect(capturedOptions?.[customFetch]).toBe(providerFetch);
-      const body = new URLSearchParams();
-      const headers = new Headers();
-      expect(capturedAuthentication).toBeTypeOf("function");
-      capturedAuthentication?.(
-        metadata(),
-        { client_id: "omnifin-client" },
-        body,
-        headers,
-      );
-      fixture.assertAuth(body, headers);
-    } finally {
-      database.close();
-    }
-  });
+        expect(capturedConfiguration?.clientMetadata().client_secret).toBeUndefined();
+        expect(Object.values(runtime)).not.toContain(capturedConfiguration);
+        expect(capturedMetadata).toEqual({
+          grant_types: ["authorization_code"],
+          id_token_signed_response_alg: "RS256",
+          response_types: ["code"],
+          token_endpoint_auth_method: fixture.method,
+        });
+        expect(JSON.stringify(capturedMetadata)).not.toContain(clientSecret);
+        expect(capturedOptions).toMatchObject({ algorithm: "oidc", timeout: 8 });
+        expect(capturedOptions?.[customFetch]).toBe(providerFetch);
+        const body = new URLSearchParams();
+        const headers = new Headers();
+        expect(capturedAuthentication).toBeTypeOf("function");
+        capturedAuthentication?.(metadata(), { client_id: "omnifin-client" }, body, headers);
+        fixture.assertAuth(body, headers);
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it.each([
     ["profile email", "missing openid"],
@@ -408,16 +405,19 @@ describe("OidcProviderRegistry", () => {
     ["openid  email", "non-canonical separators"],
     ["openid\temail", "non-space separators"],
     [`openid ${"x".repeat(129)}`, "oversized scope"],
-    [`openid ${Array.from({ length: 32 }, (_, index) => `s${index}`).join(" ")}`, "too many scopes"],
+    [
+      `openid ${Array.from({ length: 32 }, (_, index) => `s${index}`).join(" ")}`,
+      "too many scopes",
+    ],
   ])("rejects unsafe scope configuration: %s (%s)", async (scopes) => {
     const database = openHarness();
     try {
       seedProvider(database, { scopes });
       const discover = vi.fn<NonNullable<OidcProviderRegistryDependencies["discover"]>>();
 
-      await expect(registry(database, metadata(), { discover }).discover(providerId)).rejects.toMatchObject(
-        { code: "oidc_provider_misconfigured" },
-      );
+      await expect(
+        registry(database, metadata(), { discover }).discover(providerId),
+      ).rejects.toMatchObject({ code: "oidc_provider_misconfigured" });
 
       expect(discover).not.toHaveBeenCalled();
       expectFailedWithoutDetails(database);
@@ -432,10 +432,7 @@ describe("OidcProviderRegistry", () => {
     ['["http://id.example.test"]', "insecure origin"],
     ['["https://id.example.test/path"]', "origin with path"],
     ['["https://id.example.test/ "]', "non-canonical origin"],
-    [
-      '["https://id.example.test","https://id.example.test"]',
-      "duplicate origin",
-    ],
+    ['["https://id.example.test","https://id.example.test"]', "duplicate origin"],
   ])("rejects unsafe approved-origin configuration: %s (%s)", async (originsJson) => {
     const database = openHarness();
     try {
@@ -482,10 +479,7 @@ describe("OidcProviderRegistry", () => {
   const unsafeMetadataFixtures: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
     [{ issuer: "https://id.example.test/application/o/other/" }, "issuer mismatch"],
     [{ authorization_endpoint: "http://id.example.test/authorize" }, "insecure authorization"],
-    [
-      { token_endpoint: "https://unapproved.example.test/token" },
-      "unapproved token endpoint",
-    ],
+    [{ token_endpoint: "https://unapproved.example.test/token" }, "unapproved token endpoint"],
     [{ jwks_uri: undefined }, "missing JWKS endpoint"],
     [{ response_types_supported: ["id_token"] }, "implicit-only response"],
     [{ grant_types_supported: ["implicit"] }, "missing authorization-code grant"],
@@ -569,9 +563,9 @@ describe("OidcProviderRegistry", () => {
       seedProvider(database, { encryptedClientSecret: wrongContextEnvelope });
       const discover = vi.fn<NonNullable<OidcProviderRegistryDependencies["discover"]>>();
 
-      await expect(registry(database, metadata(), { discover }).discover(providerId)).rejects.toMatchObject(
-        { code: "oidc_provider_misconfigured" },
-      );
+      await expect(
+        registry(database, metadata(), { discover }).discover(providerId),
+      ).rejects.toMatchObject({ code: "oidc_provider_misconfigured" });
 
       expect(discover).not.toHaveBeenCalled();
       expectFailedWithoutDetails(database);
