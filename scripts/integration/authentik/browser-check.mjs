@@ -2,6 +2,8 @@
 
 import { createRequire } from "node:module";
 
+import { PROVIDER_VALIDATION_MAX_ATTEMPTS, providerValidationRetryDelay } from "./fixture.mjs";
+
 const requireFromWeb = createRequire(new URL("../../../apps/web/package.json", import.meta.url));
 const { chromium } = requireFromWeb("@playwright/test");
 
@@ -51,17 +53,27 @@ async function mutate(request, webOrigin, path, csrfToken, data, method = "POST"
 }
 
 async function validateProvider(request, path, webOrigin, csrfToken) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < PROVIDER_VALIDATION_MAX_ATTEMPTS; attempt += 1) {
     const response = await request.post(path, {
       headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken },
       maxRedirects: 0,
     });
     if (response.status() === 200) return json(response, 200);
-    if (response.status() !== 503 || attempt === 2) throw new BrowserCheckError();
     const retryAfterSeconds = Number(response.headers()["retry-after"]);
-    assert(Number.isInteger(retryAfterSeconds));
-    assert(retryAfterSeconds >= 1 && retryAfterSeconds <= 60);
-    await new Promise((resolve) => setTimeout(resolve, (retryAfterSeconds + 6) * 1_000));
+    let delayMs;
+    try {
+      delayMs = providerValidationRetryDelay({
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+        retryAfterSeconds,
+        status: response.status(),
+      });
+    } catch {
+      throw new BrowserCheckError();
+    }
+    if (delayMs === null) throw new BrowserCheckError();
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new BrowserCheckError();
 }

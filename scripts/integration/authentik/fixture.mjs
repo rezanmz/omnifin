@@ -2,6 +2,9 @@ import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
 const AUTHENTIK_VERSION = "2026.5.6";
+export const PROVIDER_VALIDATION_MAX_ATTEMPTS = 10;
+export const PROVIDER_VALIDATION_MAX_WAIT_MS = 300_000;
+const PROVIDER_VALIDATION_JITTER_SECONDS = 6;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
 const CHECKS = Object.freeze([
   "authorization_code_pkce",
@@ -100,6 +103,24 @@ export function failureReportFor(category) {
     service: "authentik",
     upstreamVersion: AUTHENTIK_VERSION,
   };
+}
+
+export function providerValidationRetryDelay({ attempt, elapsedMs, retryAfterSeconds, status }) {
+  if (status !== 503) return null;
+  if (
+    !Number.isInteger(attempt) ||
+    attempt < 0 ||
+    !Number.isInteger(elapsedMs) ||
+    elapsedMs < 0 ||
+    !Number.isInteger(retryAfterSeconds) ||
+    retryAfterSeconds < 1 ||
+    retryAfterSeconds > 60
+  ) {
+    throw new Error("provider_validation_retry_invalid");
+  }
+  if (attempt >= PROVIDER_VALIDATION_MAX_ATTEMPTS - 1) return null;
+  const delayMs = (retryAfterSeconds + PROVIDER_VALIDATION_JITTER_SECONDS) * 1_000;
+  return elapsedMs + delayMs <= PROVIDER_VALIDATION_MAX_WAIT_MS ? delayMs : null;
 }
 
 export function secretLeakDetected(logs, secrets) {

@@ -10,6 +10,9 @@ import {
   dotenv,
   failureReportFor,
   isPrivateIpv4,
+  PROVIDER_VALIDATION_MAX_ATTEMPTS,
+  PROVIDER_VALIDATION_MAX_WAIT_MS,
+  providerValidationRetryDelay,
   reportFor,
   secretLeakDetected,
   selectPrivateHost,
@@ -88,6 +91,58 @@ test("emits only the bounded, sanitized Authentik report contract", () => {
   assert.throws(() => failureReportFor("invalid category"), /fixture_error_category_invalid/u);
 });
 
+test("bounds transient provider validation retries without weakening fail-closed responses", () => {
+  assert.equal(PROVIDER_VALIDATION_MAX_ATTEMPTS, 10);
+  assert.equal(PROVIDER_VALIDATION_MAX_WAIT_MS, 300_000);
+  assert.equal(
+    providerValidationRetryDelay({
+      attempt: 0,
+      elapsedMs: 0,
+      retryAfterSeconds: 30,
+      status: 503,
+    }),
+    36_000,
+  );
+  assert.equal(
+    providerValidationRetryDelay({
+      attempt: 8,
+      elapsedMs: 288_000,
+      retryAfterSeconds: 30,
+      status: 503,
+    }),
+    null,
+  );
+  assert.equal(
+    providerValidationRetryDelay({
+      attempt: 0,
+      elapsedMs: 0,
+      retryAfterSeconds: Number.NaN,
+      status: 422,
+    }),
+    null,
+  );
+  assert.throws(
+    () =>
+      providerValidationRetryDelay({
+        attempt: 0,
+        elapsedMs: 0,
+        retryAfterSeconds: 0,
+        status: 503,
+      }),
+    /provider_validation_retry_invalid/u,
+  );
+  assert.throws(
+    () =>
+      providerValidationRetryDelay({
+        attempt: -1,
+        elapsedMs: 0,
+        retryAfterSeconds: 30,
+        status: 503,
+      }),
+    /provider_validation_retry_invalid/u,
+  );
+});
+
 test("detects generated secrets before runtime logs can be retained", () => {
   assert.equal(secretLeakDetected(["gateway ready"], ["private-value"]), false);
   assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
@@ -104,8 +159,7 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /form\.requestSubmit\(\)/u);
   assert.match(browserSource, /ak-stage-identification form/u);
   assert.match(browserSource, /ak-stage-consent form/u);
-  assert.match(browserSource, /response\.status\(\) !== 503/u);
-  assert.match(browserSource, /retryAfterSeconds \+ 6/u);
+  assert.match(browserSource, /providerValidationRetryDelay/u);
   assert.match(browserSource, /backchannelTaskFailureStage/u);
   assert.match(browserSource, /backchannel_logout_notification_dispatch/u);
   assert.match(browserSource, /send_backchannel_logout_request/u);
