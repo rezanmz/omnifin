@@ -23,7 +23,8 @@ liveness endpoint, and loads versioned provider metadata through the same-origin
 process. Ready OIDC providers can complete the authorization-code flow and create a
 local session; failed or inconsistent providers remain non-interactive. Gateway
 liveness and storage readiness stay private to the Compose network. The gateway owns
-OIDC discovery and backoff, one-time authorization transactions, identities, sessions,
+OIDC discovery and backoff, one-time authorization transactions, identities, individually
+and account-wide revocable sessions,
 direct Jellyfin password and Quick Connect exchanges, recovery access, and authentication audits. It
 also migrates SQLite, validates public configuration, redacts structured logs, and
 provides isolated connector fixture and probe tooling.

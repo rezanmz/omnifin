@@ -2514,6 +2514,79 @@ describe("SessionService", () => {
     }
   });
 
+  it("revokes every session owned by the validated user without affecting another account", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedLinkedOidcIdentity(database);
+      seedSecondLinkedJellyfinUser(database);
+      const harness = createHarness(database);
+      const current = issueOidcSession(harness.service);
+      const sibling = issueOidcSession(harness.service);
+      const directSibling = harness.service.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "link-1",
+          userId: "user-1",
+        },
+      });
+      const otherUser = harness.service.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "link-2",
+          userId: "user-2",
+        },
+      });
+      const validated = harness.service.validateSessionCsrf(
+        current.sessionToken,
+        current.csrfToken,
+      );
+
+      expect(
+        harness.service.revokeAllValidatedSessions(validated!, {
+          ipAddress: "192.0.2.24",
+          requestId: "request_logout_all_123",
+        }),
+      ).toBe(3);
+      expect(harness.service.resolveAndRefresh(current.sessionToken)).toBeNull();
+      expect(harness.service.resolveAndRefresh(sibling.sessionToken)).toBeNull();
+      expect(harness.service.resolveAndRefresh(directSibling.sessionToken)).toBeNull();
+      expect(harness.service.resolveAndRefresh(otherUser.sessionToken)).toMatchObject({
+        principal: { userId: "user-2" },
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+              actor_user_id as actorUserId,
+              actor_session_id as actorSessionId,
+              actor_auth_method as actorAuthMethod,
+              request_id as requestId,
+              metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.session.logout_all'`,
+          )
+          .get(),
+      ).toEqual({
+        actorAuthMethod: "oidc",
+        actorSessionId: current.principal.sessionId,
+        actorUserId: "user-1",
+        metadataJson: '{"reason":"user_logout_all","revokedSessionCount":3}',
+        requestId: "request_logout_all_123",
+      });
+      expect(harness.service.revokeAllValidatedSessions(validated!)).toBe(0);
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.session.logout_all'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("rejects invalid clock and duration seams before they can weaken session policy", () => {
     const database = openDatabase(":memory:");
     try {

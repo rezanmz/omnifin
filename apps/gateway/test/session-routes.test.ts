@@ -360,4 +360,48 @@ describe("session routes", () => {
       await app.close();
     }
   });
+
+  it("requires CSRF and clears the current browser after logout-all", async () => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({ config: testConfig(), database });
+    try {
+      const issued = app.sessionService.createSession({
+        attribution: { authMethod: "recovery" },
+      });
+      const cookie = sessionCookie(issued.sessionToken);
+      const denied = await app.inject({
+        headers: { cookie, origin: "https://omnifin.example" },
+        method: "DELETE",
+        url: "/v1/auth/sessions",
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("csrf_denied");
+
+      const response = await app.inject({
+        headers: {
+          cookie,
+          origin: "https://omnifin.example",
+          [SESSION_CSRF_HEADER]: issued.csrfToken,
+        },
+        method: "DELETE",
+        url: "/v1/auth/sessions",
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(response.body).toBe("");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(setCookieHeader(response.headers["set-cookie"])).toMatch(
+        /__Host-omnifin_session=.*(?:Expires=Thu, 01 Jan 1970|Max-Age=0)/i,
+      );
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.session.logout_all'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
 });

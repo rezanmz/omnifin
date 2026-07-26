@@ -82,6 +82,7 @@ versioned gateway API; operators must not expose the gateway directly.
 | `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll`      | Poll by opaque ID and establish a session only after approval.          |
 | `GET /api/auth/session`                                           | Inspect and, when due, rotate the current local session.                |
 | `DELETE /api/auth/session`                                        | Revoke the current session; requires same-origin CSRF protection.       |
+| `DELETE /api/auth/sessions`                                       | Revoke every local session owned by the current user.                   |
 | `POST /api/auth/recovery/session`                                 | Hidden, rate-limited recovery endpoint; never linked from the login UI. |
 
 Register the exact callback
@@ -260,7 +261,10 @@ revoke or refresh affected sessions and create audit records.
 Browser sessions must use opaque random values stored in `Secure`, `HttpOnly`,
 `SameSite=Lax` cookies. The database must retain a one-way token digest. Sessions must
 rotate after authentication and privilege changes, expire after inactivity and at an
-absolute deadline, and be revocable individually or account-wide.
+absolute deadline, and be revocable individually or account-wide. The account-wide
+route uses the CSRF-proven session as its actor, revokes all of that user's active
+sessions in one immediate transaction, emits one bounded audit event with the revoked
+count, and cannot affect a different account.
 
 State-changing requests must require both an accepted origin and a session-bound CSRF
 token. Authentication callbacks must be protected by one-time state and nonce values.

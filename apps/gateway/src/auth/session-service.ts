@@ -1039,6 +1039,52 @@ export class SessionService {
     return this.revokeSessionById(validatedSession.sessionId, context);
   }
 
+  public revokeAllValidatedSessions(
+    validatedSession: ValidatedSession,
+    context: SessionRequestContext = {},
+  ) {
+    if (
+      !validatedSession ||
+      validatedSession[VALIDATED_SESSION_BRAND] !== true ||
+      !SESSION_ID_PATTERN.test(validatedSession.sessionId)
+    ) {
+      return 0;
+    }
+    return this.withImmediateTransaction(() => {
+      const now = this.currentTime();
+      const row = this.loadJoinedSessionById(validatedSession.sessionId);
+      const principalRecord = row && mapPrincipalRecord(row);
+      const principal = principalRecord && buildSessionPrincipal(principalRecord, now);
+      if (!row || !principal) return 0;
+
+      const revoked = row.sessionUserId
+        ? this.database.sqlite
+            .prepare(
+              `update sessions
+               set revoked_at = max(@now, created_at)
+               where user_id = @userId and revoked_at is null`,
+            )
+            .run({ now: now.getTime(), userId: row.sessionUserId })
+        : this.database.sqlite
+            .prepare(
+              `update sessions
+               set revoked_at = max(@now, created_at)
+               where id = @sessionId and auth_method = 'recovery' and revoked_at is null`,
+            )
+            .run({ now: now.getTime(), sessionId: row.sessionId });
+      if (revoked.changes < 1) return 0;
+      this.auditSessionEvent(row, {
+        context,
+        eventType: "auth.session.logout_all",
+        metadata: { reason: "user_logout_all", revokedSessionCount: revoked.changes },
+        occurredAt: now,
+        outcome: "success",
+        targetId: row.sessionId,
+      });
+      return revoked.changes;
+    });
+  }
+
   public revokeSession(sessionToken: unknown, context: SessionRequestContext = {}) {
     if (!this.validSessionToken(sessionToken)) return false;
     const tokenHash = hashToken(sessionToken);

@@ -55,4 +55,23 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       await reply.status(204).send();
     },
   );
+
+  app.delete(
+    "/v1/auth/sessions",
+    {
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      app.sessionService.revokeAllValidatedSessions(request.validatedSession!, {
+        ipAddress: request.ip,
+        requestId: request.id,
+      });
+      clearSessionCookie(reply, app.appConfig);
+      await reply.status(204).send();
+    },
+  );
 };
