@@ -1,6 +1,13 @@
 export { createApp, type CreateAppOptions } from "./app.js";
 export { hasPermission, requirePermission } from "./auth/authorization.js";
 export {
+  IdentityLinkService,
+  IdentityLinkServiceError,
+  type IdentityLinkRevocationResult,
+  type IdentityLinkServiceDependencies,
+  type RevokeIdentityLinkInput,
+} from "./auth/identity-link-service.js";
+export {
   bootstrapConfiguredJellyfinConnector,
   JellyfinConnectorConfigurationError,
   JellyfinConnectorRegistry,

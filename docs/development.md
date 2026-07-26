@@ -37,8 +37,8 @@ safe provider metadata, OIDC browser routes, individual and account-wide local s
 revocation, recovery access,
 migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pending OIDC users,
 and connector fixture/probe tooling. There is no supported provider, account, or connector
-administration yet; link lifecycle controls, complete logout and
-permission enforcement, and upstream media operations remain unavailable.
+administration yet; provider-coordinated OIDC logout, complete permission enforcement,
+and upstream media operations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the

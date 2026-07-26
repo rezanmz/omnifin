@@ -105,6 +105,7 @@ export interface ValidatedOidcPairingSession {
   readonly externalIdentityId: string;
   readonly oidcProviderId: string;
   readonly operationTime: number;
+  readonly serviceIdentityLinkId: string | null;
   readonly sessionId: string;
   readonly userId: string;
   readonly [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true;
@@ -889,7 +890,24 @@ export class SessionService {
     });
   }
 
-  /** @internal Resolves a CSRF-validated session only when it is eligible for first-time pairing. */
+  /** @internal Re-resolves the exact CSRF-proven session without accepting raw bearer input. */
+  public resolveValidatedSessionPrincipal(validatedSession: unknown): SessionPrincipal | null {
+    if (
+      !validatedSession ||
+      typeof validatedSession !== "object" ||
+      (validatedSession as Partial<ValidatedSession>)[VALIDATED_SESSION_BRAND] !== true ||
+      !SESSION_ID_PATTERN.test((validatedSession as Partial<ValidatedSession>).sessionId ?? "")
+    ) {
+      return null;
+    }
+    const now = this.currentTime();
+    const row = this.loadJoinedSessionById((validatedSession as ValidatedSession).sessionId);
+    if (!row || !this.sessionLifecycleIsActive(row, now)) return null;
+    const principalRecord = mapPrincipalRecord(row);
+    return principalRecord ? buildSessionPrincipal(principalRecord, now) : null;
+  }
+
+  /** @internal Resolves a CSRF-validated OIDC session eligible for pairing or relinking. */
   public beginValidatedOidcPairingSession(
     validatedSession: unknown,
   ): ValidatedOidcPairingSession | null {
@@ -905,19 +923,37 @@ export class SessionService {
     const row = this.loadJoinedSessionById((validatedSession as ValidatedSession).sessionId);
     const principalRecord = row && mapPrincipalRecord(row);
     const principal = principalRecord && buildSessionPrincipal(principalRecord, operationTime);
+    const pendingPairing =
+      row !== undefined &&
+      principal !== null &&
+      principal !== undefined &&
+      row.serviceIdentityLinkId === null &&
+      row.joinedUserStatus === "pending_link" &&
+      principal.accountState === "pending_link" &&
+      principal.linkedServices.length === 0;
+    const activeRelink =
+      row !== undefined &&
+      principal !== null &&
+      principal !== undefined &&
+      row.serviceIdentityLinkId !== null &&
+      row.serviceIdentityLinkId === row.joinedLinkId &&
+      row.joinedUserStatus === "active" &&
+      row.joinedLinkUserId === row.sessionUserId &&
+      (row.joinedLinkHealthState === "linked" || row.joinedLinkHealthState === "unavailable") &&
+      row.joinedConnectorEnabled === 1 &&
+      principal.accountState === "active" &&
+      principal.linkedServices.length === 1 &&
+      principal.linkedServices[0]?.id === row.serviceIdentityLinkId;
     if (
       !row ||
       !principal ||
       !this.sessionLifecycleIsActive(row, operationTime) ||
       row.authMethod !== "oidc" ||
-      row.serviceIdentityLinkId !== null ||
-      row.joinedUserStatus !== "pending_link" ||
-      principal.accountState !== "pending_link" ||
       principal.authenticationMethod.kind !== "oidc" ||
-      principal.linkedServices.length !== 0 ||
       !row.sessionUserId ||
       !row.externalIdentityId ||
-      !row.oidcProviderId
+      !row.oidcProviderId ||
+      (!pendingPairing && !activeRelink)
     ) {
       return null;
     }
@@ -926,6 +962,7 @@ export class SessionService {
       externalIdentityId: row.externalIdentityId,
       oidcProviderId: row.oidcProviderId,
       operationTime: operationTime.getTime(),
+      serviceIdentityLinkId: row.serviceIdentityLinkId,
       sessionId: row.sessionId,
       userId: row.sessionUserId,
     });
@@ -960,7 +997,7 @@ export class SessionService {
       row.sessionUserId !== proof.userId ||
       row.externalIdentityId !== proof.externalIdentityId ||
       row.oidcProviderId !== proof.oidcProviderId ||
-      row.serviceIdentityLinkId !== null ||
+      row.serviceIdentityLinkId !== proof.serviceIdentityLinkId ||
       row.joinedUserStatus !== "active" ||
       row.joinedLinkId !== serviceIdentityLinkId ||
       row.joinedLinkUserId !== proof.userId ||

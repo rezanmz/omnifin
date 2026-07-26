@@ -9,8 +9,7 @@ and contributors changing a security-sensitive flow.
 > resolution, direct Jellyfin password and Quick Connect sign-in, password and Quick
 > Connect OIDC-to-Jellyfin pairing, opaque sessions, and break-glass recovery, but Phase 1 has
 > not passed its release gate. There is not yet a supported operator path for
-> configuring providers; link lifecycle controls and OIDC
-> logout remain incomplete. Treat this
+> configuring providers, and provider-coordinated OIDC logout remains incomplete. Treat this
 > document as development evidence, not a production support claim.
 
 ## Current development surface
@@ -26,8 +25,8 @@ closed as unavailable or misconfigured.
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide supported provider administration, link lifecycle
-controls, RP-initiated or provider-initiated logout, back-channel logout,
+yet provide supported provider administration, RP-initiated or provider-initiated
+logout, back-channel logout,
 or the complete application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
@@ -83,6 +82,8 @@ versioned gateway API; operators must not expose the gateway directly.
 | `GET /api/auth/session`                                           | Inspect and, when due, rotate the current local session.                |
 | `DELETE /api/auth/session`                                        | Revoke the current session; requires same-origin CSRF protection.       |
 | `DELETE /api/auth/sessions`                                       | Revoke every local session owned by the current user.                   |
+| `GET /api/auth/identity-links`                                    | Inspect the current user's normalized Jellyfin link and health.         |
+| `DELETE /api/auth/identity-links/{linkId}`                        | Revoke an owned link, erase its token, and reduce local authority.      |
 | `POST /api/auth/recovery/session`                                 | Hidden, rate-limited recovery endpoint; never linked from the login UI. |
 
 Register the exact callback
@@ -189,9 +190,9 @@ implemented; the remaining lifecycle controls are still Phase 1 work.
 
 The paired identity must supply library visibility, playback permission, watch state,
 progress, and user context for compatible Seerr operations. If Jellyfin is unavailable,
-the OIDC identity may remain pending, but media operations must stay denied. Users must
-be able to inspect link health, relink, revoke the link, and revoke all of their local
-sessions.
+the OIDC identity may remain pending, but media operations must stay denied. Users can
+inspect normalized link health, relink through either fresh proof method, revoke the
+link, and revoke all of their local sessions.
 
 `POST /v1/auth/jellyfin/link/password` requires the exact session cookie, matching
 CSRF token, and same application origin before credentials are parsed or Jellyfin is
@@ -213,6 +214,16 @@ valid session for the same user cannot adopt the transaction. Successful approva
 the same immutable identity ownership checks and atomic OIDC session replacement as
 password pairing; the Jellyfin token remains encrypted and the OIDC attribution and
 absolute session expiry are preserved.
+
+`GET /v1/auth/identity-links` returns at most the current user's browser-safe Jellyfin
+link; access tokens, device identifiers, connector configuration, and other users are
+never included. `DELETE /v1/auth/identity-links/{linkId}` requires origin and CSRF
+proof, erases the encrypted Jellyfin token, marks the user pending-link, and revokes
+all sibling sessions atomically. A current OIDC session is reduced in place to the
+pending-link permission set so the user can immediately provide fresh password or
+Quick Connect proof; a direct Jellyfin session is revoked because it cannot establish
+independent OIDC ownership. Relinking updates the existing immutable link rather than
+creating a second user or link.
 
 ## Current direct Jellyfin sign-in
 

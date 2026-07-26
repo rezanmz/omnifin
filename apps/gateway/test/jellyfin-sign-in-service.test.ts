@@ -536,6 +536,147 @@ describe("JellyfinSignInService", () => {
     }
   });
 
+  it("relinks the same immutable Jellyfin identity after fresh proof without changing ownership", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const initialService = service(handle);
+    try {
+      const pending = seedPendingOidcSession(handle, initialService.sessions);
+      const first = await initialService.signIn.pairWithPassword({
+        ...credentials(),
+        validatedSession: pending.validated,
+      });
+      if (first.status !== "paired") throw new Error("Expected initial pairing success.");
+      const originalLink = handle.db.select().from(serviceIdentityLinks).get()!;
+      const sibling = initialService.sessions.createSession({
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "oidc-identity-1",
+          oidcProviderId: "oidc-home",
+          serviceIdentityLinkId: originalLink.id,
+          userId: "oidc-user-1",
+        },
+      });
+      const validated = initialService.sessions.validateSessionCsrf(
+        first.session.sessionToken,
+        first.session.csrfToken,
+      );
+      const relinkService = service(handle, {
+        authentication: authentication({
+          AccessToken: "fresh-private-access-token",
+          User: { Id: "jellyfin-user-1", Name: "Riley Renamed" },
+        }),
+      });
+
+      const relinked = await relinkService.signIn.pairWithPassword({
+        ...credentials({ requestId: "request-jellyfin-relink" }),
+        validatedSession: validated,
+      });
+
+      expect(relinked.status).toBe("paired");
+      if (relinked.status !== "paired") throw new Error("Expected relink success.");
+      expect(relinked.session.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "oidc", providerId: "oidc-home" },
+        userId: "oidc-user-1",
+      });
+      expect(handle.db.select().from(users).all()).toHaveLength(1);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toHaveLength(1);
+      const updatedLink = handle.db.select().from(serviceIdentityLinks).get()!;
+      expect(updatedLink).toMatchObject({
+        externalDisplayName: "Riley Renamed",
+        externalUserId: originalLink.externalUserId,
+        id: originalLink.id,
+        revision: originalLink.revision + 1,
+        userId: originalLink.userId,
+      });
+      expect(
+        new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
+          updatedLink.encryptedAccessToken!,
+          `service_identity_access_token:jellyfin:${updatedLink.id}`,
+        ),
+      ).toBe("fresh-private-access-token");
+      expect(initialService.sessions.resolveAndRefresh(first.session.sessionToken)).toBeNull();
+      expect(initialService.sessions.resolveAndRefresh(sibling.sessionToken)).toBeNull();
+      expect(
+        handle.sqlite
+          .prepare(
+            `select metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.jellyfin.identity.paired'
+             order by rowid desc
+             limit 1`,
+          )
+          .get(),
+      ).toEqual({
+        metadataJson: JSON.stringify({ proof: "password", provisioned: false, relinked: true }),
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("restores a revoked owned link from the retained pending OIDC session", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const initialService = service(handle);
+    try {
+      const pending = seedPendingOidcSession(handle, initialService.sessions);
+      const first = await initialService.signIn.pairWithPassword({
+        ...credentials(),
+        validatedSession: pending.validated,
+      });
+      if (first.status !== "paired") throw new Error("Expected initial pairing success.");
+      const link = handle.db.select().from(serviceIdentityLinks).get()!;
+      const validated = initialService.sessions.validateSessionCsrf(
+        first.session.sessionToken,
+        first.session.csrfToken,
+      );
+      handle.db
+        .update(serviceIdentityLinks)
+        .set({
+          encryptedAccessToken: null,
+          healthState: "revoked",
+          revision: link.revision + 1,
+          revokedAt: NOW,
+          tokenCreatedAt: null,
+          updatedAt: NOW,
+        })
+        .run();
+      handle.db.update(users).set({ status: "pending_link", updatedAt: NOW }).run();
+      handle.db.update(sessionRows).set({ serviceIdentityLinkId: null }).run();
+      expect(initialService.sessions.resolveValidatedSessionPrincipal(validated)).toMatchObject({
+        accountState: "pending_link",
+        linkedServices: [],
+      });
+
+      const restored = await service(handle, {
+        authentication: authentication({ AccessToken: "restored-private-access-token" }),
+      }).signIn.pairWithPassword({
+        ...credentials({ requestId: "request-jellyfin-restore" }),
+        validatedSession: validated,
+      });
+
+      expect(restored.status).toBe("paired");
+      if (restored.status !== "paired") throw new Error("Expected restored pairing success.");
+      expect(restored.session.principal).toMatchObject({
+        accountState: "active",
+        userId: "oidc-user-1",
+      });
+      expect(handle.db.select().from(users).all()).toHaveLength(1);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toHaveLength(1);
+      expect(handle.db.select().from(serviceIdentityLinks).get()).toMatchObject({
+        healthState: "linked",
+        id: link.id,
+        revision: link.revision + 2,
+        revokedAt: null,
+        userId: "oidc-user-1",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
   it("requires a CSRF-validated pending OIDC session for pairing", async () => {
     const handle = database();
     seedConnector(handle);

@@ -501,6 +501,80 @@ export class JellyfinSignInService {
       if (!this.#existingLinkIsValid(existingIdentity, input, externalUserId)) {
         throw new JellyfinSignInServiceError("provider_unavailable");
       }
+      const activeRelink =
+        input.pairingSession.serviceIdentityLinkId === existingIdentity.id &&
+        existingIdentity.userId === input.pairingSession.userId &&
+        existingIdentity.userStatus === "active" &&
+        (existingIdentity.healthState === "linked" ||
+          existingIdentity.healthState === "unavailable");
+      const revokedRelink =
+        input.pairingSession.serviceIdentityLinkId === null &&
+        existingIdentity.userId === input.pairingSession.userId &&
+        existingIdentity.userStatus === "pending_link" &&
+        (existingIdentity.healthState === "relink_required" ||
+          existingIdentity.healthState === "revoked");
+      if (activeRelink || revokedRelink) {
+        const encryptedAccessToken = this.#cipher.encrypt(
+          input.authentication.AccessToken,
+          accessTokenContext(existingIdentity.id),
+        );
+        const linkUpdate = this.#database.sqlite
+          .prepare(
+            `update service_identity_links
+             set
+               external_username = ?,
+               external_display_name = ?,
+               encrypted_access_token = ?,
+               device_id = ?,
+               token_created_at = ?,
+               health_state = 'linked',
+               last_verified_at = ?,
+               revoked_at = null,
+               revision = revision + 1,
+               updated_at = ?
+             where id = ?
+               and user_id = ?
+               and revision = ?`,
+          )
+          .run(
+            externalUsername,
+            externalUsername,
+            encryptedAccessToken,
+            input.deviceId,
+            input.occurredAt,
+            input.occurredAt,
+            input.occurredAt,
+            existingIdentity.id,
+            input.pairingSession.userId,
+            existingIdentity.revision,
+          );
+        if (linkUpdate.changes !== 1) {
+          throw new JellyfinSignInServiceError("provider_unavailable");
+        }
+        const userUpdate = this.#database.sqlite
+          .prepare(
+            `update users
+             set status = 'active', updated_at = ?
+             where id = ? and status <> 'disabled'`,
+          )
+          .run(input.occurredAt, input.pairingSession.userId);
+        if (userUpdate.changes !== 1) {
+          throw new JellyfinSignInServiceError("provider_unavailable");
+        }
+        this.#insertAudit({
+          actorUserId: input.pairingSession.userId,
+          eventType: "auth.jellyfin.identity.paired",
+          metadata: { proof: input.proof, provisioned: false, relinked: true },
+          occurredAt: input.occurredAt,
+          outcome: "success",
+          ...(input.requestContext.requestId === undefined
+            ? {}
+            : { requestId: input.requestContext.requestId }),
+          targetId: existingIdentity.id,
+          targetType: "service_identity_link",
+        });
+        return Object.freeze({ linkId: existingIdentity.id, status: "resolved" as const });
+      }
       this.#insertAudit({
         actorUserId: input.pairingSession.userId,
         eventType: "auth.jellyfin.identity.pairing_denied",

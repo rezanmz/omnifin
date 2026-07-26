@@ -133,6 +133,11 @@ export const serviceIdentityLinkSchema = z.object({
 });
 export type ServiceIdentityLink = z.infer<typeof serviceIdentityLinkSchema>;
 
+export const identityLinksResponseSchema = z.strictObject({
+  links: z.array(serviceIdentityLinkSchema).max(1),
+});
+export type IdentityLinksResponse = z.infer<typeof identityLinksResponseSchema>;
+
 export const authenticationMethodSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("oidc"), providerId: identifierSchema }),
   z.object({ kind: z.literal("jellyfin") }),
@@ -381,6 +386,33 @@ export type AuthenticatedSessionResponse = z.infer<typeof authenticatedSessionRe
 
 export const jellyfinIdentityPairingResponseSchema = authenticatedSessionResponseSchema;
 export type JellyfinIdentityPairingResponse = z.infer<typeof jellyfinIdentityPairingResponseSchema>;
+
+export const identityLinkRevocationResponseSchema = z
+  .strictObject({
+    link: serviceIdentityLinkSchema,
+    principal: sessionPrincipalSchema.nullable(),
+  })
+  .superRefine((response, context) => {
+    if (response.link.health !== "revoked") {
+      context.addIssue({
+        code: "custom",
+        message: "A revocation response requires a revoked service link.",
+        path: ["link", "health"],
+      });
+    }
+    if (
+      response.principal !== null &&
+      (response.principal.accountState !== "pending_link" ||
+        response.principal.authenticationMethod.kind !== "oidc")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Only a reduced OIDC session may remain after link revocation.",
+        path: ["principal"],
+      });
+    }
+  });
+export type IdentityLinkRevocationResponse = z.infer<typeof identityLinkRevocationResponseSchema>;
 
 export const jellyfinQuickConnectInitiationRequestSchema = z.strictObject({});
 export type JellyfinQuickConnectInitiationRequest = z.infer<

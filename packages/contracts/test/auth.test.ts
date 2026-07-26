@@ -8,6 +8,8 @@ import {
   authProviderSchema,
   externalIdentitySchema,
   jellyfinIdentityPairingResponseSchema,
+  identityLinkRevocationResponseSchema,
+  identityLinksResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
@@ -197,6 +199,37 @@ const oidcIdentity = {
 const validCsrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 
 describe("authentication contracts", () => {
+  it("keeps self-service link status and revocation responses normalized", () => {
+    const revokedLink = {
+      displayName: "Riley",
+      externalUserId: "jellyfin-user-1",
+      health: "revoked" as const,
+      id: "jellyfin-link-1",
+      lastVerifiedAt: "2026-07-26T12:00:00.000Z",
+      linkedAt: "2026-07-25T12:00:00.000Z",
+      service: "jellyfin" as const,
+      username: "riley",
+    };
+
+    expect(identityLinksResponseSchema.parse({ links: [revokedLink] })).toEqual({
+      links: [revokedLink],
+    });
+    expect(
+      identityLinkRevocationResponseSchema.parse({ link: revokedLink, principal: null }),
+    ).toEqual({ link: revokedLink, principal: null });
+    expect(() =>
+      identityLinksResponseSchema.parse({
+        links: [revokedLink, { ...revokedLink, id: "another-link" }],
+      }),
+    ).toThrow();
+    expect(() =>
+      identityLinkRevocationResponseSchema.parse({
+        link: { ...revokedLink, health: "linked" },
+        principal: activeOidcPrincipal,
+      }),
+    ).toThrow();
+  });
+
   it("exposes only login-safe OIDC provider metadata", () => {
     const provider = authProviderSchema.parse({
       id: "authentik",

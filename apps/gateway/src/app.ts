@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { authProviderRoutes } from "./auth/provider-routes.js";
+import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
 import type { JellyfinQuickConnectServiceDependencies } from "./auth/jellyfin/quick-connect-service.js";
 import { jellyfinRoutes, type JellyfinRoutesOptions } from "./auth/jellyfin/routes.js";
@@ -49,6 +50,7 @@ export interface CreateAppOptions {
   oidcDependencies?: OidcRoutesDependencies;
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
+  identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -260,6 +262,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     );
     await app.register(recoveryRoutes);
     await app.register(sessionRoutes);
+    await app.register(
+      identityLinkRoutes,
+      options.identityLinkDependencies === undefined
+        ? {}
+        : { dependencies: options.identityLinkDependencies },
+    );
     return app;
   } catch (initializationError) {
     const cleanupErrors: unknown[] = [];

@@ -10,8 +10,8 @@ untagged image or default branch build as a production support promise.
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
 > provide hidden recovery access. There is not yet a supported provider-administration
-> path, link lifecycle management, complete logout and
-> authorization, connector administration, or upstream media operations. Tagged phase
+> path, provider-coordinated OIDC logout, complete authorization, connector
+> administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
 
 ## Deployment model

@@ -62,7 +62,7 @@ normalized contracts, connector probes, migration tooling, and the application s
 and sign-in experience.
 
 All upstream access crosses the gateway boundary. Phase 1 is still in development:
-supported provider administration, link lifecycle controls, complete logout,
+supported provider administration, provider-coordinated OIDC logout, complete
 permission enforcement, and encrypted connector administration remain
 release-gate work. Later phases add live events, media proxying, and complete upstream
 workflows.
