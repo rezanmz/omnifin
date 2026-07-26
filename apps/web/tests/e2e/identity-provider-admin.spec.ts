@@ -156,7 +156,7 @@ test("retains the sealed client secret while editing public provider fields", as
   await page.getByRole("button", { name: "Edit configuration" }).click();
   await page.getByRole("textbox", { name: "Display name" }).fill("Authentik Home");
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByLabel("Client secret")).toHaveValue("");
+  await expect(page.getByLabel("Client secret", { exact: true })).toHaveValue("");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: "Save configuration" }).click();
 

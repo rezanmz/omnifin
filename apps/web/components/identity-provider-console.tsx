@@ -43,7 +43,6 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 
@@ -54,9 +53,8 @@ import {
   type IdentityProviderAdminClient,
   type IdentityProviderAdminLoadOutcome,
 } from "../lib/identity-provider-admin";
-import { BrandMark } from "./brand-mark";
-import { CinematicBackdrop } from "./cinematic-backdrop";
 import styles from "./identity-provider-console.module.css";
+import { IdentityProviderPageShell } from "./identity-provider-page-shell";
 
 const administrationQueryKey = ["identity-provider-administration"] as const;
 const signingAlgorithms = [
@@ -78,6 +76,7 @@ const mappingOperators = ["equals", "contains_any", "contains_all"] as const;
 interface IdentityProviderConsoleProperties {
   client?: IdentityProviderAdminClient;
   displayProfile?: DisplayProfile;
+  embedded?: boolean;
   initialMappings?: Readonly<Record<string, readonly RoleMapping[]>> | undefined;
   initialOutcome?: IdentityProviderAdminLoadOutcome | undefined;
   publicBaseUrl: string;
@@ -745,15 +744,11 @@ function ProviderState({ state }: { state: OidcProviderAdmin["discoveryState"] }
 
 function IdentityProviderConsoleContent({
   client,
-  displayProfile,
   initialMappings,
   initialOutcome,
   publicBaseUrl,
-}: Required<
-  Pick<IdentityProviderConsoleProperties, "client" | "displayProfile" | "publicBaseUrl">
-> &
+}: Required<Pick<IdentityProviderConsoleProperties, "client" | "publicBaseUrl">> &
   Pick<IdentityProviderConsoleProperties, "initialMappings" | "initialOutcome">) {
-  const reducedMotion = useReducedMotion();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     initialOutcome?.status === "ready" ? (initialOutcome.snapshot.providers[0]?.id ?? null) : null,
@@ -956,532 +951,475 @@ function IdentityProviderConsoleContent({
     });
   };
 
-  const transition = reducedMotion
-    ? { duration: 0 }
-    : { duration: 0.24, ease: [0.2, 0, 0, 1] as const };
-
   return (
-    <div className={styles.layout} data-display-profile={displayProfile}>
-      <CinematicBackdrop />
-      <main className={styles.shell} id="main-content" tabIndex={-1}>
-        <header className={styles.topbar}>
-          <BrandMark />
-          <Link className={styles.back} href="/settings">
-            <ArrowLeft aria-hidden="true" size={17} /> Account &amp; access
-          </Link>
-        </header>
-
-        <section className={styles.hero} aria-labelledby="identity-provider-title">
+    <>
+      {outcomeQuery.isPending ? (
+        <section
+          aria-busy="true"
+          aria-label="Loading identity provider administration"
+          className={styles.console}
+        >
+          <div className={`${styles.providerRail} ${styles.skeleton}`} />
+          <div className={`${styles.workspace} ${styles.skeleton}`} />
+        </section>
+      ) : outcome?.status === "signed_out" ? (
+        <section className={styles.statePanel} role="status">
+          <KeyRound aria-hidden="true" size={29} />
           <div>
-            <p className="eyebrow">Identity control room</p>
-            <h1 id="identity-provider-title">Trust, made visible.</h1>
+            <h2>Your administrative session ended.</h2>
+            <p>Sign in again before changing identity-provider trust.</p>
+          </div>
+          <Link className={styles.primaryButton} href="/login">
+            Return to sign in <ArrowRight aria-hidden="true" size={16} />
+          </Link>
+        </section>
+      ) : outcome?.status === "forbidden" ? (
+        <section className={styles.statePanel} role="alert">
+          <LockKeyhole aria-hidden="true" size={29} />
+          <div>
+            <h2>This control room is restricted.</h2>
             <p>
-              Connect OIDC providers, verify every advertised capability, and translate exact claims
-              into bounded Omnifin roles.
+              An administrator or active recovery session is required. No provider details were
+              loaded.
             </p>
           </div>
-          <div className={styles.heroSeal}>
-            <ShieldCheck aria-hidden="true" size={20} />
-            <span>
-              <strong>Local authority</strong>
-              <small>Secrets stay in the gateway</small>
-            </span>
-          </div>
+          <Link className={styles.secondaryButton} href="/settings">
+            Back to account
+          </Link>
         </section>
-
-        {outcomeQuery.isPending ? (
-          <section
-            aria-busy="true"
-            aria-label="Loading identity provider administration"
-            className={styles.console}
+      ) : outcome?.status !== "ready" ? (
+        <section className={styles.statePanel} role="alert">
+          <CloudOff aria-hidden="true" size={29} />
+          <div>
+            <h2>Identity controls are temporarily offline.</h2>
+            <p>No settings were changed. Check the gateway connection and try again.</p>
+          </div>
+          <button
+            className={styles.secondaryButton}
+            onClick={() => void outcomeQuery.refetch()}
+            type="button"
           >
-            <div className={`${styles.providerRail} ${styles.skeleton}`} />
-            <div className={`${styles.workspace} ${styles.skeleton}`} />
-          </section>
-        ) : outcome?.status === "signed_out" ? (
-          <section className={styles.statePanel} role="status">
-            <KeyRound aria-hidden="true" size={29} />
-            <div>
-              <h2>Your administrative session ended.</h2>
-              <p>Sign in again before changing identity-provider trust.</p>
+            <RefreshCw aria-hidden="true" size={16} /> Try again
+          </button>
+        </section>
+      ) : (
+        <>
+          <div className={styles.announcer} aria-live="polite" aria-atomic="true">
+            {notice ?? operationError ?? ""}
+          </div>
+          {notice ? (
+            <div className={styles.notice} role="status">
+              <BadgeCheck aria-hidden="true" size={18} />
+              <p>{notice}</p>
+              <button
+                aria-label="Dismiss notification"
+                onClick={() => setNotice(null)}
+                type="button"
+              >
+                <X aria-hidden="true" size={16} />
+              </button>
             </div>
-            <Link className={styles.primaryButton} href="/login">
-              Return to sign in <ArrowRight aria-hidden="true" size={16} />
-            </Link>
-          </section>
-        ) : outcome?.status === "forbidden" ? (
-          <section className={styles.statePanel} role="alert">
-            <LockKeyhole aria-hidden="true" size={29} />
-            <div>
-              <h2>This control room is restricted.</h2>
-              <p>
-                An administrator or active recovery session is required. No provider details were
-                loaded.
-              </p>
+          ) : null}
+          {operationError ? (
+            <div className={styles.errorNotice} role="alert">
+              <CircleAlert aria-hidden="true" size={18} />
+              <p>{operationError}</p>
+              <button
+                aria-label="Dismiss error"
+                onClick={() => setOperationError(null)}
+                type="button"
+              >
+                <X aria-hidden="true" size={16} />
+              </button>
             </div>
-            <Link className={styles.secondaryButton} href="/settings">
-              Back to account
-            </Link>
-          </section>
-        ) : outcome?.status !== "ready" ? (
-          <section className={styles.statePanel} role="alert">
-            <CloudOff aria-hidden="true" size={29} />
-            <div>
-              <h2>Identity controls are temporarily offline.</h2>
-              <p>No settings were changed. Check the gateway connection and try again.</p>
-            </div>
-            <button
-              className={styles.secondaryButton}
-              onClick={() => void outcomeQuery.refetch()}
-              type="button"
-            >
-              <RefreshCw aria-hidden="true" size={16} /> Try again
-            </button>
-          </section>
-        ) : (
-          <>
-            <div className={styles.announcer} aria-live="polite" aria-atomic="true">
-              {notice ?? operationError ?? ""}
-            </div>
-            {notice ? (
-              <div className={styles.notice} role="status">
-                <BadgeCheck aria-hidden="true" size={18} />
-                <p>{notice}</p>
-                <button
-                  aria-label="Dismiss notification"
-                  onClick={() => setNotice(null)}
-                  type="button"
-                >
-                  <X aria-hidden="true" size={16} />
-                </button>
-              </div>
-            ) : null}
-            {operationError ? (
-              <div className={styles.errorNotice} role="alert">
-                <CircleAlert aria-hidden="true" size={18} />
-                <p>{operationError}</p>
-                <button
-                  aria-label="Dismiss error"
-                  onClick={() => setOperationError(null)}
-                  type="button"
-                >
-                  <X aria-hidden="true" size={16} />
-                </button>
-              </div>
-            ) : null}
-            <section className={styles.console} aria-label="OIDC provider administration">
-              <aside className={styles.providerRail}>
-                <div className={styles.railHeading}>
-                  <div>
-                    <p className="section-kicker">Trust perimeter</p>
-                    <h2>Providers</h2>
-                  </div>
-                  <button
-                    className={styles.addButton}
-                    onClick={() => {
-                      setView("create");
-                      setDeleteConfirmation(false);
-                    }}
-                    type="button"
-                  >
-                    <Plus aria-hidden="true" size={17} /> Add
-                  </button>
+          ) : null}
+          <section className={styles.console} aria-label="OIDC provider administration">
+            <aside className={styles.providerRail}>
+              <div className={styles.railHeading}>
+                <div>
+                  <p className="section-kicker">Trust perimeter</p>
+                  <h2>Providers</h2>
                 </div>
-                {providers.length === 0 ? (
-                  <div className={styles.railEmpty}>
-                    <Sparkles aria-hidden="true" size={22} />
-                    <strong>No provider yet</strong>
-                    <p>Start with the guided Authentik path.</p>
-                  </div>
-                ) : (
-                  <ul className={styles.providerList}>
-                    {providers.map((provider) => (
-                      <li key={provider.id}>
-                        <button
-                          aria-current={
-                            selected?.id === provider.id && effectiveView !== "create"
-                              ? "page"
-                              : undefined
-                          }
-                          onClick={() => {
-                            setSelectedId(provider.id);
-                            setView("detail");
-                            setCapabilities(null);
-                            setMappingComposer(false);
-                            setDeleteConfirmation(false);
-                          }}
-                          type="button"
-                        >
-                          <span className={styles.providerMonogram} aria-hidden="true">
-                            {provider.displayName[0]}
-                          </span>
-                          <span>
-                            <strong>{provider.displayName}</strong>
-                            <small>
-                              {provider.enabled ? "Sign-in enabled" : "Sign-in disabled"}
-                            </small>
-                          </span>
-                          <ChevronRight aria-hidden="true" size={16} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div className={styles.railFooter}>
-                  <LockKeyhole aria-hidden="true" size={15} />
-                  <p>Client secrets are encrypted and never returned to this screen.</p>
-                </div>
-              </aside>
-
-              <AnimatePresence initial={false} mode="wait">
-                <motion.section
-                  animate={{ opacity: 1, x: 0 }}
-                  className={styles.workspace}
-                  exit={{ opacity: 0, x: reducedMotion ? 0 : -8 }}
-                  initial={{ opacity: 0, x: reducedMotion ? 0 : 12 }}
-                  key={`${effectiveView}-${selected?.id ?? "empty"}`}
-                  transition={{
-                    ...transition,
-                    duration: reducedMotion ? 0 : effectiveView === "detail" ? 0.24 : 0.28,
+                <button
+                  className={styles.addButton}
+                  onClick={() => {
+                    setView("create");
+                    setDeleteConfirmation(false);
                   }}
+                  type="button"
                 >
-                  {effectiveView === "create" ? (
-                    <ProviderForm
-                      busy={busyAction === "create"}
-                      mode="create"
-                      onCancel={providers.length > 0 ? () => setView("detail") : undefined}
-                      onSubmit={createProvider}
-                      publicBaseUrl={publicBaseUrl}
-                    />
-                  ) : effectiveView === "edit" && selected ? (
-                    <ProviderForm
-                      busy={busyAction === "edit"}
-                      key={selected.id}
-                      mode="edit"
-                      onCancel={() => setView("detail")}
-                      onSubmit={editProvider}
-                      provider={selected}
-                      publicBaseUrl={publicBaseUrl}
-                    />
-                  ) : selected ? (
-                    <div className={styles.detail}>
-                      <div className={styles.workspaceHeading}>
-                        <div>
-                          <p className="section-kicker">Provider detail</p>
-                          <h2>{selected.displayName}</h2>
-                          <p>{selected.issuer}</p>
-                        </div>
-                        <ProviderState state={selected.discoveryState} />
-                      </div>
-
-                      <div className={styles.telemetryGrid}>
-                        <div>
-                          <span>Sign-in</span>
-                          <strong>{selected.enabled ? "Enabled" : "Disabled"}</strong>
-                          <small>
-                            {selected.allowJitProvisioning
-                              ? "JIT viewers allowed"
-                              : "Known identities only"}
-                          </small>
-                        </div>
-                        <div>
-                          <span>Protocol</span>
-                          <strong>Code + PKCE</strong>
-                          <small>
-                            {selected.idTokenSigningAlg} ·{" "}
-                            {selected.tokenEndpointAuthMethod.replaceAll("_", " ")}
-                          </small>
-                        </div>
-                        <div>
-                          <span>Discovery</span>
-                          <strong>{selected.discoveryState}</strong>
-                          <small>
-                            {selected.discoveryCheckedAt
-                              ? new Intl.DateTimeFormat("en", {
-                                  dateStyle: "medium",
-                                  timeStyle: "short",
-                                }).format(new Date(selected.discoveryCheckedAt))
-                              : "Never validated"}
-                          </small>
-                        </div>
-                      </div>
-
-                      <section
-                        className={styles.detailSection}
-                        aria-labelledby="provider-endpoints-title"
+                  <Plus aria-hidden="true" size={17} /> Add
+                </button>
+              </div>
+              {providers.length === 0 ? (
+                <div className={styles.railEmpty}>
+                  <Sparkles aria-hidden="true" size={22} />
+                  <strong>No provider yet</strong>
+                  <p>Start with the guided Authentik path.</p>
+                </div>
+              ) : (
+                <ul className={styles.providerList}>
+                  {providers.map((provider) => (
+                    <li key={provider.id}>
+                      <button
+                        aria-current={
+                          selected?.id === provider.id && effectiveView !== "create"
+                            ? "page"
+                            : undefined
+                        }
+                        onClick={() => {
+                          setSelectedId(provider.id);
+                          setView("detail");
+                          setCapabilities(null);
+                          setMappingComposer(false);
+                          setDeleteConfirmation(false);
+                        }}
+                        type="button"
                       >
-                        <div className={styles.sectionHeading}>
-                          <div>
-                            <Network aria-hidden="true" size={19} />
-                            <span>
-                              <h3 id="provider-endpoints-title">Exact provider endpoints</h3>
-                              <p>Keep these exact; wildcard redirects are unnecessary.</p>
-                            </span>
-                          </div>
-                        </div>
-                        <div className={styles.endpointStack}>
-                          {Object.entries(providerUrls(publicBaseUrl, selected.id)).map(
-                            ([label, value]) => (
-                              <CopyControl
-                                key={label}
-                                label={
-                                  label === "callback"
-                                    ? "Redirect URI"
-                                    : label === "logout"
-                                      ? "Post-logout redirect"
-                                      : label.replace("channel", "channel logout")
-                                }
-                                value={value}
-                              />
-                            ),
-                          )}
-                        </div>
-                      </section>
+                        <span className={styles.providerMonogram} aria-hidden="true">
+                          {provider.displayName[0]}
+                        </span>
+                        <span>
+                          <strong>{provider.displayName}</strong>
+                          <small>{provider.enabled ? "Sign-in enabled" : "Sign-in disabled"}</small>
+                        </span>
+                        <ChevronRight aria-hidden="true" size={16} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className={styles.railFooter}>
+                <LockKeyhole aria-hidden="true" size={15} />
+                <p>Client secrets are encrypted and never returned to this screen.</p>
+              </div>
+            </aside>
 
-                      <div className={styles.lifecycleActions}>
-                        <button
-                          className={styles.primaryButton}
-                          disabled={busyAction !== null}
-                          onClick={validate}
-                          type="button"
-                        >
-                          {busyAction === "validate" ? (
-                            <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
-                          ) : (
-                            <ShieldCheck aria-hidden="true" size={16} />
-                          )}{" "}
-                          Validate now
+            <section
+              className={styles.workspace}
+              key={`${effectiveView}-${selected?.id ?? "empty"}`}
+            >
+              {effectiveView === "create" ? (
+                <ProviderForm
+                  busy={busyAction === "create"}
+                  mode="create"
+                  onCancel={providers.length > 0 ? () => setView("detail") : undefined}
+                  onSubmit={createProvider}
+                  publicBaseUrl={publicBaseUrl}
+                />
+              ) : effectiveView === "edit" && selected ? (
+                <ProviderForm
+                  busy={busyAction === "edit"}
+                  key={selected.id}
+                  mode="edit"
+                  onCancel={() => setView("detail")}
+                  onSubmit={editProvider}
+                  provider={selected}
+                  publicBaseUrl={publicBaseUrl}
+                />
+              ) : selected ? (
+                <div className={styles.detail}>
+                  <div className={styles.workspaceHeading}>
+                    <div>
+                      <p className="section-kicker">Provider detail</p>
+                      <h2>{selected.displayName}</h2>
+                      <p>{selected.issuer}</p>
+                    </div>
+                    <ProviderState state={selected.discoveryState} />
+                  </div>
+
+                  <div className={styles.telemetryGrid}>
+                    <div>
+                      <span>Sign-in</span>
+                      <strong>{selected.enabled ? "Enabled" : "Disabled"}</strong>
+                      <small>
+                        {selected.allowJitProvisioning
+                          ? "JIT viewers allowed"
+                          : "Known identities only"}
+                      </small>
+                    </div>
+                    <div>
+                      <span>Protocol</span>
+                      <strong>Code + PKCE</strong>
+                      <small>
+                        {selected.idTokenSigningAlg} ·{" "}
+                        {selected.tokenEndpointAuthMethod.replaceAll("_", " ")}
+                      </small>
+                    </div>
+                    <div>
+                      <span>Discovery</span>
+                      <strong>{selected.discoveryState}</strong>
+                      <small>
+                        {selected.discoveryCheckedAt
+                          ? new Intl.DateTimeFormat("en", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(selected.discoveryCheckedAt))
+                          : "Never validated"}
+                      </small>
+                    </div>
+                  </div>
+
+                  <section
+                    className={styles.detailSection}
+                    aria-labelledby="provider-endpoints-title"
+                  >
+                    <div className={styles.sectionHeading}>
+                      <div>
+                        <Network aria-hidden="true" size={19} />
+                        <span>
+                          <h3 id="provider-endpoints-title">Exact provider endpoints</h3>
+                          <p>Keep these exact; wildcard redirects are unnecessary.</p>
+                        </span>
+                      </div>
+                    </div>
+                    <div className={styles.endpointStack}>
+                      {Object.entries(providerUrls(publicBaseUrl, selected.id)).map(
+                        ([label, value]) => (
+                          <CopyControl
+                            key={label}
+                            label={
+                              label === "callback"
+                                ? "Redirect URI"
+                                : label === "logout"
+                                  ? "Post-logout redirect"
+                                  : label.replace("channel", "channel logout")
+                            }
+                            value={value}
+                          />
+                        ),
+                      )}
+                    </div>
+                  </section>
+
+                  <div className={styles.lifecycleActions}>
+                    <button
+                      className={styles.primaryButton}
+                      disabled={busyAction !== null}
+                      onClick={validate}
+                      type="button"
+                    >
+                      {busyAction === "validate" ? (
+                        <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                      ) : (
+                        <ShieldCheck aria-hidden="true" size={16} />
+                      )}{" "}
+                      Validate now
+                    </button>
+                    <button
+                      className={styles.secondaryButton}
+                      onClick={() => setView("edit")}
+                      type="button"
+                    >
+                      <Braces aria-hidden="true" size={16} /> Edit configuration
+                    </button>
+                    <button
+                      className={selected.enabled ? styles.dangerButton : styles.primaryButton}
+                      disabled={
+                        busyAction !== null ||
+                        (!selected.enabled && selected.discoveryState !== "ready")
+                      }
+                      onClick={toggleEnabled}
+                      type="button"
+                    >
+                      {busyAction === "toggle" ? (
+                        <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                      ) : selected.enabled ? (
+                        <LockKeyhole aria-hidden="true" size={16} />
+                      ) : (
+                        <BadgeCheck aria-hidden="true" size={16} />
+                      )}
+                      {selected.enabled ? "Disable sign-in" : "Enable sign-in"}
+                    </button>
+                  </div>
+                  {!selected.enabled && selected.discoveryState !== "ready" ? (
+                    <p className={styles.actionHint}>
+                      Validation must pass before this interface enables sign-in.
+                    </p>
+                  ) : null}
+
+                  {capabilities ? (
+                    <section
+                      className={styles.capabilities}
+                      aria-label="Validated OIDC capabilities"
+                    >
+                      <div>
+                        <Check aria-hidden="true" size={15} /> PKCE S256
+                      </div>
+                      <div>
+                        <Check aria-hidden="true" size={15} /> Authorization code
+                      </div>
+                      <div>
+                        <Check aria-hidden="true" size={15} />{" "}
+                        {capabilities.userInfo ? "UserInfo" : "ID token claims"}
+                      </div>
+                      <div>
+                        <Check aria-hidden="true" size={15} />{" "}
+                        {Object.values(capabilities.logout).some(Boolean)
+                          ? "Provider logout"
+                          : "Local logout"}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  <section className={styles.detailSection} aria-labelledby="role-mapping-title">
+                    <div className={styles.sectionHeading}>
+                      <div>
+                        <UsersRound aria-hidden="true" size={19} />
+                        <span>
+                          <h3 id="role-mapping-title">Role mappings</h3>
+                          <p>
+                            Exact typed claims, highest priority first. Ambiguous top matches deny
+                            sign-in.
+                          </p>
+                        </span>
+                      </div>
+                      <button
+                        className={styles.addButton}
+                        onClick={() => setMappingComposer(true)}
+                        type="button"
+                      >
+                        <Plus aria-hidden="true" size={16} /> Add rule
+                      </button>
+                    </div>
+                    {mappingComposer ? (
+                      <MappingForm
+                        busy={busyAction === "mapping-create"}
+                        onCancel={() => setMappingComposer(false)}
+                        onSubmit={createMapping}
+                      />
+                    ) : null}
+                    {mappingsQuery.isPending ? (
+                      <div className={styles.mappingLoading} aria-busy="true">
+                        Loading role mappings…
+                      </div>
+                    ) : mappingsQuery.isError ? (
+                      <div className={styles.inlineError}>
+                        <CircleAlert aria-hidden="true" size={17} /> Role mappings could not be
+                        loaded.{" "}
+                        <button onClick={() => void mappingsQuery.refetch()} type="button">
+                          Try again
                         </button>
+                      </div>
+                    ) : mappingsQuery.data?.length ? (
+                      <ul className={styles.mappingList}>
+                        {mappingsQuery.data.map((mapping) => (
+                          <li key={mapping.id}>
+                            <div className={styles.mappingIcon}>
+                              <Braces aria-hidden="true" size={18} />
+                            </div>
+                            <div>
+                              <strong>{mapping.claimPath.join(".")}</strong>
+                              <small>
+                                {mapping.operator.replaceAll("_", " ")} ·{" "}
+                                {mapping.values.map(String).join(", ")}
+                              </small>
+                            </div>
+                            <span className={styles.roleBadge}>{mapping.role}</span>
+                            <span className={styles.priority}>P{mapping.priority}</span>
+                            {deletingMappingId === mapping.id ? (
+                              <div
+                                className={styles.mappingConfirm}
+                                role="group"
+                                aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
+                              >
+                                <span>Remove?</span>
+                                <button onClick={() => setDeletingMappingId(null)} type="button">
+                                  Keep
+                                </button>
+                                <button
+                                  disabled={busyAction !== null}
+                                  onClick={() => void deleteMapping(mapping.id)}
+                                  type="button"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className={styles.iconButton}
+                                aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
+                                onClick={() => setDeletingMappingId(mapping.id)}
+                                type="button"
+                              >
+                                <Trash2 aria-hidden="true" size={16} />
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className={styles.mappingEmpty}>
+                        <UsersRound aria-hidden="true" size={21} />
+                        <div>
+                          <strong>Viewer by default</strong>
+                          <p>No claim can grant privilege until an explicit mapping is added.</p>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className={styles.dangerZone} aria-labelledby="provider-danger-title">
+                    <div>
+                      <p className="section-kicker">Restricted action</p>
+                      <h3 id="provider-danger-title">Delete provider</h3>
+                      <p>
+                        Deletion is available only while disabled and no external identity depends
+                        on this issuer.
+                      </p>
+                    </div>
+                    {deleteConfirmation ? (
+                      <div
+                        className={styles.deleteConfirm}
+                        role="group"
+                        aria-label="Confirm provider deletion"
+                      >
                         <button
                           className={styles.secondaryButton}
-                          onClick={() => setView("edit")}
+                          onClick={() => setDeleteConfirmation(false)}
                           type="button"
                         >
-                          <Braces aria-hidden="true" size={16} /> Edit configuration
+                          Keep provider
                         </button>
                         <button
-                          className={selected.enabled ? styles.dangerButton : styles.primaryButton}
-                          disabled={
-                            busyAction !== null ||
-                            (!selected.enabled && selected.discoveryState !== "ready")
-                          }
-                          onClick={toggleEnabled}
+                          className={styles.dangerButton}
+                          disabled={busyAction !== null}
+                          onClick={deleteProvider}
                           type="button"
                         >
-                          {busyAction === "toggle" ? (
+                          {busyAction === "delete" ? (
                             <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
-                          ) : selected.enabled ? (
-                            <LockKeyhole aria-hidden="true" size={16} />
                           ) : (
-                            <BadgeCheck aria-hidden="true" size={16} />
-                          )}
-                          {selected.enabled ? "Disable sign-in" : "Enable sign-in"}
+                            <Trash2 aria-hidden="true" size={16} />
+                          )}{" "}
+                          Delete permanently
                         </button>
                       </div>
-                      {!selected.enabled && selected.discoveryState !== "ready" ? (
-                        <p className={styles.actionHint}>
-                          Validation must pass before this interface enables sign-in.
-                        </p>
-                      ) : null}
-
-                      {capabilities ? (
-                        <section
-                          className={styles.capabilities}
-                          aria-label="Validated OIDC capabilities"
-                        >
-                          <div>
-                            <Check aria-hidden="true" size={15} /> PKCE S256
-                          </div>
-                          <div>
-                            <Check aria-hidden="true" size={15} /> Authorization code
-                          </div>
-                          <div>
-                            <Check aria-hidden="true" size={15} />{" "}
-                            {capabilities.userInfo ? "UserInfo" : "ID token claims"}
-                          </div>
-                          <div>
-                            <Check aria-hidden="true" size={15} />{" "}
-                            {Object.values(capabilities.logout).some(Boolean)
-                              ? "Provider logout"
-                              : "Local logout"}
-                          </div>
-                        </section>
-                      ) : null}
-
-                      <section
-                        className={styles.detailSection}
-                        aria-labelledby="role-mapping-title"
+                    ) : (
+                      <button
+                        className={styles.dangerButton}
+                        disabled={selected.enabled}
+                        onClick={() => setDeleteConfirmation(true)}
+                        type="button"
                       >
-                        <div className={styles.sectionHeading}>
-                          <div>
-                            <UsersRound aria-hidden="true" size={19} />
-                            <span>
-                              <h3 id="role-mapping-title">Role mappings</h3>
-                              <p>
-                                Exact typed claims, highest priority first. Ambiguous top matches
-                                deny sign-in.
-                              </p>
-                            </span>
-                          </div>
-                          <button
-                            className={styles.addButton}
-                            onClick={() => setMappingComposer(true)}
-                            type="button"
-                          >
-                            <Plus aria-hidden="true" size={16} /> Add rule
-                          </button>
-                        </div>
-                        {mappingComposer ? (
-                          <MappingForm
-                            busy={busyAction === "mapping-create"}
-                            onCancel={() => setMappingComposer(false)}
-                            onSubmit={createMapping}
-                          />
-                        ) : null}
-                        {mappingsQuery.isPending ? (
-                          <div className={styles.mappingLoading} aria-busy="true">
-                            Loading role mappings…
-                          </div>
-                        ) : mappingsQuery.isError ? (
-                          <div className={styles.inlineError}>
-                            <CircleAlert aria-hidden="true" size={17} /> Role mappings could not be
-                            loaded.{" "}
-                            <button onClick={() => void mappingsQuery.refetch()} type="button">
-                              Try again
-                            </button>
-                          </div>
-                        ) : mappingsQuery.data?.length ? (
-                          <ul className={styles.mappingList}>
-                            {mappingsQuery.data.map((mapping) => (
-                              <li key={mapping.id}>
-                                <div className={styles.mappingIcon}>
-                                  <Braces aria-hidden="true" size={18} />
-                                </div>
-                                <div>
-                                  <strong>{mapping.claimPath.join(".")}</strong>
-                                  <small>
-                                    {mapping.operator.replaceAll("_", " ")} ·{" "}
-                                    {mapping.values.map(String).join(", ")}
-                                  </small>
-                                </div>
-                                <span className={styles.roleBadge}>{mapping.role}</span>
-                                <span className={styles.priority}>P{mapping.priority}</span>
-                                {deletingMappingId === mapping.id ? (
-                                  <div
-                                    className={styles.mappingConfirm}
-                                    role="group"
-                                    aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
-                                  >
-                                    <span>Remove?</span>
-                                    <button
-                                      onClick={() => setDeletingMappingId(null)}
-                                      type="button"
-                                    >
-                                      Keep
-                                    </button>
-                                    <button
-                                      disabled={busyAction !== null}
-                                      onClick={() => void deleteMapping(mapping.id)}
-                                      type="button"
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    className={styles.iconButton}
-                                    aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
-                                    onClick={() => setDeletingMappingId(mapping.id)}
-                                    type="button"
-                                  >
-                                    <Trash2 aria-hidden="true" size={16} />
-                                  </button>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <div className={styles.mappingEmpty}>
-                            <UsersRound aria-hidden="true" size={21} />
-                            <div>
-                              <strong>Viewer by default</strong>
-                              <p>
-                                No claim can grant privilege until an explicit mapping is added.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </section>
-
-                      <section
-                        className={styles.dangerZone}
-                        aria-labelledby="provider-danger-title"
-                      >
-                        <div>
-                          <p className="section-kicker">Restricted action</p>
-                          <h3 id="provider-danger-title">Delete provider</h3>
-                          <p>
-                            Deletion is available only while disabled and no external identity
-                            depends on this issuer.
-                          </p>
-                        </div>
-                        {deleteConfirmation ? (
-                          <div
-                            className={styles.deleteConfirm}
-                            role="group"
-                            aria-label="Confirm provider deletion"
-                          >
-                            <button
-                              className={styles.secondaryButton}
-                              onClick={() => setDeleteConfirmation(false)}
-                              type="button"
-                            >
-                              Keep provider
-                            </button>
-                            <button
-                              className={styles.dangerButton}
-                              disabled={busyAction !== null}
-                              onClick={deleteProvider}
-                              type="button"
-                            >
-                              {busyAction === "delete" ? (
-                                <LoaderCircle
-                                  aria-hidden="true"
-                                  className={styles.spinner}
-                                  size={16}
-                                />
-                              ) : (
-                                <Trash2 aria-hidden="true" size={16} />
-                              )}{" "}
-                              Delete permanently
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            className={styles.dangerButton}
-                            disabled={selected.enabled}
-                            onClick={() => setDeleteConfirmation(true)}
-                            type="button"
-                          >
-                            <Trash2 aria-hidden="true" size={16} /> Delete
-                          </button>
-                        )}
-                      </section>
-                    </div>
-                  ) : null}
-                </motion.section>
-              </AnimatePresence>
+                        <Trash2 aria-hidden="true" size={16} /> Delete
+                      </button>
+                    )}
+                  </section>
+                </div>
+              ) : null}
             </section>
-          </>
-        )}
-      </main>
-    </div>
+          </section>
+        </>
+      )}
+    </>
   );
 }
 
 export function IdentityProviderConsole({
   client = identityProviderAdminClient,
   displayProfile = "standard",
+  embedded = false,
   initialMappings,
   initialOutcome,
   publicBaseUrl,
@@ -1496,15 +1434,21 @@ export function IdentityProviderConsole({
       }),
   );
   const stableClient = useMemo(() => client, [client]);
-  return (
+  const administration = (
     <QueryClientProvider client={queryClient}>
       <IdentityProviderConsoleContent
         client={stableClient}
-        displayProfile={displayProfile}
         initialMappings={initialMappings}
         initialOutcome={initialOutcome}
         publicBaseUrl={publicBaseUrl}
       />
     </QueryClientProvider>
+  );
+  return embedded ? (
+    administration
+  ) : (
+    <IdentityProviderPageShell displayProfile={displayProfile}>
+      {administration}
+    </IdentityProviderPageShell>
   );
 }

@@ -1,8 +1,21 @@
 import { expect, test } from "@playwright/test";
 
-for (const route of ["/", "/login", "/settings", "/does-not-exist"] as const) {
+for (const route of [
+  "/",
+  "/login",
+  "/settings",
+  "/settings/identity-providers?test-view=ready",
+  "/does-not-exist",
+] as const) {
   test(`${route} applies its response nonce to every script`, async ({ page }) => {
     const policyViolations: string[] = [];
+    await page.addInitScript(() => {
+      const violations: string[] = [];
+      Object.defineProperty(window, "__omnifinCspViolations", { value: violations });
+      document.addEventListener("securitypolicyviolation", (event) => {
+        violations.push(`${event.effectiveDirective}: ${event.blockedURI || "inline"}`);
+      });
+    });
     page.on("console", (message) => {
       if (
         message.type() === "error" &&
@@ -26,6 +39,15 @@ for (const route of ["/", "/login", "/settings", "/does-not-exist"] as const) {
     expect(new Set(scriptNonces)).toEqual(new Set([nonce]));
 
     await page.waitForLoadState("load");
+    const eventViolations = await page.evaluate(
+      () =>
+        (
+          window as Window & {
+            __omnifinCspViolations?: string[];
+          }
+        ).__omnifinCspViolations ?? [],
+    );
     expect(policyViolations).toEqual([]);
+    expect(eventViolations).toEqual([]);
   });
 }
