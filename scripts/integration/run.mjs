@@ -113,22 +113,38 @@ function vitestArguments(packageName, files, reportPath, testNamePattern) {
   return arguments_;
 }
 
+export function workspaceBuildArguments(packageName) {
+  return ["--filter", `${packageName}^...`, "build"];
+}
+
+function spawnOptions() {
+  return {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, FORCE_COLOR: "0" },
+    maxBuffer: 2 * 1_024 * 1_024,
+  };
+}
+
 function runVitest(packageName, files, testNamePattern) {
   const reportDirectory = mkdtempSync(join(tmpdir(), "omnifin-fixture-"));
   const reportPath = join(reportDirectory, "vitest.json");
   try {
+    const dependencyBuild = spawnSync("pnpm", workspaceBuildArguments(packageName), spawnOptions());
+    if (dependencyBuild.status !== 0) {
+      return { errorCategory: "fixture_dependency_build_failed", passed: false };
+    }
     const execution = spawnSync(
       "pnpm",
       vitestArguments(packageName, files, reportPath, testNamePattern),
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, FORCE_COLOR: "0" },
-        maxBuffer: 2 * 1_024 * 1_024,
-      },
+      spawnOptions(),
     );
     const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
-    return vitestExecutionSummary(execution, report);
+    const summary = vitestExecutionSummary(execution, report);
+    return {
+      ...summary,
+      ...(summary.passed ? {} : { errorCategory: "fixture_contract_failed" }),
+    };
   } finally {
     rmSync(reportDirectory, { force: true, recursive: true });
   }
@@ -200,7 +216,7 @@ function runFixture(service) {
       ...(execution.passed
         ? {}
         : {
-            errorCategory: "fixture_contract_failed",
+            errorCategory: execution.errorCategory ?? "fixture_contract_failed",
             ...(execution.failedTestFiles ? { failedTestFiles: execution.failedTestFiles } : {}),
           }),
     };
@@ -223,7 +239,7 @@ function runFixture(service) {
     ...(execution.passed
       ? {}
       : {
-          errorCategory: "fixture_contract_failed",
+          errorCategory: execution.errorCategory ?? "fixture_contract_failed",
           ...(execution.failedTestFiles ? { failedTestFiles: execution.failedTestFiles } : {}),
         }),
   };

@@ -3,7 +3,8 @@
 The integration runner has two deliberately distinct profiles:
 
 - `fixture` runs deterministic adapter or authentication contract tests from
-  this repository. It does not claim that an upstream service was started.
+  this repository after building the selected package's workspace dependencies.
+  It does not claim that an upstream service was started.
 - `live` probes explicitly configured upstream services. The current live gate
   covers authentication where required, health/version discovery, response
   shape validation, and OIDC metadata. Safe mutation coverage will be added per

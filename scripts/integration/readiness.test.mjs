@@ -7,6 +7,7 @@ import {
   parseArguments,
   vitestExecutionPassed,
   vitestExecutionSummary,
+  workspaceBuildArguments,
 } from "./run.mjs";
 
 function ledgerWith(state = "ready") {
@@ -116,4 +117,12 @@ test("fixture failures expose only bounded test-file basenames", () => {
   });
   assert.equal(JSON.stringify(summary).includes("private assertion"), false);
   assert.equal(JSON.stringify(summary).includes("/home/runner"), false);
+});
+
+test("fixture packages build their workspace dependencies before contract execution", () => {
+  assert.deepEqual(workspaceBuildArguments("@omnifin/gateway"), [
+    "--filter",
+    "@omnifin/gateway^...",
+    "build",
+  ]);
 });
