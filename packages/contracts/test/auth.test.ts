@@ -10,6 +10,9 @@ import {
   jellyfinIdentityPairingResponseSchema,
   identityLinkRevocationResponseSchema,
   identityLinksResponseSchema,
+  oidcProviderAdminSchema,
+  oidcProviderCreateRequestSchema,
+  oidcProvidersAdminResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
@@ -199,6 +202,88 @@ const oidcIdentity = {
 const validCsrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 
 describe("authentication contracts", () => {
+  it("keeps OIDC provider administration strict and secret-free", () => {
+    const request = oidcProviderCreateRequestSchema.parse({
+      allowJitProvisioning: true,
+      approvedEndpointOrigins: ["https://id.example.test"],
+      clientId: "omnifin",
+      clientSecret: "private-client-secret",
+      displayName: "Home identity",
+      enabled: true,
+      idTokenSigningAlg: "RS256",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      scopes: ["openid", "profile", "email", "groups"],
+      slug: "home-identity",
+      tokenEndpointAuthMethod: "client_secret_basic",
+    });
+    expect(request.clientSecret).toBe("private-client-secret");
+
+    const provider = {
+      allowJitProvisioning: true,
+      approvedEndpointOrigins: ["https://id.example.test"],
+      clientId: "omnifin",
+      clientSecretConfigured: true,
+      createdAt: "2026-07-26T12:00:00.000Z",
+      discoveryCheckedAt: null,
+      discoveryState: "unchecked" as const,
+      displayName: "Home identity",
+      enabled: true,
+      id: "oidc-home-identity",
+      idTokenSigningAlg: "RS256" as const,
+      issuer: "https://id.example.test/application/o/omnifin/",
+      scopes: ["openid", "profile", "email", "groups"],
+      slug: "home-identity",
+      tokenEndpointAuthMethod: "client_secret_basic" as const,
+      updatedAt: "2026-07-26T12:00:00.000Z",
+    };
+    expect(oidcProvidersAdminResponseSchema.parse({ providers: [provider] })).toEqual({
+      providers: [provider],
+    });
+    expect(
+      oidcProviderAdminSchema.safeParse({ ...provider, clientSecret: "must-not-cross" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects unsafe or internally inconsistent OIDC provider configuration", () => {
+    const base = {
+      allowJitProvisioning: true,
+      approvedEndpointOrigins: ["https://id.example.test"],
+      clientId: "omnifin",
+      displayName: "Home identity",
+      enabled: true,
+      idTokenSigningAlg: "RS256",
+      issuer: "https://id.example.test/application/o/omnifin/",
+      scopes: ["openid", "profile", "email"],
+      slug: "home-identity",
+      tokenEndpointAuthMethod: "none",
+    };
+    expect(oidcProviderCreateRequestSchema.safeParse(base).success).toBe(true);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({ ...base, clientSecret: "unexpected" }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({
+        ...base,
+        tokenEndpointAuthMethod: "client_secret_post",
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({
+        ...base,
+        scopes: ["openid", "offline_access"],
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({
+        ...base,
+        approvedEndpointOrigins: ["https://elsewhere.example.test"],
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({ ...base, slug: "Home Identity" }).success,
+    ).toBe(false);
+  });
+
   it("keeps self-service link status and revocation responses normalized", () => {
     const revokedLink = {
       displayName: "Riley",

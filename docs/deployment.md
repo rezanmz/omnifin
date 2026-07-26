@@ -10,7 +10,8 @@ untagged image or default branch build as a production support promise.
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
 > provide RP-initiated logout, provider-initiated back- and front-channel logout, and
-> hidden recovery access. There is not yet a supported provider-administration path,
+> hidden recovery access. An initial API can create and inspect encrypted OIDC provider
+> records, but provider validation and role-mapping controls, its operator interface,
 > live Authentik verification, complete authorization, connector
 > administration, or upstream media operations. Tagged phase
 > releases define supported deployment claims.
@@ -74,9 +75,9 @@ default port binding is loopback-only. Do not carry that exception into a publis
 network deployment. Register
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` exactly at the OIDC provider;
 do not derive it from proxy forwarding headers. The current branch deliberately has no
-environment-variable OIDC bootstrap and no supported provider-administration route, so
-operators should not edit the SQLite database manually to activate the development
-flow.
+environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
+client secrets and audits provider creation, but the validation and role-mapping workflow
+is not complete; operators should not edit SQLite manually to bypass that boundary.
 
 ## Target production network layout
 

@@ -14,6 +14,10 @@ import type { JellyfinQuickConnectServiceDependencies } from "./auth/jellyfin/qu
 import { jellyfinRoutes, type JellyfinRoutesOptions } from "./auth/jellyfin/routes.js";
 import { oidcRoutes, type OidcRoutesDependencies } from "./auth/oidc/routes.js";
 import {
+  oidcProviderAdminRoutes,
+  type OidcProviderAdminRoutesOptions,
+} from "./auth/oidc/provider-admin-routes.js";
+import {
   OidcBackchannelLogoutError,
   OidcBackchannelLogoutService,
 } from "./auth/oidc/backchannel-logout.js";
@@ -52,6 +56,7 @@ export interface CreateAppOptions {
   database?: DatabaseHandle;
   migrate?: boolean;
   oidcDependencies?: OidcRoutesDependencies;
+  oidcProviderAdminDependencies?: OidcProviderAdminRoutesOptions["dependencies"];
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
@@ -337,6 +342,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(oidcProviderAdminRoutes, {
+      ...(options.oidcProviderAdminDependencies === undefined
+        ? {}
+        : { dependencies: options.oidcProviderAdminDependencies }),
+    });
     await app.register(jellyfinRoutes, {
       ...(options.jellyfinDependencies === undefined
         ? {}

@@ -20,6 +20,75 @@ const oidcIssuerSchema = z
     );
   }, "OIDC issuers must be HTTPS URLs without credentials, query parameters, or fragments");
 
+const oidcEndpointOriginSchema = z
+  .url()
+  .max(4_096)
+  .refine((value) => {
+    const origin = new URL(value);
+    return (
+      origin.protocol === "https:" &&
+      !origin.username &&
+      !origin.password &&
+      origin.origin === value &&
+      origin.pathname === "/" &&
+      !origin.search &&
+      !origin.hash
+    );
+  }, "OIDC endpoint origins must be canonical HTTPS origins");
+
+export const oidcTokenEndpointAuthMethodSchema = z.enum([
+  "client_secret_basic",
+  "client_secret_post",
+  "none",
+]);
+export type OidcTokenEndpointAuthMethod = z.infer<typeof oidcTokenEndpointAuthMethodSchema>;
+
+export const oidcIdTokenSigningAlgSchema = z.enum([
+  "RS256",
+  "RS384",
+  "RS512",
+  "PS256",
+  "PS384",
+  "PS512",
+  "ES256",
+  "ES384",
+  "ES512",
+  "EdDSA",
+]);
+export type OidcIdTokenSigningAlg = z.infer<typeof oidcIdTokenSigningAlgSchema>;
+
+const oidcScopeSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[\x21\x23-\x5B\x5D-\x7E]+$/u, "OIDC scopes must use visible token characters");
+const oidcScopesSchema = z
+  .array(oidcScopeSchema)
+  .min(1)
+  .max(32)
+  .superRefine((scopes, context) => {
+    if (new Set(scopes).size !== scopes.length) {
+      context.addIssue({ code: "custom", message: "OIDC scopes cannot contain duplicates." });
+    }
+    if (!scopes.includes("openid")) {
+      context.addIssue({ code: "custom", message: "OIDC scopes must include openid." });
+    }
+    if (scopes.some((scope) => scope.toLowerCase() === "offline_access")) {
+      context.addIssue({ code: "custom", message: "OIDC scopes cannot request offline access." });
+    }
+  });
+const oidcClientIdSchema = z
+  .string()
+  .min(1)
+  .max(1_024)
+  .refine((value) => value.trim() === value && !/[\u0000-\u001F\u007F-\u009F]/u.test(value))
+  .refine((value) => new TextEncoder().encode(value).length <= 1_024);
+const oidcClientSecretSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => new TextEncoder().encode(value).length <= 4_096);
+
 export const roleSchema = z.enum(["viewer", "requester", "operator", "admin"]);
 export type Role = z.infer<typeof roleSchema>;
 
@@ -107,6 +176,84 @@ export const authProviderSchema = z.discriminatedUnion("kind", [
   jellyfinAuthProviderSchema,
 ]);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
+
+export const oidcProviderCreateRequestSchema = z
+  .strictObject({
+    allowJitProvisioning: z.boolean(),
+    approvedEndpointOrigins: z.array(oidcEndpointOriginSchema).min(1).max(16),
+    clientId: oidcClientIdSchema,
+    clientSecret: oidcClientSecretSchema.optional(),
+    displayName: displayNameSchema,
+    enabled: z.boolean(),
+    idTokenSigningAlg: oidcIdTokenSigningAlgSchema,
+    issuer: oidcIssuerSchema,
+    scopes: oidcScopesSchema,
+    slug: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u),
+    tokenEndpointAuthMethod: oidcTokenEndpointAuthMethodSchema,
+  })
+  .superRefine((provider, context) => {
+    const usesSecret = provider.tokenEndpointAuthMethod !== "none";
+    if (usesSecret !== (provider.clientSecret !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: usesSecret
+          ? "Confidential OIDC clients require a client secret."
+          : "Public OIDC clients cannot retain a client secret.",
+        path: ["clientSecret"],
+      });
+    }
+    const issuerOrigin = new URL(provider.issuer).origin;
+    if (!provider.approvedEndpointOrigins.includes(issuerOrigin)) {
+      context.addIssue({
+        code: "custom",
+        message: "Approved endpoint origins must include the issuer origin.",
+        path: ["approvedEndpointOrigins"],
+      });
+    }
+    if (
+      new Set(provider.approvedEndpointOrigins).size !== provider.approvedEndpointOrigins.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Approved endpoint origins cannot contain duplicates.",
+        path: ["approvedEndpointOrigins"],
+      });
+    }
+  });
+export type OidcProviderCreateRequest = z.infer<typeof oidcProviderCreateRequestSchema>;
+
+export const oidcProviderAdminSchema = z.strictObject({
+  allowJitProvisioning: z.boolean(),
+  approvedEndpointOrigins: z.array(oidcEndpointOriginSchema).min(1).max(16),
+  clientId: oidcClientIdSchema,
+  clientSecretConfigured: z.boolean(),
+  createdAt: z.iso.datetime({ offset: true }),
+  discoveryCheckedAt: z.iso.datetime({ offset: true }).nullable(),
+  discoveryState: z.enum(["unchecked", "ready", "failed"]),
+  displayName: displayNameSchema,
+  enabled: z.boolean(),
+  id: identifierSchema,
+  idTokenSigningAlg: oidcIdTokenSigningAlgSchema,
+  issuer: oidcIssuerSchema,
+  scopes: oidcScopesSchema,
+  slug: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u),
+  tokenEndpointAuthMethod: oidcTokenEndpointAuthMethodSchema,
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+export type OidcProviderAdmin = z.infer<typeof oidcProviderAdminSchema>;
+
+export const oidcProvidersAdminResponseSchema = z.strictObject({
+  providers: z.array(oidcProviderAdminSchema).max(AUTH_PROVIDERS_MAX_COUNT),
+});
+export type OidcProvidersAdminResponse = z.infer<typeof oidcProvidersAdminResponseSchema>;
 
 export const externalIdentitySchema = z.object({
   providerId: identifierSchema,

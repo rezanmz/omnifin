@@ -11,8 +11,9 @@ the roadmap records when each area has passed its verification gate.
 > primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
-> authentication audits, and recovery access now exist, while complete
-> authorization, connector administration, live
+> authentication audits, recovery access, and initial encrypted OIDC provider creation now
+> exist, while provider validation and role-mapping controls, complete authorization,
+> connector administration, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
 
@@ -29,8 +30,9 @@ direct Jellyfin password and Quick Connect exchanges, recovery access, and authe
 also migrates SQLite, validates public configuration, redacts structured logs, and
 provides isolated connector fixture and probe tooling.
 
-There is not yet a supported provider-administration workflow. Direct Jellyfin password
-and Quick Connect login plus link status, both relinking methods, revocation, and
+The provider-administration boundary can create and list encrypted, audited OIDC records,
+but validation, updates, role mappings, and its operator interface remain incomplete.
+Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented;
 connector administration, live Authentik verification, and media operations remain unavailable.
@@ -147,12 +149,13 @@ The SQLite schema stores or reserves storage for:
 - durable audit records and persisted failure state; and
 - schema migration history.
 
-Current OIDC, direct Jellyfin, and recovery workflows create authenticated users,
+Current OIDC, direct Jellyfin, recovery, and provider-administration workflows create authenticated users,
 external identities, service identity links, encrypted Jellyfin tokens, sessions,
 authorization transactions, connector bootstrap records, and authentication audit
-events. Password and Quick Connect pairing, normalized link health, relinking,
-revocation, and account-wide local session logout are available; connector
-administration is not yet available. Signed provider back-channel logout can revoke an
+events. OIDC provider client secrets are encrypted and provider creation is audited in
+the same transaction. Password and Quick Connect pairing, normalized link health,
+relinking, revocation, and account-wide local session logout are available; broader
+connector administration is not yet available. Signed provider back-channel logout can revoke an
 exact OIDC session or immutable external identity without storing the raw Logout Token.
 Session-aware front-channel logout can revoke an exact provider-scoped session while
 restricting iframe access to the validated issuer origin. Raw `sid` and `jti` values
