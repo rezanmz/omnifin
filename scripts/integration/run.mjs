@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -95,6 +96,8 @@ function discoverTests(directory, namePattern) {
 }
 
 function runVitest(packageName, files, testNamePattern) {
+  const reportDirectory = mkdtempSync(join(tmpdir(), "omnifin-fixture-"));
+  const reportPath = join(reportDirectory, "vitest.json");
   const arguments_ = [
     "--filter",
     packageName,
@@ -103,22 +106,29 @@ function runVitest(packageName, files, testNamePattern) {
     "run",
     ...files,
     "--reporter=json",
+    "--outputFile",
+    reportPath,
   ];
   if (testNamePattern) arguments_.push("--testNamePattern", testNamePattern);
-  const execution = spawnSync("pnpm", arguments_, {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, FORCE_COLOR: "0" },
-    maxBuffer: 2 * 1_024 * 1_024,
-  });
-  return vitestExecutionPassed(execution);
+  try {
+    const execution = spawnSync("pnpm", arguments_, {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, FORCE_COLOR: "0" },
+      maxBuffer: 2 * 1_024 * 1_024,
+    });
+    const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
+    return vitestExecutionPassed(execution, report);
+  } finally {
+    rmSync(reportDirectory, { force: true, recursive: true });
+  }
 }
 
-export function vitestExecutionPassed(execution) {
-  if (execution.status !== 0 || typeof execution.stdout !== "string") return false;
+export function vitestExecutionPassed(execution, reporterOutput = execution.stdout) {
+  if (execution.status !== 0 || typeof reporterOutput !== "string") return false;
   let report;
   try {
-    report = JSON.parse(execution.stdout);
+    report = JSON.parse(reporterOutput);
   } catch {
     return false;
   }

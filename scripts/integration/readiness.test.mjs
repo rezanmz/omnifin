@@ -70,3 +70,17 @@ test("fixture execution rejects zero-match, all-skipped, and malformed Vitest re
     true,
   );
 });
+
+test("fixture execution reads a dedicated reporter artifact instead of command stdout", () => {
+  const report = JSON.stringify({
+    numFailedTests: 0,
+    numPassedTests: 1,
+    numPendingTests: 0,
+    numTotalTests: 1,
+    success: true,
+  });
+  assert.equal(
+    vitestExecutionPassed({ status: 0, stdout: "package-manager output before JSON" }, report),
+    true,
+  );
+});
