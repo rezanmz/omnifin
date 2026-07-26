@@ -190,22 +190,11 @@ function assertPrincipal(current, issuer, subject) {
   return current.principal.externalIdentity.subject;
 }
 
-async function revokeAuthentikSessions(request, issuerOrigin, token) {
-  const response = await request.get(
-    `${issuerOrigin}/api/v3/core/authenticated_sessions/?user__username=akadmin&page_size=100`,
-    { headers: { authorization: `Bearer ${token}` } },
-  );
-  const body = await json(response, 200);
-  assert(Array.isArray(body.results) && body.results.length > 0);
-  for (const authenticatedSession of body.results) {
-    const id = authenticatedSession?.uuid;
-    assert(typeof id === "string" && id.length > 0);
-    const deletion = await request.delete(
-      `${issuerOrigin}/api/v3/core/authenticated_sessions/${encodeURIComponent(id)}/`,
-      { headers: { authorization: `Bearer ${token}` } },
-    );
-    assert(deletion.status() === 204);
-  }
+async function logoutAtAuthentik(page, issuerOrigin) {
+  await page.goto(`${issuerOrigin}/if/flow/default-invalidation-flow/`, {
+    waitUntil: "domcontentloaded",
+  });
+  assert(new URL(page.url()).origin === issuerOrigin);
 }
 
 const AUTHENTIK_TASK_STATES = new Set([
@@ -393,7 +382,7 @@ async function run() {
     const subject = assertPrincipal(firstSession, issuer);
 
     currentStage = "backchannel_trigger";
-    await revokeAuthentikSessions(context.request, issuerOrigin, authentikToken);
+    await logoutAtAuthentik(page, issuerOrigin);
     currentStage = "backchannel_revocation";
     try {
       await waitForRevokedSession(context.request);
