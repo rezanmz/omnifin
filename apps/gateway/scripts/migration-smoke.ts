@@ -11,6 +11,8 @@ const collisionDatabasePath = path.join(temporaryDirectory, "collision.db");
 const currentMigrationDirectory = path.resolve(import.meta.dirname, "../drizzle");
 const historicalMigrationDirectory = path.join(temporaryDirectory, "migrations-through-0002");
 const requiredTables = [
+  "audit_budget_entries",
+  "audit_budget_scopes",
   "audit_events",
   "auth_transactions",
   "connector_configs",
@@ -26,6 +28,16 @@ const requiredTables = [
   "users",
 ] as const;
 const requiredColumns = {
+  audit_budget_entries: ["bucket_hash", "created_at", "generation", "scope", "slot"],
+  audit_budget_scopes: [
+    "clock_watermark_at",
+    "generation",
+    "rollback_started_at",
+    "saturated",
+    "scope",
+    "suppressed_count",
+    "window_started_at",
+  ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
   oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
@@ -65,6 +77,8 @@ const requiredColumns = {
   users: ["role_source"],
 } as const;
 const requiredIndexes = {
+  audit_budget_entries: ["audit_budget_entries_bucket_unique"],
+  audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
   oidc_logout_receipts: [
@@ -82,6 +96,11 @@ const requiredIndexes = {
   ],
 } as const;
 const requiredTriggers = [
+  "audit_budget_entries_current_generation_delete_protected",
+  "audit_budget_entries_insert_current_generation",
+  "audit_budget_entries_update_immutable",
+  "audit_budget_scopes_delete_protected",
+  "audit_budget_scopes_update_guarded",
   "session_rotation_aliases_update_immutable",
   "session_secret_reservations_delete_immutable",
   "session_secret_reservations_update_immutable",
@@ -204,7 +223,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0003.",
+  "Current migration journal must contain migration 0004.",
 );
 
 try {
@@ -318,6 +337,75 @@ try {
       );
     }
 
+    const auditBudgetForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(audit_budget_entries)",
+    ) as { from: string; table: string; to: string }[];
+    if (
+      !auditBudgetForeignKeys.some(
+        ({ from, table, to }) =>
+          from === "scope" && table === "audit_budget_scopes" && to === "scope",
+      )
+    ) {
+      throw new Error("Migration is missing the fixed-scope audit budget foreign key.");
+    }
+
+    assertCondition(
+      (
+        database.sqlite.prepare("select count(*) as count from audit_budget_scopes").get() as {
+          count: number;
+        }
+      ).count === 0,
+      "Migration must leave audit budget scope creation to the first audited event.",
+    );
+
+    const auditScope = "auth.oidc.failure:v1";
+    database.sqlite
+      .prepare(
+        `insert into audit_budget_scopes (
+           scope, generation, window_started_at, clock_watermark_at,
+           rollback_started_at, saturated, suppressed_count
+         ) values (?, 1, 1000, 1000, null, 0, 0)`,
+      )
+      .run(auditScope);
+    database.sqlite
+      .prepare(
+        `insert into audit_budget_entries (
+           scope, generation, slot, bucket_hash, created_at
+         ) values (?, 1, 0, ?, 1000)`,
+      )
+      .run(auditScope, "a".repeat(22));
+    let futureGenerationRejected = false;
+    try {
+      database.sqlite
+        .prepare(
+          `insert into audit_budget_entries (
+             scope, generation, slot, bucket_hash, created_at
+           ) values (?, 2, 0, ?, 1000)`,
+        )
+        .run(auditScope, "b".repeat(22));
+    } catch {
+      futureGenerationRejected = true;
+    }
+    assertCondition(
+      futureGenerationRejected,
+      "Audit budget accepted an entry outside the current generation.",
+    );
+    database.sqlite
+      .prepare(
+        `update audit_budget_scopes
+         set generation = 2,
+             window_started_at = 2000,
+             clock_watermark_at = 2000
+         where scope = ?`,
+      )
+      .run(auditScope);
+    assertCondition(
+      database.sqlite
+        .prepare("delete from audit_budget_entries where scope = ? and generation = 1")
+        .run(auditScope).changes === 1,
+      "Audit budget could not delete an entry after its generation advanced.",
+    );
+
     const foreignKeyViolations = database.sqlite.pragma("foreign_key_check") as unknown[];
     if (foreignKeyViolations.length > 0) {
       throw new Error(`Migration left ${foreignKeyViolations.length} foreign-key violations.`);
@@ -360,8 +448,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 4, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0003.",
+        JSON.stringify({ count: 5, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0004.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -403,6 +491,14 @@ try {
           },
         ]),
       "Production migration did not backfill every legacy bearer and CSRF reservation.",
+    );
+    assertCondition(
+      (
+        upgradeDatabase.sqlite
+          .prepare("select count(*) as count from audit_budget_scopes")
+          .get() as { count: number }
+      ).count === 0,
+      "Production upgrade created audit budget runtime state before the first event.",
     );
 
     upgradeDatabase.sqlite
@@ -518,7 +614,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0004, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

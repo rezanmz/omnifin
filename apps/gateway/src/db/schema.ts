@@ -4,6 +4,7 @@ import {
   foreignKey,
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex,
@@ -590,6 +591,96 @@ export const sessionRotationAliases = sqliteTable(
       sql`${table.validFrom} >= 0
         and ${table.expiresAt} > ${table.validFrom}
         and ${table.expiresAt} <= ${table.validFrom} + 10000`,
+    ),
+  ],
+);
+
+export const auditBudgetScopes = sqliteTable(
+  "audit_budget_scopes",
+  {
+    scope: text("scope").primaryKey(),
+    generation: integer("generation").notNull(),
+    windowStartedAt: integer("window_started_at", { mode: "timestamp_ms" }).notNull(),
+    clockWatermarkAt: integer("clock_watermark_at", { mode: "timestamp_ms" }).notNull(),
+    rollbackStartedAt: integer("rollback_started_at", { mode: "timestamp_ms" }),
+    saturated: integer("saturated", { mode: "boolean" }).notNull().default(false),
+    suppressedCount: integer("suppressed_count").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("audit_budget_scopes_scope_generation_unique").on(table.scope, table.generation),
+    check("audit_budget_scopes_scope_check", sql`${table.scope} = 'auth.oidc.failure:v1'`),
+    check(
+      "audit_budget_scopes_generation_check",
+      sql`typeof(${table.generation}) = 'integer'
+        and ${table.generation} between 1 and 9007199254740990`,
+    ),
+    check(
+      "audit_budget_scopes_timestamp_check",
+      sql`typeof(${table.windowStartedAt}) = 'integer'
+        and ${table.windowStartedAt} between 0 and 8640000000000000
+        and typeof(${table.clockWatermarkAt}) = 'integer'
+        and ${table.clockWatermarkAt} between 0 and 8640000000000000
+        and ${table.windowStartedAt} <= ${table.clockWatermarkAt}
+        and (${table.rollbackStartedAt} is null or (
+          typeof(${table.rollbackStartedAt}) = 'integer'
+          and ${table.rollbackStartedAt} between 0 and 8640000000000000
+          and ${table.rollbackStartedAt} <= ${table.clockWatermarkAt}
+        ))`,
+    ),
+    check("audit_budget_scopes_saturated_check", sql`${table.saturated} in (0, 1)`),
+    check(
+      "audit_budget_scopes_suppressed_count_check",
+      sql`typeof(${table.suppressedCount}) = 'integer'
+        and ${table.suppressedCount} between 0 and 4096`,
+    ),
+  ],
+);
+
+export const auditBudgetEntries = sqliteTable(
+  "audit_budget_entries",
+  {
+    scope: text("scope").notNull(),
+    generation: integer("generation").notNull(),
+    slot: integer("slot").notNull(),
+    bucketHash: text("bucket_hash").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.scope, table.generation, table.slot],
+      name: "audit_budget_entries_scope_generation_slot_pk",
+    }),
+    uniqueIndex("audit_budget_entries_bucket_unique").on(
+      table.scope,
+      table.generation,
+      table.bucketHash,
+    ),
+    foreignKey({
+      columns: [table.scope],
+      foreignColumns: [auditBudgetScopes.scope],
+      name: "audit_budget_entries_scope_fk",
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    check("audit_budget_entries_scope_check", sql`${table.scope} = 'auth.oidc.failure:v1'`),
+    check(
+      "audit_budget_entries_generation_check",
+      sql`typeof(${table.generation}) = 'integer'
+        and ${table.generation} between 1 and 9007199254740990`,
+    ),
+    check(
+      "audit_budget_entries_slot_check",
+      sql`typeof(${table.slot}) = 'integer' and ${table.slot} between 0 and 126`,
+    ),
+    check(
+      "audit_budget_entries_bucket_hash_check",
+      sql`length(${table.bucketHash}) = 22
+        and ${table.bucketHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "audit_budget_entries_created_at_check",
+      sql`typeof(${table.createdAt}) = 'integer'
+        and ${table.createdAt} between 0 and 8640000000000000`,
     ),
   ],
 );

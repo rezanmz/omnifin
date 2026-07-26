@@ -321,6 +321,110 @@ describe("database integrity constraints", () => {
     );
   });
 
+  it("rejects malformed audit budget state and duplicate bucket identities", () => {
+    const database = openSeededDatabase();
+    const scope = "auth.oidc.failure:v1";
+    const insertScope = database.sqlite.prepare(
+      `insert into audit_budget_scopes (
+         scope, generation, window_started_at, clock_watermark_at,
+         rollback_started_at, saturated, suppressed_count
+       ) values (
+         @scope, @generation, @windowStartedAt, @clockWatermarkAt,
+         @rollbackStartedAt, @saturated, @suppressedCount
+       )`,
+    );
+    try {
+      expect(() =>
+        insertScope.run({
+          clockWatermarkAt: 1000,
+          generation: 1,
+          rollbackStartedAt: null,
+          saturated: 0,
+          scope: "wrong-scope",
+          suppressedCount: 0,
+          windowStartedAt: 1000,
+        }),
+      ).toThrow(/audit_budget_scopes_scope_check/);
+      expect(() =>
+        insertScope.run({
+          clockWatermarkAt: 1000,
+          generation: 0,
+          rollbackStartedAt: null,
+          saturated: 0,
+          scope,
+          suppressedCount: 0,
+          windowStartedAt: 1000,
+        }),
+      ).toThrow(/audit_budget_scopes_generation_check/);
+      expect(() =>
+        insertScope.run({
+          clockWatermarkAt: 999,
+          generation: 1,
+          rollbackStartedAt: null,
+          saturated: 0,
+          scope,
+          suppressedCount: 0,
+          windowStartedAt: 1000,
+        }),
+      ).toThrow(/audit_budget_scopes_timestamp_check/);
+      expect(() =>
+        insertScope.run({
+          clockWatermarkAt: 1000,
+          generation: 1,
+          rollbackStartedAt: null,
+          saturated: 2,
+          scope,
+          suppressedCount: 0,
+          windowStartedAt: 1000,
+        }),
+      ).toThrow(/audit_budget_scopes_saturated_check/);
+      expect(() =>
+        insertScope.run({
+          clockWatermarkAt: 1000,
+          generation: 1,
+          rollbackStartedAt: null,
+          saturated: 0,
+          scope,
+          suppressedCount: 4097,
+          windowStartedAt: 1000,
+        }),
+      ).toThrow(/audit_budget_scopes_suppressed_count_check/);
+
+      insertScope.run({
+        clockWatermarkAt: 1000,
+        generation: 1,
+        rollbackStartedAt: null,
+        saturated: 0,
+        scope,
+        suppressedCount: 0,
+        windowStartedAt: 1000,
+      });
+      const insertEntry = database.sqlite.prepare(
+        `insert into audit_budget_entries (
+           scope, generation, slot, bucket_hash, created_at
+         ) values (?, ?, ?, ?, ?)`,
+      );
+      expect(() => insertEntry.run(scope, 1, 127, "a".repeat(22), 1000)).toThrow(
+        /audit_budget_entries_slot_check/,
+      );
+      expect(() => insertEntry.run(scope, 1, 0, "not+a+canonical+hash", 1000)).toThrow(
+        /audit_budget_entries_bucket_hash_check/,
+      );
+      expect(() => insertEntry.run(scope, 2, 0, "a".repeat(22), 1000)).toThrow(
+        /audit_budget_entry_generation_is_not_current/,
+      );
+      insertEntry.run(scope, 1, 0, "a".repeat(22), 1000);
+      expect(() => insertEntry.run(scope, 1, 1, "a".repeat(22), 1000)).toThrow(
+        /unique constraint/i,
+      );
+      expect(() => insertEntry.run(scope, 1, 0, "b".repeat(22), 1000)).toThrow(
+        /unique constraint/i,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("binds every rotation alias to a bearer reservation from the same session", () => {
     const database = openSeededDatabase();
     try {

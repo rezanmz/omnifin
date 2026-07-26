@@ -873,6 +873,8 @@ describe("authentication schema upgrades", () => {
 describe("authentication schema invariants", () => {
   it("loads the schema idempotently with connector-scoped links and logout replay receipts", () => {
     expect(authenticationSchema.connectorConfigs).toBeDefined();
+    expect(authenticationSchema.auditBudgetEntries).toBeDefined();
+    expect(authenticationSchema.auditBudgetScopes).toBeDefined();
     expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
     expect(authenticationSchema.sessionRotationAliases).toBeDefined();
     expect(authenticationSchema.sessionSecretReservations).toBeDefined();
@@ -888,12 +890,14 @@ describe("authentication schema invariants", () => {
       const names = tables.map(({ name }) => name);
       expect(names).not.toContain("quick_connect_transactions");
       expect(names).not.toContain("logout_transactions");
+      expect(names).toContain("audit_budget_entries");
+      expect(names).toContain("audit_budget_scopes");
       expect(names).toContain("oidc_logout_receipts");
       expect(names).toContain("session_rotation_aliases");
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 4 });
+      ).toEqual({ count: 5 });
       expect(
         database.sqlite
           .prepare(
@@ -903,6 +907,11 @@ describe("authentication schema invariants", () => {
               and name in (
                 'oidc_providers_client_secret_insert_check',
                 'oidc_providers_client_secret_update_check',
+                'audit_budget_entries_current_generation_delete_protected',
+                'audit_budget_entries_insert_current_generation',
+                'audit_budget_entries_update_immutable',
+                'audit_budget_scopes_delete_protected',
+                'audit_budget_scopes_update_guarded',
                 'session_rotation_aliases_update_immutable',
                 'session_secret_reservations_delete_immutable',
                 'session_secret_reservations_update_immutable',
@@ -917,6 +926,11 @@ describe("authentication schema invariants", () => {
           )
           .all(),
       ).toEqual([
+        { name: "audit_budget_entries_current_generation_delete_protected" },
+        { name: "audit_budget_entries_insert_current_generation" },
+        { name: "audit_budget_entries_update_immutable" },
+        { name: "audit_budget_scopes_delete_protected" },
+        { name: "audit_budget_scopes_update_guarded" },
         { name: "oidc_providers_client_secret_insert_check" },
         { name: "oidc_providers_client_secret_update_check" },
         { name: "session_rotation_aliases_update_immutable" },
@@ -1045,6 +1059,109 @@ describe("authentication schema invariants", () => {
         actorSessionId: "session-to-delete",
         sessionId: null,
       });
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("makes audit budget generations monotonic and current entries persistent", () => {
+    const database = openDatabase(":memory:");
+    const scope = "auth.oidc.failure:v1";
+    try {
+      database.migrate();
+      database.sqlite
+        .prepare(
+          `insert into audit_budget_scopes (
+             scope, generation, window_started_at, clock_watermark_at,
+             rollback_started_at, saturated, suppressed_count
+           ) values (?, 1, 1000, 1000, null, 0, 0)`,
+        )
+        .run(scope);
+      database.sqlite
+        .prepare(
+          `insert into audit_budget_entries (
+             scope, generation, slot, bucket_hash, created_at
+           ) values (?, 1, 0, ?, 1000)`,
+        )
+        .run(scope, "a".repeat(22));
+
+      expect(() =>
+        database.sqlite
+          .prepare(
+            `insert into audit_budget_entries (
+               scope, generation, slot, bucket_hash, created_at
+             ) values (?, 2, 0, ?, 1000)`,
+          )
+          .run(scope, "b".repeat(22)),
+      ).toThrow(/audit_budget_entry_generation_is_not_current/);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_entries set created_at = 1001 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_entry_is_immutable/);
+      expect(() =>
+        database.sqlite.prepare("delete from audit_budget_entries where scope = ?").run(scope),
+      ).toThrow(/audit_budget_current_generation_is_persistent/);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_scopes set generation = 3 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_scope_transition_is_invalid/);
+
+      database.sqlite
+        .prepare(
+          `update audit_budget_scopes
+           set generation = 2,
+               window_started_at = 2000,
+               clock_watermark_at = 2000,
+               rollback_started_at = null,
+               saturated = 0,
+               suppressed_count = 0
+           where scope = ?`,
+        )
+        .run(scope);
+      expect(
+        database.sqlite
+          .prepare("delete from audit_budget_entries where scope = ? and generation = 1")
+          .run(scope).changes,
+      ).toBe(1);
+      database.sqlite
+        .prepare(
+          `insert into audit_budget_entries (
+             scope, generation, slot, bucket_hash, created_at
+           ) values (?, 2, 0, ?, 2000)`,
+        )
+        .run(scope, "b".repeat(22));
+      database.sqlite
+        .prepare("update audit_budget_scopes set suppressed_count = 1 where scope = ?")
+        .run(scope);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_scopes set suppressed_count = 0 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_scope_transition_is_invalid/);
+      database.sqlite
+        .prepare("update audit_budget_scopes set saturated = 1 where scope = ?")
+        .run(scope);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_scopes set saturated = 0 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_scope_transition_is_invalid/);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_scopes set clock_watermark_at = 1999 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_scope_transition_is_invalid/);
+      expect(() =>
+        database.sqlite.prepare("delete from audit_budget_scopes where scope = ?").run(scope),
+      ).toThrow(/audit_budget_scope_is_persistent/);
+      expect(() =>
+        database.sqlite
+          .prepare("update audit_budget_scopes set generation = 1 where scope = ?")
+          .run(scope),
+      ).toThrow(/audit_budget_scope_transition_is_invalid/);
       expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();

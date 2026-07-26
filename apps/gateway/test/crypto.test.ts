@@ -97,6 +97,9 @@ describe("opaque token helpers", () => {
       privacyHash("ip_address", value, rootKey),
       privacyHash("user_agent", value, rootKey),
       privacyHash("oidc_session_id", value, rootKey),
+      privacyHash("oidc_failure_audit_bucket", value, rootKey),
+      privacyHash("oidc_failure_audit_ip_address", value, rootKey),
+      privacyHash("oidc_failure_audit_user_agent", value, rootKey),
       privacyHash("rate_limit_client", value, rootKey),
     ];
 

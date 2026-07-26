@@ -5,6 +5,8 @@ import type { DatabaseHandle } from "./db/client.js";
 
 const REQUIRED_TABLES = [
   "__drizzle_migrations",
+  "audit_budget_entries",
+  "audit_budget_scopes",
   "audit_events",
   "auth_transactions",
   "connector_configs",
@@ -36,6 +38,16 @@ function assertDatabaseReady(database: DatabaseHandle) {
       throw new Error("Required database schema is not present.");
     }
 
+    database.sqlite
+      .prepare(
+        "select scope, generation, slot, bucket_hash, created_at from audit_budget_entries limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select scope, generation, window_started_at, clock_watermark_at, rollback_started_at, saturated, suppressed_count from audit_budget_scopes limit 0",
+      )
+      .all();
     database.sqlite
       .prepare(
         "select id, oidc_provider_id, external_identity_id, oidc_session_id_hash from sessions limit 0",

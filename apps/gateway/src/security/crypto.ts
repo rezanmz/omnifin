@@ -17,7 +17,13 @@ const ENVELOPE_KEY_PURPOSE = "omnifin:v1:envelope:aes-256-gcm";
 const PRIVACY_HASH_KEY_PURPOSE = "omnifin:v1:privacy-hash:hmac-sha256";
 
 export type PrivacyHashDomain =
-  "ip_address" | "oidc_session_id" | "rate_limit_client" | "user_agent";
+  | "ip_address"
+  | "oidc_failure_audit_bucket"
+  | "oidc_failure_audit_ip_address"
+  | "oidc_failure_audit_user_agent"
+  | "oidc_session_id"
+  | "rate_limit_client"
+  | "user_agent";
 
 function deriveDomainKey(rootKey: Buffer, purpose: string) {
   if (rootKey.length !== ROOT_KEY_BYTES) {
