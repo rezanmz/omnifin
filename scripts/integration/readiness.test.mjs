@@ -5,8 +5,8 @@ import { SERVICES, readinessBlock, validateReadinessLedger } from "./readiness.m
 import {
   fixtureChecksFor,
   parseArguments,
-  vitestArguments,
   vitestExecutionPassed,
+  vitestExecutionSummary,
 } from "./run.mjs";
 
 function ledgerWith(state = "ready") {
@@ -90,13 +90,30 @@ test("fixture execution reads a dedicated reporter artifact instead of command s
   );
 });
 
-test("fixture contracts run one file at a time for deterministic service isolation", () => {
-  const arguments_ = vitestArguments(
-    "@omnifin/gateway",
-    ["test/oidc-protocol.test.ts"],
-    "/private/fixture-report.json",
-  );
-  assert.equal(arguments_.includes("--no-file-parallelism"), true);
-  const maxWorkersIndex = arguments_.indexOf("--maxWorkers");
-  assert.deepEqual(arguments_.slice(maxWorkersIndex, maxWorkersIndex + 2), ["--maxWorkers", "1"]);
+test("fixture failures expose only bounded test-file basenames", () => {
+  const reporterOutput = JSON.stringify({
+    numFailedTests: 1,
+    numPassedTests: 1,
+    numPendingTests: 0,
+    numTotalTests: 2,
+    success: false,
+    testResults: [
+      {
+        message: "private assertion and protocol payload",
+        name: "/home/runner/work/omnifin/apps/gateway/test/oidc-routes.test.ts",
+        status: "failed",
+      },
+      {
+        name: "/home/runner/work/omnifin/apps/gateway/test/oidc-protocol.test.ts",
+        status: "passed",
+      },
+    ],
+  });
+  const summary = vitestExecutionSummary({ status: 1, stdout: "ignored" }, reporterOutput);
+  assert.deepEqual(summary, {
+    failedTestFiles: ["oidc-routes.test.ts"],
+    passed: false,
+  });
+  assert.equal(JSON.stringify(summary).includes("private assertion"), false);
+  assert.equal(JSON.stringify(summary).includes("/home/runner"), false);
 });

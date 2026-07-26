@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runLiveProbe } from "./live-probes.mjs";
@@ -13,6 +13,8 @@ import { readReadinessLedger, readinessBlock, SERVICES } from "./readiness.mjs";
 export { SERVICES } from "./readiness.mjs";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const MAX_FAILED_TEST_FILES = 16;
+const TEST_FILE_BASENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,143}\.(?:test|spec)\.(?:ts|tsx)$/u;
 const connectorPatterns = {
   jellyfin: "^'jellyfin' adapter\\b",
   seerr: "^'seerr' adapter\\b",
@@ -95,7 +97,7 @@ function discoverTests(directory, namePattern) {
   return files.sort();
 }
 
-export function vitestArguments(packageName, files, reportPath, testNamePattern) {
+function vitestArguments(packageName, files, reportPath, testNamePattern) {
   const arguments_ = [
     "--filter",
     packageName,
@@ -103,9 +105,6 @@ export function vitestArguments(packageName, files, reportPath, testNamePattern)
     "vitest",
     "run",
     ...files,
-    "--no-file-parallelism",
-    "--maxWorkers",
-    "1",
     "--reporter=json",
     "--outputFile",
     reportPath,
@@ -129,19 +128,19 @@ function runVitest(packageName, files, testNamePattern) {
       },
     );
     const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
-    return vitestExecutionPassed(execution, report);
+    return vitestExecutionSummary(execution, report);
   } finally {
     rmSync(reportDirectory, { force: true, recursive: true });
   }
 }
 
-export function vitestExecutionPassed(execution, reporterOutput = execution.stdout) {
-  if (execution.status !== 0 || typeof reporterOutput !== "string") return false;
+export function vitestExecutionSummary(execution, reporterOutput = execution.stdout) {
+  if (typeof reporterOutput !== "string") return { passed: false };
   let report;
   try {
     report = JSON.parse(reporterOutput);
   } catch {
-    return false;
+    return { passed: false };
   }
   const counts = [
     report.numTotalTests,
@@ -149,13 +148,39 @@ export function vitestExecutionPassed(execution, reporterOutput = execution.stdo
     report.numFailedTests,
     report.numPendingTests,
   ];
-  return (
+  const passed =
+    execution.status === 0 &&
     counts.every((count) => Number.isInteger(count) && count >= 0) &&
     report.success === true &&
     report.numPassedTests >= 1 &&
     report.numFailedTests === 0 &&
-    report.numTotalTests >= report.numPassedTests + report.numFailedTests + report.numPendingTests
-  );
+    report.numTotalTests >= report.numPassedTests + report.numFailedTests + report.numPendingTests;
+  if (passed || !Array.isArray(report.testResults)) return { passed };
+
+  const failedTestFiles = [
+    ...new Set(
+      report.testResults
+        .filter(
+          (result) =>
+            result !== null &&
+            typeof result === "object" &&
+            result.status === "failed" &&
+            typeof result.name === "string",
+        )
+        .map((result) => basename(result.name))
+        .filter((name) => TEST_FILE_BASENAME_PATTERN.test(name)),
+    ),
+  ]
+    .sort()
+    .slice(0, MAX_FAILED_TEST_FILES);
+  return {
+    passed: false,
+    ...(failedTestFiles.length === 0 ? {} : { failedTestFiles }),
+  };
+}
+
+export function vitestExecutionPassed(execution, reporterOutput = execution.stdout) {
+  return vitestExecutionSummary(execution, reporterOutput).passed;
 }
 
 function runFixture(service) {
@@ -166,13 +191,18 @@ function runFixture(service) {
       return { service, profile: "fixture-contract", status: "not_implemented" };
     }
     const files = absoluteFiles.map((file) => relative(join(root, "apps/gateway"), file));
-    const passed = runVitest("@omnifin/gateway", files);
+    const execution = runVitest("@omnifin/gateway", files);
     return {
       service,
       profile: "fixture-contract",
-      status: passed ? "passed" : "failed",
+      status: execution.passed ? "passed" : "failed",
       checks: ["authentication_contract"],
-      ...(passed ? {} : { errorCategory: "fixture_contract_failed" }),
+      ...(execution.passed
+        ? {}
+        : {
+            errorCategory: "fixture_contract_failed",
+            ...(execution.failedTestFiles ? { failedTestFiles: execution.failedTestFiles } : {}),
+          }),
     };
   }
 
@@ -180,7 +210,7 @@ function runFixture(service) {
   if (!existsSync(testFile) || !connectorPatterns[service]) {
     return { service, profile: "fixture-contract", status: "not_implemented" };
   }
-  const passed = runVitest(
+  const execution = runVitest(
     "@omnifin/connectors",
     [relative(join(root, "packages/connectors"), testFile)],
     connectorPatterns[service],
@@ -188,9 +218,14 @@ function runFixture(service) {
   return {
     service,
     profile: "fixture-contract",
-    status: passed ? "passed" : "failed",
+    status: execution.passed ? "passed" : "failed",
     checks: fixtureChecksFor(service),
-    ...(passed ? {} : { errorCategory: "fixture_contract_failed" }),
+    ...(execution.passed
+      ? {}
+      : {
+          errorCategory: "fixture_contract_failed",
+          ...(execution.failedTestFiles ? { failedTestFiles: execution.failedTestFiles } : {}),
+        }),
   };
 }
 

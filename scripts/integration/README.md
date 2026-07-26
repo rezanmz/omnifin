@@ -24,14 +24,10 @@ Use `--strict` when a gate must fail for any unconfigured, unimplemented, or
 not-ready profile. Strict mode validates the ledger schema and rejects a
 `pending` service before running its probe; configuration alone cannot turn
 pending coverage into a release claim. Reports contain only service names,
-profile names, versions, normalized status values, check names, and normalized
-error categories. URLs, credentials, headers, cookies, and raw upstream
-payloads are never included.
-
-Fixture services remain parallelized as separate CI matrix jobs. Within each
-service job, contract files execute one at a time with a single worker so
-shared database, clock, and protocol-state fixtures remain deterministic on
-both developer machines and constrained CI runners.
+profile names, versions, normalized status values, check names, normalized
+error categories, and bounded test-file basenames on fixture failure. Assertion
+messages, filesystem paths, URLs, credentials, headers, cookies, and raw
+upstream payloads are never included.
 
 `readiness.json` is the reviewed coverage ledger. It must contain exactly every
 known service, both `fixture` and `live` profiles, and only the states `pending`
