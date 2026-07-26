@@ -42,10 +42,17 @@ import {
 } from "./provider-registry.js";
 import { OidcSignInService } from "./sign-in-service.js";
 import type { OidcBackchannelLogoutDependencies } from "./backchannel-logout.js";
+import {
+  OidcFrontchannelLogoutError,
+  OidcFrontchannelLogoutService,
+  type OidcFrontchannelLogoutDependencies,
+  type ProcessedOidcFrontchannelLogout,
+} from "./frontchannel-logout.js";
 
 const ALLOWED_RETURN_PATHS = new Set(["/", "/settings"]);
 const MAX_CALLBACK_REQUEST_TARGET_LENGTH = 16_384;
 const MAX_BACKCHANNEL_LOGOUT_BODY_BYTES = 40 * 1_024;
+const MAX_FRONTCHANNEL_LOGOUT_REQUEST_TARGET_LENGTH = 4_096;
 const MAX_PROVIDER_LOGOUT_LOCATION_LENGTH = 16_384;
 const MAX_START_REQUEST_TARGET_LENGTH = 4_096;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -135,6 +142,40 @@ function callbackRequest(rawUrl: unknown): ParsedCallbackRequest {
     throw new OidcBrowserRouteError();
   }
   return Object.freeze({ query: requestUrl.search, state: states[0] });
+}
+
+function frontchannelRequest(rawUrl: unknown, providerId: unknown) {
+  if (
+    typeof rawUrl !== "string" ||
+    rawUrl.length === 0 ||
+    rawUrl.length > MAX_FRONTCHANNEL_LOGOUT_REQUEST_TARGET_LENGTH ||
+    typeof providerId !== "string" ||
+    !PROVIDER_ID_PATTERN.test(providerId)
+  ) {
+    throw new OidcBrowserRouteError();
+  }
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(rawUrl, "http://gateway.invalid");
+  } catch {
+    throw new OidcBrowserRouteError();
+  }
+  const keys = [...requestUrl.searchParams.keys()];
+  const issuers = requestUrl.searchParams.getAll("iss");
+  const sessionIds = requestUrl.searchParams.getAll("sid");
+  if (
+    requestUrl.origin !== "http://gateway.invalid" ||
+    requestUrl.username !== "" ||
+    requestUrl.password !== "" ||
+    requestUrl.hash !== "" ||
+    keys.length !== 2 ||
+    keys.some((key) => key !== "iss" && key !== "sid") ||
+    issuers.length !== 1 ||
+    sessionIds.length !== 1
+  ) {
+    throw new OidcBrowserRouteError();
+  }
+  return Object.freeze({ issuer: issuers[0], providerId, sessionId: sessionIds[0] });
 }
 
 function callbackResponse(
@@ -257,6 +298,7 @@ export interface OidcRoutesDependencies {
   authorizationTransaction?: OidcAuthorizationTransactionDependencies;
   backchannelLogout?: Omit<OidcBackchannelLogoutDependencies, "providerRegistry">;
   failureAudit?: OidcFailureAuditDependencies;
+  frontchannelLogout?: OidcFrontchannelLogoutDependencies;
   identity?: Omit<OidcIdentityServiceDependencies, "providerBindingVerifier">;
   protocol?: OidcProtocolDependencies;
   providerRegistry?: OidcProviderRegistryDependencies;
@@ -289,6 +331,11 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     app.appConfig,
     dependencies.failureAudit,
   );
+  const frontchannelLogout = new OidcFrontchannelLogoutService(
+    app.database,
+    app.appConfig,
+    dependencies.frontchannelLogout,
+  );
   const bindingClock = dependencies.authorizationTransaction?.clock ?? (() => new Date());
   const createBrowserBinding =
     dependencies.authorizationTransaction?.createBrowserBinding ?? (() => randomToken(32));
@@ -320,6 +367,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
   const recordedRequests = new WeakSet<FastifyRequest>();
   const suppressedAuditRequests = new WeakSet<FastifyRequest>();
   const startAuditBudgetedRequests = new WeakSet<FastifyRequest>();
+  const frontchannelFrameAncestors = new WeakMap<FastifyRequest, string>();
 
   const recordFailure = (
     request: FastifyRequest,
@@ -411,6 +459,65 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
       },
     },
     async (_request, reply) => reply.status(200).send(),
+  );
+
+  app.get(
+    "/v1/auth/oidc/frontchannel/:providerId",
+    {
+      exposeHeadRoute: false,
+      helmet: { frameguard: false },
+      config: {
+        omnifinSecurity: { kind: "oidc-frontchannel" },
+        rateLimit: { max: 120, timeWindow: "1 minute" },
+      },
+      onSend: async (request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        const frameAncestorOrigin = frontchannelFrameAncestors.get(request);
+        if (frameAncestorOrigin !== undefined) {
+          reply.removeHeader("x-frame-options");
+          reply.header(
+            "content-security-policy",
+            `default-src 'none'; frame-ancestors ${frameAncestorOrigin}`,
+          );
+        } else {
+          reply.header("x-frame-options", "DENY");
+        }
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      let result: ProcessedOidcFrontchannelLogout;
+      try {
+        const providerId =
+          request.params && typeof request.params === "object" && !Array.isArray(request.params)
+            ? Object.getOwnPropertyDescriptor(request.params, "providerId")?.value
+            : undefined;
+        result = frontchannelLogout.process({
+          ...frontchannelRequest(request.raw.url, providerId),
+          requestId: request.id,
+        });
+      } catch (error) {
+        if (
+          error instanceof OidcFrontchannelLogoutError &&
+          error.code === "logout_storage_failed"
+        ) {
+          throw new SafeHttpError({
+            code: "frontchannel_temporarily_unavailable",
+            message: "The logout request could not be completed.",
+            statusCode: 503,
+          });
+        }
+        throw new SafeHttpError({
+          code: "frontchannel_authentication_denied",
+          message: "The logout request could not be verified.",
+          statusCode: 400,
+        });
+      }
+
+      frontchannelFrameAncestors.set(request, result.frameAncestorOrigin);
+      return reply.status(200).send();
+    },
   );
 
   app.post(

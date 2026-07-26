@@ -480,6 +480,13 @@ describe("gateway application", () => {
         async () => ({ accepted: true }),
       ),
     ).toThrow(/limited to the OIDC logout POST route/i);
+    expect(() =>
+      app.get(
+        "/v1/unsafe-frontchannel",
+        { config: { omnifinSecurity: { kind: "oidc-frontchannel" } } },
+        async () => ({ accepted: true }),
+      ),
+    ).toThrow(/limited to its dedicated GET route/i);
     await app.close();
   });
 

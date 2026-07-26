@@ -167,7 +167,7 @@ describe("GET /v1/auth/providers", () => {
     {
       expected: {
         supportsBackChannelLogout: true,
-        supportsFrontChannelLogout: true,
+        supportsFrontChannelLogout: false,
         supportsRpInitiatedLogout: true,
       },
       logout: {
@@ -177,7 +177,7 @@ describe("GET /v1/auth/providers", () => {
         frontChannelSession: false,
         rpInitiated: true,
       },
-      name: "provider and RP logout support",
+      name: "non-session-aware provider and RP logout support",
     },
     {
       expected: {

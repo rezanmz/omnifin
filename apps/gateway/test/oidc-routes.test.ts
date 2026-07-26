@@ -115,6 +115,7 @@ async function openRouteHarness(
       email: "viewer@example.test",
       email_verified: true,
       name: "Cinematic Viewer",
+      sid: "synthetic-provider-session",
       sub: "immutable-viewer-subject",
     },
     idToken: "header.payload.signature",
@@ -342,6 +343,112 @@ describe("OIDC browser routes", () => {
         error: { code: "backchannel_temporarily_unavailable" },
       });
       expect(response.body).not.toContain("oidc_provider_discovery_failed");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("accepts an exact session-aware front-channel logout from the configured issuer", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/auth/oidc/frontchannel/${providerId}?${new URLSearchParams({
+          iss: issuer,
+          sid: "synthetic-provider-session",
+        }).toString()}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(response.headers["x-frame-options"]).toBeUndefined();
+      expect(response.headers["content-security-policy"]).toBe(
+        "default-src 'none'; frame-ancestors https://identity.example.test",
+      );
+      expect(response.body).toBe("");
+      expect(app.sessionService.resolveAndRefresh(session.cookie.split("=", 2)[1])).toBeNull();
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.oidc.frontchannel_logout'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects malformed front-channel requests without making the denial frameable", async () => {
+    const { app } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+      const validQuery = new URLSearchParams({
+        iss: issuer,
+        sid: "synthetic-provider-session",
+      }).toString();
+      const requests = [
+        `/v1/auth/oidc/frontchannel/${providerId}?${validQuery}&unexpected=1`,
+        `/v1/auth/oidc/frontchannel/${providerId}?${validQuery}&iss=${encodeURIComponent(issuer)}`,
+        `/v1/auth/oidc/frontchannel/${providerId}?${new URLSearchParams({
+          iss: `${issuer}mismatch`,
+          sid: "synthetic-provider-session",
+        }).toString()}`,
+        `/v1/auth/oidc/frontchannel/${providerId}?iss=${encodeURIComponent(issuer)}`,
+      ];
+
+      for (const url of requests) {
+        const response = await app.inject({ method: "GET", url });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({
+          error: { code: "frontchannel_authentication_denied" },
+        });
+        expect(response.headers["x-frame-options"]).toBe("DENY");
+        expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+      }
+      const headResponse = await app.inject({
+        method: "HEAD",
+        url: `/v1/auth/oidc/frontchannel/${providerId}?${validQuery}`,
+      });
+      expect(headResponse.statusCode).toBe(404);
+      expect(headResponse.headers["x-frame-options"]).toBe("DENY");
+      expect(app.sessionService.resolveAndRefresh(session.cookie.split("=", 2)[1])).not.toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rolls a front-channel revocation back when its audit record cannot be stored", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const session = await issueBrowserOidcSession(app);
+      database.sqlite.exec(`
+        create trigger reject_frontchannel_route_audit
+        before insert on audit_events
+        when new.event_type = 'auth.oidc.frontchannel_logout'
+        begin
+          select raise(abort, 'frontchannel route audit unavailable');
+        end;
+      `);
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/auth/oidc/frontchannel/${providerId}?${new URLSearchParams({
+          iss: issuer,
+          sid: "synthetic-provider-session",
+        }).toString()}`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        error: { code: "frontchannel_temporarily_unavailable" },
+      });
+      expect(response.headers["x-frame-options"]).toBe("DENY");
+      expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+      expect(app.sessionService.resolveAndRefresh(session.cookie.split("=", 2)[1])).not.toBeNull();
+      expect(response.body).not.toContain("frontchannel route audit unavailable");
     } finally {
       await app.close();
     }

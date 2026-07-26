@@ -73,6 +73,8 @@ function providerMetadata(): ServerMetadata {
     backchannel_logout_session_supported: true,
     backchannel_logout_supported: true,
     code_challenge_methods_supported: ["S256"],
+    frontchannel_logout_session_supported: true,
+    frontchannel_logout_supported: true,
     grant_types_supported: ["authorization_code"],
     id_token_signing_alg_values_supported: ["RS256"],
     issuer: PROVIDER_ISSUER,
@@ -190,6 +192,7 @@ async function main() {
         },
       },
       failureAudit: { clock: () => new Date(startedAt) },
+      frontchannelLogout: { clock: () => new Date(startedAt) },
       identity: { clock: () => new Date(startedAt) },
       protocol: { authorizationCodeGrant: syntheticAuthorizationCodeGrant(publicOrigin) },
       providerRegistry: {

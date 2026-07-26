@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "services": {
-    "oidc": { "fixture": "pending", "live": "pending" },
+    "oidc": { "fixture": "ready", "live": "pending" },
     "authentik": { "fixture": "pending", "live": "pending" },
     "jellyfin": { "fixture": "ready", "live": "pending" },
     "seerr": { "fixture": "ready", "live": "pending" },

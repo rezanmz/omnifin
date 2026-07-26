@@ -279,7 +279,14 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
   expect(readyProviders.status()).toBe(200);
   expectNoStore(readyProviders);
   expect(await readyProviders.json()).toEqual({
-    providers: [{ ...providerObject, state: "available", supportsBackChannelLogout: true }],
+    providers: [
+      {
+        ...providerObject,
+        state: "available",
+        supportsBackChannelLogout: true,
+        supportsFrontChannelLogout: true,
+      },
+    ],
   });
 
   const callbackQuery = new URLSearchParams({
@@ -344,6 +351,54 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
       },
       role: "viewer",
     },
+  });
+
+  const frontchannelLogout = await request.get(
+    `/api/auth/oidc/frontchannel/${providerId}?${new URLSearchParams({
+      iss: providerIssuer,
+      sid: "synthetic-provider-session",
+    }).toString()}`,
+  );
+  expect(frontchannelLogout.status()).toBe(200);
+  expectNoStore(frontchannelLogout);
+  expect(frontchannelLogout.headers().pragma).toBe("no-cache");
+  expect(headerValues(frontchannelLogout, "set-cookie")).toEqual([]);
+  expect(frontchannelLogout.headers()["x-frame-options"]).toBeUndefined();
+  expect(frontchannelLogout.headers()["content-security-policy"]).toBe(
+    "default-src 'none'; frame-ancestors https://identity.example.test",
+  );
+  expect(await frontchannelLogout.text()).toBe("");
+
+  const frontchannelRevokedSession = await request.get("/api/auth/session", {
+    maxRedirects: 0,
+  });
+  expect(frontchannelRevokedSession.status()).toBe(200);
+  expectNoStore(frontchannelRevokedSession);
+  await expect(frontchannelRevokedSession.json()).resolves.toEqual({
+    csrfToken: null,
+    principal: null,
+  });
+
+  const restarted = await request.get(startPath, { maxRedirects: 0 });
+  expect(restarted.status()).toBe(302);
+  const restartedAuthorizationUrl = new URL(restarted.headers().location!);
+  const restartedState = restartedAuthorizationUrl.searchParams.get("state");
+  expect(restartedState).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  const restartedCallbackQuery = new URLSearchParams({
+    code: "synthetic-authorization-code",
+    iss: providerIssuer,
+    provider_extension: "rewrite-preserved",
+    session_state: "synthetic-provider-session",
+    state: restartedState!,
+  });
+  const restartedCallback = await request.get(
+    `/api/auth/oidc/callback/${providerId}?${restartedCallbackQuery.toString()}`,
+    { maxRedirects: 0 },
+  );
+  expect(restartedCallback.status()).toBe(303);
+  const restartedSession = await request.get("/api/auth/session", { maxRedirects: 0 });
+  await expect(restartedSession.json()).resolves.toMatchObject({
+    principal: { authenticationMethod: { kind: "oidc", providerId } },
   });
 
   const providerLogout = await request.post(`/api/auth/oidc/backchannel/${providerId}`, {

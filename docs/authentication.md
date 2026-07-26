@@ -7,10 +7,10 @@ and contributors changing a security-sensitive flow.
 > [!IMPORTANT]
 > The current development branch implements the OIDC browser flow, JIT identity
 > resolution, direct Jellyfin password and Quick Connect sign-in, password and Quick
-> Connect OIDC-to-Jellyfin pairing, RP-initiated and provider-initiated back-channel
-> logout, opaque sessions, and break-glass
+> Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
+> front-channel logout, opaque sessions, and break-glass
 > recovery, but Phase 1 has not passed its release gate. There is not yet a supported operator
-> path for configuring providers, and front-channel logout remains incomplete. Treat this
+> path for configuring providers, and the live Authentik gate remains incomplete. Treat this
 > document as development evidence, not a production support claim.
 
 ## Current development surface
@@ -26,8 +26,7 @@ closed as unavailable or misconfigured.
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not
-yet provide supported provider administration, provider-initiated front-channel
-logout,
+yet provide supported provider administration, live Authentik compatibility evidence,
 or the complete application permission surface. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
@@ -82,6 +81,7 @@ gateway directly.
 | `GET /api/auth/oidc/callback/{providerId}`                        | Consume the transaction, validate the grant, and establish a session.     |
 | `POST /api/auth/oidc/logout`                                      | Revoke locally, then request RP-initiated provider logout when available. |
 | `POST /api/auth/oidc/backchannel/{providerId}`                    | Verify a provider Logout Token and revoke its exact local session scope.  |
+| `GET /api/auth/oidc/frontchannel/{providerId}`                    | Accept exact session-aware provider logout in a restricted iframe.        |
 | `POST /api/auth/jellyfin/password`                                | Verify credentials with Jellyfin and establish a local session.           |
 | `POST /api/auth/jellyfin/link/password`                           | Pair fresh credentials to the exact pending OIDC session.                 |
 | `POST /api/auth/jellyfin/link/quick-connect`                      | Create Quick Connect proof bound to the exact pending OIDC session.       |
@@ -97,8 +97,9 @@ gateway directly.
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect
-`<OMNIFIN_BASE_URL>/login?loggedOut=1`, and back-channel logout URI
-`<OMNIFIN_BASE_URL>/api/auth/oidc/backchannel/{providerId}` with each identity provider.
+`<OMNIFIN_BASE_URL>/login?loggedOut=1`, back-channel logout URI
+`<OMNIFIN_BASE_URL>/api/auth/oidc/backchannel/{providerId}`, and front-channel logout URI
+`<OMNIFIN_BASE_URL>/api/auth/oidc/frontchannel/{providerId}` with each identity provider.
 `OMNIFIN_BASE_URL` is a canonical origin only: it cannot contain credentials, a path,
 query, or fragment. Start requests accept at most one `returnPath`, currently `/` or
 `/settings`; all other redirect targets fail closed.
@@ -159,7 +160,22 @@ without another revocation or audit write. Assertions, raw session identifiers, 
 token identifiers are never persisted. Invalid requests return a fixed no-store
 response; a bounded discovery or JWKS outage returns a retryable service response.
 
-Provider-initiated front-channel logout remains Phase 1 work.
+Provider-initiated front-channel logout follows
+[OpenID Connect Front-Channel Logout 1.0](https://openid.net/specs/openid-connect-frontchannel-1_0.html).
+Omnifin advertises support only when discovery reports both front-channel logout and
+session-parameter support. The provider must send exactly one `iss` and one `sid`; the
+issuer must exactly match the enabled provider, and the privacy-preserving `sid` hash
+can revoke only OIDC sessions scoped to that provider. Revocation and its sanitized
+audit event commit atomically. A repeat or unknown session identifier is acknowledged
+without another write.
+
+The endpoint uses `GET` only because the OIDC specification defines an iframe
+navigation. It does not depend on the Omnifin browser cookie, which can be unavailable
+in a third-party iframe. After exact provider validation, the otherwise global frame
+denial is narrowed only for the configured issuer origin; malformed, mismatched, and
+storage-failed requests retain `X-Frame-Options: DENY` and `frame-ancestors 'none'`.
+Responses are empty and non-cacheable, and raw `sid` values are never stored or written
+to audit metadata.
 
 Authorization transactions expire after ten minutes and are consumed before the
 callback interprets provider success or failure. A wrong browser binding does not
@@ -362,8 +378,8 @@ login, which also consumes another slot in the rolling issuance budget.
 ## Phase 1 operator checklist
 
 - Use HTTPS and a canonical public origin before enabling OIDC.
-- Register only the exact documented callback, back-channel logout, and post-logout URLs
-  with the provider.
+- Register only the exact documented callback, back-channel logout, front-channel
+  logout, and post-logout URLs with the provider.
 - Confirm issuer and client identifiers; do not copy a provider's authorization URL
   into the issuer field.
 - Begin with JIT provisioning disabled or viewer-only.

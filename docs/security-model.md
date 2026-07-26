@@ -9,8 +9,8 @@ design and review.
 > The current checkpoint implements defensive foundations plus OIDC authentication,
 > opaque local sessions, identity resolution, authentication audit records, and hidden
 > recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
-> and provider-initiated OIDC back-channel logout are implemented, while front-channel
-> logout, complete permission enforcement, connector
+> and provider-initiated OIDC back- and front-channel logout are implemented, while
+> complete permission enforcement, connector
 > administration, media proxying, and upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
@@ -121,6 +121,10 @@ diagnostic.
   approved JWKS transport. It requires the logout event, rejects `nonce`, scopes
   revocation by the private `sid` hash and/or immutable subject, and commits the replay
   receipt, revocation, and sanitized audit event in one immediate transaction.
+  Front-channel logout requires exact provider, issuer, and session parameters, scopes
+  revocation by the provider and private `sid` hash, and atomically records only newly
+  revoked sessions. The successful empty document is frameable only by the validated
+  issuer origin; all denials retain the global frame prohibition.
 - **Denial of service:** bounded request targets, per-client start and callback limits,
   a server-wide start limit, separate non-blocking server-wide start and callback
   audit-write budgets, and durable no-write caps for duplicate and saturated failure
@@ -143,9 +147,9 @@ diagnostic.
 
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
-erasure, revocation, relinking, and secret-preservation tests. Provider-initiated
-front-channel OIDC logout and full permission enforcement still need completed
-threat-model gates before Phase 1 can pass.
+erasure, revocation, relinking, and secret-preservation tests. Live Authentik logout
+verification and full permission enforcement still need completed threat-model gates
+before Phase 1 can pass.
 
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and

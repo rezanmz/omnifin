@@ -136,7 +136,7 @@ function parseReadyLogoutCapabilities(
   }
   return {
     supportsBackChannelLogout: logout.backChannel,
-    supportsFrontChannelLogout: logout.frontChannel,
+    supportsFrontChannelLogout: logout.frontChannel && logout.frontChannelSession,
     supportsRpInitiatedLogout: logout.rpInitiated,
   };
 }

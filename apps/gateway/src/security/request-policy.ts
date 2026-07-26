@@ -1,15 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { SafeHttpError } from "../http-error.js";
 
-export type MutationSecurityPolicy =
+export type RequestSecurityPolicy =
   | { kind: "oidc-backchannel" }
+  | { kind: "oidc-frontchannel" }
   | { kind: "public-browser" }
   | { kind: "session" }
   | { kind: "session-form" };
 
 declare module "fastify" {
   interface FastifyContextConfig {
-    omnifinSecurity?: MutationSecurityPolicy;
+    omnifinSecurity?: RequestSecurityPolicy;
   }
 }
 
@@ -29,12 +30,29 @@ export interface RequestPolicyOptions {
 
 export function installRequestPolicy(app: FastifyInstance, options: RequestPolicyOptions) {
   app.addHook("onRoute", (route) => {
-    if (!methods(route.method).some(isMutation)) return;
     const policy = route.config?.omnifinSecurity;
+    if (policy?.kind === "oidc-frontchannel") {
+      if (
+        methods(route.method).some((method) => method.toUpperCase() !== "GET") ||
+        route.url !== "/v1/auth/oidc/frontchannel/:providerId"
+      ) {
+        throw new Error("OIDC front-channel logout is limited to its dedicated GET route.");
+      }
+      return;
+    }
+    if (!methods(route.method).some(isMutation)) return;
     if (!policy) {
       throw new Error(`Mutation route ${route.url} must declare an Omnifin security policy.`);
     }
-    if (!["oidc-backchannel", "public-browser", "session", "session-form"].includes(policy.kind)) {
+    if (
+      ![
+        "oidc-backchannel",
+        "oidc-frontchannel",
+        "public-browser",
+        "session",
+        "session-form",
+      ].includes(policy.kind)
+    ) {
       throw new Error(`Mutation route ${route.url} declares an unknown security policy.`);
     }
     if (
