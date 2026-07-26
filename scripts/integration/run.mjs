@@ -95,9 +95,7 @@ function discoverTests(directory, namePattern) {
   return files.sort();
 }
 
-function runVitest(packageName, files, testNamePattern) {
-  const reportDirectory = mkdtempSync(join(tmpdir(), "omnifin-fixture-"));
-  const reportPath = join(reportDirectory, "vitest.json");
+export function vitestArguments(packageName, files, reportPath, testNamePattern) {
   const arguments_ = [
     "--filter",
     packageName,
@@ -105,18 +103,31 @@ function runVitest(packageName, files, testNamePattern) {
     "vitest",
     "run",
     ...files,
+    "--no-file-parallelism",
+    "--maxWorkers",
+    "1",
     "--reporter=json",
     "--outputFile",
     reportPath,
   ];
   if (testNamePattern) arguments_.push("--testNamePattern", testNamePattern);
+  return arguments_;
+}
+
+function runVitest(packageName, files, testNamePattern) {
+  const reportDirectory = mkdtempSync(join(tmpdir(), "omnifin-fixture-"));
+  const reportPath = join(reportDirectory, "vitest.json");
   try {
-    const execution = spawnSync("pnpm", arguments_, {
-      cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, FORCE_COLOR: "0" },
-      maxBuffer: 2 * 1_024 * 1_024,
-    });
+    const execution = spawnSync(
+      "pnpm",
+      vitestArguments(packageName, files, reportPath, testNamePattern),
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, FORCE_COLOR: "0" },
+        maxBuffer: 2 * 1_024 * 1_024,
+      },
+    );
     const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
     return vitestExecutionPassed(execution, report);
   } finally {

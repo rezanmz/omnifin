@@ -28,6 +28,11 @@ profile names, versions, normalized status values, check names, and normalized
 error categories. URLs, credentials, headers, cookies, and raw upstream
 payloads are never included.
 
+Fixture services remain parallelized as separate CI matrix jobs. Within each
+service job, contract files execute one at a time with a single worker so
+shared database, clock, and protocol-state fixtures remain deterministic on
+both developer machines and constrained CI runners.
+
 `readiness.json` is the reviewed coverage ledger. It must contain exactly every
 known service, both `fixture` and `live` profiles, and only the states `pending`
 or `ready`. Pull requests run `.github/workflows/integration.yml` with fixture

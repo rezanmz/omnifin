@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SERVICES, readinessBlock, validateReadinessLedger } from "./readiness.mjs";
-import { fixtureChecksFor, parseArguments, vitestExecutionPassed } from "./run.mjs";
+import {
+  fixtureChecksFor,
+  parseArguments,
+  vitestArguments,
+  vitestExecutionPassed,
+} from "./run.mjs";
 
 function ledgerWith(state = "ready") {
   return {
@@ -83,4 +88,15 @@ test("fixture execution reads a dedicated reporter artifact instead of command s
     vitestExecutionPassed({ status: 0, stdout: "package-manager output before JSON" }, report),
     true,
   );
+});
+
+test("fixture contracts run one file at a time for deterministic service isolation", () => {
+  const arguments_ = vitestArguments(
+    "@omnifin/gateway",
+    ["test/oidc-protocol.test.ts"],
+    "/private/fixture-report.json",
+  );
+  assert.equal(arguments_.includes("--no-file-parallelism"), true);
+  const maxWorkersIndex = arguments_.indexOf("--maxWorkers");
+  assert.deepEqual(arguments_.slice(maxWorkersIndex, maxWorkersIndex + 2), ["--maxWorkers", "1"]);
 });
