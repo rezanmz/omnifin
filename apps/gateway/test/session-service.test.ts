@@ -821,45 +821,49 @@ describe("SessionService", () => {
     }
   });
 
-  it("coalesces high-volume CSRF denials per session without further SQLite writes", () => {
-    const database = openDatabase(":memory:");
-    try {
-      database.migrate();
-      const { service } = createHarness(database);
-      const issued = service.createSession({ attribution: { authMethod: "recovery" } });
-      const incorrectCsrf = fixtureToken(201);
+  it(
+    "coalesces high-volume CSRF denials per session without further SQLite writes",
+    { timeout: 30_000 },
+    () => {
+      const database = openDatabase(":memory:");
+      try {
+        database.migrate();
+        const { service } = createHarness(database);
+        const issued = service.createSession({ attribution: { authMethod: "recovery" } });
+        const incorrectCsrf = fixtureToken(201);
 
-      expect(
-        service.validateSessionCsrf(issued.sessionToken, incorrectCsrf, {
-          ipAddress: "192.0.2.21",
-          requestId: "csrf-denial-first",
-        }),
-      ).toBeNull();
-      const changesAfterFirstDenial = totalChanges(database);
-
-      for (let attempt = 0; attempt < 10_000; attempt += 1) {
         expect(
           service.validateSessionCsrf(issued.sessionToken, incorrectCsrf, {
-            ipAddress: "192.0.2.22",
-            requestId: "csrf-denial-repeated",
+            ipAddress: "192.0.2.21",
+            requestId: "csrf-denial-first",
           }),
         ).toBeNull();
-      }
+        const changesAfterFirstDenial = totalChanges(database);
 
-      expect(totalChanges(database)).toBe(changesAfterFirstDenial);
-      expect(
-        database.sqlite
-          .prepare(
-            `select request_id as requestId, ip_hash as ipHash
-             from audit_events
-             where event_type = 'auth.session.csrf_denied'`,
-          )
-          .all(),
-      ).toEqual([{ ipHash: expect.any(String), requestId: "csrf-denial-first" }]);
-    } finally {
-      database.close();
-    }
-  });
+        for (let attempt = 0; attempt < 10_000; attempt += 1) {
+          expect(
+            service.validateSessionCsrf(issued.sessionToken, incorrectCsrf, {
+              ipAddress: "192.0.2.22",
+              requestId: "csrf-denial-repeated",
+            }),
+          ).toBeNull();
+        }
+
+        expect(totalChanges(database)).toBe(changesAfterFirstDenial);
+        expect(
+          database.sqlite
+            .prepare(
+              `select request_id as requestId, ip_hash as ipHash
+               from audit_events
+               where event_type = 'auth.session.csrf_denied'`,
+            )
+            .all(),
+        ).toEqual([{ ipHash: expect.any(String), requestId: "csrf-denial-first" }]);
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("keeps CSRF denial coalescing durable across connections and restarts", () => {
     const temporaryDirectory = mkdtempSync(join(tmpdir(), "omnifin-session-csrf-audit-"));

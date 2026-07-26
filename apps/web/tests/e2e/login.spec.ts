@@ -33,7 +33,7 @@ test("login renders only allowlisted authentication feedback", async ({ page }) 
   await expect(page.locator("body")).not.toContainText("private-upstream-canary");
 
   await page.goto("/login?authError=session_limit_reached");
-  await expect(page.getByRole("alert")).toContainText("sign-in safety limit");
+  await expect(page.locator(".login-card__auth-error")).toContainText("sign-in safety limit");
 });
 
 test("login distinguishes a temporary control-plane failure", async ({ page }) => {

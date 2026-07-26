@@ -1126,7 +1126,7 @@ export class OidcProviderRegistry {
         // A changed configuration must be retried against a fresh row regardless
         // of how the obsolete flight completed.
       }
-      return this.discover(providerId);
+      return await this.discover(providerId);
     }
     if (this.#isDiscoveryBackedOff(record, fingerprint, cacheTime)) {
       throw registryError("oidc_provider_discovery_failed", true);

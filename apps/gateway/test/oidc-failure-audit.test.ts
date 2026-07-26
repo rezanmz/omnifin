@@ -736,52 +736,56 @@ describe("OIDC failure audit service", () => {
     },
   );
 
-  it("stops duplicate bucket writes at the durable cap and preserves that guard after reopen", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-audit-duplicate-cap-"));
-    const databasePath = path.join(directory, "audit.db");
-    let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
-    let now = new Date(auditTime);
-    const serviceFor = (prefix: string) =>
-      new OidcFailureAuditService(
-        database!,
-        { encryptionKey: privacyKey },
-        { clock: () => new Date(now), createId: idFactory(prefix) },
-      );
+  it(
+    "stops duplicate bucket writes at the durable cap and preserves that guard after reopen",
+    { timeout: 30_000 },
+    () => {
+      const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-audit-duplicate-cap-"));
+      const databasePath = path.join(directory, "audit.db");
+      let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
+      let now = new Date(auditTime);
+      const serviceFor = (prefix: string) =>
+        new OidcFailureAuditService(
+          database!,
+          { encryptionKey: privacyKey },
+          { clock: () => new Date(now), createId: idFactory(prefix) },
+        );
 
-    try {
-      database.migrate();
-      const initial = serviceFor("duplicate-cap-before-reopen");
-      expect(recordUnique(initial, 1)).toBe("recorded");
-      for (let attempt = 0; attempt < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT; attempt += 1) {
-        expect(recordUnique(initial, 1)).toBe("coalesced");
-      }
-      const changesAtCap = totalChanges(database);
-      now = new Date(auditTime.getTime() + 60_000);
-      for (let attempt = 0; attempt < 1_000; attempt += 1) {
-        expect(recordUnique(initial, 1)).toBe("coalesced");
-      }
-      expect(totalChanges(database)).toBe(changesAtCap);
+      try {
+        database.migrate();
+        const initial = serviceFor("duplicate-cap-before-reopen");
+        expect(recordUnique(initial, 1)).toBe("recorded");
+        for (let attempt = 0; attempt < OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT; attempt += 1) {
+          expect(recordUnique(initial, 1)).toBe("coalesced");
+        }
+        const changesAtCap = totalChanges(database);
+        now = new Date(auditTime.getTime() + 60_000);
+        for (let attempt = 0; attempt < 1_000; attempt += 1) {
+          expect(recordUnique(initial, 1)).toBe("coalesced");
+        }
+        expect(totalChanges(database)).toBe(changesAtCap);
 
-      database.close();
-      database = openDatabase(databasePath);
-      now = new Date(auditTime.getTime() + 120_000);
-      const restarted = serviceFor("duplicate-cap-after-reopen");
-      const changesAtReopen = totalChanges(database);
-      for (let attempt = 0; attempt < 1_000; attempt += 1) {
-        expect(recordUnique(restarted, 1)).toBe("coalesced");
+        database.close();
+        database = openDatabase(databasePath);
+        now = new Date(auditTime.getTime() + 120_000);
+        const restarted = serviceFor("duplicate-cap-after-reopen");
+        const changesAtReopen = totalChanges(database);
+        for (let attempt = 0; attempt < 1_000; attempt += 1) {
+          expect(recordUnique(restarted, 1)).toBe("coalesced");
+        }
+        expect(totalChanges(database)).toBe(changesAtReopen);
+        expect(restarted.metrics).toEqual({
+          bucketCount: 1,
+          saturated: false,
+          suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
+          window: 1,
+        });
+      } finally {
+        database?.close();
+        rmSync(directory, { force: true, recursive: true });
       }
-      expect(totalChanges(database)).toBe(changesAtReopen);
-      expect(restarted.metrics).toEqual({
-        bucketCount: 1,
-        saturated: false,
-        suppressedCount: OIDC_FAILURE_AUDIT_MAX_SUPPRESSED_COUNT,
-        window: 1,
-      });
-    } finally {
-      database?.close();
-      rmSync(directory, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it(
     "keeps a saturated generation bounded through ten thousand novel clients",

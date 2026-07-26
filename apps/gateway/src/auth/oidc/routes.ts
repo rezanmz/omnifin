@@ -397,6 +397,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
   }>(
     "/v1/auth/oidc/:providerId/start",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       exposeHeadRoute: false,
       onError: async (request, reply, error) => {
         if (error instanceof SafeHttpError && error.statusCode === 429) {
@@ -496,6 +497,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
   }>(
     "/v1/auth/oidc/callback/:providerId",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       exposeHeadRoute: false,
       onError: async (request, reply, error) => {
         const rateLimited = isRateLimitFailure(error);
