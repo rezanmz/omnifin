@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { SafeHttpError } from "../../http-error.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
 import { privacyHash } from "../../security/crypto.js";
+import { requirePermission } from "../authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "../session-service.js";
 import {
@@ -53,6 +54,14 @@ function setRateLimitHeaders(reply: FastifyReply, result: { max: number; ttlInSe
   reply.header("x-ratelimit-remaining", 0);
   reply.header("x-ratelimit-reset", result.ttlInSeconds);
   reply.header("retry-after", Math.max(result.ttlInSeconds, 1));
+}
+
+function auditFailureReason(error: unknown) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    if (error.code === "permission_denied") return "permission_denied" as const;
+    if ("statusCode" in error && error.statusCode === 429) return "rate_limited" as const;
+  }
+  return "invalid_request" as const;
 }
 
 export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (app, options) => {
@@ -101,6 +110,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       | "authentication_denied"
       | "configuration_invalid"
       | "invalid_request"
+      | "permission_denied"
       | "rate_limited"
       | "upstream_unavailable",
     operation: "pairing" | "sign_in" = "sign_in",
@@ -174,11 +184,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         ) {
           return;
         }
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request");
+        recordFailure(request, auditFailureReason(error));
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -292,11 +298,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         ) {
           return;
         }
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+        recordFailure(request, auditFailureReason(error), "pairing");
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -305,6 +307,10 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       },
     },
     async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "identities.self.manage",
+      );
       const clientLimit = await clientCredentialRateLimit(request);
       if (!clientLimit.isAllowed && clientLimit.isExceeded) {
         setRateLimitHeaders(reply, clientLimit);
@@ -421,11 +427,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         rateLimit: { max: 20, timeWindow: "1 minute" },
       },
       onError: async (request, _reply, error) => {
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request");
+        recordFailure(request, auditFailureReason(error));
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -504,11 +506,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         rateLimit: { max: 90, timeWindow: "1 minute" },
       },
       onError: async (request, _reply, error) => {
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request");
+        recordFailure(request, auditFailureReason(error));
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -634,11 +632,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         ) {
           return;
         }
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+        recordFailure(request, auditFailureReason(error), "pairing");
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -647,6 +641,10 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       },
     },
     async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "identities.self.manage",
+      );
       await enforceRateLimit(
         clientQuickConnectStartRateLimit,
         request,
@@ -738,11 +736,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         ) {
           return;
         }
-        const statusCode =
-          typeof error === "object" && error !== null && "statusCode" in error
-            ? error.statusCode
-            : undefined;
-        recordFailure(request, statusCode === 429 ? "rate_limited" : "invalid_request", "pairing");
+        recordFailure(request, auditFailureReason(error), "pairing");
       },
       onSend: async (_request, reply, payload) => {
         reply.header("cache-control", "no-store");
@@ -751,6 +745,10 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       },
     },
     async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "identities.self.manage",
+      );
       await enforceRateLimit(
         globalQuickConnectPollRateLimit,
         request,

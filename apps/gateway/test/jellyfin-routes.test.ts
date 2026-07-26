@@ -376,4 +376,40 @@ describe("POST /v1/auth/jellyfin/link/password", () => {
       await app.close();
     }
   });
+
+  it("denies recovery access before parsing pairing credentials or contacting Jellyfin", async () => {
+    const fixture = dependencyFixture();
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const recovery = app.sessionService.createSession({
+        attribution: { authMethod: "recovery" },
+      });
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        url: "/v1/auth/jellyfin/link/password",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "permission_denied" } });
+      expect(fixture.calls).toEqual({ authentication: 0, publicInfo: 0 });
+      const auditPayload = JSON.stringify(
+        app.database.sqlite
+          .prepare(
+            `select metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.jellyfin.identity.pairing_attempt'`,
+          )
+          .all(),
+      );
+      expect(auditPayload).toContain("permission_denied");
+      expect(auditPayload).not.toMatch(/private-password|riley/u);
+    } finally {
+      await app.close();
+    }
+  });
 });

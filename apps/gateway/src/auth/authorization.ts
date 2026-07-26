@@ -28,3 +28,12 @@ export function requirePermission(
   }
   return principal;
 }
+
+export function requireSelfSessionRevocation(principal: SessionPrincipal | null | undefined) {
+  return requirePermission(
+    principal,
+    principal?.authenticationMethod.kind === "recovery"
+      ? "recovery.sessions.revoke"
+      : "sessions.self.revoke",
+  );
+}

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { requirePermission } from "../authorization.js";
 import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SessionIssuanceLimitError } from "../session-service.js";
 import { SafeHttpError } from "../../http-error.js";
@@ -534,6 +535,10 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
       },
     },
     async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "sessions.self.revoke",
+      );
       const material = app.sessionService.beginValidatedOidcLogout(request.validatedSession, {
         ipAddress: request.ip,
         requestId: request.id,

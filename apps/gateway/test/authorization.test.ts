@@ -7,7 +7,11 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { describe, expect, it } from "vitest";
-import { hasPermission, requirePermission } from "../src/auth/authorization.js";
+import {
+  hasPermission,
+  requirePermission,
+  requireSelfSessionRevocation,
+} from "../src/auth/authorization.js";
 import type { SafeHttpError } from "../src/http-error.js";
 
 const times = {
@@ -112,6 +116,25 @@ describe("permission authorization", () => {
       expect.objectContaining<Partial<SafeHttpError>>({
         code: "authentication_required",
         statusCode: 401,
+      }),
+    );
+  });
+
+  it("uses the dedicated recovery capability for recovery-session revocation", () => {
+    const active = activeAdmin();
+    const recovery = recoveryPrincipal();
+
+    expect(requireSelfSessionRevocation(active)).toBe(active);
+    expect(requireSelfSessionRevocation(recovery)).toBe(recovery);
+    expect(() =>
+      requireSelfSessionRevocation({
+        ...recovery,
+        permissions: ["sessions.self.revoke"],
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<SafeHttpError>>({
+        code: "permission_denied",
+        statusCode: 403,
       }),
     );
   });

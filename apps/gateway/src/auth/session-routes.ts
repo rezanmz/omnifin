@@ -1,5 +1,6 @@
 import { sessionResponseSchema } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync } from "fastify";
+import { requireSelfSessionRevocation } from "./authorization.js";
 import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "./session-cookie.js";
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
@@ -47,6 +48,9 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       reply.header("cache-control", "no-store");
+      requireSelfSessionRevocation(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+      );
       app.sessionService.revokeValidatedSession(request.validatedSession!, {
         ipAddress: request.ip,
         requestId: request.id,
@@ -66,6 +70,9 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       reply.header("cache-control", "no-store");
+      requireSelfSessionRevocation(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+      );
       app.sessionService.revokeAllValidatedSessions(request.validatedSession!, {
         ipAddress: request.ip,
         requestId: request.id,
