@@ -10,6 +10,11 @@ import type { OidcProviderRuntimeBinding } from "./provider-registry.js";
 export const OIDC_TRANSACTION_TTL_MS = 10 * 60 * 1_000;
 export const OIDC_BROWSER_BINDING_COOKIE_NAME = "__Host-omnifin_oidc_binding";
 export const LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME = "omnifin_local_oidc_binding";
+// Sixteen active tabs is deliberately generous for one browser. The larger
+// ceiling counts every physical, unexpired row—including consumed tombstones—so
+// callback churn cannot grow the ten-minute unauthenticated write set without bound.
+export const OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT = 16;
+export const OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT = 1_024;
 
 const MAX_GENERATION_ATTEMPTS = 8;
 const MAX_CLEANUP_BATCH_SIZE = 256;
@@ -418,7 +423,7 @@ export class OidcAuthorizationTransactionService {
       }
       if (!isCanonical256BitToken(codeChallenge)) unavailableTransaction();
 
-      const inserted = this.insert({
+      const insertion = this.insert({
         browserBindingHash: hashToken(browserBindingToken),
         createdAt: now.getTime(),
         encryptedCodeVerifier: this.cipher.encrypt(
@@ -440,7 +445,8 @@ export class OidcAuthorizationTransactionService {
         returnPath,
         stateHash: hashToken(state),
       });
-      if (!inserted) continue;
+      if (insertion === "capacity") unavailableTransaction();
+      if (insertion === "collision") continue;
 
       return {
         browserBindingToken,
@@ -609,34 +615,88 @@ export class OidcAuthorizationTransactionService {
     stateHash: string;
   }) {
     try {
-      const result = this.database.sqlite
-        .prepare(
-          `insert or ignore into auth_transactions (
-             id,
-             state_hash,
-             provider_id,
-             browser_binding_hash,
-             encrypted_code_verifier,
-             encrypted_nonce,
-             redirect_uri,
-             return_path,
-             expires_at,
-             created_at
-           ) values (
-             @id,
-             @stateHash,
-             @providerId,
-             @browserBindingHash,
-             @encryptedCodeVerifier,
-             @encryptedNonce,
-             @redirectUri,
-             @returnPath,
-             @expiresAt,
-             @createdAt
-           )`,
-        )
-        .run(input);
-      return result.changes === 1;
+      return this.database.sqlite
+        .transaction(() => {
+          const parameters = {
+            ...input,
+            activePerBrowserLimit: OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
+            unexpiredRowLimit: OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT,
+          };
+          const inserted = this.database.sqlite
+            .prepare(
+              `insert or ignore into auth_transactions (
+                 id,
+                 state_hash,
+                 provider_id,
+                 browser_binding_hash,
+                 encrypted_code_verifier,
+                 encrypted_nonce,
+                 redirect_uri,
+                 return_path,
+                 expires_at,
+                 created_at
+               )
+               select
+                 @id,
+                 @stateHash,
+                 @providerId,
+                 @browserBindingHash,
+                 @encryptedCodeVerifier,
+                 @encryptedNonce,
+                 @redirectUri,
+                 @returnPath,
+                 @expiresAt,
+                 @createdAt
+               where (
+                 select count(*)
+                 from auth_transactions
+                 where expires_at > @createdAt
+               ) < @unexpiredRowLimit
+                 and (
+                   select count(*)
+                   from auth_transactions
+                   where browser_binding_hash = @browserBindingHash
+                     and consumed_at is null
+                     and expires_at > @createdAt
+                 ) < @activePerBrowserLimit`,
+            )
+            .run(parameters);
+          if (inserted.changes === 1) return "inserted" as const;
+
+          const capacity = this.database.sqlite
+            .prepare(
+              `select
+                 count(*) as unexpiredRowCount,
+                 coalesce(sum(
+                   case
+                     when browser_binding_hash = @browserBindingHash and consumed_at is null
+                       then 1
+                     else 0
+                   end
+                 ), 0) as activeBrowserCount
+               from auth_transactions
+               where expires_at > @createdAt`,
+            )
+            .get(parameters) as
+            { activeBrowserCount: unknown; unexpiredRowCount: unknown } | undefined;
+          if (
+            !capacity ||
+            !Number.isSafeInteger(capacity.unexpiredRowCount) ||
+            !Number.isSafeInteger(capacity.activeBrowserCount)
+          ) {
+            unavailableTransaction();
+          }
+          if (
+            (capacity.unexpiredRowCount as number) >=
+              OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT ||
+            (capacity.activeBrowserCount as number) >=
+              OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT
+          ) {
+            return "capacity" as const;
+          }
+          return "collision" as const;
+        })
+        .immediate();
     } catch {
       unavailableTransaction();
     }

@@ -1,9 +1,17 @@
 import { calculatePKCECodeChallenge } from "openid-client";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import {
   canonicalLocalReturnPath,
   canonicalOidcCallbackUri,
   LOCAL_OIDC_BROWSER_BINDING_COOKIE_NAME,
+  OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
+  OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT,
   OIDC_BROWSER_BINDING_COOKIE_NAME,
   OidcAuthorizationTransactionError,
   OidcAuthorizationTransactionService,
@@ -46,6 +54,12 @@ function seedProvider(database: DatabaseHandle, id = "oidc-home") {
 
 function opaqueToken(fill: number) {
   return Buffer.alloc(32, fill).toString("base64url");
+}
+
+function indexedOpaqueToken(index: number, domain: number) {
+  const token = Buffer.alloc(32, domain);
+  token.writeUInt32BE(index, token.length - 4);
+  return token.toString("base64url");
 }
 
 const providerRuntimeBinding = opaqueToken(200) as OidcProviderRuntimeBinding;
@@ -133,6 +147,179 @@ async function expectInvalidTransactionAsync(
       if (value.length > 0) expect(visibleError).not.toContain(value);
     }
   }
+}
+
+type CapacityWorkerResult =
+  { status: "fulfilled" } | { code: string | undefined; status: "rejected" };
+
+interface CapacityWorkerHandle {
+  ready: Promise<void>;
+  result: Promise<CapacityWorkerResult>;
+  worker: Worker;
+}
+
+function deferred<T>() {
+  let reject!: (reason?: unknown) => void;
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    reject = promiseReject;
+    resolve = promiseResolve;
+  });
+  void promise.catch(() => undefined);
+  return { promise, reject, resolve };
+}
+
+const capacityWorkerSource = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+
+  void (async () => {
+    const { tsImport } = await import(workerData.tsxApiUrl);
+    const { OidcAuthorizationTransactionService } = await tsImport(
+      workerData.transactionModuleUrl,
+      workerData.parentUrl,
+    );
+    const { openDatabase } = await tsImport(
+      workerData.databaseModuleUrl,
+      workerData.parentUrl,
+    );
+    const database = openDatabase(workerData.databasePath);
+    let result;
+
+    try {
+      const gate = new Int32Array(workerData.gate);
+      const service = new OidcAuthorizationTransactionService(
+        database,
+        {
+          baseUrl: new URL(workerData.baseUrl),
+          encryptionKey: Buffer.from(workerData.encryptionKey, "base64"),
+          environment: "test",
+          secureCookies: true,
+        },
+        {
+          calculateCodeChallenge: async () => {
+            parentPort.postMessage({ kind: "ready" });
+            Atomics.wait(gate, 0, 0);
+            return workerData.codeChallenge;
+          },
+          clock: () => new Date(workerData.now),
+          createBrowserBinding: () => workerData.browserBindingToken,
+          createCodeVerifier: () => workerData.codeVerifier,
+          createId: () => workerData.transactionId,
+          createNonce: () => workerData.nonce,
+          createState: () => workerData.state,
+        },
+      );
+
+      try {
+        await service.create({
+          browserBindingToken: workerData.browserBindingToken,
+          providerId: "oidc-home",
+          providerRuntimeBinding: workerData.providerRuntimeBinding,
+        });
+        result = { status: "fulfilled" };
+      } catch (error) {
+        result = {
+          code: error && typeof error === "object" ? error.code : undefined,
+          status: "rejected",
+        };
+      }
+    } finally {
+      database.close();
+    }
+
+    parentPort.postMessage({ kind: "result", result });
+  })().catch((error) => {
+    parentPort.postMessage({
+      kind: "fatal",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+`;
+
+const tsxApiUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href;
+const transactionModuleUrl = new URL(
+  "../src/auth/oidc/authorization-transaction.ts",
+  import.meta.url,
+).href;
+const databaseModuleUrl = new URL("../src/db/client.ts", import.meta.url).href;
+
+function startCapacityWorker(input: {
+  browserBindingToken: string;
+  databasePath: string;
+  gate: SharedArrayBuffer;
+  tokenDomain: number;
+  transactionId: string;
+}): CapacityWorkerHandle {
+  const ready = deferred<void>();
+  const result = deferred<CapacityWorkerResult>();
+  let receivedReady = false;
+  let receivedResult = false;
+  const worker = new Worker(capacityWorkerSource, {
+    eval: true,
+    workerData: {
+      baseUrl: transactionConfig().baseUrl.toString(),
+      browserBindingToken: input.browserBindingToken,
+      codeChallenge: indexedOpaqueToken(1, input.tokenDomain + 4),
+      codeVerifier: indexedOpaqueToken(1, input.tokenDomain + 2),
+      databaseModuleUrl,
+      databasePath: input.databasePath,
+      encryptionKey: transactionConfig().encryptionKey.toString("base64"),
+      gate: input.gate,
+      nonce: indexedOpaqueToken(1, input.tokenDomain + 3),
+      now: initialTime.toISOString(),
+      parentUrl: import.meta.url,
+      providerRuntimeBinding,
+      state: indexedOpaqueToken(1, input.tokenDomain + 1),
+      transactionId: input.transactionId,
+      transactionModuleUrl,
+      tsxApiUrl,
+    },
+  });
+
+  worker.on("message", (message: unknown) => {
+    if (!message || typeof message !== "object" || !("kind" in message)) return;
+    const workerMessage = message as {
+      kind: unknown;
+      message?: unknown;
+      result?: CapacityWorkerResult;
+    };
+    if (workerMessage.kind === "ready") {
+      receivedReady = true;
+      ready.resolve();
+      return;
+    }
+    if (workerMessage.kind === "result" && workerMessage.result) {
+      receivedResult = true;
+      result.resolve(workerMessage.result);
+      return;
+    }
+    if (workerMessage.kind === "fatal") {
+      const error = new Error(
+        typeof workerMessage.message === "string"
+          ? workerMessage.message
+          : "Capacity worker failed.",
+      );
+      ready.reject(error);
+      result.reject(error);
+    }
+  });
+  worker.once("error", (error) => {
+    ready.reject(error);
+    result.reject(error);
+  });
+  worker.once("exit", (code) => {
+    if (code === 0 && receivedReady && receivedResult) return;
+    const error = new Error(`Capacity worker exited before completing (code ${code}).`);
+    ready.reject(error);
+    result.reject(error);
+  });
+
+  return { ready: ready.promise, result: result.promise, worker };
+}
+
+function releaseCapacityWorkers(gate: Int32Array) {
+  Atomics.store(gate, 0, 1);
+  Atomics.notify(gate, 0);
 }
 
 describe("OidcAuthorizationTransactionService", () => {
@@ -250,6 +437,371 @@ describe("OidcAuthorizationTransactionService", () => {
       ).toBe("/first");
     } finally {
       database.close();
+    }
+  });
+
+  it("allows a bounded set of parallel tabs and rejects the next transaction for one browser", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const first = await service.create({ providerId: "oidc-home", returnPath: "/tab-1" });
+
+      for (let tab = 1; tab < OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT; tab += 1) {
+        await service.create({
+          browserBindingToken: first.browserBindingToken,
+          providerId: "oidc-home",
+          returnPath: `/tab-${tab + 1}`,
+        });
+      }
+
+      const rejectedReturnPath = "/one-tab-too-many";
+      await expectUnavailableTransaction(
+        () =>
+          service.create({
+            browserBindingToken: first.browserBindingToken,
+            providerId: "oidc-home",
+            returnPath: rejectedReturnPath,
+          }),
+        [first.browserBindingToken, rejectedReturnPath],
+      );
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps consumed tombstones inside the global unexpired-row ceiling", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      let generation = 0;
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
+        clock: () => new Date(initialTime),
+        createCodeVerifier: () => indexedOpaqueToken(generation, 3),
+        createId: () => `global-transaction-${(generation += 1)}`,
+        createNonce: () => indexedOpaqueToken(generation, 4),
+        createState: () => indexedOpaqueToken(generation, 2),
+      });
+      let firstTransaction: { browserBindingToken: string; state: string } | undefined;
+
+      for (
+        let browser = 1;
+        browser <= OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT;
+        browser += 1
+      ) {
+        const created = await service.create({
+          browserBindingToken: indexedOpaqueToken(browser, 1),
+          providerId: "oidc-home",
+        });
+        if (browser === 1) firstTransaction = created;
+      }
+
+      await expectUnavailableTransaction(() =>
+        service.create({
+          browserBindingToken: indexedOpaqueToken(
+            OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT + 1,
+            1,
+          ),
+          providerId: "oidc-home",
+        }),
+      );
+      expect(generation).toBe(OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT + 1);
+      service.consume({
+        browserBindingToken: firstTransaction!.browserBindingToken,
+        providerId: "oidc-home",
+        state: firstTransaction!.state,
+      });
+      await expectUnavailableTransaction(() =>
+        service.create({
+          browserBindingToken: indexedOpaqueToken(
+            OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT + 2,
+            1,
+          ),
+          providerId: "oidc-home",
+        }),
+      );
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count
+             from auth_transactions
+             where expires_at > ?`,
+          )
+          .get(initialTime.getTime()),
+      ).toEqual({ count: OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT });
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT,
+      );
+      expect(
+        database.db
+          .select()
+          .from(authTransactions)
+          .all()
+          .filter((row) => row.consumedAt !== null),
+      ).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases per-browser capacity as soon as a transaction is consumed", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const transactions = [await service.create({ providerId: "oidc-home" })];
+      const browserBindingToken = transactions[0]!.browserBindingToken;
+
+      for (let tab = 1; tab < OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT; tab += 1) {
+        transactions.push(await service.create({ browserBindingToken, providerId: "oidc-home" }));
+      }
+      service.consume({
+        browserBindingToken,
+        providerId: "oidc-home",
+        state: transactions[0]!.state,
+      });
+
+      const replacement = await service.create({
+        browserBindingToken,
+        providerId: "oidc-home",
+      });
+      expect(replacement.browserBindingToken).toBe(browserBindingToken);
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count
+             from auth_transactions
+             where consumed_at is null and expires_at > ?`,
+          )
+          .get(initialTime.getTime()),
+      ).toEqual({ count: OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT });
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT + 1,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("ignores expired rows even when bounded cleanup leaves stale rows behind", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      let now = new Date(initialTime);
+      let generation = 0;
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
+        clock: () => new Date(now),
+        createCodeVerifier: () => indexedOpaqueToken(generation, 13),
+        createId: () => `expiry-transaction-${(generation += 1)}`,
+        createNonce: () => indexedOpaqueToken(generation, 14),
+        createState: () => indexedOpaqueToken(generation, 12),
+      });
+
+      for (
+        let browser = 1;
+        browser <= OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT;
+        browser += 1
+      ) {
+        await service.create({
+          browserBindingToken: indexedOpaqueToken(browser, 11),
+          providerId: "oidc-home",
+        });
+      }
+      now = new Date(initialTime.getTime() + 10 * 60 * 1_000);
+
+      const fresh = await service.create({
+        browserBindingToken: indexedOpaqueToken(
+          OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT + 1,
+          11,
+        ),
+        providerId: "oidc-home",
+      });
+      const rows = database.db.select().from(authTransactions).all();
+      expect(fresh.expiresAt).toEqual(new Date("2026-07-25T12:20:00.000Z"));
+      expect(rows.length).toBeGreaterThan(1);
+      expect(rows.filter((row) => row.expiresAt > now)).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not reopen browser capacity when the wall clock moves backward", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const harness = createHarness(database);
+      const first = await harness.service.create({ providerId: "oidc-home" });
+      for (let tab = 1; tab < OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT; tab += 1) {
+        await harness.service.create({
+          browserBindingToken: first.browserBindingToken,
+          providerId: "oidc-home",
+        });
+      }
+      harness.advance(-60 * 1_000);
+
+      await expectUnavailableTransaction(() =>
+        harness.service.create({
+          browserBindingToken: first.browserBindingToken,
+          providerId: "oidc-home",
+        }),
+      );
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("serializes the final physical-row slot across concurrent SQLite writers", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-capacity-"));
+    const databasePath = path.join(directory, "omnifin.db");
+    const database = openDatabase(databasePath);
+    const gateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const gate = new Int32Array(gateBuffer);
+    const workers: CapacityWorkerHandle[] = [];
+    try {
+      database.migrate();
+      seedProvider(database);
+      let generation = 0;
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
+        clock: () => new Date(initialTime),
+        createCodeVerifier: () => indexedOpaqueToken(generation, 63),
+        createId: () => `global-prefill-${(generation += 1)}`,
+        createNonce: () => indexedOpaqueToken(generation, 64),
+        createState: () => indexedOpaqueToken(generation, 62),
+      });
+
+      for (
+        let browser = 1;
+        browser < OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT;
+        browser += 1
+      ) {
+        await service.create({
+          browserBindingToken: indexedOpaqueToken(browser, 61),
+          providerId: "oidc-home",
+        });
+      }
+
+      workers.push(
+        startCapacityWorker({
+          browserBindingToken: indexedOpaqueToken(1, 71),
+          databasePath,
+          gate: gateBuffer,
+          tokenDomain: 72,
+          transactionId: "concurrent-global-a",
+        }),
+        startCapacityWorker({
+          browserBindingToken: indexedOpaqueToken(1, 81),
+          databasePath,
+          gate: gateBuffer,
+          tokenDomain: 82,
+          transactionId: "concurrent-global-b",
+        }),
+      );
+      await Promise.all(workers.map(({ ready }) => ready));
+      releaseCapacityWorkers(gate);
+      const finalAttempts = await Promise.all(workers.map(({ result }) => result));
+
+      expect(finalAttempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(finalAttempts.find((result) => result.status === "rejected")).toEqual({
+        code: "oidc_transaction_unavailable",
+        status: "rejected",
+      });
+      expect(
+        database.sqlite
+          .prepare(`select count(*) as count from auth_transactions where expires_at > ?`)
+          .get(initialTime.getTime()),
+      ).toEqual({ count: OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT });
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_UNEXPIRED_ROW_LIMIT,
+      );
+    } finally {
+      releaseCapacityWorkers(gate);
+      await Promise.allSettled(workers.map(({ worker }) => worker.terminate()));
+      await Promise.allSettled(workers.flatMap(({ ready, result }) => [ready, result]));
+      database.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("serializes one browser's final active slot across concurrent SQLite writers", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-oidc-browser-capacity-"));
+    const databasePath = path.join(directory, "omnifin.db");
+    const database = openDatabase(databasePath);
+    const gateBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const gate = new Int32Array(gateBuffer);
+    const workers: CapacityWorkerHandle[] = [];
+    try {
+      database.migrate();
+      seedProvider(database);
+      let generation = 0;
+      const browserBindingToken = indexedOpaqueToken(1, 41);
+      const service = new TestOidcAuthorizationTransactionService(database, transactionConfig(), {
+        clock: () => new Date(initialTime),
+        createCodeVerifier: () => indexedOpaqueToken(generation, 43),
+        createId: () => `browser-prefill-${(generation += 1)}`,
+        createNonce: () => indexedOpaqueToken(generation, 44),
+        createState: () => indexedOpaqueToken(generation, 42),
+      });
+
+      for (let tab = 1; tab < OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT; tab += 1) {
+        await service.create({ browserBindingToken, providerId: "oidc-home" });
+      }
+
+      workers.push(
+        startCapacityWorker({
+          browserBindingToken,
+          databasePath,
+          gate: gateBuffer,
+          tokenDomain: 52,
+          transactionId: "concurrent-browser-a",
+        }),
+        startCapacityWorker({
+          browserBindingToken,
+          databasePath,
+          gate: gateBuffer,
+          tokenDomain: 62,
+          transactionId: "concurrent-browser-b",
+        }),
+      );
+      await Promise.all(workers.map(({ ready }) => ready));
+      releaseCapacityWorkers(gate);
+      const finalAttempts = await Promise.all(workers.map(({ result }) => result));
+
+      expect(finalAttempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(finalAttempts.find((result) => result.status === "rejected")).toEqual({
+        code: "oidc_transaction_unavailable",
+        status: "rejected",
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count
+             from auth_transactions
+             where browser_binding_hash = ?
+               and consumed_at is null
+               and expires_at > ?`,
+          )
+          .get(hashToken(browserBindingToken), initialTime.getTime()),
+      ).toEqual({ count: OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT });
+      expect(database.db.select().from(authTransactions).all()).toHaveLength(
+        OIDC_AUTHORIZATION_TRANSACTION_ACTIVE_PER_BROWSER_LIMIT,
+      );
+    } finally {
+      releaseCapacityWorkers(gate);
+      await Promise.allSettled(workers.map(({ worker }) => worker.terminate()));
+      await Promise.allSettled(workers.flatMap(({ ready, result }) => [ready, result]));
+      database.close();
+      rmSync(directory, { force: true, recursive: true });
     }
   });
 
