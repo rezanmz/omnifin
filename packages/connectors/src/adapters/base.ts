@@ -34,10 +34,7 @@ interface ProbeVersionResult {
 
 export abstract class ProbeOnlyAdapter implements ConnectorAdapter {
   abstract readonly service: ConnectorService;
-  readonly capabilities = [
-    "connector.health",
-    "connector.version",
-  ] as const satisfies readonly ConnectorCapability[];
+  readonly capabilities: readonly ConnectorCapability[] = ["connector.health", "connector.version"];
 
   readonly connectorId: string;
   readonly displayName: string;

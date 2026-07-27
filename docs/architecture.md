@@ -8,13 +8,15 @@ the roadmap records when each area has passed its verification gate.
 > [!IMPORTANT]
 > Phase 0 established the process topology, SQLite migrations, health and readiness,
 > security headers and origin checks, connector contracts and probes, secret-handling
-> primitives, and the interface shell. Phase 1 is in development: OIDC sign-in, local
+> primitives, and the interface shell. Identity and dashboard release verification remains active:
+> OIDC sign-in, local
 > sessions, direct Jellyfin password and Quick Connect sign-in, identity resolution,
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
-> administration now exist through both normalized APIs and a permission-checked control room,
-> while the connector administration interface, live upstream workflows, and media proxying remain
-> incomplete. The implemented API surfaces enforce their local role or narrowly scoped recovery
+> administration now exist through both normalized APIs and permission-checked control rooms.
+> Encrypted connector administration and the first authorized, normalized Seerr discovery read path
+> are implemented; request mutations, acquisition workflows, and media proxying remain incomplete.
+> The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
 
@@ -42,7 +44,8 @@ Encrypted connector administration is available through a versioned, permission-
 recovery sessions see and repair only Jellyfin connector records. A pinned isolated Authentik
 environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
 protected public compatibility baseline remains pending. The connector browser control room and
-media operations remain unavailable.
+normalized Seerr search are available as pre-release development surfaces; upstream write operations
+and playback remain unavailable.
 
 ## Target system shape
 
@@ -199,7 +202,10 @@ profile.
 The web application provides server-rendered route shells, deterministic preview data,
 responsive navigation, a live provider-driven sign-in screen, secure Jellyfin pairing,
 and an account-and-access center with exact loading, unconfigured, unavailable, denied,
-and error states. These identity surfaces use only the same-origin API boundary. As media workflows arrive,
+and error states. A keyboard-, touch-, and directional-navigation-ready global search console reads
+only normalized Seerr discovery results and deliberately covers prompt, loading, empty, offline,
+permission-denied, signed-out, rate-limited, and responsive states. These surfaces use only the
+same-origin API boundary. As media workflows arrive,
 TanStack Query will own remote data and invalidation, while Zustand remains limited to
 ephemeral interface state such as an open drawer or command-palette context. Motion is
 reserved for purposeful, interruptible transitions; reduced-motion users receive

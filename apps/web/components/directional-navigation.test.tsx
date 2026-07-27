@@ -48,7 +48,7 @@ describe("directional navigation", () => {
     const user = userEvent.setup();
     render(<TopCommandBar connectionStatus="healthy" />);
 
-    const search = screen.getByRole("searchbox");
+    const search = screen.getByRole("combobox");
     await user.click(search);
     await user.keyboard("signal{ArrowLeft}");
     expect(search).toHaveFocus();

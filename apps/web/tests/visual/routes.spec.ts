@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mockDiscoverySearch } from "../fixtures/discovery";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
@@ -67,6 +68,18 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
   await page.goto(routeForProject("/", testInfo.project.name));
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
+});
+
+test("open discovery search visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Open discovery covers representative desktop and phone geometry",
+  );
+  await mockDiscoverySearch(page);
+  await page.goto("/");
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("option", { name: /The Matrix/i }).waitFor();
+  await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
 });
 
 test("first-run dashboard visual baseline", async ({ page }, testInfo) => {

@@ -40,10 +40,12 @@ migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pend
 the permission-checked OIDC provider and role-mapping control room, and connector fixture/probe
 tooling. Account and provider administration are available as pre-release development surfaces.
 The versioned gateway API can administer encrypted connector records, validate capabilities, and
-guard enablement and deletion. Recovery access can inspect and repair Jellyfin connector records
+guard enablement and deletion. It also exposes the first authenticated media read path: normalized
+Seerr discovery search for principals with `media.view`. Recovery access can inspect and repair Jellyfin connector records
 without seeing or mutating other service configuration. A pinned isolated Authentik gate exercises
-authorization, role mapping, RP logout, and back-channel logout; the browser connector control room,
-protected live compatibility baseline, and upstream media operations remain unavailable.
+authorization, role mapping, RP logout, and back-channel logout. The browser connector control room
+and global discovery search are pre-release development surfaces; the protected live compatibility
+baseline, upstream mutations, and playback remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the

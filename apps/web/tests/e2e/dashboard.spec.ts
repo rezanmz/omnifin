@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { mockDiscoverySearch } from "../fixtures/discovery";
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
   await page.goto("/");
@@ -9,6 +10,33 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await page.keyboard.press("Enter");
   await expect(operations).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("button", { name: /Signal · S01E07/i })).toBeVisible();
+});
+
+test("global search discloses live discovery with keyboard and touch-safe controls", async ({
+  page,
+}, testInfo) => {
+  await mockDiscoverySearch(page);
+  await page.goto("/");
+
+  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  await search.fill("matrix");
+  const firstResult = page.getByRole("option", { name: /The Matrix/i });
+  await expect(firstResult).toBeVisible();
+  if (testInfo.project.name === "mobile") {
+    await expect(page.getByRole("heading", { name: "The Matrix" })).toHaveCount(0);
+  } else {
+    await expect(page.getByRole("heading", { name: "The Matrix" })).toBeVisible();
+  }
+  await expect(search).toHaveAttribute("aria-expanded", "true");
+
+  await search.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(firstResult).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: /Breaking Bad/i })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveAttribute("aria-expanded", "false");
+  await expect(search).toHaveValue("matrix");
 });
 
 test("production-first onboarding remains a complete route", async ({ page }) => {
@@ -40,7 +68,7 @@ test("ten-foot posters support directional focus with focus-safe scrolling", asy
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("link", { name: "Library" })).toBeFocused();
 
-  const search = page.getByRole("searchbox");
+  const search = page.getByRole("combobox");
   await search.focus();
   await page.keyboard.press("ArrowRight");
   const status = page.getByRole("button", { name: "One service needs attention" });

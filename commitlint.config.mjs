@@ -11,6 +11,7 @@ const config = {
         "connectors",
         "db",
         "deps",
+        "discovery",
         "docs",
         "gateway",
         "release",

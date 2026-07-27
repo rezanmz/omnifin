@@ -40,6 +40,10 @@ import {
   connectorAdminRoutes,
   type ConnectorAdminRoutesOptions,
 } from "./connectors/admin-routes.js";
+import {
+  discoverySearchRoutes,
+  type DiscoverySearchRoutesOptions,
+} from "./discovery/search-routes.js";
 import { healthRoutes } from "./health.js";
 import { isSafeHttpError, SafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
@@ -70,6 +74,7 @@ export interface CreateAppOptions {
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
+  discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -357,6 +362,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.connectorAdminDependencies === undefined
         ? {}
         : { dependencies: options.connectorAdminDependencies }),
+    });
+    await app.register(discoverySearchRoutes, {
+      ...(options.discoverySearchDependencies === undefined
+        ? {}
+        : { dependencies: options.discoverySearchDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

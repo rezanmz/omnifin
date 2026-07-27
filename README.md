@@ -63,13 +63,16 @@ normalized contracts, connector probes, migration tooling, and the application s
 and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
+The first Phase 3 read path adds permission-checked Seerr discovery through a normalized,
+browser-safe search contract and a responsive global-search console.
 
 All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
 pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;
 the public compatibility baseline remains pending until protected live evidence records exact
 versions and dates. Permission checks cover every implemented administrative and self-service
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room
-is Phase 2 work. Later phases add live events, media proxying, and complete upstream workflows.
+is available as a pre-release development surface. Later Phase 3 slices add requests, acquisition
+actions, provenance, and live events; Phase 4 adds media proxying and playback.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -117,6 +120,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   failure handling
 - [Authentication](docs/authentication.md) — OIDC, Jellyfin pairing, roles, sessions,
   and recovery
+- [Discovery](docs/discovery.md) — normalized Seerr search, permissions, errors, and
+  browser behavior
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy

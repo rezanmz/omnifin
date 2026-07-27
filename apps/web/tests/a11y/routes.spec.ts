@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { mockDiscoverySearch } from "../fixtures/discovery";
 
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
@@ -74,3 +75,19 @@ for (const route of routes) {
     expect(results.violations).toEqual([]);
   });
 }
+
+test("open discovery search has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockDiscoverySearch(page);
+  await page.goto("/");
+  await page.getByRole("combobox").fill("matrix");
+  await expect(page.getByRole("option", { name: /The Matrix/i })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
