@@ -237,6 +237,32 @@ async function waitForRevokedSession(request) {
   throw new BrowserCheckError();
 }
 
+async function assertAuthentikBrowserSession(request, issuerOrigin) {
+  const response = await request.get(`${issuerOrigin}/api/v3/core/users/me/`, {
+    maxRedirects: 0,
+  });
+  const body = await json(response, 200);
+  assert(body.user?.username === "akadmin");
+}
+
+async function assertAuthentikProviderConfiguration(
+  request,
+  issuerOrigin,
+  token,
+  clientId,
+  backchannelUrl,
+) {
+  const response = await request.get(
+    `${issuerOrigin}/api/v3/providers/oauth2/?page_size=100&search=Omnifin`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const body = await json(response, 200);
+  assert(Array.isArray(body.results));
+  const provider = body.results.find((entry) => (entry.clientId ?? entry.client_id) === clientId);
+  assert((provider?.logoutMethod ?? provider?.logout_method) === "backchannel");
+  assert((provider?.logoutUri ?? provider?.logout_uri) === backchannelUrl);
+}
+
 function assertPrincipal(current, issuer, subject) {
   assert(current?.csrfToken && current.principal);
   assert(current.principal.accountState === "pending_link");
@@ -392,6 +418,15 @@ async function run() {
     assert(validation.capabilities?.logout?.backChannel === true);
     assert(validation.capabilities?.logout?.rpInitiated === true);
 
+    currentStage = "authentik_provider_configuration";
+    await assertAuthentikProviderConfiguration(
+      context.request,
+      issuerOrigin,
+      authentikToken,
+      clientId,
+      `${webOrigin}/api/auth/oidc/backchannel/${expectedProviderId}`,
+    );
+
     currentStage = "role_mapping";
     const mapping = await mutate(
       context.request,
@@ -448,6 +483,8 @@ async function run() {
     const firstSession = await session(context.request);
     const subject = assertPrincipal(firstSession, issuer);
 
+    currentStage = "backchannel_provider_session";
+    await assertAuthentikBrowserSession(context.request, issuerOrigin);
     currentStage = "backchannel_trigger";
     await logoutAtAuthentik(page, issuerOrigin);
     currentStage = "backchannel_revocation";
