@@ -338,7 +338,7 @@ async function assertAuthentikAccessToken(request, issuerOrigin, token, provider
     `${issuerOrigin}/api/v3/providers/oauth2/access_tokens/?page_size=100&provider=${encodeURIComponent(providerPk)}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
-  const body = await json(response, 200);
+  const body = await json(response, 200, "backchannel_access_token_api");
   assert(Array.isArray(body.results));
   if (body.results.length === 0) {
     currentStage = "backchannel_access_token_missing";

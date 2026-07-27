@@ -461,6 +461,11 @@ async function main(options) {
       const allowedStages = new Set([
         "authentik_provider_configuration",
         "backchannel_access_token",
+        "backchannel_access_token_api_client_error",
+        "backchannel_access_token_api_invalid_response",
+        "backchannel_access_token_api_redirect",
+        "backchannel_access_token_api_server_error",
+        "backchannel_access_token_api_unexpected_status",
         "backchannel_access_token_inactive",
         "backchannel_access_token_missing",
         "backchannel_access_token_provider_mismatch",
