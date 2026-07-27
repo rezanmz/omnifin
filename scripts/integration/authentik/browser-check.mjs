@@ -56,7 +56,7 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
       "ak",
       "shell",
       "-c",
-      "exec(open('/omnifin-fixture/dispatch-backchannel.py', encoding='utf-8').read())",
+      "exec(open('/blueprints/omnifin-dispatch-backchannel.py', encoding='utf-8').read())",
     ],
     { encoding: "utf8", maxBuffer: 1_048_576, timeout: 30_000 },
   );

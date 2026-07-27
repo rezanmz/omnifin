@@ -64,7 +64,7 @@ services:
     volumes:
       - ${OMNIFIN_AUTHENTIK_CA_FILE:?fixture CA required}:/etc/ssl/certs/omnifin-fixture-ca.pem:ro
       - ./blueprint.yaml:/blueprints/omnifin-fixture.yaml:ro
-      - ./dispatch-backchannel.py:/omnifin-fixture/dispatch-backchannel.py:ro
+      - ./dispatch-backchannel.py:/blueprints/omnifin-dispatch-backchannel.py:ro
 
 volumes:
   database:
