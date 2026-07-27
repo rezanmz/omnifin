@@ -340,14 +340,28 @@ async function assertAuthentikAccessToken(request, issuerOrigin, token, provider
   );
   const body = await json(response, 200);
   assert(Array.isArray(body.results));
-  assert(
-    body.results.some(
-      (accessToken) =>
-        String(accessToken?.provider?.pk) === String(providerPk) &&
-        accessToken?.user?.username === "akadmin" &&
-        accessToken?.revoked === false,
-    ),
+  if (body.results.length === 0) {
+    currentStage = "backchannel_access_token_missing";
+    throw new BrowserCheckError();
+  }
+  const providerTokens = body.results.filter(
+    (accessToken) => String(accessToken?.provider?.pk) === String(providerPk),
   );
+  if (providerTokens.length === 0) {
+    currentStage = "backchannel_access_token_provider_mismatch";
+    throw new BrowserCheckError();
+  }
+  const userTokens = providerTokens.filter(
+    (accessToken) => accessToken?.user?.username === "akadmin",
+  );
+  if (userTokens.length === 0) {
+    currentStage = "backchannel_access_token_user_mismatch";
+    throw new BrowserCheckError();
+  }
+  if (!userTokens.some((accessToken) => accessToken?.revoked === false)) {
+    currentStage = "backchannel_access_token_inactive";
+    throw new BrowserCheckError();
+  }
 }
 
 async function assertAuthentikProviderConfiguration(
