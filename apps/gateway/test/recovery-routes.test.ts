@@ -371,7 +371,11 @@ describe("recovery access route", () => {
 
   it("coalesces hundreds of route and global rate-limit denials into bounded durable audits", async () => {
     const database = openDatabase(":memory:");
-    const app = await createApp({ config: testConfig(), database });
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      recoveryAccessDependencies: { clock: () => new Date(initialTime) },
+    });
     try {
       let globalLimitDenials = 0;
       let routeLimitDenials = 0;

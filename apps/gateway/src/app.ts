@@ -25,7 +25,7 @@ import {
   OidcBackchannelLogoutError,
   OidcBackchannelLogoutService,
 } from "./auth/oidc/backchannel-logout.js";
-import { recoveryRoutes } from "./auth/recovery-routes.js";
+import { recoveryRoutes, type RecoveryRoutesOptions } from "./auth/recovery-routes.js";
 import { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 import { SESSION_CSRF_HEADER, sessionCookieName } from "./auth/session-cookie.js";
 import { sessionRoutes } from "./auth/session-routes.js";
@@ -65,6 +65,7 @@ export interface CreateAppOptions {
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
+  recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -369,7 +370,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       oidcRoutes,
       options.oidcDependencies === undefined ? {} : { dependencies: options.oidcDependencies },
     );
-    await app.register(recoveryRoutes);
+    await app.register(
+      recoveryRoutes,
+      options.recoveryAccessDependencies === undefined
+        ? {}
+        : { dependencies: options.recoveryAccessDependencies },
+    );
     await app.register(sessionRoutes);
     await app.register(
       identityLinkRoutes,

@@ -2,7 +2,10 @@ import { sessionResponseSchema } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { SafeHttpError } from "../http-error.js";
-import { RecoveryAccessService } from "./recovery-access-service.js";
+import {
+  RecoveryAccessService,
+  type RecoveryAccessServiceDependencies,
+} from "./recovery-access-service.js";
 import { sessionCookieName, writeSessionCookie } from "./session-cookie.js";
 import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "./session-service.js";
 
@@ -74,8 +77,17 @@ function errorAttribution(error: unknown) {
   return { kind: "internal_failure" } as const;
 }
 
-export const recoveryRoutes: FastifyPluginAsync = async (app) => {
-  const recoveryAccess = new RecoveryAccessService(app.database, app.sessionService, app.appConfig);
+export interface RecoveryRoutesOptions {
+  dependencies?: RecoveryAccessServiceDependencies;
+}
+
+export const recoveryRoutes: FastifyPluginAsync<RecoveryRoutesOptions> = async (app, options) => {
+  const recoveryAccess = new RecoveryAccessService(
+    app.database,
+    app.sessionService,
+    app.appConfig,
+    options.dependencies,
+  );
   const recordedRequests = new WeakSet<FastifyRequest>();
 
   app.post(
