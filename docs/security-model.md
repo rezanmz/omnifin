@@ -6,12 +6,16 @@ client. This model defines the assets, adversaries, boundaries, and invariants u
 design and review.
 
 > [!IMPORTANT]
-> Phase 0 implements defensive foundations including input schemas, origin checks,
-> security headers, redacted logging, encrypted-value primitives, SQLite migrations,
-> and connector destination validation. It does not yet accept authentication,
-> establish sessions, link identities, configure connectors, proxy media, perform
-> upstream mutations, or write product audit events. Controls for those surfaces below
-> are mandatory implementation requirements, not claims of current protection.
+> The current checkpoint implements defensive foundations plus OIDC authentication,
+> opaque local sessions, identity resolution, authentication audit records, and hidden
+> recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
+> and provider-initiated OIDC back- and front-channel logout are implemented, while
+> encrypted and audited connector administration is implemented through the versioned
+> gateway API. Permission enforcement covers every current route and is repeated inside
+> administrative services. The connector administration interface, media proxying, and
+> upstream mutations remain incomplete. Controls
+> for those remaining surfaces are mandatory implementation requirements, not claims
+> of current support.
 
 For vulnerability reporting, follow [SECURITY.md](../SECURITY.md).
 
@@ -67,14 +71,112 @@ application boundary; operators must still patch and isolate the host.
 | Destructive replay            | Idempotency keys or current-state preconditions, authorization, audit, safe confirmation UX       |
 | Supply-chain compromise       | Locked dependencies, pinned actions, review gates, CodeQL, SBOM, provenance, signatures           |
 
+## Current connector-administration controls
+
+- Connector API keys and passwords are authenticated-encrypted with a context bound to
+  both service and connector identity. Browser responses expose only the credential kind
+  and whether credentials are configured.
+- New connector records are disabled. A successful probe must persist normalized health
+  and capabilities before enablement, and that evidence expires after ten minutes; any
+  destination, credential, HTTP, CA, or TLS policy change disables the connector and
+  clears the evidence.
+- Destination literals are validated before storage and resolved addresses are checked at
+  request time. Redirects remain blocked and DNS-pinned transports cannot fall back to an
+  unvalidated address. Plain HTTP requires explicit approval. Self-signed TLS requires
+  both explicit approval and a current connector-specific CA certificate, so certificate
+  and hostname verification remain enabled.
+- Every mutation requires a same-origin CSRF proof and the local `connectors.manage`
+  permission. A recovery session instead uses `recovery.jellyfin.manage`; both the route and
+  service constrain that session to Jellyfin records, and list queries exclude every other
+  connector. The service repeats permission and scope checks so future non-HTTP callers cannot
+  bypass authorization.
+- Updates and deletion require the latest opaque revision. Enabled connectors cannot be
+  deleted, and connectors referenced by a service identity link remain protected.
+- Creation, validation, update, and deletion write bounded audit metadata without connector
+  credentials, private response bodies, or raw client addresses.
+
 ## Browser protections
 
-Phase 0 web and gateway code emits Content Security Policy, HSTS for secure requests,
+The web and gateway emit Content Security Policy, HSTS for secure requests,
 `nosniff`, frame restrictions, restrictive referrer policies, and minimal permissions
-policies. Current product routes do not accept reusable upstream credentials. Later
-identity and connector flows must never place credentials in query strings, local
-storage, client logs, analytics, or error-reporting services. External telemetry is off
-by default.
+policies. OIDC client secrets, token responses, ID and access tokens, and session
+tokens remain in the gateway; the browser receives only an opaque HttpOnly session
+cookie and safe provider and principal contracts after sign-in. The standard code
+flow necessarily carries a transient, PKCE-bound authorization `code`, one-time
+`state`, or provider error through the browser callback. Callback responses are
+`no-store`, use the restrictive referrer policy, consume state once, and immediately
+redirect to a fixed local URL. Operators must configure reverse proxies and access
+logs not to persist callback query strings. No reusable credential may enter a query
+string, browser storage, client log, analytics, or error-reporting service. External
+telemetry is off by default.
+
+The web process handles `/api` through a controlled streaming proxy rather than a
+generic rewrite. It confines normalized targets to `/v1` and removes untrusted
+forwarding and client-address headers. In the loopback-bound Compose topology, an
+explicit trusted-edge hop count lets it retain only the validated IP immediately
+before the maintained proxy chain, then pass that single address across the private
+web-to-gateway hop. Caller-controlled prefix entries are discarded, while malformed
+selected entries and oversized chains fail closed. The proxy also replaces
+caller-supplied request IDs before preserving distinct
+`Set-Cookie` and redirect headers, and it returns a bounded `no-store` error on gateway
+failure. Its outage log contains only a generic event name and a fresh request ID—never
+the callback path, query, upstream error, authorization code, state, or provider
+diagnostic.
+
+## Current OIDC threat-model controls
+
+- **Spoofing:** exact discovery issuer matching, pinned client and signing settings,
+  signature, audience, expiry, nonce, and subject validation; identities use
+  `(issuer, sub)` rather than email or username.
+- **Tampering and replay:** PKCE S256, high-entropy state and nonce, an HttpOnly
+  preflight binding cookie plus a transaction-specific HttpOnly binding cookie,
+  one-time transaction consumption, security-configuration binding, and a callback
+  URL reconstructed from the canonical public origin. The per-state cookie lets
+  concurrent tabs complete independently without accepting another tab's binding.
+- **Repudiation:** bounded authentication audit outcomes retain correlation and request
+  context without storing authorization responses, tokens, or upstream diagnostics.
+- **Information disclosure:** fixed browser error codes, response-schema allowlists,
+  encrypted client secrets, no-store responses, and structured-log redaction keep
+  provider details and assertions server-side.
+- **Logout integrity:** an exact same-origin form CSRF proof authorizes RP-initiated
+  logout. The gateway atomically revokes and audits the local session before releasing
+  non-serializable provider material, uses only the validated discovered end-session
+  endpoint, and falls back to a completed local logout if discovery is unavailable.
+  Provider-initiated back-channel requests use no browser authority: the gateway
+  validates a signed, issuer/client-bound, time-bounded Logout Token through the
+  approved JWKS transport. It requires the logout event, rejects `nonce`, scopes
+  revocation by the private `sid` hash and/or immutable subject, and commits the replay
+  receipt, revocation, and sanitized audit event in one immediate transaction.
+  Front-channel logout requires exact provider, issuer, and session parameters, scopes
+  revocation by the provider and private `sid` hash, and atomically records only newly
+  revoked sessions. The successful empty document is frameable only by the validated
+  issuer origin; all denials retain the global frame prohibition.
+- **Denial of service:** bounded request targets, per-client start and callback limits,
+  a server-wide start limit, separate non-blocking server-wide start and callback
+  audit-write budgets, and durable no-write caps for duplicate and saturated failure
+  buckets limit unauthenticated SQLite write pressure. Bounded discovery timeouts,
+  exponential failure backoff, and bounded in-memory caches limit upstream work, while
+  audit-budget exhaustion does not alter an otherwise valid authentication response.
+  A valid session can create at most one CSRF-denial audit row, so replaying an invalid
+  CSRF proof cannot turn a low-privilege account into an audit-storage amplifier.
+  Authenticated issuance is capped at 16 active sessions and 32 new sessions per user
+  in a rolling 24-hour window. Both checks run in the session creation transaction,
+  remain effective across processes and restarts, and deny without adding session or
+  secret-reservation rows. Reauthentication replacements count against the rolling
+  budget.
+  Recovery issuance has a separate eight-per-24-hour durable budget and a singleton
+  active-session invariant, so replay of a valid break-glass secret cannot become a
+  session-storage amplifier or displace ordinary user capacity.
+- **Elevation of privilege:** new JIT identities default to `viewer`; privileged roles
+  require an explicit validated claim mapping, and identity plus session changes commit
+  atomically.
+
+Password and Quick Connect Jellyfin proof-of-control pairing now have
+immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
+erasure, revocation, relinking, and secret-preservation tests. The pinned isolated Authentik gate
+exercises authorization, role mapping, RP logout, and provider-initiated back-channel revocation.
+Protected live compatibility evidence remains separate from this development gate and is required
+before a public support claim.
 
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and

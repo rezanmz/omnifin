@@ -3,7 +3,8 @@
 The integration runner has two deliberately distinct profiles:
 
 - `fixture` runs deterministic adapter or authentication contract tests from
-  this repository. It does not claim that an upstream service was started.
+  this repository after building the selected package's workspace dependencies.
+  It does not claim that an upstream service was started.
 - `live` probes explicitly configured upstream services. The current live gate
   covers authentication where required, health/version discovery, response
   shape validation, and OIDC metadata. Safe mutation coverage will be added per
@@ -24,18 +25,25 @@ Use `--strict` when a gate must fail for any unconfigured, unimplemented, or
 not-ready profile. Strict mode validates the ledger schema and rejects a
 `pending` service before running its probe; configuration alone cannot turn
 pending coverage into a release claim. Reports contain only service names,
-profile names, versions, normalized status values, check names, and normalized
-error categories. URLs, credentials, headers, cookies, and raw upstream
-payloads are never included.
+profile names, versions, normalized status values, check names, normalized
+error categories, and bounded test-file basenames on fixture failure. Assertion
+messages, filesystem paths, URLs, credentials, headers, cookies, and raw
+upstream payloads are never included.
 
 `readiness.json` is the reviewed coverage ledger. It must contain exactly every
 known service, both `fixture` and `live` profiles, and only the states `pending`
 or `ready`. Pull requests run `.github/workflows/integration.yml` with fixture
-data and no secrets. They exercise services marked fixture-ready; a change that
-selects an identity service also selects its pending suite, so OIDC or Authentik
-work cannot pass until its fixture coverage and readiness transition land
-together. The one-time empty-repository foundation PR is limited to the already
-ready fixture services.
+data and no secrets. They execute affected services marked fixture-ready with
+strict enforcement. Affected pending suites are reported separately and are
+not counted as verified coverage, allowing their implementation to land in
+reviewed increments. The pull request that changes a suite from `pending` to
+`ready` places it in the strict matrix immediately, so that transition cannot
+pass with missing, skipped, or failing tests. A pending-only change still runs
+the established ready fixture baseline. The one-time empty-repository
+foundation PR is limited to the already ready fixture services. The OIDC and
+isolated Authentik fixtures are ready and enforced. Authentik readiness combines
+the strict harness contract selected by the matrix with the dedicated browser flow
+that starts the pinned upstream provider in the same pull-request workflow.
 
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter
@@ -43,9 +51,8 @@ the protected `integration` environment, and activate only after the repository
 variable `OMNIFIN_LIVE_INTEGRATION_ENABLED=true` confirms that the isolated
 upstream environment has been provisioned. The weekly compatibility canary and
 any release profile that requires live evidence use the same protected
-configuration. At the foundation phase, all live entries and the OIDC/Authentik
-fixture entries intentionally remain pending; no live support baseline is
-claimed.
+configuration. All live entries intentionally remain pending; no live support
+baseline is claimed.
 
 `release-coverage.json` separately declares which ready capabilities a phase
 release claims. Coverage is cumulative and validated against `readiness.json`:

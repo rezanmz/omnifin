@@ -10,6 +10,11 @@ import {
 } from "../src/db/schema.js";
 import { privacyHash } from "../src/security/crypto.js";
 
+const tokenHash = "t".repeat(43);
+const csrfTokenHash = "c".repeat(43);
+const encryptedCsrfToken = "v1.fixture-csrf-token";
+const sessionCreatedAt = new Date("2026-07-25T12:00:00.000Z");
+
 describe("authentication persistence invariants", () => {
   it("round-trips the complete role-mapping contract without losing claim semantics", () => {
     const database = openDatabase(":memory:");
@@ -52,8 +57,13 @@ describe("authentication persistence invariants", () => {
     const stored = database.db.select().from(roleMappings).get();
     expect(
       roleMappingSchema.parse({
-        ...stored,
         claimPath: JSON.parse(stored?.claimPathJson ?? "null"),
+        enabled: stored?.enabled,
+        id: stored?.id,
+        operator: stored?.operator,
+        priority: stored?.priority,
+        providerId: stored?.providerId,
+        role: stored?.role,
         values: JSON.parse(stored?.valuesJson ?? "null"),
       }),
     ).toEqual(mapping);
@@ -89,19 +99,26 @@ describe("authentication persistence invariants", () => {
       })
       .run();
 
-    const sidHash = privacyHash("upstream-session-identifier", Buffer.alloc(32, 7));
+    const sidHash = privacyHash(
+      "oidc_session_id",
+      "upstream-session-identifier",
+      Buffer.alloc(32, 7),
+    );
     database.db
       .insert(sessions)
       .values({
         id: "session-1",
-        tokenHash: "token-hash",
+        tokenHash,
         userId: "user-1",
         authMethod: "oidc",
         oidcProviderId: "oidc-home",
         externalIdentityId: "identity-1",
         oidcSessionIdHash: sidHash,
-        csrfTokenHash: "csrf-hash",
-        lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+        csrfTokenHash,
+        encryptedCsrfToken,
+        createdAt: sessionCreatedAt,
+        lastRotatedAt: sessionCreatedAt,
+        lastSeenAt: sessionCreatedAt,
         expiresAt: new Date("2026-07-25T13:00:00.000Z"),
         absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
       })
@@ -114,6 +131,19 @@ describe("authentication persistence invariants", () => {
       oidcSessionIdHash: sidHash,
       userId: "user-1",
     });
+    database.sqlite
+      .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+      .run("v2.fixture-id-token-hint");
+    expect(() =>
+      database.sqlite
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+        .run(""),
+    ).toThrow(/sessions_id_token_hint_check/);
+    expect(() =>
+      database.sqlite
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-1'")
+        .run("x".repeat(32769)),
+    ).toThrow(/sessions_id_token_hint_check/);
     database.close();
   });
 
@@ -160,13 +190,16 @@ describe("authentication persistence invariants", () => {
         .insert(sessions)
         .values({
           id: "session-1",
-          tokenHash: "token-hash",
+          tokenHash,
           userId: "user-1",
           authMethod: "oidc",
           oidcProviderId: "oidc-work",
           externalIdentityId: "identity-1",
-          csrfTokenHash: "csrf-hash",
-          lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+          csrfTokenHash,
+          encryptedCsrfToken,
+          createdAt: sessionCreatedAt,
+          lastRotatedAt: sessionCreatedAt,
+          lastSeenAt: sessionCreatedAt,
           expiresAt: new Date("2026-07-25T13:00:00.000Z"),
           absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
         })
@@ -275,13 +308,16 @@ describe("authentication persistence invariants", () => {
         .insert(sessions)
         .values({
           id: "session-1",
-          tokenHash: "token-hash",
+          tokenHash,
           userId: "user-1",
           authMethod: "jellyfin",
           oidcProviderId: "oidc-home",
           externalIdentityId: "identity-1",
-          csrfTokenHash: "csrf-hash",
-          lastSeenAt: new Date("2026-07-25T12:00:00.000Z"),
+          csrfTokenHash,
+          encryptedCsrfToken,
+          createdAt: sessionCreatedAt,
+          lastRotatedAt: sessionCreatedAt,
+          lastSeenAt: sessionCreatedAt,
           expiresAt: new Date("2026-07-25T13:00:00.000Z"),
           absoluteExpiresAt: new Date("2026-07-26T12:00:00.000Z"),
         })

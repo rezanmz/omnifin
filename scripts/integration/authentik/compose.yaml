@@ -1,0 +1,70 @@
+name: omnifin-authentik-fixture
+
+x-authentik-environment: &authentik-environment
+  AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  AUTHENTIK_POSTGRESQL__HOST: postgresql
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${OMNIFIN_AUTHENTIK_POSTGRES_PASSWORD:?database password required}
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_SECRET_KEY: ${OMNIFIN_AUTHENTIK_SECRET_KEY:?authentik secret key required}
+  REQUESTS_CA_BUNDLE: /etc/ssl/certs/omnifin-fixture-ca.pem
+  SSL_CERT_FILE: /etc/ssl/certs/omnifin-fixture-ca.pem
+
+services:
+  postgresql:
+    image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_PASSWORD: ${OMNIFIN_AUTHENTIK_POSTGRES_PASSWORD:?database password required}
+      POSTGRES_USER: authentik
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+    tmpfs:
+      - /tmp
+    volumes:
+      - database:/var/lib/postgresql/data
+
+  server:
+    image: ghcr.io/goauthentik/server:2026.5.6@sha256:ed120caf710ccf82ef0026f0bc74e51615bc95ebff228a7a2d6fc60c441c3868
+    command: server
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment: *authentik-environment
+    ports:
+      - "127.0.0.1:${OMNIFIN_AUTHENTIK_HTTP_PORT:?http port required}:9000"
+    restart: "no"
+    shm_size: 256mb
+    volumes:
+      - ${OMNIFIN_AUTHENTIK_CA_FILE:?fixture CA required}:/etc/ssl/certs/omnifin-fixture-ca.pem:ro
+
+  worker:
+    image: ghcr.io/goauthentik/server:2026.5.6@sha256:ed120caf710ccf82ef0026f0bc74e51615bc95ebff228a7a2d6fc60c441c3868
+    command: worker
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      <<: *authentik-environment
+      AUTHENTIK_BOOTSTRAP_PASSWORD_HASH: ${OMNIFIN_AUTHENTIK_BOOTSTRAP_PASSWORD_HASH:?bootstrap hash required}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${OMNIFIN_AUTHENTIK_BOOTSTRAP_TOKEN:?bootstrap token required}
+      OMNIFIN_AUTHENTIK_BACKCHANNEL_URL: ${OMNIFIN_AUTHENTIK_BACKCHANNEL_URL:?backchannel URL required}
+      OMNIFIN_AUTHENTIK_CLIENT_ID: ${OMNIFIN_AUTHENTIK_CLIENT_ID:?client ID required}
+      OMNIFIN_AUTHENTIK_CLIENT_SECRET: ${OMNIFIN_AUTHENTIK_CLIENT_SECRET:?client secret required}
+      OMNIFIN_AUTHENTIK_CALLBACK_URL: ${OMNIFIN_AUTHENTIK_CALLBACK_URL:?callback URL required}
+      OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL: ${OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL:?logout redirect required}
+    restart: "no"
+    shm_size: 256mb
+    volumes:
+      - ${OMNIFIN_AUTHENTIK_CA_FILE:?fixture CA required}:/etc/ssl/certs/omnifin-fixture-ca.pem:ro
+      - ./blueprint.yaml:/blueprints/omnifin-fixture.yaml:ro
+      - ./dispatch-backchannel.py:/blueprints/omnifin-dispatch-backchannel.py:ro
+
+volumes:
+  database:

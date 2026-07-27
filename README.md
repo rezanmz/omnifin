@@ -52,17 +52,30 @@ See the [compatibility matrix](docs/compatibility.md) for validation status.
 ## Architecture at a glance
 
 Omnifin is a TypeScript monorepo with a Next.js application, a Fastify gateway,
-and shared contract and connector packages. Phase 0 keeps the first interface
-primitives app-local; the planned design-system package will be extracted as its API
-stabilizes during Phase 2. The current foundation provides storage-backed health
-checks, browser-safe authentication-provider discovery, normalized contracts,
-connector probes, migration tooling, and the application shell.
+and shared contract and connector packages. The first interface primitives remain
+app-local until the design-system API stabilizes during Phase 2. The current
+development checkpoint provides storage-backed health checks, browser-safe provider
+discovery, an OIDC Authorization Code flow with PKCE, opaque local sessions,
+break-glass recovery, direct Jellyfin password and Quick Connect authentication with
+encrypted identity links, CSRF-protected password and Quick Connect pairing for pending OIDC users,
+RP-initiated provider logout and provider-initiated back- and front-channel logout,
+normalized contracts, connector probes, migration tooling, and the application shell
+and sign-in experience. The gateway also provides a permission-checked connector
+administration API with encrypted credentials, guarded transport policy, capability
+snapshots, optimistic revisions, and audited lifecycle changes.
 
-The target boundary routes all upstream access through the gateway. Phase 1 will add
-sessions, authorization, encrypted connector administration, identity linking, and
-audit records; later phases add live events, media proxying, and complete upstream
-workflows. Raw upstream credentials and payloads are never intended to cross into the
-browser.
+All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
+pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;
+the public compatibility baseline remains pending until protected live evidence records exact
+versions and dates. Permission checks cover every implemented administrative and self-service
+surface, including a deliberately Jellyfin-only recovery path. The browser connector control room
+is Phase 2 work. Later phases add live events, media proxying, and complete upstream workflows.
+Reusable upstream credentials, token responses, identity assertions, and raw upstream
+API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
+carry the provider's transient, one-time `code`, `state`, or error parameters to the
+callback; PKCE, one-shot transaction consumption, `no-store` responses, and the
+restrictive referrer policy limit that exposure. Reverse proxies must not persist
+authentication callback query strings in access logs.
 
 The default deployment is a single-node Docker Compose installation backed by
 SQLite. One immutable image contains both process entry points, allowing the web and

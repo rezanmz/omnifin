@@ -241,6 +241,49 @@ test("each live integration matrix job receives only its service configuration",
   }
 });
 
+test("fixture integration reports pending work without weakening the strict ready gate", () => {
+  const document = workflowDocument("integration.yml");
+  const detect = document.jobs.detect;
+  const integration = document.jobs.integration;
+  const gate = document.jobs.gate;
+
+  assert.equal(detect.outputs.deferred, "${{ steps.matrix.outputs.deferred }}");
+  const report = namedStep(detect.steps, "Report fixture coverage still under development");
+  assert.equal(report.if, "steps.matrix.outputs.deferred != '[]'");
+  assert.equal(report.env.DEFERRED_SERVICES, "${{ steps.matrix.outputs.deferred }}");
+  assert.match(report.run, /not part of this integration claim/u);
+
+  const strict = namedStep(integration.steps, "Run strict fixture integration gate");
+  assert.match(strict.run, /--mode fixture --strict/u);
+  assert.equal(strict["continue-on-error"], undefined);
+
+  const aggregate = namedStep(gate.steps, "Require connector selection and fixture integration");
+  assert.match(aggregate.run, /job\.result !== "success"/u);
+});
+
+test("fixture integration makes real Authentik OIDC behavior a protected aggregate dependency", () => {
+  const document = workflowDocument("integration.yml");
+  const authentik = document.jobs.authentik;
+  const gate = document.jobs.gate;
+
+  assert.equal(authentik.name, "Authentik OIDC integration");
+  assert.equal(authentik["timeout-minutes"], 45);
+  assert.equal(JSON.stringify(authentik).includes("secrets."), false);
+  assert.equal(JSON.stringify(authentik).includes("vars."), false);
+
+  const browser = namedStep(authentik.steps, "Install isolated browser runtime");
+  assert.match(browser.run, /playwright install --with-deps chromium/u);
+  const run = namedStep(authentik.steps, "Run isolated Authentik authorization-code gate");
+  assert.match(run.run, /pnpm test:authentik/u);
+  assert.match(run.run, /artifacts\/integration\/authentik\/report\.json/u);
+  assert.equal(run["continue-on-error"], undefined);
+
+  const upload = namedStep(authentik.steps, "Upload sanitized Authentik report");
+  assert.equal(upload.with.path, "artifacts/integration/authentik/report.json");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.ok(gate.needs.includes("authentik"));
+});
+
 test("edge promotion revalidates protected main immediately before moving aliases", () => {
   const source = workflow("edge.yml");
   const promotionStart = source.indexOf("- name: Preserve immutable SHA identity");
@@ -266,6 +309,15 @@ test("CI builds Storybook before exercising stories", () => {
   const build = source.indexOf("pnpm --filter @omnifin/web build:storybook");
   const testStories = source.indexOf("pnpm test:storybook");
   assert.ok(build >= 0 && build < testStories);
+});
+
+test("browser-backed CI builds workspace dependencies before the web application", () => {
+  const document = workflowDocument("ci.yml");
+
+  for (const jobName of ["browser", "storybook", "visual", "lighthouse"]) {
+    const build = namedStep(document.jobs[jobName].steps, "Build web application");
+    assert.equal(build.run, "pnpm build", `${jobName} must use the dependency-aware root build`);
+  }
 });
 
 test("CI rejects migration metadata and schema drift", () => {

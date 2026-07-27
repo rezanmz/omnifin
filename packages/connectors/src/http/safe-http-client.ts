@@ -1,6 +1,7 @@
 import type {
   ConnectorFailureCode,
   ConnectorService,
+  ConnectorTlsPolicy,
   PartialFailure,
 } from "@omnifin/contracts/connectors";
 import { MAX_RETRY_AFTER_SECONDS } from "@omnifin/contracts/connectors";
@@ -19,6 +20,8 @@ export interface SafeHttpClientOptions {
   service: ConnectorService;
   baseUrl: string;
   allowInsecureHttp?: boolean;
+  tlsPolicy?: ConnectorTlsPolicy;
+  tlsCaCertificatePem?: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
   headers?: Readonly<Record<string, string>>;
@@ -139,6 +142,18 @@ function hasTraversalSegment(path: string): boolean {
   });
 }
 
+const UNSAFE_REQUEST_PATH_CHARACTER = /[\p{Cc}\p{Cf}\p{White_Space}]/u;
+
+function unsafeRequestPath(service: ConnectorService, operation: string): SafeConnectorError {
+  return new SafeConnectorError({
+    service,
+    operation,
+    code: "destination_blocked",
+    message: "The connector request path is not a safe relative path.",
+    retryable: false,
+  });
+}
+
 const BLOCKED_REQUEST_HEADERS = [
   "connection",
   "host",
@@ -198,6 +213,8 @@ export class SafeHttpClient {
   readonly #timeoutMs: number;
   readonly #maxResponseBytes: number;
   readonly #headers: Readonly<Record<string, string>>;
+  readonly #tlsPolicy: ConnectorTlsPolicy;
+  readonly #tlsCaCertificatePem: string | undefined;
   readonly #transport: ConnectorTransport;
   readonly #resolveHost: HostResolver | undefined;
 
@@ -242,6 +259,34 @@ export class SafeHttpClient {
     if (!baseUrl.pathname.endsWith("/")) baseUrl.pathname = `${baseUrl.pathname}/`;
     baseUrl.search = "";
     baseUrl.hash = "";
+    const tlsPolicy = options.tlsPolicy ?? "strict";
+    if (tlsPolicy === "allow_self_signed" && baseUrl.protocol !== "https:") {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "A relaxed TLS policy requires an HTTPS connector destination.",
+        retryable: false,
+      });
+    }
+    if (tlsPolicy === "allow_self_signed" && options.tlsCaCertificatePem === undefined) {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "Self-signed TLS requires a connector-specific CA certificate.",
+        retryable: false,
+      });
+    }
+    if (tlsPolicy === "strict" && options.tlsCaCertificatePem !== undefined) {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "A connector-specific CA is valid only with self-signed TLS approval.",
+        retryable: false,
+      });
+    }
 
     this.service = options.service;
     this.origin = baseUrl.origin;
@@ -250,6 +295,8 @@ export class SafeHttpClient {
     this.#timeoutMs = timeoutMs;
     this.#maxResponseBytes = maxResponseBytes;
     this.#headers = options.headers ?? {};
+    this.#tlsPolicy = tlsPolicy;
+    this.#tlsCaCertificatePem = options.tlsCaCertificatePem;
     this.#transport = options.transport ?? pinnedNodeTransport;
     this.#resolveHost = options.resolveHost;
   }
@@ -270,6 +317,7 @@ export class SafeHttpClient {
   async requestText(path: string, options: SafeRequestOptions): Promise<SafeTextResponse> {
     if (
       !path ||
+      UNSAFE_REQUEST_PATH_CHARACTER.test(path) ||
       path.startsWith("/") ||
       path.startsWith("//") ||
       path.includes("\\") ||
@@ -278,16 +326,18 @@ export class SafeHttpClient {
       hasTraversalSegment(path) ||
       /^[a-z][a-z\d+.-]*:/i.test(path)
     ) {
-      throw new SafeConnectorError({
-        service: this.service,
-        operation: options.operation,
-        code: "destination_blocked",
-        message: "The connector request path is not a safe relative path.",
-        retryable: false,
-      });
+      throw unsafeRequestPath(this.service, options.operation);
     }
 
-    const url = new URL(path, this.#baseUrl);
+    let url: URL;
+    try {
+      url = new URL(path, this.#baseUrl);
+    } catch {
+      throw unsafeRequestPath(this.service, options.operation);
+    }
+    if (url.origin !== this.#baseUrl.origin || !url.pathname.startsWith(this.#baseUrl.pathname)) {
+      throw unsafeRequestPath(this.service, options.operation);
+    }
     if (options.query) {
       const query =
         options.query instanceof URLSearchParams
@@ -351,6 +401,10 @@ export class SafeHttpClient {
         {
           method: options.method ?? "GET",
           headers,
+          tlsPolicy: this.#tlsPolicy,
+          ...(this.#tlsCaCertificatePem === undefined
+            ? {}
+            : { tlsCaCertificatePem: this.#tlsCaCertificatePem }),
           ...(body === undefined ? {} : { body }),
           signal: controller.signal,
         },

@@ -19,6 +19,9 @@ data/
 *.db-wal
 *.sqlite
 *.sqlite3
+*-journal
+*-shm
+*-wal
 
 # Local configuration and secrets
 .env

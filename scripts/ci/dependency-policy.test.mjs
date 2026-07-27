@@ -7,6 +7,31 @@ function repositoryFile(name) {
   return readFileSync(new URL(`../../${name}`, import.meta.url), "utf8");
 }
 
+function ignoreEntries(name) {
+  return new Set(
+    repositoryFile(name)
+      .split(/\r?\n/u)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry && !entry.startsWith("#")),
+  );
+}
+
+function isCoveredByGenericSidecarRule(entries, path) {
+  const basename = path.split("/").at(-1);
+
+  return [...entries].some((entry) => {
+    if (entry.startsWith("**/*")) {
+      return basename.endsWith(entry.slice(4));
+    }
+
+    if (entry.startsWith("*") && !entry.includes("/")) {
+      return basename.endsWith(entry.slice(1));
+    }
+
+    return false;
+  });
+}
+
 test("the security audit covers production and development dependencies", () => {
   const rootPackage = JSON.parse(repositoryFile("package.json"));
   assert.equal(rootPackage.scripts["security:audit"], "pnpm audit --audit-level low");
@@ -78,30 +103,65 @@ test("the shared image does not allocate writable storage implicitly", () => {
 });
 
 test("the Docker build context excludes local and sensitive output", () => {
-  const ignored = new Set(
-    repositoryFile(".dockerignore")
-      .split(/\r?\n/u)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry && !entry.startsWith("#")),
-  );
+  const ignored = ignoreEntries(".dockerignore");
 
   for (const required of [
     ".env",
     ".env.*",
+    "**/.env",
+    "**/.env.*",
     ".git",
     ".turbo",
+    "**/data",
+    "**/*.db",
+    "**/*.db-shm",
+    "**/*.db-wal",
+    "**/*.key",
     "**/.lighthouseci",
     "**/.next",
+    "**/*.p12",
+    "**/*.pem",
+    "**/*.sqlite",
+    "**/*.sqlite3",
     "**/*.tsbuildinfo",
     "**/coverage",
     "**/dist",
     "**/node_modules",
     "**/playwright-report",
+    "**/secrets",
     "**/storybook-static",
     "**/test-results",
     "*.log",
     "docker/secrets/*",
   ]) {
     assert.ok(ignored.has(required), `Expected .dockerignore to include ${required}`);
+  }
+});
+
+test("SQLite sidecars stay outside Git and nested Docker build contexts", () => {
+  const gitIgnored = ignoreEntries(".gitignore");
+  const dockerIgnored = ignoreEntries(".dockerignore");
+
+  for (const required of ["*-wal", "*-shm", "*-journal"]) {
+    assert.ok(gitIgnored.has(required), `Expected .gitignore to include ${required}`);
+    assert.ok(
+      dockerIgnored.has(`**/${required}`),
+      `Expected .dockerignore to include **/${required}`,
+    );
+  }
+
+  for (const sentinel of [
+    "runtime/omnifin.sqlite-wal",
+    "apps/gateway/data/omnifin.sqlite3-shm",
+    "services/control-plane/state/custom-name-journal",
+  ]) {
+    assert.ok(
+      isCoveredByGenericSidecarRule(gitIgnored, sentinel),
+      `Expected Git to ignore the SQLite sidecar sentinel ${sentinel}`,
+    );
+    assert.ok(
+      isCoveredByGenericSidecarRule(dockerIgnored, sentinel),
+      `Expected the Docker context to ignore the SQLite sidecar sentinel ${sentinel}`,
+    );
   }
 });

@@ -5,20 +5,26 @@ an operator must make safely. Omnifin is currently pre-release; do not treat an
 untagged image or default branch build as a production support promise.
 
 > [!IMPORTANT]
-> Phase 0 is a source-built foundation preview, not an operable media control plane. It
-> can start the web and gateway processes, initialize and migrate SQLite, report health,
-> expose browser-safe provider metadata, and render the interface preview. It cannot
-> sign users in, configure OIDC or connectors, create sessions, enforce application
-> roles, perform upstream operations, or provide break-glass recovery. Sections marked
-> as future requirements define the supported deployment contract for later phases.
+> The current development branch is not an operable media control plane or a production
+> support promise. It can run the OIDC browser flow for an already configured provider,
+> establish local sessions, authenticate by password or Quick Connect with a configured
+> Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
+> provide RP-initiated logout, provider-initiated back- and front-channel logout, and
+> hidden recovery access. A permission-checked interface and API can create, inspect, and safely
+> validate encrypted OIDC provider records, manage their guarded lifecycle, and administer explicit
+> role mappings. A separate connector API stores encrypted credentials, requires fresh probes before
+> enablement, and permits recovery sessions to repair Jellyfin configuration only. The connector
+> browser interface, protected live compatibility baseline, and upstream media operations remain
+> incomplete. Tagged phase releases define supported deployment claims.
 
 ## Deployment model
 
-The Phase 0 Compose file establishes the intended topology: web and gateway processes
+The Compose file establishes the intended topology: web and gateway processes
 run from the same source-built image, only the web service is published, and the
-gateway owns the SQLite volume. Communication with configured upstream services is a
-later-phase capability; the current repository contains connector contracts and probe
-tooling, but the runtime has no administrative configuration or operational API.
+gateway owns the SQLite volume. The gateway currently communicates with Jellyfin only
+for public server identity, password and Quick Connect authentication, and connector probes. Other live
+upstream workflows remain later-phase capabilities, and the runtime has no supported
+administrative configuration surface.
 
 The production image is distroless and runs without a shell or package manager as a
 numeric non-root user. Use the application health endpoints and structured logs for
@@ -34,7 +40,7 @@ is visible in the repository. Versioned installation instructions will begin wit
 first verified release. Avoid `edge` for persistent installations; it follows the
 default branch and may include migrations that have not passed a release gate.
 
-## Requirements for a future supported deployment
+## Requirements for a supported deployment
 
 Before operating a release that advertises the corresponding capabilities, prepare:
 
@@ -44,30 +50,65 @@ Before operating a release that advertises the corresponding capabilities, prepa
   in Compose configuration;
 - a separately generated break-glass recovery secret;
 - dedicated connector credentials where upstream services support them; and
-- exact OIDC callback and logout URLs when using an identity provider.
+- exact OIDC callback, back-channel logout, front-channel logout, and post-logout URLs
+  when using an identity provider.
 
 Keep the master key and recovery secret outside the database backup. Anyone holding
 both the database and master key may be able to recover upstream credentials.
 
-Phase 0 requires an encryption key to start, but does not yet store usable OIDC client
-secrets, Jellyfin access tokens, connector credentials, sessions, or recovery grants.
-Supplying future-facing settings early does not activate those features.
+The gateway requires an encryption key to start and can store encrypted OIDC client
+secrets, Jellyfin access tokens, connector credentials, and local session and recovery
+state. Direct Jellyfin sign-in is the first workflow that writes an encrypted upstream
+token; passwords are used only for the upstream exchange and are never persisted.
 
-The optional Phase 0 `OMNIFIN_JELLYFIN_URL` setting exposes only browser-safe,
-unavailable provider metadata. It must be a canonical HTTPS URL without embedded
-credentials, a query, or a fragment. An operator who deliberately targets a trusted
-private-network HTTP endpoint must also set
-`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`; this acknowledgement does not enable
-authentication or any media operation.
+The optional `OMNIFIN_JELLYFIN_URL` setting bootstraps the single direct-authentication
+connector and exposes browser-safe provider metadata. It must be a canonical HTTPS URL
+without embedded credentials, a query, or a fragment. An operator who deliberately
+targets a trusted private-network HTTP endpoint must also set
+`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. That acknowledgement enables only the
+currently implemented authentication exchange and does not enable media operations.
+
+`OMNIFIN_BASE_URL` must contain only the canonical public origin, with no credentials,
+path, query, or fragment. Production requires HTTPS except for a loopback-only source
+preview. The production container permits that HTTP exception only when
+`OMNIFIN_INSECURE_LOOPBACK_PREVIEW=true`; the bundled Compose file sets it because its
+default port binding is loopback-only. Do not carry that exception into a published
+network deployment. Register
+`<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` exactly at the OIDC provider;
+for a new configuration, the administration UI can calculate `providerId` as `oidc-{slug}` before
+credentials are submitted. Do not derive callback URLs from proxy forwarding headers. The current branch deliberately has no
+environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
+client secrets and audits provider creation, replacement, validation, and guarded deletion.
+Authorized administrators and recovery sessions reach the guided control room through
+**Account & access → Identity providers**. It previews exact callback and logout endpoints before
+the first credential is submitted, saves new providers disabled, requires fresh discovery
+validation before offering enablement, and manages exact typed role mappings. Role-mapping
+administration and the role-derived session invalidation boundary are implemented; mapping
+updates are not yet available. Operators should not edit SQLite manually to bypass that boundary.
 
 ## Target production network layout
 
 Terminate TLS at a maintained reverse proxy and forward only to the web service. Do
 not publish the gateway port to an untrusted network. Preserve the canonical host and
 scheme so origin checks, secure cookies, and OIDC redirects remain correct. The
-fronting proxy must replace, rather than append to, client-supplied forwarding
-headers. The bundled gateway trusts exactly the single private web-service hop; do
-not make the hop count configurable in the public Compose path.
+fronting proxy must remove any client-supplied forwarding chain before setting or
+appending its observed address. The published web socket is loopback-only, and the
+bundled Compose topology sets `OMNIFIN_WEB_TRUST_PROXY_HOPS=1` for that single
+maintained edge. Set the value to the exact reviewed hop count when more proxies are
+present; use `0` whenever clients can reach the web process directly. A wrong nonzero
+value lets callers choose rate-limit attribution. The bundled gateway separately
+trusts exactly the single private web-service hop; do not change that hop count in the
+public Compose path.
+
+The same-origin `/api` proxy removes every inbound client-address and forwarding
+assertion. When an explicit web trusted-hop count is nonzero, it then selects only the
+IP address immediately before those trusted hops and sends that single canonical
+`X-Forwarded-For` value to the private gateway. Attacker-controlled earlier entries,
+malformed or oversized chains, and all other address headers are discarded. This
+keeps gateway and OIDC per-client rate-limit groups distinct without accepting a
+browser-selected identity. Continue to enforce edge limits at the TLS proxy as an
+additional layer, and treat hashed addresses as operational attribution rather than
+proof of a person's identity.
 
 Once upstream configuration is implemented, restrict gateway egress to DNS and the
 configured identity and media services where practical. Approve private-network
@@ -75,10 +116,12 @@ connector destinations deliberately. Never grant access to cloud metadata addres
 unrelated administration networks, or a generic forward proxy.
 
 Production deployments should use valid certificates end to end where possible.
-Insecure HTTP and self-signed upstream certificates weaken connector identity and
-must require an explicit, service-specific administrative acknowledgement.
+Insecure HTTP weakens connector identity and requires an explicit, service-specific
+administrative acknowledgement. A self-signed HTTPS connector additionally requires
+its current PEM-encoded CA certificate; Omnifin keeps normal certificate and hostname
+verification enabled against that connector-specific trust anchor.
 
-## Phase 0 source-preview verification
+## Source-checkpoint verification
 
 1. Start the exact source commit or locally built image digest selected for validation.
 2. Confirm web liveness through the published loopback port:
@@ -96,11 +139,19 @@ must require an explicit, service-specific administrative acknowledgement.
      'const response = await fetch("http://127.0.0.1:4000/readyz"); const body = await response.json(); if (!response.ok || body.status !== "ready") process.exit(1); console.log(JSON.stringify(body));'
    ```
 
-4. Confirm provider discovery returns only safe metadata and marks every unimplemented
-   login method unavailable.
-5. Confirm the interface identifies itself as a foundation preview and does not offer
-   working account or connector setup.
-6. Confirm telemetry is disabled and inspect logs for accidental private values.
+4. Confirm provider discovery returns only safe metadata. Without a provider configured
+   through test tooling, the login screen must remain explicitly unconfigured.
+5. If validating the OIDC development flow with an isolated synthetic provider,
+   confirm the exact callback, PKCE, authorization replay rejection, session inspection,
+   RP-initiated logout, signed back-channel logout, session-aware front-channel logout,
+   and Logout Token replay behavior.
+   Do not use a personal identity provider or manually edit production data.
+6. Confirm recovery remains absent from the ordinary login interface and rejects a
+   missing or incorrect secret without revealing whether recovery is configured.
+7. Confirm a gateway restart revokes the active recovery session, then reauthenticate
+   deliberately; each new recovery session consumes one of eight rolling 24-hour
+   issuance slots.
+8. Confirm telemetry is disabled and inspect logs for accidental private values.
 
 These checks validate the foundation only. They do not make the preview suitable for
 real users or a personal media library.
@@ -125,7 +176,7 @@ consistent SQLite backup, the matching encryption master key, deployment configu
 and any required Docker secrets. Protect and rotate backup access as carefully as live
 access.
 
-Phase 0 has no supported in-application backup or restore operation. For disposable
+The current checkpoint has no supported in-application backup or restore operation. For disposable
 source-preview data, stop the gateway before copying SQLite. Future supported releases
 must provide and document a transactionally safe procedure; record the running image
 digest and schema version with every recovery set.

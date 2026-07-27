@@ -1,3 +1,5 @@
+import { validateDestinationUrlLiteral } from "@omnifin/connectors/security/destination";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { z } from "zod";
@@ -13,21 +15,27 @@ const optionalUrlString = z.preprocess(
   z.url().optional(),
 );
 
+const optionalSecretSetting = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   OMNIFIN_BASE_URL: z.url().default("http://localhost:3000"),
   OMNIFIN_DATABASE_URL: z.string().min(1).default("./data/omnifin.db"),
-  OMNIFIN_ENCRYPTION_KEY: z.string().optional(),
-  OMNIFIN_ENCRYPTION_KEY_FILE: z.string().optional(),
+  OMNIFIN_ENCRYPTION_KEY: optionalSecretSetting,
+  OMNIFIN_ENCRYPTION_KEY_FILE: optionalSecretSetting,
   OMNIFIN_HOST: z.string().min(1).default("127.0.0.1"),
+  OMNIFIN_INSECURE_LOOPBACK_PREVIEW: booleanString,
   OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: booleanString,
   OMNIFIN_JELLYFIN_URL: optionalUrlString,
   OMNIFIN_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
   OMNIFIN_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
-  OMNIFIN_RECOVERY_SECRET: z.string().optional(),
-  OMNIFIN_RECOVERY_SECRET_FILE: z.string().optional(),
+  OMNIFIN_RECOVERY_SECRET: optionalSecretSetting,
+  OMNIFIN_RECOVERY_SECRET_FILE: optionalSecretSetting,
   OMNIFIN_SECURE_COOKIES: booleanString,
   OMNIFIN_TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(4).default(0),
 });
@@ -38,19 +46,27 @@ export interface AppConfig {
   encryptionKey: Buffer;
   environment: "development" | "test" | "production";
   host: string;
+  insecureLoopbackPreview: boolean;
   jellyfinInsecureHttpApproved: boolean;
   jellyfinUrl?: URL;
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
   port: number;
-  recoverySecret?: string;
+  recoverySecretDigest?: Buffer;
   secureCookies: boolean;
   session: {
     absoluteTtlMs: number;
     inactivityTtlMs: number;
+    recoveryAbsoluteTtlMs: number;
     rotationIntervalMs: number;
   };
   trustProxyHops: number;
 }
+
+const CANONICAL_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const RECOVERY_SECRET_MIN_BYTES = 32;
+const RECOVERY_SECRET_MAX_BYTES = 128;
+const RECOVERY_SECRET_MAX_ENCODED_CHARACTERS = Math.ceil(RECOVERY_SECRET_MAX_BYTES / 3) * 4;
+const RECOVERY_SECRET_DIGEST_BYTES = 32;
 
 function secretFromEnvironment(
   value: string | undefined,
@@ -58,8 +74,8 @@ function secretFromEnvironment(
   conflictCode: StartupFailureCode,
   unreadableFileCode: StartupFailureCode,
 ) {
-  if (value && file) throw new StartupError(conflictCode);
-  if (!file) return value;
+  if (value !== undefined && file !== undefined) throw new StartupError(conflictCode);
+  if (file === undefined) return value;
 
   try {
     return readFileSync(file, "utf8").trim();
@@ -68,16 +84,67 @@ function secretFromEnvironment(
   }
 }
 
+function decodeCanonicalBase64(encoded: string) {
+  if (encoded.length % 4 !== 0 || !CANONICAL_BASE64_PATTERN.test(encoded)) return undefined;
+  const decoded = Buffer.from(encoded, "base64");
+  return decoded.toString("base64") === encoded ? decoded : undefined;
+}
+
 function decodeEncryptionKey(encoded: string | undefined) {
   if (!encoded) throw new StartupError("encryption_key_missing");
-  const canonicalBase64 =
-    encoded.length % 4 === 0 &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded);
-  const key = Buffer.from(encoded, "base64");
-  if (!canonicalBase64 || key.length !== 32 || key.toString("base64") !== encoded) {
+  const key = decodeCanonicalBase64(encoded);
+  if (!key || key.length !== 32) {
     throw new StartupError("encryption_key_invalid");
   }
   return key;
+}
+
+function digestRecoverySecret(encoded: string) {
+  if (encoded.length > RECOVERY_SECRET_MAX_ENCODED_CHARACTERS) {
+    throw new StartupError("recovery_secret_invalid");
+  }
+  const secret = decodeCanonicalBase64(encoded);
+  if (
+    !secret ||
+    secret.length < RECOVERY_SECRET_MIN_BYTES ||
+    secret.length > RECOVERY_SECRET_MAX_BYTES
+  ) {
+    throw new StartupError("recovery_secret_invalid");
+  }
+
+  try {
+    return createHash("sha256").update(secret).digest();
+  } finally {
+    secret.fill(0);
+  }
+}
+
+export function verifyRecoverySecret(candidate: unknown, expectedDigest: unknown) {
+  const decodedCandidate =
+    typeof candidate === "string" && candidate.length <= RECOVERY_SECRET_MAX_ENCODED_CHARACTERS
+      ? decodeCanonicalBase64(candidate)
+      : undefined;
+  const candidateHasValidFormat =
+    decodedCandidate !== undefined &&
+    decodedCandidate.length >= RECOVERY_SECRET_MIN_BYTES &&
+    decodedCandidate.length <= RECOVERY_SECRET_MAX_BYTES;
+  const candidateDigest = createHash("sha256")
+    .update(candidateHasValidFormat ? decodedCandidate : Buffer.alloc(0))
+    .digest();
+  decodedCandidate?.fill(0);
+
+  const comparisonDigest = Buffer.alloc(RECOVERY_SECRET_DIGEST_BYTES);
+  const expectedDigestHasValidFormat =
+    expectedDigest instanceof Uint8Array &&
+    expectedDigest.byteLength === RECOVERY_SECRET_DIGEST_BYTES;
+  if (expectedDigestHasValidFormat) {
+    comparisonDigest.set(expectedDigest);
+  }
+
+  const matches = timingSafeEqual(candidateDigest, comparisonDigest);
+  comparisonDigest.fill(0);
+  candidateDigest.fill(0);
+  return candidateHasValidFormat && expectedDigestHasValidFormat && matches;
 }
 
 function isLoopbackHostname(hostname: string) {
@@ -97,6 +164,7 @@ function canonicalBaseUrl(value: string, environment: AppConfig["environment"]) 
     (url.protocol !== "http:" && url.protocol !== "https:") ||
     url.username ||
     url.password ||
+    url.pathname !== "/" ||
     value.includes("?") ||
     value.includes("#")
   ) {
@@ -113,20 +181,16 @@ function canonicalBaseUrl(value: string, environment: AppConfig["environment"]) 
 }
 
 function canonicalJellyfinUrl(value: string, insecureHttpApproved: boolean) {
-  const url = new URL(value);
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
-    url.username ||
-    url.password ||
-    value.includes("?") ||
-    value.includes("#")
-  ) {
+  if (value.includes("?") || value.includes("#")) {
     throw new StartupError("jellyfin_configuration_invalid");
   }
-  if (url.protocol === "http:" && !insecureHttpApproved) {
-    throw new StartupError("jellyfin_configuration_invalid");
+  try {
+    return validateDestinationUrlLiteral(value, {
+      allowInsecureHttp: insecureHttpApproved,
+    });
+  } catch (error) {
+    throw new StartupError("jellyfin_configuration_invalid", { cause: error });
   }
-  return url;
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -148,6 +212,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     "recovery_secret_conflict",
     "recovery_secret_file_unreadable",
   );
+  const recoverySecretDigest =
+    recoverySecret === undefined ? undefined : digestRecoverySecret(recoverySecret);
   if (parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED && !parsed.OMNIFIN_JELLYFIN_URL) {
     throw new StartupError("jellyfin_configuration_invalid");
   }
@@ -157,22 +223,37 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
         parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED,
       )
     : undefined;
+  const baseUrl = canonicalBaseUrl(parsed.OMNIFIN_BASE_URL, parsed.NODE_ENV);
+  const secureCookies = parsed.OMNIFIN_SECURE_COOKIES || baseUrl.protocol === "https:";
+  const insecureLoopbackPreview =
+    !secureCookies &&
+    baseUrl.protocol === "http:" &&
+    isLoopbackHostname(baseUrl.hostname) &&
+    (parsed.NODE_ENV !== "production" || parsed.OMNIFIN_INSECURE_LOOPBACK_PREVIEW);
+  if (
+    (secureCookies && baseUrl.protocol !== "https:") ||
+    (!secureCookies && !insecureLoopbackPreview)
+  ) {
+    throw new StartupError("base_url_invalid");
+  }
 
   return {
-    baseUrl: canonicalBaseUrl(parsed.OMNIFIN_BASE_URL, parsed.NODE_ENV),
+    baseUrl,
     databaseUrl: parsed.OMNIFIN_DATABASE_URL,
     encryptionKey: decodeEncryptionKey(encryptionKey),
     environment: parsed.NODE_ENV,
     host: parsed.OMNIFIN_HOST,
+    insecureLoopbackPreview,
     jellyfinInsecureHttpApproved: parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED,
     ...(jellyfinUrl ? { jellyfinUrl } : {}),
     logLevel: parsed.OMNIFIN_LOG_LEVEL,
     port: parsed.OMNIFIN_PORT,
-    ...(recoverySecret ? { recoverySecret } : {}),
-    secureCookies: parsed.OMNIFIN_SECURE_COOKIES || parsed.NODE_ENV === "production",
+    ...(recoverySecretDigest ? { recoverySecretDigest } : {}),
+    secureCookies,
     session: {
       absoluteTtlMs: 30 * 24 * 60 * 60 * 1_000,
       inactivityTtlMs: 12 * 60 * 60 * 1_000,
+      recoveryAbsoluteTtlMs: 15 * 60 * 1_000,
       rotationIntervalMs: 15 * 60 * 1_000,
     },
     trustProxyHops: parsed.OMNIFIN_TRUST_PROXY_HOPS,

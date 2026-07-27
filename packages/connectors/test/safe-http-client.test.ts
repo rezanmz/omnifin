@@ -16,6 +16,42 @@ function clientWith(transport: ConnectorTransport, overrides: Record<string, unk
 }
 
 describe("SafeHttpClient", () => {
+  it("requires HTTPS for an explicitly relaxed certificate policy", () => {
+    expect(
+      () =>
+        new SafeHttpClient({
+          service: "radarr",
+          baseUrl: "http://radarr.internal/",
+          allowInsecureHttp: true,
+          tlsPolicy: "allow_self_signed",
+        }),
+    ).toThrow(/requires an HTTPS connector destination/u);
+  });
+
+  it("requires a connector CA for self-signed TLS and preserves strict verification", async () => {
+    const ca = "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----";
+    const mock = createMockTransport([jsonResponse({ version: "6.0.0" })]);
+
+    expect(() => clientWith(mock.transport, { tlsPolicy: "allow_self_signed" })).toThrowError(
+      expect.objectContaining({ code: "configuration_invalid" }),
+    );
+    expect(() => clientWith(mock.transport, { tlsCaCertificatePem: ca })).toThrowError(
+      expect.objectContaining({ code: "configuration_invalid" }),
+    );
+
+    const client = clientWith(mock.transport, {
+      tlsCaCertificatePem: ca,
+      tlsPolicy: "allow_self_signed",
+    });
+    await client.requestJson("api/v3/system/status", z.object({ version: z.string() }), {
+      operation: "probe",
+    });
+    expect(mock.requests[0]?.init).toMatchObject({
+      tlsCaCertificatePem: ca,
+      tlsPolicy: "allow_self_signed",
+    });
+  });
+
   it("rejects limits that could disable deadline or response-size protection", () => {
     const mock = createMockTransport([]);
 
@@ -108,6 +144,29 @@ describe("SafeHttpClient", () => {
     await expect(
       client.requestText("api/v3/%2e%2e/admin", { operation: "probe" }),
     ).rejects.toMatchObject({ code: "destination_blocked" });
+    expect(mock.requests).toHaveLength(0);
+  });
+
+  it("does not forward credentials through whitespace-disguised absolute paths", async () => {
+    const mock = createMockTransport([]);
+    const client = clientWith(mock.transport, {
+      baseUrl: "https://radarr.example.test/api/",
+      headers: { "X-Api-Key": "api-key-super-secret" },
+    });
+
+    for (const path of [
+      " https://radarr.example.test:9999/secret",
+      "\thttps://radarr.example.test:9999/secret",
+      "\u0000https://radarr.example.test:9999/secret",
+      "\u00a0https://radarr.example.test:9999/secret",
+      "\u200bhttps://radarr.example.test:9999/secret",
+      "../secret",
+    ]) {
+      await expect(client.requestText(path, { operation: "probe" })).rejects.toMatchObject({
+        code: "destination_blocked",
+      });
+    }
+
     expect(mock.requests).toHaveLength(0);
   });
 

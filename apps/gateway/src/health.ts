@@ -5,6 +5,8 @@ import type { DatabaseHandle } from "./db/client.js";
 
 const REQUIRED_TABLES = [
   "__drizzle_migrations",
+  "audit_budget_entries",
+  "audit_budget_scopes",
   "audit_events",
   "auth_transactions",
   "connector_configs",
@@ -13,6 +15,8 @@ const REQUIRED_TABLES = [
   "operational_failures",
   "role_mappings",
   "service_identity_links",
+  "session_rotation_aliases",
+  "session_secret_reservations",
   "sessions",
   "users",
 ] as const;
@@ -36,7 +40,27 @@ function assertDatabaseReady(database: DatabaseHandle) {
 
     database.sqlite
       .prepare(
+        "select scope, generation, slot, bucket_hash, created_at from audit_budget_entries limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select scope, generation, window_started_at, clock_watermark_at, rollback_started_at, saturated, suppressed_count from audit_budget_scopes limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
         "select id, oidc_provider_id, external_identity_id, oidc_session_id_hash from sessions limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select token_hash, purpose, state, session_id, valid_from, expires_at from session_rotation_aliases limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select secret_hash, purpose, origin_session_id, reserved_at from session_secret_reservations limit 0",
       )
       .all();
     database.sqlite

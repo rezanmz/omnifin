@@ -79,6 +79,7 @@ ENV NODE_ENV=production \
     OMNIFIN_PORT=4000 \
     OMNIFIN_DATABASE_URL=/data/omnifin.db \
     OMNIFIN_GATEWAY_URL=http://gateway:4000 \
+    OMNIFIN_WEB_TRUST_PROXY_HOPS=0 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

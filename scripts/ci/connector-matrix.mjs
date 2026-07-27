@@ -19,7 +19,7 @@ const globalPatterns = [
 const authPattern =
   /^(?:apps\/gateway\/(?:src\/auth\/|test\/auth)|packages\/contracts\/(?:src|test)\/auth\.)/u;
 
-export function selectConnectorServices(changedFiles, { emptyBase = false, readiness }) {
+export function planConnectorServices(changedFiles, { emptyBase = false, readiness }) {
   const fixtureReadyServices = SERVICES.filter(
     (service) => readiness.services[service].fixture === "ready",
   );
@@ -42,19 +42,34 @@ export function selectConnectorServices(changedFiles, { emptyBase = false, readi
   const globalChange = changedFiles.some((file) =>
     globalPatterns.some((pattern) => pattern.test(file)),
   );
+  let affectedServices;
   if (globalChange) {
-    const selected = new Set(fixtureReadyServices);
     // The repository's one-time foundation PR starts from an empty bootstrap
     // commit and must establish the ledger before pending identity suites exist.
-    // Every later global change preserves explicitly selected pending services.
-    if (!emptyBase) {
-      for (const service of explicitlySelected) selected.add(service);
-    }
-    return SERVICES.filter((service) => selected.has(service));
+    affectedServices = emptyBase ? new Set(fixtureReadyServices) : new Set(SERVICES);
+  } else if (explicitlySelected.size === 0) {
+    affectedServices = new Set(fixtureReadyServices);
+  } else {
+    affectedServices = explicitlySelected;
   }
 
-  if (explicitlySelected.size === 0) return fixtureReadyServices;
-  return SERVICES.filter((service) => explicitlySelected.has(service));
+  let services = SERVICES.filter(
+    (service) => affectedServices.has(service) && readiness.services[service].fixture === "ready",
+  );
+  const deferredServices = SERVICES.filter(
+    (service) => affectedServices.has(service) && readiness.services[service].fixture === "pending",
+  );
+
+  // Keep the required connector check useful when a change affects only future
+  // suites: run the established fixture baseline without treating pending work
+  // as verified coverage.
+  if (services.length === 0) services = fixtureReadyServices;
+
+  return { deferredServices, services };
+}
+
+export function selectConnectorServices(changedFiles, options) {
+  return planConnectorServices(changedFiles, options).services;
 }
 
 async function main() {
@@ -63,11 +78,12 @@ async function main() {
   const outputFile = process.env.GITHUB_OUTPUT;
   if (!outputFile) throw new Error("GITHUB_OUTPUT is required");
 
-  let selectedServices;
+  let plan;
   if (eventName !== "pull_request") {
-    selectedServices = SERVICES.filter(
-      (service) => readiness.services[service].fixture === "ready",
-    );
+    plan = {
+      deferredServices: [],
+      services: SERVICES.filter((service) => readiness.services[service].fixture === "ready"),
+    };
   } else {
     const baseSha = process.env.OMNIFIN_BASE_SHA ?? "";
     const headSha = process.env.OMNIFIN_HEAD_SHA ?? "";
@@ -84,15 +100,21 @@ async function main() {
     const baseFiles = execFileSync("git", ["ls-tree", "--name-only", "-r", baseSha], {
       encoding: "utf8",
     }).trim();
-    selectedServices = selectConnectorServices(changedFiles, {
+    plan = planConnectorServices(changedFiles, {
       emptyBase: baseFiles.length === 0,
       readiness,
     });
   }
 
-  const matrix = JSON.stringify({ service: selectedServices });
-  await appendFile(outputFile, `matrix=${matrix}\n`, "utf8");
-  process.stdout.write(`Integration services: ${selectedServices.join(", ")}\n`);
+  const matrix = JSON.stringify({ service: plan.services });
+  const deferred = JSON.stringify(plan.deferredServices);
+  await appendFile(outputFile, `matrix=${matrix}\ndeferred=${deferred}\n`, "utf8");
+  process.stdout.write(`Integration services: ${plan.services.join(", ")}\n`);
+  if (plan.deferredServices.length > 0) {
+    process.stdout.write(
+      `Pending fixture coverage deferred: ${plan.deferredServices.join(", ")}\n`,
+    );
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,21 +1,24 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
 import SettingsPage from "./page";
 
 describe("SettingsPage", () => {
-  it("states the foundation-release configuration boundary in user language", () => {
-    render(<SettingsPage />);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("opens the account-and-access center with geometry-preserving loading states", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+
+    render(await SettingsPage({ searchParams: Promise.resolve({}) }));
 
     expect(
-      screen.getByRole("heading", {
-        level: 1,
-        name: "Account setup arrives in Phase 1.",
-      }),
+      screen.getByRole("heading", { level: 1, name: "Your identity, under your control." }),
     ).toBeVisible();
-    expect(
-      screen.getByText(/does not yet accept credentials or connect to media services/i),
-    ).toBeVisible();
-    expect(screen.getByRole("link", { name: /Return home/i })).toHaveAttribute("href", "/");
-    expect(screen.queryByText(/Phase 0|preview|validation/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Loading account security")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("link", { name: "Back to home" })).toHaveAttribute("href", "/");
+    expect(screen.queryByText(/preview|checkpoint|phase/i)).not.toBeInTheDocument();
   });
 });

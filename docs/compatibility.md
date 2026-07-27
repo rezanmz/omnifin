@@ -8,18 +8,18 @@ combination is described as supported.
 > There is no verified public compatibility baseline yet. Every entry below is a
 > target for pre-release integration work, not a support claim.
 
-| Service                           | Intended use                                                   | Current status               |
-| --------------------------------- | -------------------------------------------------------------- | ---------------------------- |
-| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Target; verification pending |
-| Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Target; verification pending |
-| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending |
-| Seerr                             | Discovery, requests, approvals, issues, user context           | Target; verification pending |
-| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | Target; verification pending |
-| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Target; verification pending |
-| Bazarr                            | Subtitle status, search, and download                          | Target; verification pending |
-| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending |
-| qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending |
-| SABnzbd                           | Queue, history, rates, progress, pause/resume, safe removal    | Target; verification pending |
+| Service                           | Intended use                                                   | Current status                             |
+| --------------------------------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Target; verification pending               |
+| Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Isolated gate ready; live baseline pending |
+| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending               |
+| Seerr                             | Discovery, requests, approvals, issues, user context           | Target; verification pending               |
+| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | Target; verification pending               |
+| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Target; verification pending               |
+| Bazarr                            | Subtitle status, search, and download                          | Target; verification pending               |
+| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending               |
+| qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending               |
+| SABnzbd                           | Queue, history, rates, progress, pause/resume, safe removal    | Target; verification pending               |
 
 Seerr is the primary request-management target. Compatibility with older Jellyseerr
 and Overseerr installations is capability-based and will be listed only after it is
@@ -47,9 +47,10 @@ version. “Latest” without a recorded version and verification date is not su
 Pull requests run the affected deterministic fixture matrix in
 `.github/workflows/integration.yml`; that workflow has no access to live service
 credentials. Its required `Connector integration` gate reflects fixture evidence only.
-At the foundation phase, Jellyfin, Seerr, Radarr, Sonarr, Bazarr, Prowlarr,
-qBittorrent, and SABnzbd fixture suites are marked ready, while OIDC and Authentik
-fixture coverage remains pending.
+All deterministic fixture suites are marked ready. OIDC is covered by protocol and
+gateway contract fixtures; Authentik additionally runs a pinned, isolated upstream
+authorization-code browser harness. Fixture readiness is development evidence and
+does not establish a public live-support baseline.
 
 Scheduled and manual probes run in `.github/workflows/integration-live.yml` only from
 `main` and only through the protected `integration` environment. Until the repository

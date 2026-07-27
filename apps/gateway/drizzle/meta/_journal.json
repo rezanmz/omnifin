@@ -8,6 +8,55 @@
       "when": 1785007972541,
       "tag": "0000_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785018255482,
+      "tag": "0001_auth_security_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785023416678,
+      "tag": "0002_oidc_runtime_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785034833279,
+      "tag": "0003_session_secret_reservations",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785038321917,
+      "tag": "0004_oidc_failure_audit_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785061316244,
+      "tag": "0005_session_issuance_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785070140642,
+      "tag": "0006_jellyfin_quick_connect",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785073497632,
+      "tag": "0007_jellyfin_quick_connect_pairing",
+      "breakpoints": true
     }
   ]
 }

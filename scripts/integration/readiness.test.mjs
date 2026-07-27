@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SERVICES, readinessBlock, validateReadinessLedger } from "./readiness.mjs";
-import { fixtureChecksFor, parseArguments, vitestExecutionPassed } from "./run.mjs";
+import {
+  fixtureChecksFor,
+  nodeTestExecutionPassed,
+  parseArguments,
+  vitestExecutionPassed,
+  vitestExecutionSummary,
+  workspaceBuildArguments,
+} from "./run.mjs";
 
 function ledgerWith(state = "ready") {
   return {
@@ -69,4 +76,69 @@ test("fixture execution rejects zero-match, all-skipped, and malformed Vitest re
     }),
     true,
   );
+});
+
+test("fixture execution reads a dedicated reporter artifact instead of command stdout", () => {
+  const report = JSON.stringify({
+    numFailedTests: 0,
+    numPassedTests: 1,
+    numPendingTests: 0,
+    numTotalTests: 1,
+    success: true,
+  });
+  assert.equal(
+    vitestExecutionPassed({ status: 0, stdout: "package-manager output before JSON" }, report),
+    true,
+  );
+});
+
+test("node fixture execution requires a real passing test summary", () => {
+  const passing = ["TAP version 13", "# tests 10", "# pass 10", "# fail 0", "# cancelled 0"].join(
+    "\n",
+  );
+  assert.equal(nodeTestExecutionPassed({ status: 0, stdout: passing }), true);
+  assert.equal(
+    nodeTestExecutionPassed({
+      status: 0,
+      stdout: "TAP version 13\n# tests 0\n# pass 0\n# fail 0\n# cancelled 0",
+    }),
+    false,
+  );
+  assert.equal(nodeTestExecutionPassed({ status: 1, stdout: passing }), false);
+});
+
+test("fixture failures expose only bounded test-file basenames", () => {
+  const reporterOutput = JSON.stringify({
+    numFailedTests: 1,
+    numPassedTests: 1,
+    numPendingTests: 0,
+    numTotalTests: 2,
+    success: false,
+    testResults: [
+      {
+        message: "private assertion and protocol payload",
+        name: "/home/runner/work/omnifin/apps/gateway/test/oidc-routes.test.ts",
+        status: "failed",
+      },
+      {
+        name: "/home/runner/work/omnifin/apps/gateway/test/oidc-protocol.test.ts",
+        status: "passed",
+      },
+    ],
+  });
+  const summary = vitestExecutionSummary({ status: 1, stdout: "ignored" }, reporterOutput);
+  assert.deepEqual(summary, {
+    failedTestFiles: ["oidc-routes.test.ts"],
+    passed: false,
+  });
+  assert.equal(JSON.stringify(summary).includes("private assertion"), false);
+  assert.equal(JSON.stringify(summary).includes("/home/runner"), false);
+});
+
+test("fixture packages build their workspace dependencies before contract execution", () => {
+  assert.deepEqual(workspaceBuildArguments("@omnifin/gateway"), [
+    "--filter",
+    "@omnifin/gateway^...",
+    "build",
+  ]);
 });

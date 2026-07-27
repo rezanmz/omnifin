@@ -1,9 +1,11 @@
 # Security policy
 
 Omnifin is designed to handle identity assertions, session state, media history, and
-credentials that may carry administrative access to several services. Phase 0 does not
-yet expose those product workflows, but its gateway, storage, connector, and release
-foundations remain security-sensitive. Please report suspected vulnerabilities
+credentials that may carry administrative access to several services. The current
+pre-release code exposes OIDC authentication, local sessions, recovery access, and
+authentication audit records; Jellyfin pairing, connector administration, and media
+operations remain in development. The gateway, storage, identity, connector, and
+release boundaries are security-sensitive. Please report suspected vulnerabilities
 privately and avoid testing against systems or data you do not own.
 
 ## Supported versions

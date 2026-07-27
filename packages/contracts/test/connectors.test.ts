@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { connectorHealthSchema, partialFailureSchema } from "../src/connectors.js";
+import {
+  connectorAdminSchema,
+  connectorAdminJsonSchema,
+  connectorCreateRequestSchema,
+  connectorDeleteQuerySchema,
+  connectorDeleteResponseJsonSchema,
+  connectorHealthSchema,
+  connectorListQuerySchema,
+  connectorUpdateRequestSchema,
+  partialFailureSchema,
+} from "../src/connectors.js";
 import {
   continueWatchingItemSchema,
   dashboardSnapshotSchema,
@@ -8,6 +18,8 @@ import {
 } from "../src/dashboard.js";
 
 describe("connector contracts", () => {
+  const shapedCaCertificate = "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n";
+
   it("normalizes a safe partial failure without an upstream payload", () => {
     const failure = partialFailureSchema.parse({
       service: "radarr",
@@ -130,6 +142,115 @@ describe("connector contracts", () => {
         status: "healthy",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts only service-compatible connector credentials and explicit transport approval", () => {
+    const base = {
+      id: "radarr-main",
+      service: "radarr",
+      displayName: "Radarr",
+      baseUrl: "https://radarr.example.test/base/",
+      credentials: { kind: "api_key", apiKey: "fixture-api-key" },
+      tlsPolicy: "strict",
+      insecureHttpApproved: false,
+    } as const;
+
+    expect(connectorCreateRequestSchema.safeParse(base).success).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        credentials: { kind: "username_password", username: "admin", password: "private" },
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        baseUrl: "http://radarr.example.test/",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        baseUrl: "http://radarr.example.test/",
+        insecureHttpApproved: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        baseUrl: "https://radarr.example.test/?apiKey=private",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsPolicy: "allow_self_signed",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsCaCertificatePem: shapedCaCertificate,
+        tlsPolicy: "allow_self_signed",
+      }).success,
+    ).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsCaCertificatePem: shapedCaCertificate,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("exposes a secret-free administration record and bounded cursor query", () => {
+    const input = {
+      id: "radarr-main",
+      service: "radarr",
+      displayName: "Radarr",
+      baseUrl: "https://radarr.example.test/",
+      credentialKind: "api_key",
+      credentialsConfigured: true,
+      tlsPolicy: "strict",
+      tlsCaCertificateConfigured: false,
+      insecureHttpApproved: false,
+      enabled: false,
+      healthState: "unknown",
+      lastProbe: null,
+      revision: "0123456789abcdef",
+      createdAt: "2026-07-26T12:00:00.000Z",
+      updatedAt: "2026-07-26T12:00:00.000Z",
+    } as const;
+    expect(connectorAdminSchema.safeParse({ ...input, apiKey: "must-not-cross" }).success).toBe(
+      false,
+    );
+    const record = connectorAdminSchema.parse(input);
+    expect(record).not.toHaveProperty("apiKey");
+    expect(record).not.toHaveProperty("credentials");
+    expect(connectorListQuerySchema.parse({ limit: "50" })).toEqual({ limit: 50 });
+    expect(connectorListQuerySchema.safeParse({ limit: "51" }).success).toBe(false);
+  });
+
+  it("requires optimistic revision and a material update", () => {
+    expect(
+      connectorUpdateRequestSchema.safeParse({
+        revision: "0123456789abcdef",
+        displayName: "Living room Radarr",
+      }).success,
+    ).toBe(true);
+    expect(connectorUpdateRequestSchema.safeParse({ revision: "0123456789abcdef" }).success).toBe(
+      false,
+    );
+  });
+
+  it("publishes dialect-neutral route schemas and validates delete revisions", () => {
+    expect(connectorAdminJsonSchema).not.toHaveProperty("$schema");
+    expect(connectorDeleteResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(connectorDeleteQuerySchema.safeParse({ revision: "0123456789abcdef" }).success).toBe(
+      true,
+    );
+    expect(connectorDeleteQuerySchema.safeParse({ revision: "quoted revision" }).success).toBe(
+      false,
+    );
   });
 
   it("rejects playback positions beyond the media duration", () => {

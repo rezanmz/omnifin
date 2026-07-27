@@ -220,11 +220,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build web application
-        run: pnpm --filter @omnifin/web build
+        run: pnpm build
       - name: Install browser runtime
         run: pnpm --filter @omnifin/web exec playwright install --with-deps "${{ matrix.browser }}"
       - name: Run browser tests
         run: pnpm test:e2e --project="${{ matrix.browser }}"
+      - name: Verify browser-to-gateway OIDC rewrites
+        if: matrix.browser == 'chromium'
+        run: pnpm test:oidc-rewrite
       - name: Upload browser diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -258,7 +261,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build web application
-        run: pnpm --filter @omnifin/web build
+        run: pnpm build
       - name: Install browser runtimes
         run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit
       - name: Build static Storybook
@@ -290,7 +293,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build web application
-        run: pnpm --filter @omnifin/web build
+        run: pnpm build
       - name: Install browser runtimes
         run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit
       - name: Compare committed visual baselines
@@ -328,7 +331,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build web application
-        run: pnpm --filter @omnifin/web build
+        run: pnpm build
       - name: Install Chromium
         run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium
       - name: Enforce Lighthouse and Core Web Vitals budgets

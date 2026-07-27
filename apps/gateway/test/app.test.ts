@@ -7,6 +7,7 @@ import { createApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
 import { oidcProviders } from "../src/db/schema.js";
+import { SafeHttpError } from "../src/http-error.js";
 import { startupFailureDetails } from "../src/startup-error.js";
 
 function testConfig(): AppConfig {
@@ -16,6 +17,7 @@ function testConfig(): AppConfig {
     encryptionKey: Buffer.alloc(32, 4),
     environment: "test",
     host: "127.0.0.1",
+    insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     jellyfinUrl: new URL("https://jellyfin.example"),
     logLevel: "silent",
@@ -24,6 +26,7 @@ function testConfig(): AppConfig {
     session: {
       absoluteTtlMs: 30 * 24 * 60 * 60 * 1_000,
       inactivityTtlMs: 12 * 60 * 60 * 1_000,
+      recoveryAbsoluteTtlMs: 15 * 60 * 1_000,
       rotationIntervalMs: 15 * 60 * 1_000,
     },
     trustProxyHops: 0,
@@ -31,6 +34,25 @@ function testConfig(): AppConfig {
 }
 
 describe("gateway application", () => {
+  it("starts the production image in an explicitly approved loopback preview", async () => {
+    const app = await createApp({
+      config: {
+        ...testConfig(),
+        baseUrl: new URL("http://localhost:3000"),
+        environment: "production",
+        insecureLoopbackPreview: true,
+        secureCookies: false,
+      },
+      database: openDatabase(":memory:"),
+    });
+    try {
+      const health = await app.inject({ method: "GET", url: "/healthz" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("closes the transferred database handle when initialization fails", async () => {
     const database = openDatabase(":memory:");
     const close = vi.fn(database.close);
@@ -140,6 +162,42 @@ describe("gateway application", () => {
     await app.close();
   });
 
+  it("revokes recovery access on startup even when a pre-migrated deployment skips migrations", async () => {
+    const database = openDatabase(":memory:");
+    database.migrate();
+    database.sqlite.exec(`
+      insert into sessions (
+        id, token_hash, auth_method, csrf_token_hash, encrypted_csrf_token,
+        created_at, last_rotated_at, last_seen_at, expires_at, absolute_expires_at
+      ) values (
+        'pre-migrated-recovery', '${"r".repeat(43)}', 'recovery', '${"c".repeat(43)}',
+        'v2.fixture-csrf', 1000, 1000, 1000, 2000, 3000
+      )
+    `);
+
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      migrate: false,
+      sessionDependencies: { clock: () => new Date(2_000) },
+    });
+    expect(
+      database.sqlite
+        .prepare("select revoked_at as revokedAt from sessions where id = 'pre-migrated-recovery'")
+        .get(),
+    ).toEqual({ revokedAt: expect.any(Number) });
+    expect(
+      database.sqlite
+        .prepare(
+          `select event_type as eventType
+           from audit_events
+           where target_id = 'pre-migrated-recovery'`,
+        )
+        .get(),
+    ).toEqual({ eventType: "auth.recovery_session.revoked" });
+    await app.close();
+  });
+
   it("rejects readiness when required schema is missing", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });
@@ -214,7 +272,7 @@ describe("gateway application", () => {
     await app.close();
   });
 
-  it("reports configured providers without advertising unimplemented login methods", async () => {
+  it("reports configured providers and the implemented Jellyfin login methods", async () => {
     const database = openDatabase(":memory:");
     const app = await createApp({ config: testConfig(), database });
     database.db
@@ -250,9 +308,9 @@ describe("gateway application", () => {
           id: "jellyfin",
           kind: "jellyfin",
           pairingRequiredAfterOidc: true,
-          passwordLoginAvailable: false,
-          quickConnectAvailable: false,
-          state: "unavailable",
+          passwordLoginAvailable: true,
+          quickConnectAvailable: true,
+          state: "available",
         },
       ],
     });
@@ -262,11 +320,17 @@ describe("gateway application", () => {
 
   it("denies state-changing requests without the configured public origin", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
-    app.post("/v1/test-mutation", async () => ({ accepted: true }));
+    app.post(
+      "/v1/test-mutation",
+      { config: { omnifinSecurity: { kind: "public-browser" } } },
+      async () => ({ accepted: true }),
+    );
 
     const denied = await app.inject({ method: "POST", url: "/v1/test-mutation" });
     expect(denied.statusCode).toBe(403);
     expect(apiErrorSchema.parse(denied.json()).error.code).toBe("origin_denied");
+    expect(denied.headers["x-request-id"]).toBeTypeOf("string");
+    expect(denied.headers["permissions-policy"]).toContain("camera=()");
 
     const accepted = await app.inject({
       headers: { origin: "https://omnifin.example" },
@@ -282,6 +346,7 @@ describe("gateway application", () => {
     app.post(
       "/v1/validated",
       {
+        config: { omnifinSecurity: { kind: "public-browser" } },
         schema: {
           body: { type: "object", required: ["safe"], properties: { safe: { type: "string" } } },
         },
@@ -297,6 +362,34 @@ describe("gateway application", () => {
     expect(response.statusCode).toBe(400);
     expect(apiErrorSchema.parse(response.json()).error.code).toBe("invalid_request");
     expect(response.body).not.toContain("must-not-reflect");
+    await app.close();
+  });
+
+  it("preserves explicitly safe domain errors without exposing their causes", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    app.get("/v1/domain-failure", async () => {
+      throw new SafeHttpError({
+        cause: new Error("password=private and /private/media/path"),
+        code: "authentication_required",
+        details: { relinkRequired: true },
+        message: "Sign in to continue.",
+        statusCode: 401,
+      });
+    });
+
+    const response = await app.inject({ method: "GET", url: "/v1/domain-failure" });
+
+    expect(response.statusCode).toBe(401);
+    expect(apiErrorSchema.parse(response.json())).toEqual({
+      error: {
+        code: "authentication_required",
+        details: { relinkRequired: true },
+        message: "Sign in to continue.",
+        requestId: response.headers["x-request-id"],
+      },
+    });
+    expect(response.body).not.toContain("password=private");
+    expect(response.body).not.toContain("/private/media/path");
     await app.close();
   });
 
@@ -326,6 +419,24 @@ describe("gateway application", () => {
     await app.close();
   });
 
+  it("does not trust invalid status codes on internal errors", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    app.get("/v1/invalid-error-status", async () => {
+      throw Object.assign(new Error("private connector failure"), {
+        code: "UPSTREAM_PRIVATE_CODE",
+        statusCode: 200,
+      });
+    });
+
+    const response = await app.inject({ method: "GET", url: "/v1/invalid-error-status" });
+
+    expect(response.statusCode).toBe(500);
+    expect(apiErrorSchema.parse(response.json()).error.code).toBe("internal_error");
+    expect(response.body).not.toContain("UPSTREAM_PRIVATE_CODE");
+    expect(response.body).not.toContain("private connector failure");
+    await app.close();
+  });
+
   it("uses the shared error envelope for routes that do not exist", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
 
@@ -336,14 +447,64 @@ describe("gateway application", () => {
     await app.close();
   });
 
-  it("allows the dedicated signed-logout surface to validate its own non-browser request", async () => {
+  it("fails closed on the dedicated signed-logout surface without a verified form assertion", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
-    app.post("/v1/auth/oidc/backchannel/provider", async () => ({ accepted: true }));
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/oidc/backchannel/provider",
     });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(400);
+    expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+      "backchannel_authentication_denied",
+    );
+    await app.close();
+  });
+
+  it("refuses to register mutations without an explicit request-security policy", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+
+    expect(() => app.post("/v1/unsafe-mutation", async () => ({ accepted: true }))).toThrow(
+      /must declare an Omnifin security policy/i,
+    );
+    expect(() =>
+      app.post(
+        "/v1/unsafe-backchannel",
+        { config: { omnifinSecurity: { kind: "oidc-backchannel" } } },
+        async () => ({ accepted: true }),
+      ),
+    ).toThrow(/limited to its dedicated POST route/i);
+    expect(() =>
+      app.post(
+        "/v1/unsafe-session-form",
+        { config: { omnifinSecurity: { kind: "session-form" } } },
+        async () => ({ accepted: true }),
+      ),
+    ).toThrow(/limited to the OIDC logout POST route/i);
+    expect(() =>
+      app.get(
+        "/v1/unsafe-frontchannel",
+        { config: { omnifinSecurity: { kind: "oidc-frontchannel" } } },
+        async () => ({ accepted: true }),
+      ),
+    ).toThrow(/limited to its dedicated GET route/i);
+    await app.close();
+  });
+
+  it("denies session mutations when their CSRF proof is unavailable", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    app.delete(
+      "/v1/session-bound",
+      { config: { omnifinSecurity: { kind: "session" } } },
+      async () => ({ accepted: true }),
+    );
+
+    const response = await app.inject({
+      headers: { origin: "https://omnifin.example", "x-omnifin-csrf": "untrusted" },
+      method: "DELETE",
+      url: "/v1/session-bound",
+    });
+    expect(response.statusCode).toBe(403);
+    expect(apiErrorSchema.parse(response.json()).error.code).toBe("csrf_denied");
     await app.close();
   });
 

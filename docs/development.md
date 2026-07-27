@@ -32,10 +32,18 @@ set +a
 pnpm dev
 ```
 
-The Phase 0 workspace starts a foundation preview: interface shells, health and
-readiness, safe provider metadata, migrations, and connector fixture/probe tooling. It
-does not provide a working sign-in, account or connector administration, sessions,
-recovery access, or upstream media operations.
+The current workspace starts the application shells, health and readiness endpoints,
+safe provider metadata, OIDC browser routes, RP-initiated logout, provider-initiated
+back- and front-channel logout, individual and account-wide local session
+revocation, recovery access,
+migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pending OIDC users,
+the permission-checked OIDC provider and role-mapping control room, and connector fixture/probe
+tooling. Account and provider administration are available as pre-release development surfaces.
+The versioned gateway API can administer encrypted connector records, validate capabilities, and
+guard enablement and deletion. Recovery access can inspect and repair Jellyfin connector records
+without seeing or mutating other service configuration. A pinned isolated Authentik gate exercises
+authorization, role mapping, RP logout, and back-channel logout; the browser connector control room,
+protected live compatibility baseline, and upstream media operations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the
@@ -101,12 +109,14 @@ CI environment. A pull request must not waive a failing check merely because it 
 on one workstation.
 
 Connector fixture work must keep `scripts/integration/readiness.json` truthful. A
-strict fixture check succeeds only for a profile reviewed as `ready`; pending identity
-coverage is expected to fail closed:
+strict fixture check succeeds only for a profile reviewed as `ready`. The deterministic
+OIDC and isolated Authentik profiles are enforced; live identity profiles remain
+pending and fail closed:
 
 ```sh
 pnpm test:integration --service jellyfin --mode fixture --strict
-pnpm test:integration --service oidc --mode fixture --strict # expected to fail while pending
+pnpm test:integration --service oidc --mode fixture --strict
+pnpm test:integration --service authentik --mode fixture --strict
 ```
 
 Do not copy live credentials into a pull-request workflow or local fixture. Scheduled,
@@ -150,6 +160,11 @@ docs(deploy): clarify master-key backup
 Keep refactors separate from behavior changes when practical. Sign commits with a
 verified GPG, SSH, or S/MIME signature. Pull requests should explain user impact,
 security and migration consequences, evidence, and rollback.
+
+Use neutral, purpose-based branch names under `feature/`, `fix/`, `phase/`, or
+`release/`. Branch names, commits, pull requests, documentation, releases, and package
+metadata must describe the project change itself and must not include editor,
+automation, or implementation-tool attribution.
 
 ## Data and migrations
 
