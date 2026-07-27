@@ -470,6 +470,7 @@ async function main(options) {
         "backchannel_send_failed",
         "backchannel_send_missing",
         "backchannel_send_pending",
+        "backchannel_session_lookup",
         "backchannel_task_status_unavailable",
         "backchannel_trigger",
         "configuration",

@@ -249,6 +249,29 @@ async function assertAuthentikBrowserSession(request, issuerOrigin) {
   assert(body.user?.username === "akadmin");
 }
 
+async function currentAuthentikBrowserSession(request, issuerOrigin) {
+  const response = await request.get(
+    `${issuerOrigin}/api/v3/core/authenticated_sessions/?page_size=100&user__username=akadmin`,
+    { maxRedirects: 0 },
+  );
+  const body = await json(response, 200);
+  assert(Array.isArray(body.results));
+  const current = body.results.find((session) => session?.current === true);
+  assert(typeof current?.uuid === "string" && current.uuid.length > 0);
+  return current.uuid;
+}
+
+async function revokeAuthentikBrowserSession(request, issuerOrigin, token, sessionId) {
+  const response = await request.delete(
+    `${issuerOrigin}/api/v3/core/authenticated_sessions/${encodeURIComponent(sessionId)}/`,
+    {
+      headers: { authorization: `Bearer ${token}` },
+      maxRedirects: 0,
+    },
+  );
+  assert(response.status() === 204);
+}
+
 async function assertAuthentikProviderConfiguration(
   request,
   issuerOrigin,
@@ -279,15 +302,6 @@ function assertPrincipal(current, issuer, subject) {
   assert(current.principal.externalIdentity.subject.length > 0);
   if (subject !== undefined) assert(current.principal.externalIdentity.subject === subject);
   return current.principal.externalIdentity.subject;
-}
-
-async function logoutAtAuthentik(page, issuerOrigin) {
-  // Enter the provider's OIDC session endpoint directly so this path cannot
-  // accidentally exercise Omnifin's RP-initiated logout route.
-  await page.goto(`${issuerOrigin}/application/o/omnifin/end-session/`, {
-    waitUntil: "domcontentloaded",
-  });
-  assert(new URL(page.url()).origin === issuerOrigin);
 }
 
 const AUTHENTIK_TASK_STATES = new Set([
@@ -489,8 +503,15 @@ async function run() {
 
     currentStage = "backchannel_provider_session";
     await assertAuthentikBrowserSession(context.request, issuerOrigin);
+    currentStage = "backchannel_session_lookup";
+    const authentikSessionId = await currentAuthentikBrowserSession(context.request, issuerOrigin);
     currentStage = "backchannel_trigger";
-    await logoutAtAuthentik(page, issuerOrigin);
+    await revokeAuthentikBrowserSession(
+      context.request,
+      issuerOrigin,
+      authentikToken,
+      authentikSessionId,
+    );
     currentStage = "backchannel_revocation";
     try {
       await waitForRevokedSession(context.request);
