@@ -13,7 +13,7 @@ const { chromium } = requireFromWeb("@playwright/test");
 
 const providerSlug = "authentik";
 const expectedProviderId = `oidc-${providerSlug}`;
-const INTERACTION_RETRY_ATTEMPTS = 4;
+const INTERACTION_RETRY_ATTEMPTS = 6;
 
 class BrowserCheckError extends Error {
   constructor() {
@@ -122,14 +122,7 @@ async function retryInteraction(page, action) {
 async function fillStable(page, locator, value) {
   await retryInteraction(page, async () => {
     await locator.waitFor({ state: "visible", timeout: 5_000 });
-    await locator.evaluate((input, nextValue) => {
-      if (!(input instanceof HTMLInputElement)) throw new Error("fixture_input_unavailable");
-      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      if (!valueSetter) throw new Error("fixture_input_setter_unavailable");
-      valueSetter.call(input, nextValue);
-      input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    }, value);
+    await locator.fill(value, { timeout: 5_000 });
     assert((await locator.inputValue()) === value);
   });
 }

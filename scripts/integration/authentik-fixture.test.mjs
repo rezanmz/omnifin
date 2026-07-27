@@ -164,10 +164,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
     "utf8",
   );
   assert.match(browserSource, /authentik_browser_checks_failed/u);
-  assert.match(browserSource, /INTERACTION_RETRY_ATTEMPTS = 4/u);
+  assert.match(browserSource, /INTERACTION_RETRY_ATTEMPTS = 6/u);
   assert.match(browserSource, /retryInteraction/u);
-  assert.match(browserSource, /HTMLInputElement\.prototype/u);
-  assert.match(browserSource, /composed: true/u);
+  assert.match(browserSource, /locator\.fill\(value/u);
   assert.match(browserSource, /ak-stage-identification input\[name="uidField"\]:visible/u);
   assert.match(browserSource, /ak-stage-password input\[name="password"\]:visible/u);
   assert.match(browserSource, /ak-stage-consent button\[type="submit"\]:visible/u);
