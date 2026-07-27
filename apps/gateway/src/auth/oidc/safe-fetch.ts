@@ -368,6 +368,7 @@ export function createOidcSafeFetch(options: OidcSafeFetchOptions): CustomFetch 
             headers,
             ...(body === undefined ? {} : { body }),
             signal: controller.signal,
+            tlsPolicy: "strict",
           },
           destination.addresses,
         ),

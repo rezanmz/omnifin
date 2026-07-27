@@ -1,6 +1,7 @@
 import type {
   ConnectorFailureCode,
   ConnectorService,
+  ConnectorTlsPolicy,
   PartialFailure,
 } from "@omnifin/contracts/connectors";
 import { MAX_RETRY_AFTER_SECONDS } from "@omnifin/contracts/connectors";
@@ -19,6 +20,7 @@ export interface SafeHttpClientOptions {
   service: ConnectorService;
   baseUrl: string;
   allowInsecureHttp?: boolean;
+  tlsPolicy?: ConnectorTlsPolicy;
   timeoutMs?: number;
   maxResponseBytes?: number;
   headers?: Readonly<Record<string, string>>;
@@ -210,6 +212,7 @@ export class SafeHttpClient {
   readonly #timeoutMs: number;
   readonly #maxResponseBytes: number;
   readonly #headers: Readonly<Record<string, string>>;
+  readonly #tlsPolicy: ConnectorTlsPolicy;
   readonly #transport: ConnectorTransport;
   readonly #resolveHost: HostResolver | undefined;
 
@@ -254,6 +257,16 @@ export class SafeHttpClient {
     if (!baseUrl.pathname.endsWith("/")) baseUrl.pathname = `${baseUrl.pathname}/`;
     baseUrl.search = "";
     baseUrl.hash = "";
+    const tlsPolicy = options.tlsPolicy ?? "strict";
+    if (tlsPolicy === "allow_self_signed" && baseUrl.protocol !== "https:") {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "A relaxed TLS policy requires an HTTPS connector destination.",
+        retryable: false,
+      });
+    }
 
     this.service = options.service;
     this.origin = baseUrl.origin;
@@ -262,6 +275,7 @@ export class SafeHttpClient {
     this.#timeoutMs = timeoutMs;
     this.#maxResponseBytes = maxResponseBytes;
     this.#headers = options.headers ?? {};
+    this.#tlsPolicy = tlsPolicy;
     this.#transport = options.transport ?? pinnedNodeTransport;
     this.#resolveHost = options.resolveHost;
   }
@@ -366,6 +380,7 @@ export class SafeHttpClient {
         {
           method: options.method ?? "GET",
           headers,
+          tlsPolicy: this.#tlsPolicy,
           ...(body === undefined ? {} : { body }),
           signal: controller.signal,
         },

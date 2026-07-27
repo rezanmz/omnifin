@@ -57,6 +57,7 @@ describe("DNS-pinned connector transport", () => {
         {
           method: "GET",
           headers: new Headers(),
+          tlsPolicy: "strict",
           signal: new AbortController().signal,
         },
         [{ address: "127.0.0.1", family: 4 }],

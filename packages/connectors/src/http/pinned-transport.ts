@@ -93,6 +93,11 @@ export const pinnedNodeTransport: ConnectorTransport = (url, init, pinnedAddress
           pinnedAddresses,
         ),
         agent: false,
+        // This relaxation is reachable only through an explicitly approved connector
+        // policy. DNS pinning and redirect blocking remain active for the request.
+        ...(url.protocol === "https:"
+          ? { rejectUnauthorized: init.tlsPolicy !== "allow_self_signed" }
+          : {}),
         signal: init.signal,
       },
       (incoming) => {

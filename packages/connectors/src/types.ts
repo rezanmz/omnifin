@@ -2,6 +2,7 @@ import type {
   ConnectorCapability,
   ConnectorHealth,
   ConnectorService,
+  ConnectorTlsPolicy,
 } from "@omnifin/contracts/connectors";
 
 import type { HostResolver } from "./security/destination.js";
@@ -11,6 +12,7 @@ export interface ConnectorTransportInit {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   headers: Headers;
   body?: Uint8Array;
+  tlsPolicy: ConnectorTlsPolicy;
   signal: AbortSignal;
 }
 
@@ -31,6 +33,8 @@ export interface ConnectorTargetConfig {
   baseUrl: string;
   /** An administrator must explicitly approve plain HTTP for a target. */
   insecureHttpApproved?: boolean;
+  /** An administrator must explicitly approve a self-signed HTTPS certificate. */
+  tlsPolicy?: ConnectorTlsPolicy;
   timeoutMs?: number;
   maxResponseBytes?: number;
   /** A transport seam for deterministic tests; production uses the DNS-pinned Node transport. */

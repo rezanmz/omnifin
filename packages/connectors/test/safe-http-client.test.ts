@@ -16,6 +16,18 @@ function clientWith(transport: ConnectorTransport, overrides: Record<string, unk
 }
 
 describe("SafeHttpClient", () => {
+  it("requires HTTPS for an explicitly relaxed certificate policy", () => {
+    expect(
+      () =>
+        new SafeHttpClient({
+          service: "radarr",
+          baseUrl: "http://radarr.internal/",
+          allowInsecureHttp: true,
+          tlsPolicy: "allow_self_signed",
+        }),
+    ).toThrow(/requires an HTTPS connector destination/u);
+  });
+
   it("rejects limits that could disable deadline or response-size protection", () => {
     const mock = createMockTransport([]);
 
