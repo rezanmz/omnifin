@@ -4,6 +4,7 @@ import type { ServiceStatus } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 import { ConnectionPulse } from "./connection-pulse";
 import { GlobalSearch } from "./global-search";
+import { ProfileMenu } from "./profile-menu";
 
 export function TopCommandBar({ connectionStatus }: { connectionStatus: ServiceStatus }) {
   return (
@@ -14,14 +15,7 @@ export function TopCommandBar({ connectionStatus }: { connectionStatus: ServiceS
       <GlobalSearch />
       <div className="top-command-bar__actions">
         <ConnectionPulse status={connectionStatus} />
-        <button
-          className="user-avatar"
-          data-directional-item
-          type="button"
-          aria-label="Open profile menu"
-        >
-          <span aria-hidden="true">RN</span>
-        </button>
+        <ProfileMenu />
       </div>
     </header>
   );

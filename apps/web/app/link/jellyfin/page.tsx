@@ -4,6 +4,7 @@ import {
   JellyfinCredentialScreen,
   type PairingSessionOutcome,
 } from "../../../components/jellyfin-credential-screen";
+import "../../globals.css";
 
 export const metadata: Metadata = { title: "Link Jellyfin" };
 

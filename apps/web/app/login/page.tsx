@@ -2,6 +2,7 @@ import type { AuthProvider } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 import { LoginScreen, type LoginAuthError } from "../../components/login-screen";
 import { loadCachedPublicAuthProviders } from "../../lib/auth-providers";
+import "../globals.css";
 
 export const metadata: Metadata = { title: "Sign in" };
 export const dynamic = "force-dynamic";

@@ -52,8 +52,15 @@ const provider = {
   updatedAt: "2026-07-26T12:00:00.000Z",
 };
 
-it("uses CSP-safe schema validation in the browser client", () => {
-  expect(z.config().jitless).toBe(true);
+it("loads CSP-safe schema validation only when the browser client needs it", async () => {
+  try {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse({}, 401)));
+
+    await expect(loadIdentityProviderAdministration()).resolves.toEqual({ status: "signed_out" });
+    expect(z.config().jitless).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 function jsonResponse(body: unknown, status = 200) {

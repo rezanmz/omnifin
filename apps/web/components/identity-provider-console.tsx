@@ -1,17 +1,12 @@
 "use client";
 
-import "../lib/zod-browser";
-
-import {
-  oidcProviderCreateRequestSchema,
-  oidcProviderUpdateRequestSchema,
-  oidcRoleMappingCreateRequestSchema,
-  type OidcProviderAdmin,
-  type OidcProviderCapabilities,
-  type OidcProviderCreateRequest,
-  type OidcProviderUpdateRequest,
-  type OidcRoleMappingCreateRequest,
-  type RoleMapping,
+import type {
+  OidcProviderAdmin,
+  OidcProviderCapabilities,
+  OidcProviderCreateRequest,
+  OidcProviderUpdateRequest,
+  OidcRoleMappingCreateRequest,
+  RoleMapping,
 } from "@omnifin/contracts/auth";
 import {
   QueryClient,
@@ -74,6 +69,18 @@ const signingAlgorithms = [
 const tokenMethods = ["client_secret_basic", "client_secret_post", "none"] as const;
 const roles = ["viewer", "requester", "operator", "admin"] as const;
 const mappingOperators = ["equals", "contains_any", "contains_all"] as const;
+
+async function loadContractSchemas() {
+  await import("../lib/zod-browser");
+  return import("@omnifin/contracts/auth");
+}
+
+let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
+
+function contractSchemas() {
+  contractSchemasPromise ??= loadContractSchemas();
+  return contractSchemasPromise;
+}
 
 export interface IdentityProviderConsoleProperties {
   client?: IdentityProviderAdminClient;
@@ -277,8 +284,11 @@ function ProviderForm({
       slug: fields.slug,
       tokenEndpointAuthMethod: fields.tokenEndpointAuthMethod,
     };
+    const schemas = await contractSchemas();
     const schema =
-      mode === "create" ? oidcProviderCreateRequestSchema : oidcProviderUpdateRequestSchema;
+      mode === "create"
+        ? schemas.oidcProviderCreateRequestSchema
+        : schemas.oidcProviderUpdateRequestSchema;
     const parsed = schema.safeParse(candidate);
     if (!parsed.success) {
       const fieldErrors: Record<string, string> = {};
@@ -605,7 +615,8 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
         return value === "true" ? true : value === "false" ? false : value;
       return value;
     });
-    const parsed = oidcRoleMappingCreateRequestSchema.safeParse({
+    const schemas = await contractSchemas();
+    const parsed = schemas.oidcRoleMappingCreateRequestSchema.safeParse({
       claimPath: claimPath
         .split(".")
         .map((segment) => segment.trim())
@@ -830,7 +841,7 @@ function IdentityProviderConsoleContent({
     if (!snapshot) return;
     await run("create", async () => {
       const created = await client.createProvider(
-        oidcProviderCreateRequestSchema.parse(input),
+        input as OidcProviderCreateRequest,
         snapshot.csrfToken,
       );
       updateProviders((current) =>
@@ -851,7 +862,7 @@ function IdentityProviderConsoleContent({
     await run("edit", async () => {
       const result = await client.updateProvider(
         selected.id,
-        oidcProviderUpdateRequestSchema.parse(input),
+        input as OidcProviderUpdateRequest,
         snapshot.csrfToken,
       );
       updateProviders((current) =>
@@ -885,7 +896,7 @@ function IdentityProviderConsoleContent({
   const toggleEnabled = async () => {
     if (!snapshot || !selected) return;
     await run("toggle", async () => {
-      const input = oidcProviderUpdateRequestSchema.parse({
+      const input: OidcProviderUpdateRequest = {
         allowJitProvisioning: selected.allowJitProvisioning,
         approvedEndpointOrigins: [...selected.approvedEndpointOrigins],
         clientId: selected.clientId,
@@ -896,7 +907,7 @@ function IdentityProviderConsoleContent({
         scopes: [...selected.scopes],
         slug: selected.slug,
         tokenEndpointAuthMethod: selected.tokenEndpointAuthMethod,
-      });
+      };
       const result = await client.updateProvider(selected.id, input, snapshot.csrfToken);
       updateProviders((current) =>
         current.map((provider) =>

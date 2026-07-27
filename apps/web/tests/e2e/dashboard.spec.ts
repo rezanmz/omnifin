@@ -19,6 +19,8 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await page.goto("/");
 
   const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  await search.focus();
+  await expect(search).toHaveAttribute("aria-expanded", "true");
   await search.fill("matrix");
   const firstResult = page.getByRole("option", { name: /The Matrix/i });
   await expect(firstResult).toBeVisible();
@@ -42,6 +44,7 @@ test("global search discloses live discovery with keyboard and touch-safe contro
 test("production-first onboarding remains a complete route", async ({ page }) => {
   await page.goto("/?test-view=onboarding");
 
+  await expect(page).toHaveURL(/\/\?test-view=onboarding$/u);
   await expect(
     page.getByRole("heading", { level: 1, name: "Your media control room is being prepared." }),
   ).toBeVisible();
@@ -236,6 +239,38 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
   await page.goto("/?test-view=onboarding");
   await expect(page.locator(".mobile-navigation")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review account access" })).toBeVisible();
+});
+
+test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "One desktop engine covers hover geometry and transparent rail surfaces.",
+  );
+  await page.goto("/");
+
+  const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
+  await firstPoster.hover();
+
+  await expect
+    .poll(() =>
+      firstPoster.evaluate((poster) => {
+        const cardBox = poster.getBoundingClientRect();
+        const scrollerBox = poster
+          .closest<HTMLElement>(".media-rail__scroller")!
+          .getBoundingClientRect();
+        return cardBox.top - scrollerBox.top;
+      }),
+    )
+    .toBeGreaterThanOrEqual(1);
+
+  const railBackgrounds = await page
+    .locator(".media-rail")
+    .first()
+    .evaluate((rail) => {
+      const scroller = rail.querySelector<HTMLElement>(".media-rail__scroller")!;
+      return [getComputedStyle(rail).backgroundColor, getComputedStyle(scroller).backgroundColor];
+    });
+  expect(railBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
 });
 
 test("touch users can disclose operations and navigate to settings", async ({ page }, testInfo) => {

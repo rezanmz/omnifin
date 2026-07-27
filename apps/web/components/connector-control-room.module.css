@@ -131,10 +131,9 @@
 .statePanel,
 .notice,
 .operationError {
-  backdrop-filter: blur(30px) saturate(125%);
-  background: linear-gradient(145deg, rgb(255 255 255 / 3%), transparent 38%), rgb(7 11 9 / 86%);
+  background: var(--surface-card);
   border: 1px solid var(--line-strong);
-  box-shadow: 0 30px 90px rgb(0 0 0 / 24%);
+  box-shadow: var(--shadow-raised);
 }
 
 .serviceRail,
@@ -1322,6 +1321,13 @@
   .layout[data-display-profile="ten-foot"] .liveButton,
   .layout[data-display-profile="ten-foot"] .dangerButton {
     min-height: 52px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .heroSeal {
+    backdrop-filter: none;
+    background: var(--surface-card-solid);
   }
 }
 

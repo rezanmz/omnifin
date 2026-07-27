@@ -65,6 +65,9 @@ administration API with encrypted credentials, guarded transport policy, capabil
 snapshots, optimistic revisions, and audited lifecycle changes.
 The first Phase 3 read path adds permission-checked Seerr discovery through a normalized,
 browser-safe search contract and a responsive global-search console.
+The interface supports light, dark, and live system appearance preferences through an
+adaptive liquid-material hierarchy that keeps navigation and floating controls
+translucent while preserving solid, readable content surfaces.
 
 All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
 pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;

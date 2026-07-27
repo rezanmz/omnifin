@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import "./globals.css";
+
+import { readThemePreference } from "../lib/theme-server";
+import "./foundation.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
 // framework and application script, including not-found and error surfaces.
@@ -15,15 +17,34 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  colorScheme: "dark",
-  themeColor: "#060807",
+  colorScheme: "light dark",
   viewportFit: "cover",
   width: "device-width",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const preference = await readThemePreference();
+  const explicitTheme = preference === "system" ? undefined : preference;
+
   return (
-    <html data-scroll-behavior="smooth" lang="en">
+    <html
+      data-scroll-behavior="smooth"
+      data-theme={explicitTheme}
+      data-theme-preference={preference}
+      lang="en"
+    >
+      <head>
+        <meta
+          content={explicitTheme === "dark" ? "#070a0d" : "#eef3f5"}
+          media="(prefers-color-scheme: light)"
+          name="theme-color"
+        />
+        <meta
+          content={explicitTheme === "light" ? "#eef3f5" : "#070a0d"}
+          media="(prefers-color-scheme: dark)"
+          name="theme-color"
+        />
+      </head>
       <body>
         <a className="skip-link" href="#main-content">
           Skip to main content

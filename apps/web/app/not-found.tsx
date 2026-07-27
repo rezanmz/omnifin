@@ -2,6 +2,7 @@ import { ArrowLeft, Telescope } from "lucide-react";
 import Link from "next/link";
 import { BrandMark } from "../components/brand-mark";
 import { CinematicBackdrop } from "../components/cinematic-backdrop";
+import "./not-found.css";
 
 export default function NotFound() {
   const displayProfile =

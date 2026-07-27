@@ -1,5 +1,4 @@
 import { ArrowRight, KeyRound, Layers3, ShieldCheck } from "lucide-react";
-import Link from "next/link";
 import type { DisplayProfile } from "../lib/dashboard-data";
 import { BrandMark } from "./brand-mark";
 import { CinematicBackdrop } from "./cinematic-backdrop";
@@ -51,9 +50,9 @@ export function OnboardingDashboard({
               controls are now in place. Provider administration and media-service connections stay
               locked until their security and integration gates pass.
             </p>
-            <Link className="button button--primary" href="/settings">
+            <a className="button button--primary" href="/settings">
               Review account access <ArrowRight aria-hidden="true" size={17} />
-            </Link>
+            </a>
           </div>
         </section>
         <section className="onboarding__steps" aria-label="What comes next">

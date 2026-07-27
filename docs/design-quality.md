@@ -6,13 +6,58 @@ ready for review.
 
 ## Visual direction
 
-The design language is a **cinematic control room**: OLED blacks, artwork-derived
-colour, editorial typography, restrained translucent surfaces, precise operational
-telemetry, and technical depth that appears only when it is relevant.
+The design language is a **cinematic control room with adaptive liquid materials**:
+artwork-derived colour, editorial typography, precise operational telemetry, and
+technical depth that appears only when it is relevant. Dark mode uses OLED blacks and
+controlled luminous accents. Light mode uses cool paper-like canvases and crisp,
+low-chroma surfaces. Both modes preserve the same hierarchy and product identity.
 
 Reusable behavior may come from accessible primitives, but appearance is authored
 for Omnifin. Default component-library styling, generic dashboard cards, excessive
 glass, and decorative motion do not meet the bar.
+
+The material model is informed by Apple's published
+[Liquid Glass introduction](https://developer.apple.com/videos/play/wwdc2025/219/) and
+[Human Interface Guidelines for materials](https://developer.apple.com/design/human-interface-guidelines/materials),
+then authored specifically for Omnifin rather than reproducing platform controls.
+
+## Liquid material hierarchy
+
+Liquid Glass is an interaction material, not a blur effect applied to every card.
+Omnifin uses three deliberate layers:
+
+1. **Content:** artwork, posters, text-heavy forms, tables, and long reading surfaces
+   use opaque or nearly opaque standard materials. They remain stable and readable.
+2. **Navigation and controls:** the rail, mobile navigation, search control, service
+   pulse, profile control, and other floating command surfaces use regular liquid
+   material. Ambient artwork colour may tint them subtly.
+3. **Overlays:** search results, profile controls, drawers, and comparative workbenches
+   use a thicker liquid material so text remains legible over changing content.
+
+Glass surfaces use adaptive tint, saturation, an inner highlight, a defined edge, and
+a restrained cast shadow. Concentric geometry makes adjacent radii feel cut from one
+shape. A glass surface is not nested inside another glass surface; content inside an
+overlay returns to standard fills. Accent tint is reserved for selection, status, or
+the primary action.
+
+Motion may make a liquid control scale, blur, or morph to explain where an overlay
+came from. It may not distort content, delay input, or continuously shimmer. Where
+`backdrop-filter` is unavailable, the same components fall back to an opaque semantic
+surface rather than becoming transparent.
+
+## Appearance modes
+
+Users can choose **System**, **Light**, or **Dark**. System is the default and follows
+live operating-system colour-scheme changes. An explicit choice is stored only as a
+same-site preference cookie so the server can render the correct theme before
+hydration; it is not identity data and is not sent to an external service.
+
+Every component consumes semantic canvas, text, line, fill, accent, and material
+tokens. A theme is incomplete if it merely inverts the page background while leaving
+hard-coded panel colours behind. Visual and accessibility checks cover representative
+routes in both themes. The implementation also honours increased contrast, forced
+colours, reduced motion, and reduced transparency; reduced transparency removes blur,
+ambient noise, and nonessential aurora layers.
 
 ## State completeness
 

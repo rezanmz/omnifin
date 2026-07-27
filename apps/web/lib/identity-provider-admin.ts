@@ -1,36 +1,37 @@
-import "./zod-browser";
-
-import {
-  oidcProviderAdminSchema,
-  oidcProviderCreateRequestSchema,
-  oidcProviderDeleteResponseSchema,
-  oidcProviderMutationResponseSchema,
-  oidcProviderUpdateRequestSchema,
-  oidcProviderValidationResponseSchema,
-  oidcProvidersAdminResponseSchema,
-  oidcRoleMappingCreateRequestSchema,
-  oidcRoleMappingDeleteResponseSchema,
-  oidcRoleMappingMutationResponseSchema,
-  oidcRoleMappingsAdminResponseSchema,
-  sessionResponseSchema,
-  type OidcProviderAdmin,
-  type OidcProviderCreateRequest,
-  type OidcProviderDeleteResponse,
-  type OidcProviderMutationResponse,
-  type OidcProviderUpdateRequest,
-  type OidcProviderValidationResponse,
-  type OidcRoleMappingCreateRequest,
-  type OidcRoleMappingDeleteResponse,
-  type OidcRoleMappingMutationResponse,
-  type RoleMapping,
-  type SessionPrincipal,
+import type {
+  OidcProviderAdmin,
+  OidcProviderCreateRequest,
+  OidcProviderDeleteResponse,
+  OidcProviderMutationResponse,
+  OidcProviderUpdateRequest,
+  OidcProviderValidationResponse,
+  OidcRoleMappingCreateRequest,
+  OidcRoleMappingDeleteResponse,
+  OidcRoleMappingMutationResponse,
+  RoleMapping,
+  SessionPrincipal,
 } from "@omnifin/contracts/auth";
-import { apiErrorSchema } from "@omnifin/contracts/errors";
 
 const CSRF_HEADER = "x-omnifin-csrf";
 
 interface ResponseSchema<T> {
   safeParse(input: unknown): { data: T; success: true } | { success: false };
+}
+
+async function loadContractSchemas() {
+  await import("./zod-browser");
+  const [auth, errors] = await Promise.all([
+    import("@omnifin/contracts/auth"),
+    import("@omnifin/contracts/errors"),
+  ]);
+  return { auth, errors };
+}
+
+let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
+
+function contractSchemas() {
+  contractSchemasPromise ??= loadContractSchemas();
+  return contractSchemasPromise;
 }
 
 export interface IdentityProviderAdminSnapshot {
@@ -78,7 +79,8 @@ async function responseError(response: Response): Promise<IdentityProviderAdminC
       "Your administrative session changed. Sign in again before continuing.",
     );
   }
-  const parsed = apiErrorSchema.safeParse(await safeJson(response));
+  const schemas = await contractSchemas();
+  const parsed = schemas.errors.apiErrorSchema.safeParse(await safeJson(response));
   if (parsed.success) {
     return new IdentityProviderAdminClientError(
       "rejected",
@@ -139,6 +141,7 @@ async function mutationRequest<T>(
 
 export async function loadIdentityProviderAdministration(): Promise<IdentityProviderAdminLoadOutcome> {
   try {
+    const schemas = await contractSchemas();
     const sessionResponse = await fetch("/api/auth/session", {
       cache: "no-store",
       credentials: "same-origin",
@@ -146,7 +149,7 @@ export async function loadIdentityProviderAdministration(): Promise<IdentityProv
     if (!sessionResponse.ok) {
       return sessionResponse.status === 401 ? { status: "signed_out" } : { status: "unavailable" };
     }
-    const session = sessionResponseSchema.safeParse(await safeJson(sessionResponse));
+    const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(sessionResponse));
     if (!session.success) return { status: "unavailable" };
     if (session.data.principal === null || session.data.csrfToken === null) {
       return { status: "signed_out" };
@@ -161,7 +164,10 @@ export async function loadIdentityProviderAdministration(): Promise<IdentityProv
     });
     if (providersResponse.status === 401) return { status: "signed_out" };
     if (providersResponse.status === 403) return { status: "forbidden" };
-    const providers = await parsedResponse(providersResponse, oidcProvidersAdminResponseSchema);
+    const providers = await parsedResponse(
+      providersResponse,
+      schemas.auth.oidcProvidersAdminResponseSchema,
+    );
     return {
       snapshot: {
         csrfToken: session.data.csrfToken,
@@ -200,46 +206,51 @@ export interface IdentityProviderAdminClient {
 
 export const identityProviderAdminClient: IdentityProviderAdminClient = {
   async createProvider(input, csrfToken) {
-    const body = oidcProviderCreateRequestSchema.parse(input);
+    const schemas = (await contractSchemas()).auth;
+    const body = schemas.oidcProviderCreateRequestSchema.parse(input);
     return mutationRequest(
       "/api/admin/auth/oidc/providers",
       csrfToken,
       "POST",
-      oidcProviderAdminSchema,
+      schemas.oidcProviderAdminSchema,
       body,
     );
   },
 
   async createRoleMapping(providerId, input, csrfToken) {
-    const body = oidcRoleMappingCreateRequestSchema.parse(input);
+    const schemas = (await contractSchemas()).auth;
+    const body = schemas.oidcRoleMappingCreateRequestSchema.parse(input);
     return mutationRequest(
       `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}/role-mappings`,
       csrfToken,
       "POST",
-      oidcRoleMappingMutationResponseSchema,
+      schemas.oidcRoleMappingMutationResponseSchema,
       body,
     );
   },
 
-  deleteProvider(providerId, csrfToken) {
+  async deleteProvider(providerId, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
     return mutationRequest(
       `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}`,
       csrfToken,
       "DELETE",
-      oidcProviderDeleteResponseSchema,
+      schemas.oidcProviderDeleteResponseSchema,
     );
   },
 
-  deleteRoleMapping(providerId, mappingId, csrfToken) {
+  async deleteRoleMapping(providerId, mappingId, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
     return mutationRequest(
       `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}/role-mappings/${encodeURIComponent(mappingId)}`,
       csrfToken,
       "DELETE",
-      oidcRoleMappingDeleteResponseSchema,
+      schemas.oidcRoleMappingDeleteResponseSchema,
     );
   },
 
   async listRoleMappings(providerId) {
+    const schemas = (await contractSchemas()).auth;
     let response: Response;
     try {
       response = await fetch(
@@ -253,28 +264,30 @@ export const identityProviderAdminClient: IdentityProviderAdminClient = {
         "Role mappings could not be loaded.",
       );
     }
-    return (await parsedResponse(response, oidcRoleMappingsAdminResponseSchema)).mappings;
+    return (await parsedResponse(response, schemas.oidcRoleMappingsAdminResponseSchema)).mappings;
   },
 
   load: loadIdentityProviderAdministration,
 
-  updateProvider(providerId, input, csrfToken) {
-    const body = oidcProviderUpdateRequestSchema.parse(input);
+  async updateProvider(providerId, input, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
+    const body = schemas.oidcProviderUpdateRequestSchema.parse(input);
     return mutationRequest(
       `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}`,
       csrfToken,
       "PUT",
-      oidcProviderMutationResponseSchema,
+      schemas.oidcProviderMutationResponseSchema,
       body,
     );
   },
 
-  validateProvider(providerId, csrfToken) {
+  async validateProvider(providerId, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
     return mutationRequest(
       `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}/validate`,
       csrfToken,
       "POST",
-      oidcProviderValidationResponseSchema,
+      schemas.oidcProviderValidationResponseSchema,
     );
   },
 };

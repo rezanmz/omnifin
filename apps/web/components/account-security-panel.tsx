@@ -21,6 +21,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
+import { AppearanceSelector } from "./appearance-selector";
 import { BrandMark } from "./brand-mark";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 
@@ -313,6 +314,8 @@ export function AccountSecurityPanel({
             </span>
           ) : null}
         </section>
+
+        <AppearanceSelector />
 
         {outcome === null ? (
           <section aria-busy="true" aria-label="Loading account security" className="account-grid">
