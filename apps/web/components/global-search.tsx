@@ -335,6 +335,7 @@ export function GlobalSearch({
         aria-haspopup="listbox"
         autoComplete="off"
         data-directional-item
+        enterKeyHint="search"
         id="global-search"
         name="search"
         onChange={(event) => {
@@ -352,7 +353,7 @@ export function GlobalSearch({
         placeholder="Search everything…"
         ref={inputReference}
         role="combobox"
-        type="search"
+        type="text"
         value={query}
       />
       {query ? (
