@@ -61,7 +61,7 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
     { encoding: "utf8", maxBuffer: 1_048_576, timeout: 30_000 },
   );
   assert(execution.status === 0);
-  assert(execution.stdout.includes('"event":"authentik_backchannel_queued"'));
+  assert(execution.stdout.includes('"event":"authentik_backchannel_delivered"'));
 }
 
 async function json(response, expectedStatus, failureStage) {

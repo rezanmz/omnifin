@@ -1,7 +1,8 @@
 from os import environ
 
-from authentik.providers.oauth2.models import AccessToken
-from authentik.providers.oauth2.tasks import backchannel_logout_notification_dispatch
+from authentik.lib.utils.http import get_http_session
+from authentik.providers.oauth2.models import AccessToken, OAuth2LogoutMethod
+from authentik.providers.oauth2.utils import create_logout_token
 
 
 tokens = list(
@@ -17,14 +18,21 @@ if len(tokens) != 1 or tokens[0].session is None:
     raise RuntimeError("fixture_access_token_unavailable")
 
 access_token = tokens[0]
-backchannel_logout_notification_dispatch.send(
-    revocations=[
-        (
-            access_token.provider_id,
-            access_token.id_token.iss,
-            access_token.id_token.sub,
-            access_token.session.session.session_key,
-        )
-    ]
+provider = access_token.provider
+if provider.logout_method != OAuth2LogoutMethod.BACKCHANNEL or not provider.logout_uri:
+    raise RuntimeError("fixture_backchannel_provider_invalid")
+
+logout_token = create_logout_token(
+    provider,
+    access_token.id_token.iss,
+    access_token.id_token.sub,
+    access_token.session.session.session_key,
 )
-print('{"event":"authentik_backchannel_queued"}')
+response = get_http_session().post(
+    provider.logout_uri,
+    data={"logout_token": logout_token},
+    headers={"Content-Type": "application/x-www-form-urlencoded"},
+    allow_redirects=True,
+)
+response.raise_for_status()
+print('{"event":"authentik_backchannel_delivered"}')
