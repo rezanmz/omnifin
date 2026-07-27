@@ -14,8 +14,9 @@ the roadmap records when each area has passed its verification gate.
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
 > administration now exist through both normalized APIs and permission-checked control rooms.
-> Encrypted connector administration and the first authorized, normalized Seerr discovery read path
-> are implemented; request mutations, acquisition workflows, and media proxying remain incomplete.
+> Encrypted connector administration, normalized Seerr discovery, and the first
+> identity-delegated, idempotent Seerr request mutation are implemented; request review,
+> acquisition workflows, and media proxying remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -44,8 +45,8 @@ Encrypted connector administration is available through a versioned, permission-
 recovery sessions see and repair only Jellyfin connector records. A pinned isolated Authentik
 environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
 protected public compatibility baseline remains pending. The connector browser control room and
-normalized Seerr search are available as pre-release development surfaces; upstream write operations
-and playback remain unavailable.
+normalized Seerr search and media-request creation are available as pre-release development
+surfaces; request review, acquisition operations, and playback remain unavailable.
 
 ## Target system shape
 

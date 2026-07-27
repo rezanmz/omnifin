@@ -4,7 +4,7 @@ export const discoverySearchFixture = {
   generatedAt: "2026-07-27T08:30:00.000Z",
   items: [
     {
-      availability: "available",
+      availability: "unavailable",
       id: "movie:603",
       kind: "movie",
       originalTitle: "The Matrix",

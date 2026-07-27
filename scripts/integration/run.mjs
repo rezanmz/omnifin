@@ -17,7 +17,7 @@ const MAX_FAILED_TEST_FILES = 16;
 const TEST_FILE_BASENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,143}\.(?:test|spec)\.(?:ts|tsx)$/u;
 const connectorPatterns = {
   jellyfin: "^'jellyfin' adapter\\b",
-  seerr: "^'seerr' adapter\\b",
+  seerr: "^(?:'seerr' adapter|Seerr discovery|Seerr media requests)\\b",
   radarr: "^'radarr' adapter\\b",
   sonarr: "^'sonarr' adapter\\b",
   prowlarr: "^'prowlarr' adapter\\b",
@@ -27,7 +27,15 @@ const connectorPatterns = {
 };
 const connectorChecks = {
   jellyfin: ["public_health", "version_discovery"],
-  seerr: ["health_normalization", "version_discovery"],
+  seerr: [
+    "authentication_header",
+    "health_normalization",
+    "identity_delegation",
+    "request_creation",
+    "response_normalization",
+    "secret_isolation",
+    "version_discovery",
+  ],
   radarr: ["authentication_header", "health_normalization", "version_discovery"],
   sonarr: ["authentication_header", "health_normalization", "version_discovery"],
   prowlarr: ["authentication_header", "health_normalization", "version_discovery"],
@@ -264,13 +272,19 @@ function runFixture(service) {
     };
   }
 
-  const testFile = join(root, "packages/connectors/test/adapters.test.ts");
-  if (!existsSync(testFile) || !connectorPatterns[service]) {
+  const testFiles = [join(root, "packages/connectors/test/adapters.test.ts")];
+  if (service === "seerr") {
+    testFiles.push(
+      join(root, "packages/connectors/test/seerr-discovery.test.ts"),
+      join(root, "packages/connectors/test/seerr-requests.test.ts"),
+    );
+  }
+  if (testFiles.some((file) => !existsSync(file)) || !connectorPatterns[service]) {
     return { service, profile: "fixture-contract", status: "not_implemented" };
   }
   const execution = runVitest(
     "@omnifin/connectors",
-    [relative(join(root, "packages/connectors"), testFile)],
+    testFiles.map((file) => relative(join(root, "packages/connectors"), file)),
     connectorPatterns[service],
   );
   return {

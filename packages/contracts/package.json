@@ -24,6 +24,10 @@
     "./errors": {
       "types": "./dist/errors.d.ts",
       "default": "./dist/errors.js"
+    },
+    "./requests": {
+      "types": "./dist/requests.d.ts",
+      "default": "./dist/requests.js"
     }
   },
   "files": [

@@ -57,6 +57,13 @@
       "when": 1785073497632,
       "tag": "0007_jellyfin_quick_connect_pairing",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785170315819,
+      "tag": "0008_media_request_operations",
+      "breakpoints": true
     }
   ]
 }

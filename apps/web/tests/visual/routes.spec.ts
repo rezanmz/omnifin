@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockMediaRequestSession } from "../fixtures/media-request";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
@@ -112,6 +113,37 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   await page.getByRole("combobox").fill("matrix");
   await page.getByRole("option", { name: /The Matrix/i }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
+});
+
+async function openRequestComposer(page: Page) {
+  await mockDiscoverySearch(page);
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+}
+
+test("request composer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Request composition covers representative desktop and phone geometry",
+  );
+  await openRequestComposer(page);
+  await expect(page).toHaveScreenshot("dashboard-request-composer.png", { fullPage: true });
+});
+
+test("light request composer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light request composition covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await openRequestComposer(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-request-composer-light.png", {
+    fullPage: true,
+  });
 });
 
 test("first-run dashboard visual baseline", async ({ page }, testInfo) => {

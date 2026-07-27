@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { mockDiscoverySearch } from "../fixtures/discovery";
+import {
+  mediaRequestCsrfToken,
+  mockMediaRequestCreation,
+  mockMediaRequestSession,
+} from "../fixtures/media-request";
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
   await page.goto("/");
@@ -14,7 +19,7 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
 
 test("global search discloses live discovery with keyboard and touch-safe controls", async ({
   page,
-}, testInfo) => {
+}) => {
   await mockDiscoverySearch(page);
   await page.goto("/");
 
@@ -24,11 +29,7 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await search.fill("matrix");
   const firstResult = page.getByRole("option", { name: /The Matrix/i });
   await expect(firstResult).toBeVisible();
-  if (testInfo.project.name === "mobile") {
-    await expect(page.getByRole("heading", { name: "The Matrix" })).toHaveCount(0);
-  } else {
-    await expect(page.getByRole("heading", { name: "The Matrix" })).toBeVisible();
-  }
+  await expect(page.getByRole("heading", { name: "The Matrix" })).toBeVisible();
   await expect(search).toHaveAttribute("aria-expanded", "true");
 
   await search.focus();
@@ -39,6 +40,32 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await page.keyboard.press("Escape");
   await expect(search).toHaveAttribute("aria-expanded", "false");
   await expect(search).toHaveValue("matrix");
+});
+
+test("request composer delegates a bounded request through the verified session", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await mockMediaRequestSession(page);
+  const capture = await mockMediaRequestCreation(page);
+  await page.goto("/");
+
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  const composer = page.getByRole("dialog", { name: "Compose request" });
+  await expect(composer).toBeVisible();
+  await expect(composer.getByText("Mina’s Jellyfin")).toBeVisible();
+  await composer.getByRole("button", { name: /Send request/i }).click();
+
+  await expect(composer.getByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+  expect(capture.body).toEqual({ is4k: false, kind: "movie", tmdbId: 603 });
+  expect(capture.csrfToken).toBe(mediaRequestCsrfToken);
+  expect(capture.idempotencyKey).toMatch(/^media-[0-9a-f-]{36}$/u);
+  expect(JSON.stringify(capture.body)).not.toContain("userId");
+
+  await composer.getByRole("button", { name: "Done" }).click();
+  await expect(composer).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /The Matrix.*Requested/i })).toBeVisible();
 });
 
 test("production-first onboarding remains a complete route", async ({ page }) => {

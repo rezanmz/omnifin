@@ -47,6 +47,10 @@ import {
 import { healthRoutes } from "./health.js";
 import { isSafeHttpError, SafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
+import {
+  mediaRequestRoutes,
+  type MediaRequestRoutesOptions,
+} from "./requests/media-request-routes.js";
 import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
@@ -75,6 +79,7 @@ export interface CreateAppOptions {
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
+  mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -367,6 +372,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.discoverySearchDependencies === undefined
         ? {}
         : { dependencies: options.discoverySearchDependencies }),
+    });
+    await app.register(mediaRequestRoutes, {
+      ...(options.mediaRequestDependencies === undefined
+        ? {}
+        : { dependencies: options.mediaRequestDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

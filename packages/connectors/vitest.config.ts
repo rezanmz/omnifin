@@ -10,6 +10,9 @@ export default defineConfig({
       "@omnifin/contracts/discovery": fileURLToPath(
         new URL("../contracts/src/discovery.ts", import.meta.url),
       ),
+      "@omnifin/contracts/requests": fileURLToPath(
+        new URL("../contracts/src/requests.ts", import.meta.url),
+      ),
     },
   },
   test: {
