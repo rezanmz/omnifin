@@ -206,6 +206,7 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_trigger_process_failure/u);
   assert.match(dispatchSource, /create_logout_token/u);
   assert.match(dispatchSource, /get_http_session\(\)\.post/u);
+  assert.match(dispatchSource, /verify=environ\["REQUESTS_CA_BUNDLE"\]/u);
   assert.match(dispatchSource, /response\.raise_for_status\(\)/u);
   assert.doesNotMatch(dispatchSource, /print\([^)]*(?:token|session|subject|secret)/iu);
   assert.match(browserSource, /currentAuthentikBrowserSession/u);

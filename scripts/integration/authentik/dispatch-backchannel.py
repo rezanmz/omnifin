@@ -33,6 +33,7 @@ response = get_http_session().post(
     data={"logout_token": logout_token},
     headers={"Content-Type": "application/x-www-form-urlencoded"},
     allow_redirects=True,
+    verify=environ["REQUESTS_CA_BUNDLE"],
 )
 response.raise_for_status()
 print('{"event":"authentik_backchannel_delivered"}')
