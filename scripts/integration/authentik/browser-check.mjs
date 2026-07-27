@@ -286,20 +286,42 @@ async function currentAuthentikBrowserSession(request, issuerOrigin) {
   );
   const body = await json(response, 200);
   assert(Array.isArray(body.results));
-  const current = body.results.find((session) => session?.current === true);
-  assert(typeof current?.uuid === "string" && current.uuid.length > 0);
-  return current.uuid;
+  assert(body.results.some((session) => session?.current === true));
+  const sessionIds = body.results
+    .map((session) => session?.uuid)
+    .filter((sessionId) => typeof sessionId === "string" && sessionId.length > 0);
+  assert(sessionIds.length > 0);
+  return sessionIds;
 }
 
-async function revokeAuthentikBrowserSession(request, issuerOrigin, token, sessionId) {
-  const response = await request.delete(
-    `${issuerOrigin}/api/v3/core/authenticated_sessions/${encodeURIComponent(sessionId)}/`,
-    {
-      headers: { authorization: `Bearer ${token}` },
-      maxRedirects: 0,
-    },
+async function revokeAuthentikBrowserSessions(request, issuerOrigin, token, sessionIds) {
+  for (const sessionId of sessionIds) {
+    const response = await request.delete(
+      `${issuerOrigin}/api/v3/core/authenticated_sessions/${encodeURIComponent(sessionId)}/`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        maxRedirects: 0,
+      },
+    );
+    assert(response.status() === 204);
+  }
+}
+
+async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk) {
+  const response = await request.get(
+    `${issuerOrigin}/api/v3/providers/oauth2/access_tokens/?page_size=100&provider=${encodeURIComponent(providerPk)}`,
+    { headers: { authorization: `Bearer ${token}` } },
   );
-  assert(response.status() === 204);
+  const body = await json(response, 200);
+  assert(Array.isArray(body.results));
+  assert(
+    body.results.some(
+      (accessToken) =>
+        String(accessToken?.provider?.pk) === String(providerPk) &&
+        accessToken?.user?.username === "akadmin" &&
+        accessToken?.revoked === false,
+    ),
+  );
 }
 
 async function assertAuthentikProviderConfiguration(
@@ -318,6 +340,8 @@ async function assertAuthentikProviderConfiguration(
   const provider = body.results.find((entry) => (entry.clientId ?? entry.client_id) === clientId);
   assert((provider?.logoutMethod ?? provider?.logout_method) === "backchannel");
   assert((provider?.logoutUri ?? provider?.logout_uri) === backchannelUrl);
+  assert(typeof provider.pk === "number" || typeof provider.pk === "string");
+  return provider.pk;
 }
 
 function assertPrincipal(current, issuer, subject) {
@@ -467,7 +491,7 @@ async function run() {
     assert(validation.capabilities?.logout?.rpInitiated === true);
 
     currentStage = "authentik_provider_configuration";
-    await assertAuthentikProviderConfiguration(
+    const authentikProviderPk = await assertAuthentikProviderConfiguration(
       context.request,
       issuerOrigin,
       authentikToken,
@@ -531,16 +555,23 @@ async function run() {
     const firstSession = await session(context.request);
     const subject = assertPrincipal(firstSession, issuer);
 
-    currentStage = "backchannel_provider_session";
-    await assertAuthentikBrowserSession(context.request, issuerOrigin);
-    currentStage = "backchannel_session_lookup";
-    const authentikSessionId = await currentAuthentikBrowserSession(context.request, issuerOrigin);
-    currentStage = "backchannel_trigger";
-    await revokeAuthentikBrowserSession(
+    currentStage = "backchannel_access_token";
+    await assertAuthentikAccessToken(
       context.request,
       issuerOrigin,
       authentikToken,
-      authentikSessionId,
+      authentikProviderPk,
+    );
+    currentStage = "backchannel_provider_session";
+    await assertAuthentikBrowserSession(context.request, issuerOrigin);
+    currentStage = "backchannel_session_lookup";
+    const authentikSessionIds = await currentAuthentikBrowserSession(context.request, issuerOrigin);
+    currentStage = "backchannel_trigger";
+    await revokeAuthentikBrowserSessions(
+      context.request,
+      issuerOrigin,
+      authentikToken,
+      authentikSessionIds,
     );
     currentStage = "backchannel_revocation";
     try {

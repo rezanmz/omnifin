@@ -460,6 +460,7 @@ async function main(options) {
       const match = stderr.match(/"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u);
       const allowedStages = new Set([
         "authentik_provider_configuration",
+        "backchannel_access_token",
         "backchannel_revocation",
         "backchannel_dispatch_completed",
         "backchannel_dispatch_failed",

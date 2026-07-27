@@ -186,8 +186,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_logout_notification_dispatch/u);
   assert.match(browserSource, /send_backchannel_logout_request/u);
   assert.match(browserSource, /application\/o\/omnifin\/end-session/u);
+  assert.match(browserSource, /assertAuthentikAccessToken/u);
   assert.match(browserSource, /currentAuthentikBrowserSession/u);
-  assert.match(browserSource, /revokeAuthentikBrowserSession/u);
+  assert.match(browserSource, /revokeAuthentikBrowserSessions/u);
   assert.match(browserSource, /core\/authenticated_sessions/u);
   assert.match(runnerSource, /allowedStages/u);
   assert.match(runnerSource, /first_login_submit/u);
