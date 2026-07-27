@@ -193,6 +193,7 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_access_token_api/u);
   assert.match(browserSource, /backchannel_access_token_missing/u);
   assert.match(browserSource, /backchannel_access_token_provider_mismatch/u);
+  assert.match(browserSource, /backchannel_access_token_retained/u);
   assert.match(browserSource, /backchannel_access_token_user_mismatch/u);
   assert.match(browserSource, /backchannel_access_token_inactive/u);
   assert.match(browserSource, /currentAuthentikBrowserSession/u);

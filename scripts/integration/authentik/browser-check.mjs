@@ -333,27 +333,38 @@ async function revokeAuthentikBrowserSessions(request, issuerOrigin, token, sess
   }
 }
 
-async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk) {
+async function authentikAccessTokens(request, issuerOrigin, token, providerPk) {
   const response = await request.get(
     `${issuerOrigin}/api/v3/oauth2/access_tokens/?page_size=100&provider=${encodeURIComponent(providerPk)}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
   const body = await json(response, 200, "backchannel_access_token_api");
   assert(Array.isArray(body.results));
-  if (body.results.length === 0) {
+  return body.results;
+}
+
+function providerUserAccessTokens(accessTokens, providerPk) {
+  return accessTokens.filter(
+    (accessToken) =>
+      String(accessToken?.provider?.pk) === String(providerPk) &&
+      accessToken?.user?.username === "akadmin",
+  );
+}
+
+async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk) {
+  const accessTokens = await authentikAccessTokens(request, issuerOrigin, token, providerPk);
+  if (accessTokens.length === 0) {
     currentStage = "backchannel_access_token_missing";
     throw new BrowserCheckError();
   }
-  const providerTokens = body.results.filter(
+  const providerTokens = accessTokens.filter(
     (accessToken) => String(accessToken?.provider?.pk) === String(providerPk),
   );
   if (providerTokens.length === 0) {
     currentStage = "backchannel_access_token_provider_mismatch";
     throw new BrowserCheckError();
   }
-  const userTokens = providerTokens.filter(
-    (accessToken) => accessToken?.user?.username === "akadmin",
-  );
+  const userTokens = providerUserAccessTokens(providerTokens, providerPk);
   if (userTokens.length === 0) {
     currentStage = "backchannel_access_token_user_mismatch";
     throw new BrowserCheckError();
@@ -611,6 +622,17 @@ async function run() {
       authentikToken,
       authentikSessionIds,
     );
+    currentStage = "backchannel_access_token_cleanup";
+    const remainingAccessTokens = await authentikAccessTokens(
+      context.request,
+      issuerOrigin,
+      authentikToken,
+      authentikProviderPk,
+    );
+    if (providerUserAccessTokens(remainingAccessTokens, authentikProviderPk).length > 0) {
+      currentStage = "backchannel_access_token_retained";
+      throw new BrowserCheckError();
+    }
     currentStage = "backchannel_revocation";
     try {
       await waitForRevokedSession(context.request);
