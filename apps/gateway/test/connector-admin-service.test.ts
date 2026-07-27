@@ -98,13 +98,15 @@ function insertUser(database: DatabaseHandle, actor = principal()) {
     .run(actor.userId, actor.displayName, actor.role, baseTime, baseTime);
 }
 
-function createHarness(options: {
-  createAdapter?: (input: ConnectorAdapterFactoryInput) => {
-    service: "radarr";
-    capabilities: readonly ["connector.health", "connector.version"];
-    probe: () => Promise<ConnectorHealth>;
-  };
-} = {}) {
+function createHarness(
+  options: {
+    createAdapter?: (input: ConnectorAdapterFactoryInput) => {
+      service: "radarr";
+      capabilities: readonly ["connector.health", "connector.version"];
+      probe: () => Promise<ConnectorHealth>;
+    };
+  } = {},
+) {
   const config = testConfig();
   const database = openDatabase(config.databaseUrl);
   database.migrate();
@@ -195,9 +197,11 @@ describe("connector administration service", () => {
       const created = service.create(radarrRequest, context());
       expect(() =>
         service.update("radarr-main", { enabled: true, revision: created.revision }, context()),
-      ).toThrow(expect.objectContaining<Partial<ConnectorAdminError>>({
-        reason: "connector_not_validated",
-      }));
+      ).toThrow(
+        expect.objectContaining<Partial<ConnectorAdminError>>({
+          reason: "connector_not_validated",
+        }),
+      );
 
       const probed = await service.probe("radarr-main", context());
       expect(probed).toMatchObject({ healthState: "healthy", lastProbe: { status: "healthy" } });
@@ -254,9 +258,11 @@ describe("connector administration service", () => {
       expect(changed).toMatchObject({ enabled: false, healthState: "unknown", lastProbe: null });
       expect(() =>
         service.update(created.id, { displayName: "Stale", revision: enabled.revision }, context()),
-      ).toThrow(expect.objectContaining<Partial<ConnectorAdminError>>({
-        reason: "revision_conflict",
-      }));
+      ).toThrow(
+        expect.objectContaining<Partial<ConnectorAdminError>>({
+          reason: "revision_conflict",
+        }),
+      );
     } finally {
       database.close();
     }
@@ -324,17 +330,51 @@ describe("connector administration service", () => {
     }
   });
 
+  it("reads legacy deployment-bootstrapped Jellyfin credentials without weakening other records", () => {
+    const { config, database, service } = createHarness();
+    try {
+      const cipher = new EnvelopeCipher(config.encryptionKey);
+      database.sqlite
+        .prepare(
+          `insert into connector_configs (
+            id, type, display_name, base_url, encrypted_credentials,
+            capability_snapshot_json, health_state, enabled, created_at, updated_at
+          ) values (?, 'jellyfin', ?, ?, ?, ?, 'unknown', 1, ?, ?)`,
+        )
+        .run(
+          "jellyfin-legacy",
+          "Jellyfin",
+          "https://jellyfin.example.test/",
+          cipher.encrypt("{}", "connector_credentials:jellyfin:jellyfin-legacy"),
+          JSON.stringify({
+            authentication: { password: true, quickConnect: "unknown" },
+            schemaVersion: 1,
+          }),
+          baseTime,
+          baseTime,
+        );
+
+      expect(service.get("jellyfin-legacy", context())).toMatchObject({
+        credentialKind: "none",
+        credentialsConfigured: false,
+        enabled: true,
+        service: "jellyfin",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("requires explicit approval for insecure HTTP", () => {
     const { database, service } = createHarness();
     try {
       expect(() =>
-        service.create(
-          { ...radarrRequest, baseUrl: "http://radarr.example.test/" },
-          context(),
-        ),
-      ).toThrow(expect.objectContaining<Partial<ConnectorAdminError>>({
-        reason: "configuration_invalid",
-      }));
+        service.create({ ...radarrRequest, baseUrl: "http://radarr.example.test/" }, context()),
+      ).toThrow(
+        expect.objectContaining<Partial<ConnectorAdminError>>({
+          reason: "configuration_invalid",
+        }),
+      );
       expect(
         service.create(
           {

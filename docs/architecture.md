@@ -13,8 +13,7 @@ the roadmap records when each area has passed its verification gate.
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
 > administration now exist through both normalized APIs and a permission-checked control room,
-> while mapping updates, complete authorization,
-> connector administration, live
+> while complete authorization, the connector administration interface, live
 > upstream workflows, and media proxying remain incomplete. The roadmap, not branch
 > availability, determines supported-release status.
 
@@ -37,8 +36,9 @@ control room exposes only normalized secret-free records, reserves exact provide
 creation, and requires validation before offering enablement. Mapping updates remain incomplete.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
-RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented;
-connector administration, live Authentik verification, and media operations remain unavailable.
+RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented.
+Encrypted connector administration is available through a versioned, permission-checked API;
+its browser control room, live Authentik verification, and media operations remain unavailable.
 
 ## Target system shape
 
@@ -160,8 +160,10 @@ the same transaction. Administrative validation uses the same SSRF-resistant dis
 capability checks as sign-in, exposes no endpoints or runtime security seals, supports safe
 validation while disabled, and records bounded success or failure audits. Password and Quick
 Connect pairing, normalized link health,
-relinking, revocation, and account-wide local session logout are available; broader
-connector administration is not yet available. Signed provider back-channel logout can revoke an
+relinking, revocation, and account-wide local session logout are available. Connector records can
+be created, listed, inspected, validated, revised, enabled, disabled, and safely deleted through
+`/v1/admin/connectors`; credentials remain encrypted, every mutation is audited, and material
+changes invalidate the capability snapshot. Signed provider back-channel logout can revoke an
 exact OIDC session or immutable external identity without storing the raw Logout Token.
 Session-aware front-channel logout can revoke an exact provider-scoped session while
 restricting iframe access to the validated issuer origin. Raw `sid` and `jti` values

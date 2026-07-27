@@ -88,6 +88,14 @@ export {
   type SessionServiceDependencies,
 } from "./auth/session-service.js";
 export { loadConfig, type AppConfig } from "./config.js";
+export {
+  ConnectorAdminError,
+  ConnectorAdminService,
+  type ConnectorAdapterFactoryInput,
+  type ConnectorAdminContext,
+  type ConnectorAdminDependencies,
+  type ConnectorAdminErrorReason,
+} from "./connectors/admin-service.js";
 export { openDatabase, type DatabaseHandle } from "./db/client.js";
 export * as databaseSchema from "./db/schema.js";
 export { SafeHttpError } from "./http-error.js";

@@ -715,11 +715,13 @@ describe("bootstrapConfiguredJellyfinConnector", () => {
         type: "jellyfin",
       });
       expect(
-        new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
-          connector.encryptedCredentials,
-          "connector_credentials:jellyfin:jellyfin",
+        JSON.parse(
+          new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
+            connector.encryptedCredentials,
+            "connector_credentials:jellyfin:jellyfin",
+          ),
         ),
-      ).toBe("{}");
+      ).toEqual({ kind: "none" });
       expect(
         handle.sqlite
           .prepare("select event_type as eventType from audit_events where id = ?")

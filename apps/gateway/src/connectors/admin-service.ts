@@ -400,8 +400,7 @@ export class ConnectorAdminService {
       baseUrl: parsed.data.baseUrl ?? current.baseUrl,
       credentials,
       tlsPolicy: parsed.data.tlsPolicy ?? current.tlsPolicy,
-      insecureHttpApproved:
-        parsed.data.insecureHttpApproved ?? (current.insecureHttpApproved === 1),
+      insecureHttpApproved: parsed.data.insecureHttpApproved ?? current.insecureHttpApproved === 1,
     });
     if (!candidate.success) throw new ConnectorAdminError("configuration_invalid");
     let baseUrl: string;
@@ -431,9 +430,7 @@ export class ConnectorAdminService {
       parsed.data.credentials === undefined
         ? current.encryptedCredentials
         : this.#cipher.encrypt(JSON.stringify(credentials), credentialContext(service, current.id));
-    const enabled = materialChange
-      ? false
-      : (parsed.data.enabled ?? (current.enabled === 1));
+    const enabled = materialChange ? false : (parsed.data.enabled ?? current.enabled === 1);
     const changedFields = [
       ...(parsed.data.displayName === undefined ? [] : ["displayName"]),
       ...(parsed.data.baseUrl === undefined ? [] : ["baseUrl"]),
@@ -574,7 +571,7 @@ export class ConnectorAdminService {
     if (revisionFor(current) !== revision) throw new ConnectorAdminError("revision_conflict");
     if (current.enabled === 1) throw new ConnectorAdminError("connector_must_be_disabled");
     const auditId = this.#id();
-    const now = this.#now();
+    const now = Math.max(this.#now(), current.updatedAt + 1);
     try {
       this.#database.sqlite
         .transaction(() => {
@@ -622,7 +619,16 @@ export class ConnectorAdminService {
         row.encryptedCredentials,
         credentialContext(service, row.id),
       );
-      const parsed = connectorCredentialInputSchema.safeParse(JSON.parse(plaintext) as unknown);
+      const decoded = JSON.parse(plaintext) as unknown;
+      const normalized =
+        service === "jellyfin" &&
+        typeof decoded === "object" &&
+        decoded !== null &&
+        !Array.isArray(decoded) &&
+        Object.keys(decoded).length === 0
+          ? { kind: "none" }
+          : decoded;
+      const parsed = connectorCredentialInputSchema.safeParse(normalized);
       if (!parsed.success || !credentialAllowed(service, parsed.data)) {
         throw new Error("invalid");
       }

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectorAdminSchema,
+  connectorAdminJsonSchema,
   connectorCreateRequestSchema,
+  connectorDeleteQuerySchema,
+  connectorDeleteResponseJsonSchema,
   connectorHealthSchema,
   connectorListQuerySchema,
   connectorUpdateRequestSchema,
@@ -213,6 +216,17 @@ describe("connector contracts", () => {
       }).success,
     ).toBe(true);
     expect(connectorUpdateRequestSchema.safeParse({ revision: "0123456789abcdef" }).success).toBe(
+      false,
+    );
+  });
+
+  it("publishes dialect-neutral route schemas and validates delete revisions", () => {
+    expect(connectorAdminJsonSchema).not.toHaveProperty("$schema");
+    expect(connectorDeleteResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(connectorDeleteQuerySchema.safeParse({ revision: "0123456789abcdef" }).success).toBe(
+      true,
+    );
+    expect(connectorDeleteQuerySchema.safeParse({ revision: "quoted revision" }).success).toBe(
       false,
     );
   });

@@ -10,8 +10,9 @@ design and review.
 > opaque local sessions, identity resolution, authentication audit records, and hidden
 > recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
 > and provider-initiated OIDC back- and front-channel logout are implemented, while
-> complete permission enforcement, connector
-> administration, media proxying, and upstream mutations remain incomplete. Controls
+> encrypted and audited connector administration is implemented through the versioned
+> gateway API. Complete permission enforcement, the connector administration interface,
+> media proxying, and upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
 
@@ -68,6 +69,26 @@ application boundary; operators must still patch and isolate the host.
 | Malicious upstream content    | Schema parsing, output encoding, content-type controls, media proxy allowlists                    |
 | Destructive replay            | Idempotency keys or current-state preconditions, authorization, audit, safe confirmation UX       |
 | Supply-chain compromise       | Locked dependencies, pinned actions, review gates, CodeQL, SBOM, provenance, signatures           |
+
+## Current connector-administration controls
+
+- Connector API keys and passwords are authenticated-encrypted with a context bound to
+  both service and connector identity. Browser responses expose only the credential kind
+  and whether credentials are configured.
+- New connector records are disabled. A successful probe must persist normalized health
+  and capabilities before enablement; any destination, credential, HTTP, or TLS policy
+  change disables the connector and clears that evidence.
+- Destination literals are validated before storage and resolved addresses are checked at
+  request time. Redirects remain blocked and DNS-pinned transports cannot fall back to an
+  unvalidated address. Plain HTTP and self-signed TLS each require a separate explicit
+  administrator approval.
+- Every mutation requires a same-origin CSRF proof and the local `connectors.manage`
+  permission. The service repeats the permission check so future non-HTTP callers cannot
+  bypass authorization.
+- Updates and deletion require the latest opaque revision. Enabled connectors cannot be
+  deleted, and connectors referenced by a service identity link remain protected.
+- Creation, validation, update, and deletion write bounded audit metadata without connector
+  credentials, private response bodies, or raw client addresses.
 
 ## Browser protections
 

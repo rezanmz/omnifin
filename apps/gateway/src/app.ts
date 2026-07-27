@@ -36,6 +36,10 @@ import {
 } from "./auth/session-service.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import { type DatabaseHandle, openDatabase } from "./db/client.js";
+import {
+  connectorAdminRoutes,
+  type ConnectorAdminRoutesOptions,
+} from "./connectors/admin-routes.js";
 import { healthRoutes } from "./health.js";
 import { isSafeHttpError, SafeHttpError } from "./http-error.js";
 import { createLoggerOptions } from "./logger.js";
@@ -65,6 +69,7 @@ export interface CreateAppOptions {
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
+  connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -348,6 +353,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await app.register(healthRoutes);
     await app.register(authProviderRoutes);
+    await app.register(connectorAdminRoutes, {
+      ...(options.connectorAdminDependencies === undefined
+        ? {}
+        : { dependencies: options.connectorAdminDependencies }),
+    });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined
         ? {}

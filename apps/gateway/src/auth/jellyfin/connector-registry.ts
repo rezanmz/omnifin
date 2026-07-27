@@ -62,7 +62,7 @@ export function bootstrapConfiguredJellyfinConnector(
   const auditId = createId();
   if (!IDENTIFIER_PATTERN.test(auditId)) throw new JellyfinConnectorConfigurationError();
   const encryptedCredentials = new EnvelopeCipher(config.encryptionKey).encrypt(
-    "{}",
+    JSON.stringify({ kind: "none" }),
     credentialsContext(ENVIRONMENT_CONNECTOR_ID),
   );
   const timestamp = occurredAt.getTime();

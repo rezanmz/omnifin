@@ -129,7 +129,7 @@ export type ManagedConnectorService = z.infer<typeof managedConnectorServiceSche
 export const connectorTlsPolicySchema = z.enum(["strict", "allow_self_signed"]);
 export type ConnectorTlsPolicy = z.infer<typeof connectorTlsPolicySchema>;
 
-const connectorIdentifierSchema = z
+export const connectorIdentifierSchema = z
   .string()
   .trim()
   .min(1)
@@ -315,3 +315,32 @@ export const connectorDeleteResponseSchema = z.strictObject({
   deletedConnectorId: connectorIdentifierSchema,
 });
 export type ConnectorDeleteResponse = z.infer<typeof connectorDeleteResponseSchema>;
+
+export const connectorDeleteQuerySchema = z.strictObject({
+  revision: z
+    .string()
+    .min(16)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/u),
+});
+export type ConnectorDeleteQuery = z.infer<typeof connectorDeleteQuerySchema>;
+
+function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
+  const jsonSchema = z.toJSONSchema(schema);
+  delete jsonSchema.$schema;
+  return jsonSchema;
+}
+
+export const connectorAdminJsonSchema = withoutSchemaDialect(connectorAdminSchema);
+export const connectorAdminParamsJsonSchema = withoutSchemaDialect(connectorAdminParamsSchema);
+export const connectorCreateRequestJsonSchema = withoutSchemaDialect(connectorCreateRequestSchema);
+export const connectorDeleteQueryJsonSchema = withoutSchemaDialect(connectorDeleteQuerySchema);
+export const connectorDeleteResponseJsonSchema = withoutSchemaDialect(
+  connectorDeleteResponseSchema,
+);
+export const connectorListQueryJsonSchema = withoutSchemaDialect(connectorListQuerySchema);
+export const connectorListResponseJsonSchema = withoutSchemaDialect(connectorListResponseSchema);
+export const connectorMutationResponseJsonSchema = withoutSchemaDialect(
+  connectorMutationResponseSchema,
+);
+export const connectorUpdateRequestJsonSchema = withoutSchemaDialect(connectorUpdateRequestSchema);
