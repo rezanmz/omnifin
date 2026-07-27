@@ -168,6 +168,8 @@ async function generateCertificate(directory, host) {
       "basicConstraints=critical,CA:FALSE",
       "keyUsage=critical,digitalSignature,keyEncipherment",
       "extendedKeyUsage=serverAuth",
+      "subjectKeyIdentifier=hash",
+      "authorityKeyIdentifier=keyid:always,issuer:always",
       `subjectAltName=IP:${host}`,
       "",
     ].join("\n"),
@@ -188,6 +190,14 @@ async function generateCertificate(directory, host) {
       caCertificate,
       "-subj",
       "/CN=Omnifin isolated fixture CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE,pathlen:0",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+      "-addext",
+      "subjectKeyIdentifier=hash",
+      "-addext",
+      "authorityKeyIdentifier=keyid:always",
     ],
     { failureCategory: "certificate_generation_failed" },
   );
@@ -227,6 +237,11 @@ async function generateCertificate(directory, host) {
       "-out",
       serverCertificate,
     ],
+    { failureCategory: "certificate_generation_failed" },
+  );
+  await runCommand(
+    "openssl",
+    ["verify", "-x509_strict", "-CAfile", caCertificate, serverCertificate],
     { failureCategory: "certificate_generation_failed" },
   );
   chmodSync(caCertificate, 0o644);
@@ -493,7 +508,10 @@ async function main(options) {
         "backchannel_trigger_response_failure",
         "backchannel_trigger_shell_unavailable",
         "backchannel_trigger_timeout",
+        "backchannel_trigger_tls_chain_failure",
         "backchannel_trigger_tls_failure",
+        "backchannel_trigger_tls_identity_failure",
+        "backchannel_trigger_tls_validity_failure",
         "backchannel_trigger_token_unavailable",
         "configuration",
         "first_browser_login",

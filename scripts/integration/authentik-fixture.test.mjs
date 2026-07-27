@@ -202,6 +202,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_access_token_inactive/u);
   assert.match(browserSource, /dispatchAuthentikBackchannel/u);
   assert.match(browserSource, /backchannel_trigger_tls_failure/u);
+  assert.match(browserSource, /backchannel_trigger_tls_chain_failure/u);
+  assert.match(browserSource, /backchannel_trigger_tls_identity_failure/u);
+  assert.match(browserSource, /backchannel_trigger_tls_validity_failure/u);
   assert.match(browserSource, /backchannel_trigger_network_failure/u);
   assert.match(browserSource, /backchannel_trigger_process_failure/u);
   assert.match(dispatchSource, /create_logout_token/u);
@@ -220,6 +223,10 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(runnerSource, /backchannel_not_delivered/u);
   assert.match(runnerSource, /backchannel_response_missing/u);
   assert.match(runnerSource, /backchannel_response_\$\{responseMatch\[1\]\}/u);
+  assert.match(runnerSource, /basicConstraints=critical,CA:TRUE,pathlen:0/u);
+  assert.match(runnerSource, /keyUsage=critical,keyCertSign,cRLSign/u);
+  assert.match(runnerSource, /authorityKeyIdentifier=keyid:always/u);
+  assert.match(runnerSource, /"-x509_strict"/u);
 });
 
 test("pins an isolated Authentik topology without privileged host mounts", () => {
