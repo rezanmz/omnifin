@@ -201,6 +201,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_access_token_user_mismatch/u);
   assert.match(browserSource, /backchannel_access_token_inactive/u);
   assert.match(browserSource, /dispatchAuthentikBackchannel/u);
+  assert.match(browserSource, /backchannel_trigger_tls_failure/u);
+  assert.match(browserSource, /backchannel_trigger_network_failure/u);
+  assert.match(browserSource, /backchannel_trigger_process_failure/u);
   assert.match(dispatchSource, /create_logout_token/u);
   assert.match(dispatchSource, /get_http_session\(\)\.post/u);
   assert.match(dispatchSource, /response\.raise_for_status\(\)/u);

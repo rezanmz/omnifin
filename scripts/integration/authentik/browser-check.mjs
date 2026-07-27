@@ -60,8 +60,33 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
     ],
     { encoding: "utf8", maxBuffer: 1_048_576, timeout: 30_000 },
   );
-  assert(execution.status === 0);
-  assert(execution.stdout.includes('"event":"authentik_backchannel_delivered"'));
+  if (execution.error?.code === "ETIMEDOUT") {
+    currentStage = "backchannel_trigger_timeout";
+    throw new BrowserCheckError();
+  }
+  if (execution.status !== 0) {
+    const diagnostic = `${execution.stdout ?? ""}\n${execution.stderr ?? ""}`;
+    if (/fixture_access_token_unavailable/u.test(diagnostic)) {
+      currentStage = "backchannel_trigger_token_unavailable";
+    } else if (/fixture_backchannel_provider_invalid/u.test(diagnostic)) {
+      currentStage = "backchannel_trigger_provider_invalid";
+    } else if (/no such command ['"]?shell|unknown command ['"]?shell/iu.test(diagnostic)) {
+      currentStage = "backchannel_trigger_shell_unavailable";
+    } else if (/certificate_verify_failed|sslerror/iu.test(diagnostic)) {
+      currentStage = "backchannel_trigger_tls_failure";
+    } else if (/connectionerror|connection refused|network is unreachable/iu.test(diagnostic)) {
+      currentStage = "backchannel_trigger_network_failure";
+    } else if (/httperror/iu.test(diagnostic)) {
+      currentStage = "backchannel_trigger_response_failure";
+    } else {
+      currentStage = "backchannel_trigger_process_failure";
+    }
+    throw new BrowserCheckError();
+  }
+  if (!execution.stdout.includes('"event":"authentik_backchannel_delivered"')) {
+    currentStage = "backchannel_trigger_output_missing";
+    throw new BrowserCheckError();
+  }
 }
 
 async function json(response, expectedStatus, failureStage) {
