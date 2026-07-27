@@ -142,6 +142,35 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 });
 
+test("operations navigation opens the dedicated indexer intelligence workspace", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute(
+    "href",
+    "/operations/indexers",
+  );
+});
+
+test("indexer intelligence hydrates without changing deterministic telemetry", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  const recordHydrationError = (message: string) => {
+    if (/hydration|server rendered html|server-rendered html/iu.test(message)) {
+      hydrationErrors.push(message);
+    }
+  };
+
+  page.on("console", (message) => {
+    if (message.type() === "error") recordHydrationError(message.text());
+  });
+  page.on("pageerror", (error) => recordHydrationError(error.message));
+
+  await page.goto("/operations/indexers?test-view=ready");
+  await expect(page.getByRole("heading", { name: "Know every source." })).toBeVisible();
+  await expect(page.getByText("Jul 27, 5:18 PM UTC", { exact: true })).toBeVisible();
+  expect(hydrationErrors).toEqual([]);
+});
+
 test("ten-foot posters support directional focus with focus-safe scrolling", async ({
   page,
 }, testInfo) => {

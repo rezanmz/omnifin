@@ -73,6 +73,12 @@ async function useLightTheme(page: Page) {
   ]);
 }
 
+async function removeDevelopmentIndicator(page: Page) {
+  await page.locator("nextjs-portal").evaluateAll((portals) => {
+    for (const portal of portals) portal.remove();
+  });
+}
+
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -365,6 +371,41 @@ test("degraded service connection visual baseline", async ({ page }, testInfo) =
   await page.goto("/settings/connectors?test-view=degraded");
   await page.getByRole("heading", { name: "Radarr" }).waitFor();
   await expect(page).toHaveScreenshot("service-connections-degraded.png", { fullPage: true });
+});
+
+test("indexer intelligence visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Indexer intelligence covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/indexers?test-view=ready");
+  await page.getByRole("heading", { name: "Know every source." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("indexer-intelligence.png", { fullPage: true });
+});
+
+test("light indexer intelligence visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light indexer intelligence covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/indexers?test-view=ready");
+  await page.getByRole("heading", { name: "Know every source." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("indexer-intelligence-light.png", { fullPage: true });
+});
+
+test("degraded indexer intelligence visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded indexer intelligence covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/indexers?test-view=degraded");
+  await page.getByText("Partial intelligence", { exact: true }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("indexer-intelligence-degraded.png", { fullPage: true });
 });
 
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {

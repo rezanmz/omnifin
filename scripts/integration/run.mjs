@@ -20,7 +20,7 @@ const connectorPatterns = {
   seerr: "^(?:'seerr' adapter|Seerr discovery|Seerr media requests)\\b",
   radarr: "^'radarr' adapter\\b",
   sonarr: "^'sonarr' adapter\\b",
-  prowlarr: "^'prowlarr' adapter\\b",
+  prowlarr: "^(?:'prowlarr' adapter|Prowlarr indexer intelligence)\\b",
   bazarr: "^'bazarr' adapter\\b",
   qbittorrent: "^qBittorrent adapter\\b",
   sabnzbd: "^'sabnzbd' adapter\\b",
@@ -38,7 +38,17 @@ const connectorChecks = {
   ],
   radarr: ["authentication_header", "health_normalization", "version_discovery"],
   sonarr: ["authentication_header", "health_normalization", "version_discovery"],
-  prowlarr: ["authentication_header", "health_normalization", "version_discovery"],
+  prowlarr: [
+    "application_sync",
+    "authentication_header",
+    "failure_history",
+    "health_normalization",
+    "indexer_inventory",
+    "safe_test",
+    "secret_isolation",
+    "statistics",
+    "version_discovery",
+  ],
   bazarr: ["authentication_header", "health_normalization", "version_discovery"],
   qbittorrent: ["authentication", "credential_rejection", "secret_isolation", "version_discovery"],
   sabnzbd: ["health_normalization", "version_discovery"],
@@ -278,6 +288,9 @@ function runFixture(service) {
       join(root, "packages/connectors/test/seerr-discovery.test.ts"),
       join(root, "packages/connectors/test/seerr-requests.test.ts"),
     );
+  }
+  if (service === "prowlarr") {
+    testFiles.push(join(root, "packages/connectors/test/prowlarr-intelligence.test.ts"));
   }
   if (testFiles.some((file) => !existsSync(file)) || !connectorPatterns[service]) {
     return { service, profile: "fixture-contract", status: "not_implemented" };

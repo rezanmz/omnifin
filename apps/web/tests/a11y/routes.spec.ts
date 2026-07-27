@@ -50,6 +50,22 @@ const routes = [
     path: "/settings/connectors?test-view=forbidden",
   },
   {
+    label: "indexer intelligence",
+    path: "/operations/indexers?test-view=ready",
+  },
+  {
+    label: "empty indexer intelligence",
+    path: "/operations/indexers?test-view=empty",
+  },
+  {
+    label: "degraded indexer intelligence",
+    path: "/operations/indexers?test-view=degraded",
+  },
+  {
+    label: "restricted indexer intelligence",
+    path: "/operations/indexers?test-view=forbidden",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
@@ -161,6 +177,7 @@ for (const route of [
     path: "/settings/identity-providers?test-view=ready",
   },
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
+  { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },
 ] as const) {
   test(`${route.label} light theme has no automatically detectable accessibility violations`, async ({
     context,

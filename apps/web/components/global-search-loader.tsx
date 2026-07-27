@@ -8,12 +8,14 @@ import type { GlobalSearchProperties } from "./global-search";
 
 function GlobalSearchPlaceholder({
   activate,
+  busy,
   inputReference,
   preload,
   query,
   setQuery,
 }: {
   activate?: () => void;
+  busy?: boolean;
   inputReference?: RefObject<HTMLInputElement | null>;
   preload?: () => void;
   query?: string;
@@ -27,7 +29,7 @@ function GlobalSearchPlaceholder({
       </label>
       <input
         aria-autocomplete="list"
-        aria-busy={activate ? undefined : true}
+        aria-busy={busy || undefined}
         aria-controls="global-search-results"
         aria-expanded="false"
         aria-haspopup="listbox"
@@ -61,6 +63,7 @@ const loadGlobalSearch = () => import("./global-search").then((module_) => modul
 export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const [SearchComponent, setSearchComponent] =
     useState<ComponentType<GlobalSearchProperties> | null>(null);
+  const [loading, setLoading] = useState(false);
   const [pendingQuery, setPendingQuery] = useState(properties.initialQuery ?? "");
   const [restoreFocus, setRestoreFocus] = useState(false);
   const [shortcutRequested, setShortcutRequested] = useState(false);
@@ -68,10 +71,13 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
 
   const activate = useCallback((shortcut = false) => {
     if (shortcut) setShortcutRequested(true);
-    void loadGlobalSearch().then((Component) => {
-      setRestoreFocus(shortcut || document.activeElement === placeholderReference.current);
-      setSearchComponent(() => Component);
-    });
+    setLoading(true);
+    void loadGlobalSearch()
+      .then((Component) => {
+        setRestoreFocus(shortcut || document.activeElement === placeholderReference.current);
+        setSearchComponent(() => Component);
+      })
+      .catch(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -89,6 +95,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
     return (
       <GlobalSearchPlaceholder
         activate={() => activate()}
+        busy={loading}
         inputReference={placeholderReference}
         preload={() => void loadGlobalSearch()}
         query={pendingQuery}

@@ -16,8 +16,9 @@ the roadmap records when each area has passed its verification gate.
 > administration now exist through both normalized APIs and permission-checked control rooms.
 > Encrypted connector administration, normalized Seerr discovery, the first
 > identity-delegated, idempotent Seerr request mutation, and permission-gated read-only
-> Radarr/Sonarr acquisition provenance and exact-target search recovery are implemented; request review, manual acquisition
-> recovery mutations, and media proxying remain incomplete.
+> Radarr/Sonarr acquisition provenance, exact-target search recovery, and Prowlarr
+> Indexer Intelligence are implemented; request review, manual acquisition recovery
+> mutations, and media proxying remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -47,8 +48,10 @@ recovery sessions see and repair only Jellyfin connector records. A pinned isola
 environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
 protected public compatibility baseline remains pending. The connector browser control room,
 normalized Seerr search, media-request creation, and title-level Radarr/Sonarr provenance are
-available as pre-release development surfaces; request review, broader acquisition mutations, and playback
-remain unavailable.
+available as pre-release development surfaces. Prowlarr inventory, 24-hour statistics,
+disabled state, application sync, normalized failures, and exact-target safe tests are
+also available through the operator-only Indexer Intelligence workspace. Request review,
+broader acquisition mutations, and playback remain unavailable.
 
 ## Target system shape
 
