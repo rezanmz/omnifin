@@ -113,3 +113,205 @@ export const connectorSnapshotSchema = z.object({
   connectors: z.array(connectorHealthSchema).max(100),
 });
 export type ConnectorSnapshot = z.infer<typeof connectorSnapshotSchema>;
+
+export const managedConnectorServiceSchema = z.enum([
+  "jellyfin",
+  "seerr",
+  "radarr",
+  "sonarr",
+  "prowlarr",
+  "bazarr",
+  "qbittorrent",
+  "sabnzbd",
+]);
+export type ManagedConnectorService = z.infer<typeof managedConnectorServiceSchema>;
+
+export const connectorTlsPolicySchema = z.enum(["strict", "allow_self_signed"]);
+export type ConnectorTlsPolicy = z.infer<typeof connectorTlsPolicySchema>;
+
+const connectorIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
+
+const connectorBaseUrlSchema = z
+  .url()
+  .max(2_048)
+  .superRefine((value, context) => {
+    const url = new URL(value);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Connector URLs must be HTTP(S) origins or base paths without credentials or suffixes.",
+      });
+    }
+  });
+
+const connectorSecretSchema = z.string().min(1).max(4_096);
+
+export const connectorCredentialInputSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("none") }),
+  z.strictObject({ kind: z.literal("api_key"), apiKey: connectorSecretSchema }),
+  z.strictObject({
+    kind: z.literal("username_password"),
+    username: z.string().trim().min(1).max(256),
+    password: connectorSecretSchema,
+  }),
+]);
+export type ConnectorCredentialInput = z.infer<typeof connectorCredentialInputSchema>;
+
+export const connectorCredentialKindSchema = z.enum(["none", "api_key", "username_password"]);
+export type ConnectorCredentialKind = z.infer<typeof connectorCredentialKindSchema>;
+
+function credentialKindAllowed(service: ManagedConnectorService, kind: ConnectorCredentialKind) {
+  if (service === "jellyfin") return kind === "none";
+  if (["seerr", "sabnzbd"].includes(service)) return kind === "none" || kind === "api_key";
+  if (service === "qbittorrent") return kind === "username_password";
+  return kind === "api_key";
+}
+
+function validateConnectorPolicy(
+  input: {
+    baseUrl: string;
+    credentials: ConnectorCredentialInput;
+    insecureHttpApproved: boolean;
+    service: ManagedConnectorService;
+    tlsPolicy: ConnectorTlsPolicy;
+  },
+  context: z.core.$RefinementCtx,
+) {
+  const url = new URL(input.baseUrl);
+  if (url.protocol === "http:" && !input.insecureHttpApproved) {
+    context.addIssue({
+      code: "custom",
+      path: ["insecureHttpApproved"],
+      message: "Plain HTTP requires explicit administrator approval.",
+    });
+  }
+  if (url.protocol === "https:" && input.insecureHttpApproved) {
+    context.addIssue({
+      code: "custom",
+      path: ["insecureHttpApproved"],
+      message: "Plain HTTP approval is valid only for an HTTP destination.",
+    });
+  }
+  if (url.protocol !== "https:" && input.tlsPolicy !== "strict") {
+    context.addIssue({
+      code: "custom",
+      path: ["tlsPolicy"],
+      message: "A relaxed TLS policy is valid only for an HTTPS destination.",
+    });
+  }
+  if (!credentialKindAllowed(input.service, input.credentials.kind)) {
+    context.addIssue({
+      code: "custom",
+      path: ["credentials", "kind"],
+      message: "The credential kind is not valid for this connector service.",
+    });
+  }
+}
+
+export const connectorCreateRequestSchema = z
+  .strictObject({
+    id: connectorIdentifierSchema,
+    service: managedConnectorServiceSchema,
+    displayName: z.string().trim().min(1).max(160),
+    baseUrl: connectorBaseUrlSchema,
+    credentials: connectorCredentialInputSchema,
+    tlsPolicy: connectorTlsPolicySchema.default("strict"),
+    insecureHttpApproved: z.boolean().default(false),
+  })
+  .superRefine(validateConnectorPolicy);
+export type ConnectorCreateRequest = z.infer<typeof connectorCreateRequestSchema>;
+
+export const connectorUpdateRequestSchema = z
+  .strictObject({
+    revision: z
+      .string()
+      .min(16)
+      .max(128)
+      .regex(/^[A-Za-z0-9_-]+$/u),
+    displayName: z.string().trim().min(1).max(160).optional(),
+    baseUrl: connectorBaseUrlSchema.optional(),
+    credentials: connectorCredentialInputSchema.optional(),
+    tlsPolicy: connectorTlsPolicySchema.optional(),
+    insecureHttpApproved: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine(
+    (value) =>
+      value.displayName !== undefined ||
+      value.baseUrl !== undefined ||
+      value.credentials !== undefined ||
+      value.tlsPolicy !== undefined ||
+      value.insecureHttpApproved !== undefined ||
+      value.enabled !== undefined,
+    { message: "A connector update must change at least one field." },
+  );
+export type ConnectorUpdateRequest = z.infer<typeof connectorUpdateRequestSchema>;
+
+export const connectorAdminSchema = z.strictObject({
+  id: connectorIdentifierSchema,
+  service: managedConnectorServiceSchema,
+  displayName: z.string().trim().min(1).max(160),
+  baseUrl: connectorBaseUrlSchema,
+  credentialKind: connectorCredentialKindSchema,
+  credentialsConfigured: z.boolean(),
+  tlsPolicy: connectorTlsPolicySchema,
+  insecureHttpApproved: z.boolean(),
+  enabled: z.boolean(),
+  healthState: z.enum(["unknown", "healthy", "degraded", "offline"]),
+  lastProbe: connectorHealthSchema.nullable(),
+  revision: z
+    .string()
+    .min(16)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/u),
+  createdAt: z.iso.datetime({ offset: true }),
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+export type ConnectorAdmin = z.infer<typeof connectorAdminSchema>;
+
+export const connectorAdminParamsSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+});
+export type ConnectorAdminParams = z.infer<typeof connectorAdminParamsSchema>;
+
+export const connectorListQuerySchema = z.strictObject({
+  cursor: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9_-]+$/u)
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+});
+export type ConnectorListQuery = z.infer<typeof connectorListQuerySchema>;
+
+export const connectorListResponseSchema = z.strictObject({
+  items: z.array(connectorAdminSchema).max(50),
+  nextCursor: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9_-]+$/u)
+    .nullable(),
+});
+export type ConnectorListResponse = z.infer<typeof connectorListResponseSchema>;
+
+export const connectorMutationResponseSchema = z.strictObject({ connector: connectorAdminSchema });
+export type ConnectorMutationResponse = z.infer<typeof connectorMutationResponseSchema>;
+
+export const connectorDeleteResponseSchema = z.strictObject({
+  deletedConnectorId: connectorIdentifierSchema,
+});
+export type ConnectorDeleteResponse = z.infer<typeof connectorDeleteResponseSchema>;
