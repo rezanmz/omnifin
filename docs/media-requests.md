@@ -51,6 +51,25 @@ the reservation remains pending. Replays return `request_outcome_pending` instea
 risking a duplicate upstream write. Operators can correlate the request identifier with
 gateway and Seerr records before deciding whether to submit a new idempotency key.
 
+## Request composer
+
+Requestable discovery results open a modal Liquid Glass drawer rather than exposing
+upstream controls in the search list. The composer checks the current session, local
+permission, and paired Jellyfin identity before rendering mutation controls. It supports
+standard or 4K intent and either all available or explicit, bounded season selections.
+
+The browser creates a fresh cryptographic idempotency key for each distinct selection.
+It preserves that key after an ambiguous network outcome so a retry can recover the
+original success without duplication. A confirmed upstream failure starts a new key only
+after the user explicitly reviews and retries the request. Successful local results update
+the discovery status immediately without waiting for a second upstream search.
+
+The drawer uses the native modal dialog model for focus containment, Escape dismissal,
+focus restoration, and background inertness. Desktop and mobile layouts, dark and light
+themes, reduced motion and transparency, forced colors, loading, pairing, denial, offline,
+submitting, interrupted, and accepted states are covered by component, browser,
+accessibility, and deterministic visual tests.
+
 ## Failure and audit model
 
 The API maps upstream behavior into stable, sanitized outcomes for permission denial,

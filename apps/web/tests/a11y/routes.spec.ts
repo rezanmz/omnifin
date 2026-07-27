@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockMediaRequestSession } from "../fixtures/media-request";
 
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
@@ -88,6 +89,24 @@ test("open discovery search has no automatically detectable accessibility violat
   await page.goto("/");
   await page.getByRole("combobox").fill("matrix");
   await expect(page.getByRole("option", { name: /The Matrix/i })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("request composer has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockDiscoverySearch(page);
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

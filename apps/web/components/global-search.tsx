@@ -1,7 +1,18 @@
 "use client";
 
 import type { DiscoverySearchResult } from "@omnifin/contracts/discovery";
-import { Command, Film, LoaderCircle, Search, Tv, UserRound, WifiOff, X } from "lucide-react";
+import {
+  Command,
+  Film,
+  LoaderCircle,
+  Search,
+  Sparkles,
+  Tv,
+  UserRound,
+  WifiOff,
+  X,
+} from "lucide-react";
+import dynamic from "next/dynamic";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -11,6 +22,13 @@ import {
   type DiscoverySearchClient,
   type DiscoverySearchClientErrorKind,
 } from "../lib/discovery-search";
+import type { MediaRequestClient } from "../lib/media-requests";
+import type { RequestableMedia } from "./request-composer";
+
+const RequestComposer = dynamic(
+  () => import("./request-composer").then((module) => module.RequestComposer),
+  { ssr: false },
+);
 
 const SEARCH_RESULT_LIMIT = 12;
 const SEARCH_ACCENTS = ["#d8ff70", "#75d8c8", "#e8a575", "#a88be4", "#7eb6e8", "#e27f9f"];
@@ -31,6 +49,7 @@ export interface GlobalSearchProperties {
   debounceMs?: number;
   initialOpen?: boolean;
   initialQuery?: string;
+  requestClient?: MediaRequestClient;
 }
 
 function searchLanguage() {
@@ -53,8 +72,9 @@ function resultIcon(result: DiscoverySearchResult) {
   return <UserRound aria-hidden="true" />;
 }
 
-function availabilityLabel(result: DiscoverySearchResult) {
+function availabilityLabel(result: DiscoverySearchResult, locallyRequested = false) {
   if (result.kind === "person") return "Profile";
+  if (locallyRequested) return "Requested";
   return {
     available: "Available",
     partial: "Partial",
@@ -208,11 +228,15 @@ export function GlobalSearch({
   debounceMs = 240,
   initialOpen = false,
   initialQuery = "",
+  requestClient,
 }: GlobalSearchProperties) {
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState(initialQuery);
   const [retry, setRetry] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [composerMedia, setComposerMedia] = useState<RequestableMedia | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [requestedIds, setRequestedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<SearchState>({ kind: "idle" });
   const rootReference = useRef<HTMLDivElement>(null);
   const inputReference = useRef<HTMLInputElement>(null);
@@ -278,6 +302,12 @@ export function GlobalSearch({
     searchState.kind === "ready"
       ? (searchState.items.find((item) => item.id === selectedId) ?? searchState.items[0] ?? null)
       : null;
+  const selectedLocallyRequested = selectedResult ? requestedIds.has(selectedResult.id) : false;
+  const selectedRequestable =
+    selectedResult !== null &&
+    selectedResult.kind !== "person" &&
+    !selectedLocallyRequested &&
+    (selectedResult.availability === "unavailable" || selectedResult.availability === "partial");
 
   const focusResult = useCallback((position: "first" | "last") => {
     const options = rootReference.current?.querySelectorAll<HTMLElement>("[data-search-option]");
@@ -432,7 +462,9 @@ export function GlobalSearch({
                     </span>
                     <span className="search-result__meta">
                       <span className="search-result__kind">{resultLabel(result)}</span>
-                      <span className="search-result__state">{availabilityLabel(result)}</span>
+                      <span className="search-result__state">
+                        {availabilityLabel(result, requestedIds.has(result.id))}
+                      </span>
                     </span>
                   </button>
                 ))}
@@ -445,13 +477,27 @@ export function GlobalSearch({
                   </div>
                   <div className="search-preview__signal">
                     <span>{resultLabel(selectedResult)}</span>
-                    <span>{availabilityLabel(selectedResult)}</span>
+                    <span>{availabilityLabel(selectedResult, selectedLocallyRequested)}</span>
                   </div>
                   <h2>{selectedResult.title}</h2>
                   <p>{previewCopy(selectedResult)}</p>
                   <div className="search-preview__footer">
-                    <span>Live index</span>
                     <span>Seerr match</span>
+                    {selectedRequestable ? (
+                      <button
+                        aria-label={`Request ${selectedResult.title}`}
+                        data-directional-item
+                        onClick={() => {
+                          setComposerMedia(selectedResult);
+                          setComposerOpen(true);
+                        }}
+                        type="button"
+                      >
+                        Request <Sparkles aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <span>{availabilityLabel(selectedResult, selectedLocallyRequested)}</span>
+                    )}
                   </div>
                 </aside>
               ) : null}
@@ -459,6 +505,20 @@ export function GlobalSearch({
           )}
         </section>
       ) : null}
+      <RequestComposer
+        {...(requestClient ? { client: requestClient } : {})}
+        key={composerMedia?.id ?? "request-composer"}
+        media={composerMedia}
+        onCreated={() => {
+          if (!composerMedia) return;
+          setRequestedIds((current) => new Set([...current, composerMedia.id]));
+        }}
+        onOpenChange={(nextOpen) => {
+          setComposerOpen(nextOpen);
+          if (!nextOpen) setComposerMedia(null);
+        }}
+        open={composerOpen}
+      />
     </div>
   );
 }
