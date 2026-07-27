@@ -48,17 +48,16 @@ async function json(response, expectedStatus, failureStage) {
   }
 }
 
-async function mutate(request, webOrigin, path, csrfToken, data, method = "POST", failureStage) {
-  const response = await request.fetch(path, {
+async function mutate(request, webOrigin, path, csrfToken, data) {
+  const response = await request.post(path, {
     data,
     headers: {
       origin: webOrigin,
       "x-omnifin-csrf": csrfToken,
     },
-    method,
     maxRedirects: 0,
   });
-  return json(response, method === "POST" ? 201 : 200, failureStage);
+  return json(response, 201);
 }
 
 async function validateProvider(request, path, webOrigin, csrfToken) {
@@ -82,6 +81,33 @@ async function validateProvider(request, path, webOrigin, csrfToken) {
       throw new BrowserCheckError();
     }
     if (delayMs === null) throw new BrowserCheckError();
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new BrowserCheckError();
+}
+
+async function enableProvider(request, path, webOrigin, csrfToken, data) {
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < PROVIDER_VALIDATION_MAX_ATTEMPTS; attempt += 1) {
+    const response = await request.put(path, {
+      data,
+      headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken },
+      maxRedirects: 0,
+    });
+    if (response.status() === 200) return json(response, 200);
+    const retryAfterSeconds = Number(response.headers()["retry-after"]);
+    let delayMs;
+    try {
+      delayMs = providerValidationRetryDelay({
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+        retryAfterSeconds,
+        status: response.status(),
+      });
+    } catch {
+      return json(response, 200, "provider_enable");
+    }
+    if (delayMs === null) return json(response, 200, "provider_enable");
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new BrowserCheckError();
@@ -517,14 +543,12 @@ async function run() {
     assert(mapping.mapping?.providerId === expectedProviderId);
 
     currentStage = "provider_enable";
-    const enabled = await mutate(
+    const enabled = await enableProvider(
       context.request,
-      webOrigin,
       `/api/admin/auth/oidc/providers/${expectedProviderId}`,
+      webOrigin,
       csrfToken,
       { ...providerInput, clientSecret: undefined, enabled: true },
-      "PUT",
-      "provider_enable",
     );
     currentStage = "provider_enable_response";
     assert(enabled.provider?.enabled === true);

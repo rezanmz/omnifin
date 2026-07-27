@@ -178,6 +178,8 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /ak-stage-identification form/u);
   assert.match(browserSource, /ak-stage-consent form/u);
   assert.match(browserSource, /providerValidationRetryDelay/u);
+  assert.match(browserSource, /enableProvider/u);
+  assert.match(browserSource, /request\.put\(path/u);
   assert.match(browserSource, /httpFailureStage/u);
   assert.match(browserSource, /assertAuthentikProviderConfiguration/u);
   assert.match(browserSource, /assertAuthentikBrowserSession/u);
