@@ -4,6 +4,7 @@ import type { ServiceIdentityLink, SessionPrincipal } from "@omnifin/contracts/a
 import {
   ArrowLeft,
   ArrowRight,
+  Cable,
   CheckCircle2,
   CircleAlert,
   KeyRound,
@@ -457,6 +458,15 @@ export function AccountSecurityPanel({
                     </div>
                   ) : (
                     <div className="account-card__actions">
+                      {snapshot!.principal.permissions.includes("connectors.manage") ||
+                      snapshot!.principal.permissions.includes("recovery.jellyfin.manage") ? (
+                        <Link
+                          className="account-action account-action--primary"
+                          href="/settings/connectors"
+                        >
+                          <Cable aria-hidden="true" size={17} /> Service connections
+                        </Link>
+                      ) : null}
                       {snapshot!.principal.permissions.includes("recovery.oidc.manage") ? (
                         <Link
                           className="account-action account-action--primary"

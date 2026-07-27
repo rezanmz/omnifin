@@ -106,6 +106,55 @@ describe("AccountSecurityPanel", () => {
     );
   });
 
+  it("reveals connector administration to full administrators and Jellyfin recovery", () => {
+    const { rerender } = render(<AccountSecurityPanel initialOutcome={ready} />);
+    expect(screen.queryByRole("link", { name: "Service connections" })).not.toBeInTheDocument();
+
+    rerender(
+      <AccountSecurityPanel
+        key="connector-administrator"
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              permissions: [...principal.permissions, "connectors.manage"],
+              role: "admin",
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Service connections" })).toHaveAttribute(
+      "href",
+      "/settings/connectors",
+    );
+
+    rerender(
+      <AccountSecurityPanel
+        key="jellyfin-recovery"
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              accountState: "recovery",
+              authenticationMethod: { kind: "recovery" },
+              permissions: ["recovery.jellyfin.manage", "recovery.sessions.revoke"],
+              role: "admin",
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Service connections" })).toHaveAttribute(
+      "href",
+      "/settings/connectors",
+    );
+  });
+
   it("requires deliberate confirmation before revoking an identity link", async () => {
     const user = userEvent.setup();
     const pendingPrincipal: SessionPrincipal = {
