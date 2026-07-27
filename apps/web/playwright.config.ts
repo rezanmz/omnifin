@@ -1,6 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 3000;
+const port = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
+
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error("PLAYWRIGHT_PORT must be an integer between 1 and 65535.");
+}
 
 export default defineConfig({
   expect: {
@@ -27,6 +31,7 @@ export default defineConfig({
       OMNIFIN_DEMO_MODE: "true",
       OMNIFIN_GATEWAY_URL: "http://127.0.0.1:4000",
       OMNIFIN_TEST_MODE: "true",
+      PORT: String(port),
     },
     port,
     reuseExistingServer: !process.env.CI,

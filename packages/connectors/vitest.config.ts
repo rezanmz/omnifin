@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: {
+      "@omnifin/contracts/acquisition": fileURLToPath(
+        new URL("../contracts/src/acquisition.ts", import.meta.url),
+      ),
       "@omnifin/contracts/connectors": fileURLToPath(
         new URL("../contracts/src/connectors.ts", import.meta.url),
       ),

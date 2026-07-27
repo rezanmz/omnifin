@@ -15,7 +15,12 @@ describe("OperationsDock", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /The Far Meridian/i })).toBeInTheDocument();
+    const acquisition = screen.getByRole("button", {
+      name: "Inspect acquisition history for The Far Meridian",
+    });
+    expect(acquisition).toBeInTheDocument();
+    await user.click(acquisition);
+    expect(await screen.findByRole("heading", { name: "Signal history" })).toBeVisible();
   });
 
   it("renders an honest quiet state without invalid progress when the queue is empty", () => {

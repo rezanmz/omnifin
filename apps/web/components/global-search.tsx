@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   DiscoverySearchClientError,
@@ -47,6 +47,7 @@ type SearchState =
 export interface GlobalSearchProperties {
   client?: DiscoverySearchClient;
   debounceMs?: number;
+  initialFocus?: boolean;
   initialOpen?: boolean;
   initialQuery?: string;
   requestClient?: MediaRequestClient;
@@ -226,6 +227,7 @@ function SearchError({
 export function GlobalSearch({
   client = discoverySearchClient,
   debounceMs = 240,
+  initialFocus = false,
   initialOpen = false,
   initialQuery = "",
   requestClient,
@@ -243,6 +245,12 @@ export function GlobalSearch({
   const suppressFocusOpenReference = useRef(false);
   const normalizedQuery = query.trim();
   const requestKey = `${normalizedQuery}\0${retry}`;
+
+  useLayoutEffect(() => {
+    if (!initialFocus) return;
+    inputReference.current?.focus();
+    inputReference.current?.select();
+  }, [initialFocus]);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {

@@ -14,18 +14,18 @@ const servarrStatusSchema = z.object({
 export abstract class ServarrAdapter extends ProbeOnlyAdapter {
   abstract override readonly service: Extract<ConnectorService, "radarr" | "sonarr" | "prowlarr">;
   protected abstract readonly apiPath: string;
-  readonly #apiKey: string;
+  protected readonly apiKey: string;
 
   protected constructor(config: ApiKeyConnectorConfig) {
     super(config, [config.apiKey]);
-    this.#apiKey = config.apiKey;
+    this.apiKey = config.apiKey;
   }
 
   probe(signal?: AbortSignal): Promise<ConnectorHealth> {
     return this.runProbe("probe", async () => {
       const status = await this.client.requestJson(this.apiPath, servarrStatusSchema, {
         operation: "probe",
-        headers: { "X-Api-Key": this.#apiKey },
+        headers: { "X-Api-Key": this.apiKey },
         ...(signal ? { signal } : {}),
       });
       return status.version;

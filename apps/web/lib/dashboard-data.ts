@@ -23,8 +23,10 @@ export interface OperationModel {
   eta: string;
   id: string;
   progress: number;
+  provenance?: AcquisitionProvenanceResponse;
   rate: string;
   service: string;
+  target: AcquisitionTargetInput;
   title: string;
 }
 
@@ -134,8 +136,102 @@ export const demoDashboard: DashboardModel = {
       eta: "12m",
       id: "op-1",
       progress: 0.72,
+      provenance: {
+        events: [
+          {
+            episodeNumbers: [],
+            id: "radarr:queue:422",
+            kind: "downloading",
+            occurredAt: "2026-07-27T18:58:00.000Z",
+            release: {
+              downloadClient: "qBittorrent",
+              indexer: "Northstar",
+              protocol: "torrent",
+              quality: "WEBDL-2160p",
+              sizeBytes: 18_420_000_000,
+              title: "The.Far.Meridian.2026.2160p.WEB-DL",
+            },
+            seasonNumber: null,
+            state: "active",
+            summary: "Download is moving through the configured client.",
+          },
+          {
+            episodeNumbers: [],
+            id: "radarr:history:421",
+            kind: "grabbed",
+            occurredAt: "2026-07-27T18:51:00.000Z",
+            release: {
+              downloadClient: "qBittorrent",
+              indexer: "Northstar",
+              protocol: "torrent",
+              quality: "WEBDL-2160p",
+              sizeBytes: null,
+              title: "The.Far.Meridian.2026.2160p.WEB-DL",
+            },
+            seasonNumber: null,
+            state: "success",
+            summary: "Release was sent to the download client.",
+          },
+          {
+            episodeNumbers: [],
+            id: "radarr:history:417",
+            kind: "download_failed",
+            occurredAt: "2026-07-27T18:39:00.000Z",
+            release: {
+              downloadClient: "qBittorrent",
+              indexer: "Orbit Index",
+              protocol: "torrent",
+              quality: "Bluray-2160p",
+              sizeBytes: null,
+              title: "The.Far.Meridian.2026.REMUX.2160p",
+            },
+            seasonNumber: null,
+            state: "failure",
+            summary: "The download failed before it could be imported.",
+          },
+          {
+            episodeNumbers: [],
+            id: "radarr:history:402",
+            kind: "upgraded",
+            occurredAt: "2026-07-24T02:12:00.000Z",
+            release: {
+              downloadClient: "SABnzbd",
+              indexer: "Northstar",
+              protocol: "usenet",
+              quality: "WEBDL-1080p",
+              sizeBytes: null,
+              title: "The.Far.Meridian.2026.1080p.WEB-DL",
+            },
+            seasonNumber: null,
+            state: "success",
+            summary: "A higher-quality release replaced the previous file.",
+          },
+          {
+            episodeNumbers: [],
+            id: "radarr:history:398",
+            kind: "imported",
+            occurredAt: "2026-07-23T23:41:00.000Z",
+            release: {
+              downloadClient: "SABnzbd",
+              indexer: "Northstar",
+              protocol: "usenet",
+              quality: "WEBDL-1080p",
+              sizeBytes: null,
+              title: "The.Far.Meridian.2026.1080p.WEB-DL",
+            },
+            seasonNumber: null,
+            state: "success",
+            summary: "Download was imported into the media library.",
+          },
+        ],
+        failures: [],
+        generatedAt: "2026-07-27T19:00:00.000Z",
+        state: "complete",
+        target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+      },
       rate: "42.8 MB/s",
       service: "Radarr · qBittorrent",
+      target: { mediaId: 42, service: "radarr" },
       title: "The Far Meridian",
     },
     {
@@ -144,6 +240,7 @@ export const demoDashboard: DashboardModel = {
       progress: 0.91,
       rate: "18.2 MB/s",
       service: "Sonarr · SABnzbd",
+      target: { mediaId: 77, seasonNumber: 1, service: "sonarr" },
       title: "Signal · S01E07",
     },
   ],
@@ -153,3 +250,7 @@ export const demoDashboard: DashboardModel = {
     { label: "Acquisition", status: "attention" },
   ],
 };
+import type {
+  AcquisitionProvenanceResponse,
+  AcquisitionTargetInput,
+} from "@omnifin/contracts/acquisition";

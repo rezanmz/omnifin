@@ -73,9 +73,10 @@ All upstream access crosses the gateway boundary. The current Phase 1 implementa
 pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;
 the public compatibility baseline remains pending until protected live evidence records exact
 versions and dates. Permission checks cover every implemented administrative and self-service
-surface, including a deliberately Jellyfin-only recovery path. The browser connector control room
-is available as a pre-release development surface. Later Phase 3 slices add requests, acquisition
-actions, provenance, and live events; Phase 4 adds media proxying and playback.
+surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
+identity-delegated media requests, and read-only Radarr/Sonarr acquisition provenance are available
+as pre-release development surfaces. Later Phase 3 slices add request review, acquisition recovery
+actions, and live events; Phase 4 adds media proxying and playback.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -127,6 +128,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   browser behavior
 - [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,
   normalized mutations, and audits
+- [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
+  Sonarr title history, partial failure, and operator access
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy

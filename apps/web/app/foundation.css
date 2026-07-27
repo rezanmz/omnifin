@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 :root {
   color-scheme: light;
   --ink-0: #eef3f5;
@@ -161,8 +159,70 @@
   }
 }
 
-* {
+*,
+*::before,
+*::after {
+  border: 0 solid currentcolor;
   box-sizing: border-box;
+}
+
+html {
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd,
+figure,
+blockquote {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+ol,
+ul,
+menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  background: transparent;
+  border-radius: 0;
+  color: inherit;
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  vertical-align: middle;
+}
+
+img,
+video {
+  height: auto;
+  max-width: 100%;
 }
 
 html {

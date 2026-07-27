@@ -17,6 +17,38 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await expect(page.getByRole("button", { name: /Signal · S01E07/i })).toBeVisible();
 });
 
+test("operators can inspect a title-level acquisition trace without triggering a write", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await expect(timeline).toBeVisible();
+  await expect(timeline.getByRole("heading", { name: "The Far Meridian" })).toBeVisible();
+  await expect(timeline.getByText("Release grabbed")).toBeVisible();
+  await expect(timeline.getByText("Download failed", { exact: true })).toBeVisible();
+  await expect(timeline.getByText("Read-only operational signal")).toBeVisible();
+
+  const history = timeline.getByRole("region", { name: "Acquisition event history" });
+  await history.focus();
+  await expect(history).toBeFocused();
+  await page.keyboard.press("End");
+  await expect
+    .poll(() =>
+      history.evaluate(
+        (region) => region.scrollHeight <= region.clientHeight + 1 || region.scrollTop > 0,
+      ),
+    )
+    .toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(timeline).not.toBeVisible();
+});
+
 test("global search discloses live discovery with keyboard and touch-safe controls", async ({
   page,
 }) => {
@@ -314,7 +346,7 @@ test("touch users can disclose operations and navigate to settings", async ({ pa
   await page.getByRole("link", { name: "Settings" }).tap();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(
-    page.getByRole("heading", { name: "Account setup is still being secured." }),
+    page.getByRole("heading", { name: "Your identity, under your control." }),
   ).toBeVisible();
 });
 

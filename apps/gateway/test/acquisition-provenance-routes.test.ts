@@ -1,0 +1,315 @@
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
+import { acquisitionProvenanceResponseSchema } from "@omnifin/contracts/acquisition";
+import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { describe, expect, it, vi } from "vitest";
+
+import { createApp } from "../src/app.js";
+import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
+import type { AppConfig } from "../src/config.js";
+import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import { EnvelopeCipher } from "../src/security/crypto.js";
+
+const baseUrl = "https://omnifin.example";
+const now = new Date("2026-07-27T19:00:00.000Z");
+
+function testConfig(): AppConfig {
+  return {
+    baseUrl: new URL(baseUrl),
+    databaseUrl: ":memory:",
+    encryptionKey: Buffer.alloc(32, 89),
+    environment: "test",
+    host: "127.0.0.1",
+    insecureLoopbackPreview: false,
+    jellyfinInsecureHttpApproved: false,
+    logLevel: "silent",
+    port: 4000,
+    secureCookies: true,
+    session: {
+      absoluteTtlMs: 30 * 24 * 60 * 60 * 1_000,
+      inactivityTtlMs: 60 * 60 * 1_000,
+      recoveryAbsoluteTtlMs: 15 * 60 * 1_000,
+      rotationIntervalMs: 5 * 60 * 1_000,
+    },
+    trustProxyHops: 0,
+  };
+}
+
+function sessionDependencies() {
+  let identifier = 0;
+  let token = 0;
+  return {
+    clock: () => now,
+    createId: () => `acquisition-session-${++identifier}`,
+    createToken: () => Buffer.alloc(32, ++token).toString("base64url"),
+  };
+}
+
+const normalizedResponse: AcquisitionProvenanceResponse = {
+  events: [
+    {
+      episodeNumbers: [],
+      id: "radarr:queue:14",
+      kind: "downloading",
+      occurredAt: "2026-07-27T18:55:00.000Z",
+      release: {
+        downloadClient: "qBittorrent",
+        indexer: "Cinema Index",
+        protocol: "torrent",
+        quality: "WEBDL-1080p",
+        sizeBytes: 9_000_000_000,
+        title: "A.Safe.Release",
+      },
+      seasonNumber: null,
+      state: "active",
+      summary: "Download is moving through the configured client.",
+    },
+  ],
+  failures: [],
+  generatedAt: now.toISOString(),
+  state: "complete",
+  target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+};
+
+function capabilitySnapshot() {
+  return JSON.stringify({
+    health: {
+      capabilities: ["connector.health", "connector.version", "acquisition.history"],
+      checkedAt: now.toISOString(),
+      connectorId: "radarr-main",
+      displayName: "Radarr",
+      failure: null,
+      latencyMs: 10,
+      service: "radarr",
+      status: "healthy",
+      version: "5.22.4",
+    },
+    schemaVersion: 1,
+  });
+}
+
+async function harness(
+  implementation = vi.fn(async () => normalizedResponse),
+  options: { withConnector?: boolean } = {},
+) {
+  const config = testConfig();
+  const app = await createApp({
+    acquisitionProvenanceDependencies: {
+      clock: () => now,
+      createAdapter: () => ({ readAcquisitionProvenance: implementation }),
+    },
+    config,
+    sessionDependencies: sessionDependencies(),
+  });
+  app.database.db
+    .insert(connectorConfigs)
+    .values({
+      baseUrl: "https://jellyfin.example.test/",
+      capabilitySnapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      createdAt: now,
+      displayName: "Jellyfin",
+      enabled: true,
+      encryptedCredentials: "v2.fixture-jellyfin-credentials",
+      healthState: "healthy",
+      id: "jellyfin-main",
+      type: "jellyfin",
+      updatedAt: now,
+    })
+    .run();
+  if (options.withConnector !== false) {
+    app.database.db
+      .insert(connectorConfigs)
+      .values({
+        baseUrl: "https://radarr.example.test/",
+        capabilitySnapshotJson: capabilitySnapshot(),
+        createdAt: now,
+        displayName: "Radarr",
+        enabled: true,
+        encryptedCredentials: new EnvelopeCipher(config.encryptionKey).encrypt(
+          JSON.stringify({
+            credentials: { apiKey: "route-private-api-key", kind: "api_key" },
+            schemaVersion: 1,
+          }),
+          "connector_credentials:radarr:radarr-main",
+        ),
+        healthState: "healthy",
+        id: "radarr-main",
+        type: "radarr",
+        updatedAt: now,
+      })
+      .run();
+  }
+  app.database.db
+    .insert(users)
+    .values([
+      {
+        createdAt: now,
+        displayName: "Operator",
+        id: "operator-user",
+        role: "operator",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: now,
+      },
+      {
+        createdAt: now,
+        displayName: "Viewer",
+        id: "viewer-user",
+        role: "viewer",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: now,
+      },
+    ])
+    .run();
+  app.database.db
+    .insert(serviceIdentityLinks)
+    .values([
+      {
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        deviceId: "operator-device",
+        encryptedAccessToken: "v2.fixture-operator-token",
+        externalDisplayName: "Operator",
+        externalServerId: "jellyfin-server",
+        externalUserId: "operator-external",
+        externalUsername: "operator",
+        healthState: "linked",
+        id: "operator-link",
+        lastVerifiedAt: now,
+        service: "jellyfin",
+        tokenCreatedAt: now,
+        updatedAt: now,
+        userId: "operator-user",
+      },
+      {
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        deviceId: "viewer-device",
+        encryptedAccessToken: "v2.fixture-viewer-token",
+        externalDisplayName: "Viewer",
+        externalServerId: "jellyfin-server",
+        externalUserId: "viewer-external",
+        externalUsername: "viewer",
+        healthState: "linked",
+        id: "viewer-link",
+        lastVerifiedAt: now,
+        service: "jellyfin",
+        tokenCreatedAt: now,
+        updatedAt: now,
+        userId: "viewer-user",
+      },
+    ])
+    .run();
+  const operator = app.sessionService.createSession({
+    attribution: {
+      authMethod: "jellyfin",
+      serviceIdentityLinkId: "operator-link",
+      userId: "operator-user",
+    },
+  });
+  const viewer = app.sessionService.createSession({
+    attribution: {
+      authMethod: "jellyfin",
+      serviceIdentityLinkId: "viewer-link",
+      userId: "viewer-user",
+    },
+  });
+  return { app, implementation, operator, viewer };
+}
+
+describe("acquisition provenance routes", () => {
+  it("requires an operator session and returns private normalized provenance", async () => {
+    const { app, implementation, operator, viewer } = await harness();
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const denied = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(denied.statusCode).toBe(403);
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(acquisitionProvenanceResponseSchema.parse(response.json())).toEqual(
+        normalizedResponse,
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toContain("route-private-api-key");
+      expect(implementation).toHaveBeenCalledWith(
+        { mediaId: 42, service: "radarr" },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects mismatched movie season input before calling the connector", async () => {
+    const { app, implementation, operator } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42&seasonNumber=1",
+      });
+      expect(response.statusCode).toBe(400);
+      expect(implementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports unconfigured acquisition history without exposing configuration", async () => {
+    const { app, operator } = await harness(undefined, { withConnector: false });
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("acquisition_not_configured");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("preserves bounded retry guidance and redacts upstream error details", async () => {
+    const upstream = new SafeConnectorError({
+      code: "rate_limited",
+      message: "Private Radarr response details",
+      operation: "acquisition.history",
+      retryAfterSeconds: 45,
+      retryable: true,
+      service: "radarr",
+      status: 429,
+    });
+    const { app, operator } = await harness(vi.fn(async () => Promise.reject(upstream)));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBe("45");
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("acquisition_rate_limited");
+      expect(response.body).not.toContain("Private Radarr response details");
+    } finally {
+      await app.close();
+    }
+  });
+});

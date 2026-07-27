@@ -3,15 +3,15 @@
     "collect": {
       "numberOfRuns": 3,
       "settings": { "budgetsPath": "./lighthouse-budget.json" },
-      "startServerCommand": "OMNIFIN_DEMO_MODE=true OMNIFIN_TEST_MODE=true pnpm start",
+      "startServerCommand": "PORT=3101 OMNIFIN_DEMO_MODE=true OMNIFIN_TEST_MODE=true pnpm start",
       "startServerReadyPattern": "Ready",
       "url": [
-        "http://127.0.0.1:3000/",
-        "http://127.0.0.1:3000/?test-view=onboarding",
-        "http://127.0.0.1:3000/login",
-        "http://127.0.0.1:3000/login?test-view=unconfigured",
-        "http://127.0.0.1:3000/settings/identity-providers?test-view=ready",
-        "http://127.0.0.1:3000/settings/connectors?test-view=ready"
+        "http://127.0.0.1:3101/",
+        "http://127.0.0.1:3101/?test-view=onboarding",
+        "http://127.0.0.1:3101/login",
+        "http://127.0.0.1:3101/login?test-view=unconfigured",
+        "http://127.0.0.1:3101/settings/identity-providers?test-view=ready",
+        "http://127.0.0.1:3101/settings/connectors?test-view=ready"
       ]
     },
     "assert": {

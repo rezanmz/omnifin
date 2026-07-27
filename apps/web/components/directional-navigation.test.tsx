@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { demoDashboard } from "../lib/dashboard-data";
@@ -48,8 +48,9 @@ describe("directional navigation", () => {
     const user = userEvent.setup();
     render(<TopCommandBar connectionStatus="healthy" />);
 
+    await user.click(await screen.findByRole("combobox"));
+    await waitFor(() => expect(screen.getByRole("combobox")).not.toHaveAttribute("aria-busy"));
     const search = screen.getByRole("combobox");
-    await user.click(search);
     await user.keyboard("signal{ArrowLeft}");
     expect(search).toHaveFocus();
 

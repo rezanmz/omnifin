@@ -5,6 +5,10 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./acquisition": {
+      "types": "./dist/acquisition.d.ts",
+      "default": "./dist/acquisition.js"
+    },
     "./auth": {
       "types": "./dist/auth.d.ts",
       "default": "./dist/auth.js"
