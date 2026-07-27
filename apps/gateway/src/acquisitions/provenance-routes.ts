@@ -43,6 +43,7 @@ function configurationError(error: AcquisitionProvenanceError) {
     case "idempotency_conflict":
     case "idempotency_in_progress":
     case "identity_required":
+    case "rate_limited":
     case "response_invalid":
     case "temporarily_unavailable":
       return new SafeHttpError({
@@ -77,6 +78,14 @@ function searchError(error: AcquisitionProvenanceError, reply: FastifyReply) {
         code: "acquisition_search_identity_required",
         message: "An active operator account is required to start an acquisition search.",
         statusCode: 403,
+      });
+    case "rate_limited":
+      reply.header("retry-after", "30");
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_rate_limited",
+        message: "The acquisition service is cooling down before another search.",
+        statusCode: 429,
       });
     case "response_invalid":
       return new SafeHttpError({

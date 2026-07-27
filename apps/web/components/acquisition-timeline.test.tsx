@@ -1,3 +1,4 @@
+import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -7,6 +8,7 @@ import {
   AcquisitionProvenanceClientError,
   type AcquisitionProvenanceClient,
 } from "../lib/acquisition-provenance";
+import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
 import { demoDashboard, type OperationModel } from "../lib/dashboard-data";
 import { AcquisitionTimeline } from "./acquisition-timeline";
 
@@ -27,12 +29,72 @@ const liveOperation: OperationModel = {
   target: { mediaId: 77, seasonNumber: 1, service: "sonarr" },
   title: "Signal · S01E07",
 };
+const operator: SessionPrincipal = {
+  absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
+  accountState: "active",
+  authenticationMethod: { kind: "jellyfin" },
+  displayName: "Operator",
+  externalIdentity: null,
+  inactivityExpiresAt: "2026-07-27T14:00:00.000Z",
+  issuedAt: "2026-07-27T12:00:00.000Z",
+  linkedServices: [],
+  permissions: [...ROLE_PERMISSIONS.operator],
+  role: "operator",
+  sessionId: "operator-session",
+  userId: "operator-user",
+};
 
 function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanceClient {
   return { read };
 }
 
 describe("acquisition timeline", () => {
+  it("confirms and queues an exact-target recovery without exposing destructive controls", async () => {
+    const user = userEvent.setup();
+    const queueSearch = vi.fn<AcquisitionRecoveryClient["queueSearch"]>(async () => ({
+      replayed: false,
+      search: {
+        acceptedAt: "2026-07-27T19:01:00.000Z",
+        operationId: "radarr:command:88",
+        state: "queued",
+        target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+      },
+    }));
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(async () => ({
+        snapshot: { csrfToken: "acquisition_csrf_0123456789abcdefghijklmnop", principal: operator },
+        status: "ready" as const,
+      })),
+      queueSearch,
+    };
+    render(
+      <AcquisitionTimeline
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /delete|blocklist|remove/i }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Review search" }));
+    expect(
+      screen.getByText(/Existing downloads and library files remain untouched\./u),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Queue search" }));
+
+    expect(await screen.findByText("Acquisition search is in motion")).toBeVisible();
+    expect(queueSearch).toHaveBeenCalledWith(
+      operation.target,
+      expect.objectContaining({
+        csrfToken: "acquisition_csrf_0123456789abcdefghijklmnop",
+        idempotencyKey: expect.stringMatching(/^acquisition-/u),
+      }),
+    );
+  });
+
   it("renders a title-level trace from normalized preview data and closes accessibly", async () => {
     const onOpenChange = vi.fn();
     const user = userEvent.setup();

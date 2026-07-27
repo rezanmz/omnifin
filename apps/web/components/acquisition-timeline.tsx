@@ -14,14 +14,23 @@ import {
   History,
   PackageCheck,
   Radio,
+  RefreshCw,
   RotateCcw,
   Search,
+  ShieldCheck,
   ShieldAlert,
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
+import {
+  AcquisitionRecoveryClientError,
+  acquisitionRecoveryClient,
+  createAcquisitionSearchIdempotencyKey,
+  type AcquisitionRecoveryClient,
+  type AcquisitionRecoveryClientErrorKind,
+} from "../lib/acquisition-recovery";
 import {
   AcquisitionProvenanceClientError,
   acquisitionProvenanceClient,
@@ -45,7 +54,15 @@ export interface AcquisitionTimelineProperties {
   onOpenChange: (open: boolean) => void;
   open: boolean;
   operation: OperationModel | null;
+  recoveryClient?: AcquisitionRecoveryClient;
 }
+
+type RecoveryState =
+  | { kind: "idle" }
+  | { kind: "confirming" }
+  | { kind: "submitting" }
+  | { kind: "success"; operationId: string; replayed: boolean }
+  | { errorKind: AcquisitionRecoveryClientErrorKind; kind: "error" };
 
 const EVENT_COPY: Record<AcquisitionEvent["kind"], { label: string; icon: typeof Search }> = {
   download_failed: { icon: CircleAlert, label: "Download failed" },
@@ -177,7 +194,13 @@ function TimelineEvent({ event }: { event: AcquisitionEvent }) {
   );
 }
 
-function TimelineReady({ data }: { data: AcquisitionProvenanceResponse }) {
+function TimelineReady({
+  data,
+  recovery,
+}: {
+  data: AcquisitionProvenanceResponse;
+  recovery: ReactNode;
+}) {
   const active = data.events.filter((event) => event.state === "active").length;
   const attention = data.events.filter(
     (event) => event.state === "warning" || event.state === "failure",
@@ -232,13 +255,133 @@ function TimelineReady({ data }: { data: AcquisitionProvenanceResponse }) {
           ))}
         </ol>
       )}
+      {recovery}
       <div className="acquisition-timeline__footer">
         <span>
-          <Radio aria-hidden="true" /> Read-only operational signal
+          <Radio aria-hidden="true" /> Verified operational signal
         </span>
         <time dateTime={data.generatedAt}>Refreshed {formatTimestamp(data.generatedAt)}</time>
       </div>
     </>
+  );
+}
+
+function RecoveryPanel({
+  onConfirm,
+  onNewAttempt,
+  onStart,
+  state,
+  targetLabel,
+}: {
+  onConfirm: () => void;
+  onNewAttempt: () => void;
+  onStart: () => void;
+  state: RecoveryState;
+  targetLabel: string;
+}) {
+  if (state.kind === "idle") {
+    return (
+      <section className="acquisition-recovery">
+        <span aria-hidden="true" className="acquisition-recovery__icon">
+          <RefreshCw />
+        </span>
+        <div>
+          <small>Contextual recovery</small>
+          <strong>Search this target again</strong>
+          <p>Queue a new automatic search without changing files or monitoring settings.</p>
+        </div>
+        <button onClick={onStart} type="button">
+          Review search
+        </button>
+      </section>
+    );
+  }
+  if (state.kind === "confirming") {
+    return (
+      <section className="acquisition-recovery" data-state="confirming">
+        <span aria-hidden="true" className="acquisition-recovery__icon">
+          <ShieldCheck />
+        </span>
+        <div>
+          <small>Exact-target confirmation</small>
+          <strong>Queue {targetLabel}?</strong>
+          <p>This starts discovery only. Existing downloads and library files remain untouched.</p>
+        </div>
+        <span className="acquisition-recovery__actions">
+          <button className="acquisition-recovery__secondary" onClick={onStart} type="button">
+            Cancel
+          </button>
+          <button onClick={onConfirm} type="button">
+            Queue search
+          </button>
+        </span>
+      </section>
+    );
+  }
+  if (state.kind === "submitting") {
+    return (
+      <section aria-live="polite" className="acquisition-recovery" data-state="submitting">
+        <span aria-hidden="true" className="acquisition-recovery__icon">
+          <RefreshCw />
+        </span>
+        <div>
+          <small>Submitting securely</small>
+          <strong>Reserving one search</strong>
+          <p>The target is idempotency-protected while the service confirms the command.</p>
+        </div>
+      </section>
+    );
+  }
+  if (state.kind === "success") {
+    return (
+      <section aria-live="polite" className="acquisition-recovery" data-state="success">
+        <span aria-hidden="true" className="acquisition-recovery__icon">
+          <Check />
+        </span>
+        <div>
+          <small>{state.replayed ? "Verified receipt" : "Search queued"}</small>
+          <strong>Acquisition search is in motion</strong>
+          <p>
+            Command {state.operationId.split(":").at(-1)} was accepted. New evidence will appear
+            here.
+          </p>
+        </div>
+        <button onClick={onNewAttempt} type="button">
+          Done
+        </button>
+      </section>
+    );
+  }
+  const signedOut = state.errorKind === "signed_out";
+  const forbidden = state.errorKind === "forbidden";
+  return (
+    <section aria-live="polite" className="acquisition-recovery" data-state="error">
+      <span aria-hidden="true" className="acquisition-recovery__icon">
+        <ShieldAlert />
+      </span>
+      <div>
+        <small>Search not queued</small>
+        <strong>
+          {signedOut
+            ? "Sign in to continue"
+            : forbidden
+              ? "Operator access required"
+              : "Verify history before another attempt"}
+        </strong>
+        <p>
+          {signedOut || forbidden
+            ? "No upstream action was attempted."
+            : "The outcome was not confirmed. Review the timeline before creating a fresh search."}
+        </p>
+      </div>
+      {signedOut ? (
+        <a href="/login">Sign in</a>
+      ) : forbidden ? null : (
+        <button onClick={onNewAttempt} type="button">
+          New attempt
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -247,11 +390,15 @@ export function AcquisitionTimeline({
   onOpenChange,
   open,
   operation,
+  recoveryClient = acquisitionRecoveryClient,
 }: AcquisitionTimelineProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
+  const idempotencyKeyReference = useRef<string | null>(null);
+  const operationIdReference = useRef(operation?.id);
+  const [recoveryState, setRecoveryState] = useState<RecoveryState>({ kind: "idle" });
   const [state, setState] = useState<TimelineState>({ kind: "idle" });
 
   useEffect(() => {
@@ -291,8 +438,19 @@ export function AcquisitionTimeline({
     };
   }, [attempt, client, open, operation]);
 
+  useEffect(() => {
+    if (operationIdReference.current === operation?.id) return;
+    operationIdReference.current = operation?.id;
+    idempotencyKeyReference.current = null;
+    setRecoveryState({ kind: "idle" });
+  }, [operation?.id]);
+
   if (!operation) return null;
   const service = operation.target.service === "radarr" ? "Radarr" : "Sonarr";
+  const targetLabel =
+    operation.target.service === "sonarr" && operation.target.seasonNumber !== undefined
+      ? `${operation.title} season ${operation.target.seasonNumber}`
+      : operation.title;
   const visibleState: TimelineState = operation.provenance
     ? { data: operation.provenance, kind: "ready", operationId: operation.id }
     : "operationId" in state && state.operationId === operation.id
@@ -381,7 +539,63 @@ export function AcquisitionTimeline({
               ) : null}
             </section>
           ) : (
-            <TimelineReady data={visibleState.data} />
+            <TimelineReady
+              data={visibleState.data}
+              recovery={
+                <RecoveryPanel
+                  onConfirm={() => {
+                    void (async () => {
+                      setRecoveryState({ kind: "submitting" });
+                      const eligibility = await recoveryClient.loadEligibility();
+                      if (eligibility.status !== "ready") {
+                        setRecoveryState({
+                          errorKind:
+                            eligibility.status === "signed_out"
+                              ? "signed_out"
+                              : eligibility.status === "forbidden"
+                                ? "forbidden"
+                                : "unavailable",
+                          kind: "error",
+                        });
+                        return;
+                      }
+                      try {
+                        idempotencyKeyReference.current ??= createAcquisitionSearchIdempotencyKey();
+                        const result = await recoveryClient.queueSearch(operation.target, {
+                          csrfToken: eligibility.snapshot.csrfToken,
+                          idempotencyKey: idempotencyKeyReference.current,
+                        });
+                        idempotencyKeyReference.current = null;
+                        setRecoveryState({
+                          kind: "success",
+                          operationId: result.search.operationId,
+                          replayed: result.replayed,
+                        });
+                      } catch (error) {
+                        setRecoveryState({
+                          errorKind:
+                            error instanceof AcquisitionRecoveryClientError
+                              ? error.kind
+                              : "unavailable",
+                          kind: "error",
+                        });
+                      }
+                    })();
+                  }}
+                  onNewAttempt={() => {
+                    idempotencyKeyReference.current = null;
+                    setRecoveryState({ kind: "idle" });
+                  }}
+                  onStart={() =>
+                    setRecoveryState((current) =>
+                      current.kind === "confirming" ? { kind: "idle" } : { kind: "confirming" },
+                    )
+                  }
+                  state={recoveryState}
+                  targetLabel={targetLabel}
+                />
+              }
+            />
           )}
         </div>
       </div>

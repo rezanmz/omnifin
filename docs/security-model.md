@@ -123,6 +123,21 @@ application boundary; operators must still patch and isolate the host.
 - History and queue reads are independently bounded and parsed. Safe partial results survive one
   upstream failure; raw history data, queue statuses, download hashes, paths, and private errors do
   not cross the gateway boundary.
+
+## Acquisition-search mutation controls
+
+- Automatic search requires an active user with `acquisition.manage` at both the session route and
+  service boundary. Same-origin, session-bound CSRF, mutation rate limiting, and an abort signal are
+  mandatory; recovery sessions cannot issue the command.
+- The public contract accepts only one exact Radarr movie, Sonarr series, or Sonarr season target.
+  The adapter maps that target to `MoviesSearch`, `SeriesSearch`, or `SeasonSearch`; arbitrary
+  command names and destructive fields are impossible to express.
+- Per-user idempotency keys and canonical target fingerprints are stored only as hashes. A pending
+  outcome fails closed, a known success is replayed without another upstream call, and key reuse
+  for another target is rejected.
+- The normalized outcome and bounded audit event commit in one SQLite transaction. Stored and
+  returned data exclude credentials, raw upstream commands, response bodies, paths, idempotency
+  keys, and private errors.
 - The route is read-only, abort-aware, rate-limited, and explicitly non-cacheable. It offers no
   upstream retry, search, grab, blocklist, or deletion mutation in this slice.
 

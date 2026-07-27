@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import {
+  acquisitionRecoveryCsrfToken,
+  mockAcquisitionRecoverySession,
+  mockAcquisitionSearch,
+} from "../fixtures/acquisition-recovery";
 import { mockDiscoverySearch } from "../fixtures/discovery";
 import {
   mediaRequestCsrfToken,
@@ -17,7 +22,7 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await expect(page.getByRole("button", { name: /Signal · S01E07/i })).toBeVisible();
 });
 
-test("operators can inspect a title-level acquisition trace without triggering a write", async ({
+test("operators can inspect a title-level acquisition trace before choosing recovery", async ({
   page,
 }) => {
   await page.goto("/");
@@ -31,7 +36,7 @@ test("operators can inspect a title-level acquisition trace without triggering a
   await expect(timeline.getByRole("heading", { name: "The Far Meridian" })).toBeVisible();
   await expect(timeline.getByText("Release grabbed")).toBeVisible();
   await expect(timeline.getByText("Download failed", { exact: true })).toBeVisible();
-  await expect(timeline.getByText("Read-only operational signal")).toBeVisible();
+  await expect(timeline.getByText("Verified operational signal")).toBeVisible();
 
   const history = timeline.getByRole("region", { name: "Acquisition event history" });
   await history.focus();
@@ -47,6 +52,27 @@ test("operators can inspect a title-level acquisition trace without triggering a
 
   await page.keyboard.press("Escape");
   await expect(timeline).not.toBeVisible();
+});
+
+test("operators can queue one exact-target acquisition search", async ({ page }) => {
+  await mockAcquisitionRecoverySession(page);
+  const capture = await mockAcquisitionSearch(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await timeline.getByRole("button", { name: "Review search" }).click();
+  await expect(timeline.getByText(/library files remain untouched/u)).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /delete|blocklist|remove/i })).toHaveCount(0);
+  await timeline.getByRole("button", { name: "Queue search" }).click();
+
+  await expect(timeline.getByText("Acquisition search is in motion")).toBeVisible();
+  expect(capture.body).toEqual({ mediaId: 42, service: "radarr" });
+  expect(capture.csrfToken).toBe(acquisitionRecoveryCsrfToken);
+  expect(capture.idempotencyKey).toMatch(/^acquisition-[0-9a-f-]{36}$/u);
 });
 
 test("global search discloses live discovery with keyboard and touch-safe controls", async ({

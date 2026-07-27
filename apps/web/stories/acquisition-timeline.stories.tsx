@@ -1,3 +1,4 @@
+import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { expect, waitFor, within } from "storybook/test";
@@ -7,6 +8,7 @@ import {
   AcquisitionProvenanceClientError,
   type AcquisitionProvenanceClient,
 } from "../lib/acquisition-provenance";
+import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
 import { demoDashboard, type OperationModel } from "../lib/dashboard-data";
 
 const previewOperation = demoDashboard.operations[0]!;
@@ -40,6 +42,20 @@ const degraded: AcquisitionProvenanceResponse = {
   ],
   state: "degraded",
 };
+const operator: SessionPrincipal = {
+  absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
+  accountState: "active",
+  authenticationMethod: { kind: "jellyfin" },
+  displayName: "Operator",
+  externalIdentity: null,
+  inactivityExpiresAt: "2026-07-27T21:00:00.000Z",
+  issuedAt: "2026-07-27T19:00:00.000Z",
+  linkedServices: [],
+  permissions: [...ROLE_PERMISSIONS.operator],
+  role: "operator",
+  sessionId: "story-operator-session",
+  userId: "story-operator-user",
+};
 
 function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanceClient {
   return { read };
@@ -51,7 +67,11 @@ const meta = {
     onOpenChange: () => undefined,
     open: true,
   },
-  argTypes: { client: { control: false }, onOpenChange: { control: false } },
+  argTypes: {
+    client: { control: false },
+    onOpenChange: { control: false },
+    recoveryClient: { control: false },
+  },
   component: AcquisitionTimeline,
   decorators: [
     (Story) => (
@@ -90,6 +110,49 @@ export const Empty: Story = {
 
 export const Degraded: Story = {
   args: { operation: { ...previewOperation, provenance: degraded } },
+};
+
+export const RecoveryConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Review search" }));
+    await waitFor(() => expect(canvas.getByRole("button", { name: "Queue search" })).toBeVisible());
+    await waitFor(() => expect(canvas.getByText(/library files remain untouched/u)).toBeVisible());
+  },
+};
+
+export const RecoverySuccess: Story = {
+  args: {
+    recoveryClient: {
+      loadEligibility: async () => ({
+        snapshot: {
+          csrfToken: "story_acquisition_csrf_0123456789abcdefghijklmnop",
+          principal: operator,
+        },
+        status: "ready" as const,
+      }),
+      queueSearch: async () => ({
+        replayed: false,
+        search: {
+          acceptedAt: "2026-07-27T19:01:00.000Z",
+          operationId: "radarr:command:88",
+          state: "queued" as const,
+          target: {
+            kind: "movie" as const,
+            mediaId: 42,
+            seasonNumber: null,
+            service: "radarr" as const,
+          },
+        },
+      }),
+    } satisfies AcquisitionRecoveryClient,
+  },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Review search" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Queue search" }));
+    await waitFor(() => expect(canvas.getByText("Acquisition search is in motion")).toBeVisible());
+  },
 };
 
 export const PermissionDenied: Story = {

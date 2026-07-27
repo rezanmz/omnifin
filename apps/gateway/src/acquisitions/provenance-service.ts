@@ -88,10 +88,11 @@ export interface AcquisitionSearchResult {
 }
 
 export type AcquisitionSearchFailureCode =
-  "configuration_unavailable" | "response_invalid" | "temporarily_unavailable";
+  "configuration_unavailable" | "rate_limited" | "response_invalid" | "temporarily_unavailable";
 
 const ACQUISITION_SEARCH_FAILURE_CODES = new Set<AcquisitionSearchFailureCode>([
   "configuration_unavailable",
+  "rate_limited",
   "response_invalid",
   "temporarily_unavailable",
 ]);
@@ -195,6 +196,7 @@ function defaultAdapter(service: AcquisitionService, config: ApiKeyConnectorConf
 function knownSearchFailure(error: unknown): AcquisitionSearchFailureCode {
   if (error instanceof AcquisitionProvenanceError) return "configuration_unavailable";
   if (error instanceof SafeConnectorError) {
+    if (error.code === "rate_limited") return "rate_limited";
     if (error.code === "response_invalid" || error.code === "unsupported_version") {
       return "response_invalid";
     }
