@@ -25,6 +25,10 @@ const blueprintSource = readFileSync(
   "utf8",
 );
 const runnerSource = readFileSync(new URL("./authentik/run.mjs", import.meta.url), "utf8");
+const dispatchSource = readFileSync(
+  new URL("./authentik/dispatch-backchannel.py", import.meta.url),
+  "utf8",
+);
 
 test("selects only a non-loopback RFC1918 fixture host", () => {
   assert.equal(isPrivateIpv4("10.4.5.6"), true);
@@ -196,6 +200,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /backchannel_access_token_retained/u);
   assert.match(browserSource, /backchannel_access_token_user_mismatch/u);
   assert.match(browserSource, /backchannel_access_token_inactive/u);
+  assert.match(browserSource, /dispatchAuthentikBackchannel/u);
+  assert.match(dispatchSource, /backchannel_logout_notification_dispatch\.send/u);
+  assert.doesNotMatch(dispatchSource, /print\([^)]*(?:token|session|subject|secret)/iu);
   assert.match(browserSource, /currentAuthentikBrowserSession/u);
   assert.match(browserSource, /revokeAuthentikBrowserSessions/u);
   assert.match(browserSource, /core\/authenticated_sessions/u);

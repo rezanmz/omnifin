@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 import {
   httpFailureStage,
@@ -10,6 +12,7 @@ import {
 
 const requireFromWeb = createRequire(new URL("../../../apps/web/package.json", import.meta.url));
 const { chromium } = requireFromWeb("@playwright/test");
+const composeFile = fileURLToPath(new URL("./compose.yaml", import.meta.url));
 
 const providerSlug = "authentik";
 const expectedProviderId = `oidc-${providerSlug}`;
@@ -33,6 +36,32 @@ function required(name) {
 
 function assert(condition) {
   if (!condition) throw new BrowserCheckError();
+}
+
+function dispatchAuthentikBackchannel(project, environmentFile) {
+  assert(/^[a-z0-9-]{1,127}$/u.test(project));
+  const execution = spawnSync(
+    "docker",
+    [
+      "compose",
+      "--project-name",
+      project,
+      "--file",
+      composeFile,
+      "--env-file",
+      environmentFile,
+      "exec",
+      "-T",
+      "worker",
+      "ak",
+      "shell",
+      "-c",
+      "exec(open('/omnifin-fixture/dispatch-backchannel.py', encoding='utf-8').read())",
+    ],
+    { encoding: "utf8", maxBuffer: 1_048_576, timeout: 30_000 },
+  );
+  assert(execution.status === 0);
+  assert(execution.stdout.includes('"event":"authentik_backchannel_queued"'));
 }
 
 async function json(response, expectedStatus, failureStage) {
@@ -478,6 +507,8 @@ async function run() {
   const recoverySecret = required("OMNIFIN_FIXTURE_RECOVERY_SECRET");
   const authentikToken = required("OMNIFIN_FIXTURE_AUTHENTIK_TOKEN");
   const authentikPassword = required("OMNIFIN_FIXTURE_AUTHENTIK_PASSWORD");
+  const composeProject = required("OMNIFIN_FIXTURE_COMPOSE_PROJECT");
+  const composeEnvironmentFile = required("OMNIFIN_FIXTURE_COMPOSE_ENV_FILE");
   assert(new URL(webOrigin).protocol === "https:");
   assert(new URL(issuer).protocol === "https:");
 
@@ -616,6 +647,20 @@ async function run() {
     currentStage = "backchannel_session_lookup";
     const authentikSessionIds = await currentAuthentikBrowserSession(context.request, issuerOrigin);
     currentStage = "backchannel_trigger";
+    dispatchAuthentikBackchannel(composeProject, composeEnvironmentFile);
+    currentStage = "backchannel_revocation";
+    try {
+      await waitForRevokedSession(context.request);
+    } catch {
+      currentStage = await backchannelTaskFailureStage(
+        context.request,
+        issuerOrigin,
+        authentikToken,
+      );
+      throw new BrowserCheckError();
+    }
+
+    currentStage = "backchannel_provider_session_cleanup";
     await revokeAuthentikBrowserSessions(
       context.request,
       issuerOrigin,
@@ -631,17 +676,6 @@ async function run() {
     );
     if (providerUserAccessTokens(remainingAccessTokens, authentikProviderPk).length > 0) {
       currentStage = "backchannel_access_token_retained";
-      throw new BrowserCheckError();
-    }
-    currentStage = "backchannel_revocation";
-    try {
-      await waitForRevokedSession(context.request);
-    } catch {
-      currentStage = await backchannelTaskFailureStage(
-        context.request,
-        issuerOrigin,
-        authentikToken,
-      );
       throw new BrowserCheckError();
     }
 
