@@ -49,7 +49,7 @@ export function AppearanceSelector({ compact = false }: { compact?: boolean }) {
             ? `System · ${resolvedTheme}`
             : preference === "system"
               ? "System theme"
-            : `${OPTIONS[preference].label} theme`}
+              : `${OPTIONS[preference].label} theme`}
         </span>
       </div>
       <div aria-label="Color theme" className="appearance-selector__options" role="radiogroup">
