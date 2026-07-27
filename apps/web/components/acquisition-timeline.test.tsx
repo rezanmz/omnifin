@@ -9,6 +9,7 @@ import {
   type AcquisitionProvenanceClient,
 } from "../lib/acquisition-provenance";
 import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
+import { AcquisitionRecoveryClientError } from "../lib/acquisition-recovery";
 import { demoDashboard, type OperationModel } from "../lib/dashboard-data";
 import { AcquisitionTimeline } from "./acquisition-timeline";
 
@@ -93,6 +94,85 @@ describe("acquisition timeline", () => {
         idempotencyKey: expect.stringMatching(/^acquisition-/u),
       }),
     );
+  });
+
+  it("lets an operator cancel the exact-target confirmation without a session lookup", async () => {
+    const user = userEvent.setup();
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(),
+      queueSearch: vi.fn(),
+    };
+    render(
+      <AcquisitionTimeline
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review search" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Review search" })).toBeVisible();
+    expect(recoveryClient.loadEligibility).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { heading: "Sign in to continue", status: "signed_out" as const },
+    { heading: "Operator access required", status: "forbidden" as const },
+    { heading: "Verify history before another attempt", status: "unavailable" as const },
+  ])("fails closed when recovery eligibility is $status", async ({ heading, status }) => {
+    const user = userEvent.setup();
+    const queueSearch = vi.fn<AcquisitionRecoveryClient["queueSearch"]>();
+    render(
+      <AcquisitionTimeline
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={{ loadEligibility: async () => ({ status }), queueSearch }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review search" }));
+    await user.click(screen.getByRole("button", { name: "Queue search" }));
+    expect(await screen.findByText(heading)).toBeVisible();
+    expect(queueSearch).not.toHaveBeenCalled();
+  });
+
+  it("preserves a failed operation until the operator explicitly begins a new attempt", async () => {
+    const user = userEvent.setup();
+    const queueSearch = vi.fn<AcquisitionRecoveryClient["queueSearch"]>(async () =>
+      Promise.reject(
+        new AcquisitionRecoveryClientError(
+          "pending",
+          "acquisition_search_outcome_pending",
+          "Still pending.",
+        ),
+      ),
+    );
+    render(
+      <AcquisitionTimeline
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={{
+          loadEligibility: async () => ({
+            snapshot: {
+              csrfToken: "acquisition_csrf_0123456789abcdefghijklmnop",
+              principal: operator,
+            },
+            status: "ready",
+          }),
+          queueSearch,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review search" }));
+    await user.click(screen.getByRole("button", { name: "Queue search" }));
+    expect(await screen.findByText("Verify history before another attempt")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "New attempt" }));
+    expect(screen.getByRole("button", { name: "Review search" })).toBeVisible();
   });
 
   it("renders a title-level trace from normalized preview data and closes accessibly", async () => {
