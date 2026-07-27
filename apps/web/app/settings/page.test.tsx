@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import SettingsPage from "./page";
 
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined }),
+}));
+
 describe("SettingsPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 

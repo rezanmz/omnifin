@@ -46,8 +46,9 @@ function applyTheme(preference: ThemePreference, resolvedTheme: ResolvedTheme) {
     root.dataset.theme = preference;
   }
 
-  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  themeColor?.setAttribute("content", THEME_COLORS[resolvedTheme]);
+  for (const themeColor of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    themeColor.setAttribute("content", THEME_COLORS[resolvedTheme]);
+  }
 }
 
 export function ThemeProvider({
