@@ -238,6 +238,38 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
   await expect(page.getByRole("link", { name: "Review account access" })).toBeVisible();
 });
 
+test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "One desktop engine covers hover geometry and transparent rail surfaces.",
+  );
+  await page.goto("/");
+
+  const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
+  await firstPoster.hover();
+
+  await expect
+    .poll(() =>
+      firstPoster.evaluate((poster) => {
+        const cardBox = poster.getBoundingClientRect();
+        const scrollerBox = poster
+          .closest<HTMLElement>(".media-rail__scroller")!
+          .getBoundingClientRect();
+        return cardBox.top - scrollerBox.top;
+      }),
+    )
+    .toBeGreaterThanOrEqual(1);
+
+  const railBackgrounds = await page
+    .locator(".media-rail")
+    .first()
+    .evaluate((rail) => {
+      const scroller = rail.querySelector<HTMLElement>(".media-rail__scroller")!;
+      return [getComputedStyle(rail).backgroundColor, getComputedStyle(scroller).backgroundColor];
+    });
+  expect(railBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+});
+
 test("touch users can disclose operations and navigate to settings", async ({ page }, testInfo) => {
   test.skip(
     !testInfo.project.use.hasTouch,
