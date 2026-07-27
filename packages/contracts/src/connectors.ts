@@ -140,7 +140,12 @@ const connectorBaseUrlSchema = z
   .url()
   .max(2_048)
   .superRefine((value, context) => {
-    const url = new URL(value);
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return;
+    }
     if (
       !["http:", "https:"].includes(url.protocol) ||
       url.username ||
@@ -201,7 +206,12 @@ function validateConnectorPolicy(
   },
   context: z.core.$RefinementCtx,
 ) {
-  const url = new URL(input.baseUrl);
+  let url: URL;
+  try {
+    url = new URL(input.baseUrl);
+  } catch {
+    return;
+  }
   if (url.protocol === "http:" && !input.insecureHttpApproved) {
     context.addIssue({
       code: "custom",
