@@ -19,6 +19,8 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await page.goto("/");
 
   const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  await search.focus();
+  await expect(search).toHaveAttribute("aria-expanded", "true");
   await search.fill("matrix");
   const firstResult = page.getByRole("option", { name: /The Matrix/i });
   await expect(firstResult).toBeVisible();
