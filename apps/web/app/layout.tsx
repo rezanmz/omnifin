@@ -1,5 +1,9 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
+
+import { ThemeProvider } from "../components/theme-provider";
+import { parseThemePreference, THEME_COOKIE_NAME } from "../lib/theme";
 import "./globals.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
@@ -15,20 +19,33 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  colorScheme: "dark",
-  themeColor: "#060807",
+  colorScheme: "light dark",
   viewportFit: "cover",
   width: "device-width",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const cookieStore = await cookies();
+  const preference = parseThemePreference(cookieStore.get(THEME_COOKIE_NAME)?.value);
+  const explicitTheme = preference === "system" ? undefined : preference;
+
   return (
-    <html data-scroll-behavior="smooth" lang="en">
+    <html
+      data-scroll-behavior="smooth"
+      data-theme={explicitTheme}
+      data-theme-preference={preference}
+      lang="en"
+    >
+      <head>
+        <meta content={explicitTheme === "dark" ? "#070a0d" : "#eef3f5"} name="theme-color" />
+      </head>
       <body>
-        <a className="skip-link" href="#main-content">
-          Skip to main content
-        </a>
-        {children}
+        <ThemeProvider initialPreference={preference}>
+          <a className="skip-link" href="#main-content">
+            Skip to main content
+          </a>
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );
