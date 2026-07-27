@@ -44,7 +44,7 @@ CSRF/session tests, recovery rehearsal, and secret-leak inspection all pass.
 
 ## Phase 2 — Design system and dashboard
 
-**Status: Planned**
+**Status: In development**
 
 - Cinematic token system, editorial typography, artwork-derived palettes, and
   production interface primitives
@@ -58,7 +58,7 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 ## Phase 3 — Discovery, requests, and acquisition
 
-**Status: Planned**
+**Status: In development**
 
 - Seerr and metadata discovery, global search, granular requests, and approvals
 - Radarr and Sonarr calendar, queue, monitoring, searches, and manual releases
