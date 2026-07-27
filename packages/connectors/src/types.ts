@@ -13,6 +13,7 @@ export interface ConnectorTransportInit {
   headers: Headers;
   body?: Uint8Array;
   tlsPolicy: ConnectorTlsPolicy;
+  tlsCaCertificatePem?: string;
   signal: AbortSignal;
 }
 
@@ -35,6 +36,8 @@ export interface ConnectorTargetConfig {
   insecureHttpApproved?: boolean;
   /** An administrator must explicitly approve a self-signed HTTPS certificate. */
   tlsPolicy?: ConnectorTlsPolicy;
+  /** A connector-specific CA certificate required for self-signed HTTPS. */
+  tlsCaCertificatePem?: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
   /** A transport seam for deterministic tests; production uses the DNS-pinned Node transport. */

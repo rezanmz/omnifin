@@ -157,6 +157,17 @@ const connectorBaseUrlSchema = z
   });
 
 const connectorSecretSchema = z.string().min(1).max(4_096);
+const connectorTlsCaCertificatePemSchema = z
+  .string()
+  .min(1)
+  .max(12_288)
+  .refine(
+    (value) =>
+      /^-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\r?\n?$/u.test(
+        value,
+      ),
+    "A single PEM-encoded CA certificate is required.",
+  );
 
 export const connectorCredentialInputSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("none") }),
@@ -185,6 +196,7 @@ function validateConnectorPolicy(
     credentials: ConnectorCredentialInput;
     insecureHttpApproved: boolean;
     service: ManagedConnectorService;
+    tlsCaCertificatePem?: string | undefined;
     tlsPolicy: ConnectorTlsPolicy;
   },
   context: z.core.$RefinementCtx,
@@ -211,6 +223,20 @@ function validateConnectorPolicy(
       message: "A relaxed TLS policy is valid only for an HTTPS destination.",
     });
   }
+  if (input.tlsPolicy === "allow_self_signed" && input.tlsCaCertificatePem === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["tlsCaCertificatePem"],
+      message: "Self-signed TLS requires the connector's trusted CA certificate.",
+    });
+  }
+  if (input.tlsPolicy === "strict" && input.tlsCaCertificatePem !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["tlsCaCertificatePem"],
+      message: "A connector CA certificate is valid only with self-signed TLS approval.",
+    });
+  }
   if (!credentialKindAllowed(input.service, input.credentials.kind)) {
     context.addIssue({
       code: "custom",
@@ -228,6 +254,7 @@ export const connectorCreateRequestSchema = z
     baseUrl: connectorBaseUrlSchema,
     credentials: connectorCredentialInputSchema,
     tlsPolicy: connectorTlsPolicySchema.default("strict"),
+    tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
     insecureHttpApproved: z.boolean().default(false),
   })
   .superRefine(validateConnectorPolicy);
@@ -244,6 +271,7 @@ export const connectorUpdateRequestSchema = z
     baseUrl: connectorBaseUrlSchema.optional(),
     credentials: connectorCredentialInputSchema.optional(),
     tlsPolicy: connectorTlsPolicySchema.optional(),
+    tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
     insecureHttpApproved: z.boolean().optional(),
     enabled: z.boolean().optional(),
   })
@@ -253,6 +281,7 @@ export const connectorUpdateRequestSchema = z
       value.baseUrl !== undefined ||
       value.credentials !== undefined ||
       value.tlsPolicy !== undefined ||
+      value.tlsCaCertificatePem !== undefined ||
       value.insecureHttpApproved !== undefined ||
       value.enabled !== undefined,
     { message: "A connector update must change at least one field." },
@@ -267,6 +296,7 @@ export const connectorAdminSchema = z.strictObject({
   credentialKind: connectorCredentialKindSchema,
   credentialsConfigured: z.boolean(),
   tlsPolicy: connectorTlsPolicySchema,
+  tlsCaCertificateConfigured: z.boolean(),
   insecureHttpApproved: z.boolean(),
   enabled: z.boolean(),
   healthState: z.enum(["unknown", "healthy", "degraded", "offline"]),

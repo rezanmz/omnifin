@@ -101,7 +101,8 @@ otherwise useful dashboard.
 Connector destinations are administrator-approved. URL validation rejects embedded
 credentials, unexpected redirects, and loopback, link-local, or cloud-metadata
 targets unless a narrowly scoped local-network policy explicitly permits the target.
-Insecure HTTP and untrusted certificates require a visible administrative opt-in.
+Insecure HTTP requires a visible administrative opt-in. Self-signed HTTPS requires a
+connector-specific trusted CA certificate and retains certificate and hostname verification.
 
 ## Required authenticated request lifecycle
 

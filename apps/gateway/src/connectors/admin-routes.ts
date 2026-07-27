@@ -205,7 +205,7 @@ export const connectorAdminRoutes: FastifyPluginAsync<ConnectorAdminRoutesOption
   app.post(
     "/v1/admin/connectors",
     {
-      bodyLimit: 16 * 1_024,
+      bodyLimit: 32 * 1_024,
       config: {
         omnifinSecurity: { kind: "session" },
         rateLimit: { max: 10, timeWindow: "1 minute" },
@@ -232,7 +232,7 @@ export const connectorAdminRoutes: FastifyPluginAsync<ConnectorAdminRoutesOption
   app.patch(
     "/v1/admin/connectors/:connectorId",
     {
-      bodyLimit: 16 * 1_024,
+      bodyLimit: 32 * 1_024,
       config: {
         omnifinSecurity: { kind: "session" },
         rateLimit: { max: 10, timeWindow: "1 minute" },

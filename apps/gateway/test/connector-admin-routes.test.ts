@@ -237,7 +237,7 @@ describe("connector administration routes", () => {
             "connector_credentials:radarr:radarr-main",
           ),
         ),
-      ).toEqual(connectorRequest.credentials);
+      ).toEqual({ credentials: connectorRequest.credentials, schemaVersion: 1 });
 
       const listResponse = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },

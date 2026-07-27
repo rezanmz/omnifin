@@ -2,9 +2,33 @@ import { createServer } from "node:http";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createPinnedLookup, pinnedNodeTransport } from "../src/http/pinned-transport.js";
+import {
+  createPinnedLookup,
+  createPinnedRequestOptions,
+  pinnedNodeTransport,
+} from "../src/http/pinned-transport.js";
 
 describe("DNS-pinned connector transport", () => {
+  it("keeps certificate verification enabled when trusting a connector-specific CA", () => {
+    const ca = "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----";
+    const options = createPinnedRequestOptions(
+      new URL("https://radarr.example.test/api"),
+      {
+        headers: new Headers(),
+        method: "GET",
+        signal: new AbortController().signal,
+        tlsCaCertificatePem: ca,
+        tlsPolicy: "allow_self_signed",
+      },
+      [{ address: "1.1.1.1", family: 4 }],
+    );
+
+    expect(options).toMatchObject({
+      ca,
+      rejectUnauthorized: true,
+    });
+  });
+
   it("returns only the addresses that passed destination validation", () => {
     const lookup = createPinnedLookup("radarr.example.test", [
       { address: "1.1.1.1", family: 4 },

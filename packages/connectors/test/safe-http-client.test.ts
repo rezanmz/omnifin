@@ -28,6 +28,30 @@ describe("SafeHttpClient", () => {
     ).toThrow(/requires an HTTPS connector destination/u);
   });
 
+  it("requires a connector CA for self-signed TLS and preserves strict verification", async () => {
+    const ca = "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----";
+    const mock = createMockTransport([jsonResponse({ version: "6.0.0" })]);
+
+    expect(() => clientWith(mock.transport, { tlsPolicy: "allow_self_signed" })).toThrowError(
+      expect.objectContaining({ code: "configuration_invalid" }),
+    );
+    expect(() => clientWith(mock.transport, { tlsCaCertificatePem: ca })).toThrowError(
+      expect.objectContaining({ code: "configuration_invalid" }),
+    );
+
+    const client = clientWith(mock.transport, {
+      tlsCaCertificatePem: ca,
+      tlsPolicy: "allow_self_signed",
+    });
+    await client.requestJson("api/v3/system/status", z.object({ version: z.string() }), {
+      operation: "probe",
+    });
+    expect(mock.requests[0]?.init).toMatchObject({
+      tlsCaCertificatePem: ca,
+      tlsPolicy: "allow_self_signed",
+    });
+  });
+
   it("rejects limits that could disable deadline or response-size protection", () => {
     const mock = createMockTransport([]);
 

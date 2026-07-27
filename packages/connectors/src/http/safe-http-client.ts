@@ -21,6 +21,7 @@ export interface SafeHttpClientOptions {
   baseUrl: string;
   allowInsecureHttp?: boolean;
   tlsPolicy?: ConnectorTlsPolicy;
+  tlsCaCertificatePem?: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
   headers?: Readonly<Record<string, string>>;
@@ -213,6 +214,7 @@ export class SafeHttpClient {
   readonly #maxResponseBytes: number;
   readonly #headers: Readonly<Record<string, string>>;
   readonly #tlsPolicy: ConnectorTlsPolicy;
+  readonly #tlsCaCertificatePem: string | undefined;
   readonly #transport: ConnectorTransport;
   readonly #resolveHost: HostResolver | undefined;
 
@@ -267,6 +269,24 @@ export class SafeHttpClient {
         retryable: false,
       });
     }
+    if (tlsPolicy === "allow_self_signed" && options.tlsCaCertificatePem === undefined) {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "Self-signed TLS requires a connector-specific CA certificate.",
+        retryable: false,
+      });
+    }
+    if (tlsPolicy === "strict" && options.tlsCaCertificatePem !== undefined) {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "A connector-specific CA is valid only with self-signed TLS approval.",
+        retryable: false,
+      });
+    }
 
     this.service = options.service;
     this.origin = baseUrl.origin;
@@ -276,6 +296,7 @@ export class SafeHttpClient {
     this.#maxResponseBytes = maxResponseBytes;
     this.#headers = options.headers ?? {};
     this.#tlsPolicy = tlsPolicy;
+    this.#tlsCaCertificatePem = options.tlsCaCertificatePem;
     this.#transport = options.transport ?? pinnedNodeTransport;
     this.#resolveHost = options.resolveHost;
   }
@@ -381,6 +402,9 @@ export class SafeHttpClient {
           method: options.method ?? "GET",
           headers,
           tlsPolicy: this.#tlsPolicy,
+          ...(this.#tlsCaCertificatePem === undefined
+            ? {}
+            : { tlsCaCertificatePem: this.#tlsCaCertificatePem }),
           ...(body === undefined ? {} : { body }),
           signal: controller.signal,
         },

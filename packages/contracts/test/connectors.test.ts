@@ -18,6 +18,8 @@ import {
 } from "../src/dashboard.js";
 
 describe("connector contracts", () => {
+  const shapedCaCertificate = "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n";
+
   it("normalizes a safe partial failure without an upstream payload", () => {
     const failure = partialFailureSchema.parse({
       service: "radarr",
@@ -179,6 +181,25 @@ describe("connector contracts", () => {
         baseUrl: "https://radarr.example.test/?apiKey=private",
       }).success,
     ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsPolicy: "allow_self_signed",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsCaCertificatePem: shapedCaCertificate,
+        tlsPolicy: "allow_self_signed",
+      }).success,
+    ).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        tlsCaCertificatePem: shapedCaCertificate,
+      }).success,
+    ).toBe(false);
   });
 
   it("exposes a secret-free administration record and bounded cursor query", () => {
@@ -190,6 +211,7 @@ describe("connector contracts", () => {
       credentialKind: "api_key",
       credentialsConfigured: true,
       tlsPolicy: "strict",
+      tlsCaCertificateConfigured: false,
       insecureHttpApproved: false,
       enabled: false,
       healthState: "unknown",

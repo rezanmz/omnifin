@@ -64,6 +64,9 @@ export abstract class ProbeOnlyAdapter implements ConnectorAdapter {
       baseUrl: this.config.baseUrl,
       allowInsecureHttp: this.config.insecureHttpApproved ?? false,
       tlsPolicy: this.config.tlsPolicy ?? "strict",
+      ...(this.config.tlsCaCertificatePem === undefined
+        ? {}
+        : { tlsCaCertificatePem: this.config.tlsCaCertificatePem }),
       ...(this.config.timeoutMs === undefined ? {} : { timeoutMs: this.config.timeoutMs }),
       ...(this.config.maxResponseBytes === undefined
         ? {}

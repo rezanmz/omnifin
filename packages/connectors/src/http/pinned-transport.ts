@@ -1,10 +1,11 @@
 import { request as requestHttp } from "node:http";
 import { request as requestHttps } from "node:https";
+import type { RequestOptions } from "node:https";
 import type { LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 
 import type { ResolvedHostAddress } from "../security/destination.js";
-import type { ConnectorTransport } from "../types.js";
+import type { ConnectorTransport, ConnectorTransportInit } from "../types.js";
 
 function requestedFamily(value: number | string | undefined): 4 | 6 | undefined {
   if (value === 4 || value === "IPv4") return 4;
@@ -78,28 +79,35 @@ function responseHeaders(rawHeaders: readonly string[]): Headers {
   return headers;
 }
 
+export function createPinnedRequestOptions(
+  url: URL,
+  init: ConnectorTransportInit,
+  pinnedAddresses: readonly ResolvedHostAddress[],
+): RequestOptions {
+  const hostname = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
+  return {
+    protocol: url.protocol,
+    hostname,
+    port: url.port || undefined,
+    path: `${url.pathname}${url.search}`,
+    method: init.method,
+    headers: Object.fromEntries(init.headers.entries()),
+    lookup: createPinnedLookup(hostname, pinnedAddresses),
+    agent: false,
+    ...(url.protocol === "https:"
+      ? {
+          rejectUnauthorized: true,
+          ...(init.tlsPolicy === "allow_self_signed" ? { ca: init.tlsCaCertificatePem } : {}),
+        }
+      : {}),
+    signal: init.signal,
+  };
+}
+
 export const pinnedNodeTransport: ConnectorTransport = (url, init, pinnedAddresses) =>
   new Promise<Response>((resolve, reject) => {
     const request = (url.protocol === "https:" ? requestHttps : requestHttp)(
-      {
-        protocol: url.protocol,
-        hostname: url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname,
-        port: url.port || undefined,
-        path: `${url.pathname}${url.search}`,
-        method: init.method,
-        headers: Object.fromEntries(init.headers.entries()),
-        lookup: createPinnedLookup(
-          url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname,
-          pinnedAddresses,
-        ),
-        agent: false,
-        // This relaxation is reachable only through an explicitly approved connector
-        // policy. DNS pinning and redirect blocking remain active for the request.
-        ...(url.protocol === "https:"
-          ? { rejectUnauthorized: init.tlsPolicy !== "allow_self_signed" }
-          : {}),
-        signal: init.signal,
-      },
+      createPinnedRequestOptions(url, init, pinnedAddresses),
       (incoming) => {
         const status = incoming.statusCode ?? 502;
         const cannotHaveBody = [204, 205, 304].includes(status);

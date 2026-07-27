@@ -76,12 +76,14 @@ application boundary; operators must still patch and isolate the host.
   both service and connector identity. Browser responses expose only the credential kind
   and whether credentials are configured.
 - New connector records are disabled. A successful probe must persist normalized health
-  and capabilities before enablement; any destination, credential, HTTP, or TLS policy
-  change disables the connector and clears that evidence.
+  and capabilities before enablement, and that evidence expires after ten minutes; any
+  destination, credential, HTTP, CA, or TLS policy change disables the connector and
+  clears the evidence.
 - Destination literals are validated before storage and resolved addresses are checked at
   request time. Redirects remain blocked and DNS-pinned transports cannot fall back to an
-  unvalidated address. Plain HTTP and self-signed TLS each require a separate explicit
-  administrator approval.
+  unvalidated address. Plain HTTP requires explicit approval. Self-signed TLS requires
+  both explicit approval and a current connector-specific CA certificate, so certificate
+  and hostname verification remain enabled.
 - Every mutation requires a same-origin CSRF proof and the local `connectors.manage`
   permission. The service repeats the permission check so future non-HTTP callers cannot
   bypass authorization.

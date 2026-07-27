@@ -4,6 +4,8 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type { ConnectorHealth } from "@omnifin/contracts/connectors";
+import { X509Certificate } from "node:crypto";
+import { rootCertificates } from "node:tls";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConnectorAdminService } from "../src/connectors/admin-service.js";
@@ -100,6 +102,7 @@ function insertUser(database: DatabaseHandle, actor = principal()) {
 
 function createHarness(
   options: {
+    clock?: () => Date;
     createAdapter?: (input: ConnectorAdapterFactoryInput) => {
       service: "radarr";
       capabilities: readonly ["connector.health", "connector.version"];
@@ -115,6 +118,7 @@ function createHarness(
   let identifier = 0;
   const service = new ConnectorAdminService(database, config, {
     clock: () => new Date(baseTime + clockTick++),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
     createId: () => `connector-audit-${++identifier}`,
     ...(options.createAdapter === undefined ? {} : { createAdapter: options.createAdapter }),
   });
@@ -163,7 +167,7 @@ describe("connector administration service", () => {
             "connector_credentials:radarr:radarr-main",
           ),
         ),
-      ).toEqual(radarrRequest.credentials);
+      ).toEqual({ credentials: radarrRequest.credentials, schemaVersion: 1 });
       expect(audit.eventType).toBe("connector.configuration.created");
       expect(audit.metadataJson).not.toContain(radarrRequest.credentials.apiKey);
       expect(audit.ipHash).toMatch(/^[A-Za-z0-9_-]{22}$/u);
@@ -263,6 +267,114 @@ describe("connector administration service", () => {
           reason: "revision_conflict",
         }),
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("requires recent validation evidence before enabling a connector", async () => {
+    let currentTime = baseTime;
+    const { database, service } = createHarness({
+      clock: () => new Date(currentTime),
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"] as const,
+        probe: async () => ({
+          ...healthyRadarr(),
+          checkedAt: new Date(baseTime).toISOString(),
+        }),
+        service: "radarr" as const,
+      }),
+    });
+    try {
+      const created = service.create(radarrRequest, context());
+      const probed = await service.probe(created.id, context());
+      currentTime += 11 * 60 * 1_000;
+
+      expect(() =>
+        service.update(created.id, { enabled: true, revision: probed.revision }, context()),
+      ).toThrow(
+        expect.objectContaining<Partial<ConnectorAdminError>>({
+          reason: "connector_not_validated",
+        }),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("stores a trusted connector CA inside the encrypted envelope and never presents it", async () => {
+    const trustedCaCertificate = rootCertificates.find((pem) => {
+      const certificate = new X509Certificate(pem);
+      return (
+        certificate.ca &&
+        Date.parse(certificate.validFrom) <= baseTime &&
+        Date.parse(certificate.validTo) > baseTime
+      );
+    });
+    if (!trustedCaCertificate) throw new Error("A current runtime CA fixture is required.");
+    const createAdapter = vi.fn(() => ({
+      capabilities: ["connector.health", "connector.version"] as const,
+      probe: async () => healthyRadarr(),
+      service: "radarr" as const,
+    }));
+    const { config, database, service } = createHarness({ createAdapter });
+    try {
+      expect(() =>
+        service.create(
+          {
+            ...radarrRequest,
+            tlsCaCertificatePem: "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n",
+            tlsPolicy: "allow_self_signed",
+          },
+          context(),
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<ConnectorAdminError>>({ reason: "configuration_invalid" }),
+      );
+      const created = service.create(
+        {
+          ...radarrRequest,
+          tlsCaCertificatePem: trustedCaCertificate,
+          tlsPolicy: "allow_self_signed",
+        },
+        context(),
+      );
+      expect(created).toMatchObject({
+        tlsCaCertificateConfigured: true,
+        tlsPolicy: "allow_self_signed",
+      });
+      expect(JSON.stringify(created)).not.toContain(trustedCaCertificate);
+
+      await service.probe(created.id, context());
+      expect(createAdapter).toHaveBeenCalledWith(
+        expect.objectContaining({ tlsCaCertificatePem: trustedCaCertificate }),
+      );
+      const row = database.sqlite
+        .prepare(
+          "select encrypted_credentials as encryptedCredentials from connector_configs where id = ?",
+        )
+        .get(created.id) as { encryptedCredentials: string };
+      expect(row.encryptedCredentials).not.toContain(trustedCaCertificate);
+      expect(
+        JSON.parse(
+          new EnvelopeCipher(config.encryptionKey).decrypt(
+            row.encryptedCredentials,
+            "connector_credentials:radarr:radarr-main",
+          ),
+        ),
+      ).toMatchObject({ tlsCaCertificatePem: trustedCaCertificate });
+
+      const probed = service.get(created.id, context());
+      const strict = service.update(
+        created.id,
+        { revision: probed.revision, tlsPolicy: "strict" },
+        context(),
+      );
+      expect(strict).toMatchObject({
+        enabled: false,
+        tlsCaCertificateConfigured: false,
+        tlsPolicy: "strict",
+      });
     } finally {
       database.close();
     }

@@ -115,8 +115,10 @@ connector destinations deliberately. Never grant access to cloud metadata addres
 unrelated administration networks, or a generic forward proxy.
 
 Production deployments should use valid certificates end to end where possible.
-Insecure HTTP and self-signed upstream certificates weaken connector identity and
-must require an explicit, service-specific administrative acknowledgement.
+Insecure HTTP weakens connector identity and requires an explicit, service-specific
+administrative acknowledgement. A self-signed HTTPS connector additionally requires
+its current PEM-encoded CA certificate; Omnifin keeps normal certificate and hostname
+verification enabled against that connector-specific trust anchor.
 
 ## Source-checkpoint verification
 

@@ -24,7 +24,7 @@ import {
   type ManagedConnectorService,
 } from "@omnifin/contracts/connectors";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, X509Certificate } from "node:crypto";
 
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
@@ -33,6 +33,8 @@ import { EnvelopeCipher, privacyHash } from "../security/crypto.js";
 
 const MAX_CONNECTORS = 100;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+export const CONNECTOR_VALIDATION_TTL_MS = 10 * 60 * 1_000;
+const CONNECTOR_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 interface ConnectorRow {
   id: string;
@@ -53,6 +55,12 @@ interface StoredSnapshot {
   schemaVersion: 1;
   health?: ConnectorHealth;
   authentication?: unknown;
+}
+
+interface StoredSecrets {
+  schemaVersion: 1;
+  credentials: ConnectorCredentialInput;
+  tlsCaCertificatePem?: string;
 }
 
 export type ConnectorAdminErrorReason =
@@ -91,6 +99,7 @@ export interface ConnectorAdapterFactoryInput {
   credentials: ConnectorCredentialInput;
   insecureHttpApproved: boolean;
   tlsPolicy: "strict" | "allow_self_signed";
+  tlsCaCertificatePem?: string;
 }
 
 export interface ConnectorAdminDependencies {
@@ -101,6 +110,40 @@ export interface ConnectorAdminDependencies {
 
 function credentialContext(service: ManagedConnectorService, connectorId: string) {
   return `connector_credentials:${service}:${connectorId}`;
+}
+
+function parseCaCertificate(pem: string) {
+  try {
+    const certificate = new X509Certificate(pem);
+    if (!certificate.ca) throw new Error("not-ca");
+    return certificate;
+  } catch (error) {
+    throw new ConnectorAdminError("configuration_invalid", { cause: error });
+  }
+}
+
+function validateCaCertificate(pem: string, now: number) {
+  const certificate = parseCaCertificate(pem);
+  const validFrom = Date.parse(certificate.validFrom);
+  const validTo = Date.parse(certificate.validTo);
+  if (
+    !Number.isSafeInteger(validFrom) ||
+    !Number.isSafeInteger(validTo) ||
+    now < validFrom ||
+    now >= validTo
+  ) {
+    throw new ConnectorAdminError("configuration_invalid");
+  }
+}
+
+function healthIsFresh(health: ConnectorHealth | undefined, now: number) {
+  if (health?.status !== "healthy") return false;
+  const checkedAt = Date.parse(health.checkedAt);
+  return (
+    Number.isSafeInteger(checkedAt) &&
+    checkedAt >= now - CONNECTOR_VALIDATION_TTL_MS &&
+    checkedAt <= now + CONNECTOR_PROBE_CLOCK_SKEW_MS
+  );
 }
 
 function revisionFor(row: Pick<ConnectorRow, "id" | "type" | "updatedAt">) {
@@ -187,6 +230,9 @@ function defaultAdapterFactory(input: ConnectorAdapterFactoryInput): ConnectorAd
     baseUrl: input.baseUrl,
     insecureHttpApproved: input.insecureHttpApproved,
     tlsPolicy: input.tlsPolicy,
+    ...(input.tlsCaCertificatePem === undefined
+      ? {}
+      : { tlsCaCertificatePem: input.tlsCaCertificatePem }),
   } satisfies ConnectorTargetConfig;
   switch (input.service) {
     case "jellyfin":
@@ -308,9 +354,18 @@ export class ConnectorAdminService {
       throw new ConnectorAdminError("configuration_invalid", { cause: error });
     }
     const now = this.#now();
+    if (connector.tlsCaCertificatePem !== undefined) {
+      validateCaCertificate(connector.tlsCaCertificatePem, now);
+    }
     const auditId = this.#id();
     const encryptedCredentials = this.#cipher.encrypt(
-      JSON.stringify(connector.credentials),
+      JSON.stringify({
+        credentials: connector.credentials,
+        schemaVersion: 1,
+        ...(connector.tlsCaCertificatePem === undefined
+          ? {}
+          : { tlsCaCertificatePem: connector.tlsCaCertificatePem }),
+      } satisfies StoredSecrets),
       credentialContext(connector.service, connector.id),
     );
     try {
@@ -365,6 +420,7 @@ export class ConnectorAdminService {
               credentialKind: connector.credentials.kind,
               insecureHttpApproved: connector.insecureHttpApproved,
               service: connector.service,
+              tlsCaCertificateConfigured: connector.tlsCaCertificatePem !== undefined,
               tlsPolicy: connector.tlsPolicy,
             },
             now,
@@ -391,15 +447,24 @@ export class ConnectorAdminService {
       throw new ConnectorAdminError("revision_conflict");
     }
     const service = this.#service(current.type);
-    const currentCredentials = this.#credentials(current, service);
-    const credentials = parsed.data.credentials ?? currentCredentials;
+    const currentSecrets = this.#secrets(current, service);
+    const credentials = parsed.data.credentials ?? currentSecrets.credentials;
+    const tlsPolicy = parsed.data.tlsPolicy ?? current.tlsPolicy;
+    const tlsCaCertificatePem =
+      tlsPolicy === "allow_self_signed"
+        ? (parsed.data.tlsCaCertificatePem ?? currentSecrets.tlsCaCertificatePem)
+        : undefined;
+    if (parsed.data.tlsCaCertificatePem !== undefined && tlsPolicy !== "allow_self_signed") {
+      throw new ConnectorAdminError("configuration_invalid");
+    }
     const candidate = connectorCreateRequestSchema.safeParse({
       id: current.id,
       service,
       displayName: parsed.data.displayName ?? current.displayName,
       baseUrl: parsed.data.baseUrl ?? current.baseUrl,
       credentials,
-      tlsPolicy: parsed.data.tlsPolicy ?? current.tlsPolicy,
+      tlsPolicy,
+      ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
       insecureHttpApproved: parsed.data.insecureHttpApproved ?? current.insecureHttpApproved === 1,
     });
     if (!candidate.success) throw new ConnectorAdminError("configuration_invalid");
@@ -409,10 +474,15 @@ export class ConnectorAdminService {
     } catch (error) {
       throw new ConnectorAdminError("configuration_invalid", { cause: error });
     }
+    const requestedAt = this.#now();
+    if (parsed.data.tlsCaCertificatePem !== undefined) {
+      validateCaCertificate(parsed.data.tlsCaCertificatePem, requestedAt);
+    }
     const materialChange =
       baseUrl !== current.baseUrl ||
       parsed.data.credentials !== undefined ||
       candidate.data.tlsPolicy !== current.tlsPolicy ||
+      parsed.data.tlsCaCertificatePem !== undefined ||
       candidate.data.insecureHttpApproved !== (current.insecureHttpApproved === 1);
     if (materialChange && parsed.data.enabled === true) {
       throw new ConnectorAdminError("connector_not_validated");
@@ -420,22 +490,28 @@ export class ConnectorAdminService {
     if (
       !materialChange &&
       parsed.data.enabled === true &&
-      (current.healthState !== "healthy" || parseSnapshot(current).health?.status !== "healthy")
+      (current.healthState !== "healthy" ||
+        !healthIsFresh(parseSnapshot(current).health, requestedAt))
     ) {
       throw new ConnectorAdminError("connector_not_validated");
     }
-    const now = Math.max(this.#now(), current.updatedAt + 1);
+    const now = Math.max(requestedAt, current.updatedAt + 1);
     const auditId = this.#id();
-    const encryptedCredentials =
-      parsed.data.credentials === undefined
-        ? current.encryptedCredentials
-        : this.#cipher.encrypt(JSON.stringify(credentials), credentialContext(service, current.id));
+    const encryptedCredentials = this.#cipher.encrypt(
+      JSON.stringify({
+        credentials,
+        schemaVersion: 1,
+        ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
+      } satisfies StoredSecrets),
+      credentialContext(service, current.id),
+    );
     const enabled = materialChange ? false : (parsed.data.enabled ?? current.enabled === 1);
     const changedFields = [
       ...(parsed.data.displayName === undefined ? [] : ["displayName"]),
       ...(parsed.data.baseUrl === undefined ? [] : ["baseUrl"]),
       ...(parsed.data.credentials === undefined ? [] : ["credentials"]),
       ...(parsed.data.tlsPolicy === undefined ? [] : ["tlsPolicy"]),
+      ...(parsed.data.tlsCaCertificatePem === undefined ? [] : ["tlsCaCertificatePem"]),
       ...(parsed.data.insecureHttpApproved === undefined ? [] : ["insecureHttpApproved"]),
       ...(parsed.data.enabled === undefined ? [] : ["enabled"]),
     ];
@@ -494,7 +570,8 @@ export class ConnectorAdminService {
     this.#authorize(context);
     const current = this.#row(connectorId);
     const service = this.#service(current.type);
-    const credentials = this.#credentials(current, service);
+    const secrets = this.#secrets(current, service);
+    const credentials = secrets.credentials;
     if (!credentialAllowed(service, credentials)) {
       throw new ConnectorAdminError("integrity_failure");
     }
@@ -508,6 +585,9 @@ export class ConnectorAdminService {
         credentials,
         insecureHttpApproved: current.insecureHttpApproved === 1,
         tlsPolicy: current.tlsPolicy === "allow_self_signed" ? "allow_self_signed" : "strict",
+        ...(secrets.tlsCaCertificatePem === undefined
+          ? {}
+          : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
       });
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
@@ -517,13 +597,21 @@ export class ConnectorAdminService {
     if (health.connectorId !== current.id || health.service !== service) {
       throw new ConnectorAdminError("integrity_failure");
     }
+    const now = Math.max(this.#now(), current.updatedAt + 1);
+    const checkedAt = Date.parse(health.checkedAt);
+    if (
+      !Number.isSafeInteger(checkedAt) ||
+      checkedAt < now - CONNECTOR_PROBE_CLOCK_SKEW_MS ||
+      checkedAt > now + CONNECTOR_PROBE_CLOCK_SKEW_MS
+    ) {
+      throw new ConnectorAdminError("integrity_failure");
+    }
     const previous = parseSnapshot(current);
     const snapshot: StoredSnapshot = {
       schemaVersion: 1,
       health,
       ...(previous.authentication === undefined ? {} : { authentication: previous.authentication }),
     };
-    const now = Math.max(this.#now(), current.updatedAt + 1);
     const auditId = this.#id();
     try {
       this.#database.sqlite
@@ -612,7 +700,7 @@ export class ConnectorAdminService {
     }
   }
 
-  #credentials(row: ConnectorRow, service: ManagedConnectorService) {
+  #secrets(row: ConnectorRow, service: ManagedConnectorService): StoredSecrets {
     let plaintext: string;
     try {
       plaintext = this.#cipher.decrypt(
@@ -620,19 +708,39 @@ export class ConnectorAdminService {
         credentialContext(service, row.id),
       );
       const decoded = JSON.parse(plaintext) as unknown;
-      const normalized =
-        service === "jellyfin" &&
-        typeof decoded === "object" &&
-        decoded !== null &&
-        !Array.isArray(decoded) &&
-        Object.keys(decoded).length === 0
+      const isRecord = typeof decoded === "object" && decoded !== null && !Array.isArray(decoded);
+      const record = isRecord ? (decoded as Record<string, unknown>) : undefined;
+      const isVersioned = record?.schemaVersion === 1;
+      if (
+        isVersioned &&
+        Object.keys(record).some(
+          (key) => !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(key),
+        )
+      ) {
+        throw new Error("invalid");
+      }
+      const legacyCredentials =
+        service === "jellyfin" && record && Object.keys(record).length === 0
           ? { kind: "none" }
           : decoded;
-      const parsed = connectorCredentialInputSchema.safeParse(normalized);
+      const parsed = connectorCredentialInputSchema.safeParse(
+        isVersioned ? record.credentials : legacyCredentials,
+      );
       if (!parsed.success || !credentialAllowed(service, parsed.data)) {
         throw new Error("invalid");
       }
-      return parsed.data;
+      const tlsCaCertificatePem = isVersioned ? record.tlsCaCertificatePem : undefined;
+      if (tlsCaCertificatePem !== undefined) {
+        if (typeof tlsCaCertificatePem !== "string" || row.tlsPolicy !== "allow_self_signed") {
+          throw new Error("invalid");
+        }
+        parseCaCertificate(tlsCaCertificatePem);
+      }
+      return {
+        credentials: parsed.data,
+        schemaVersion: 1,
+        ...(typeof tlsCaCertificatePem === "string" ? { tlsCaCertificatePem } : {}),
+      };
     } catch (error) {
       throw new ConnectorAdminError("integrity_failure", { cause: error });
     }
@@ -640,16 +748,17 @@ export class ConnectorAdminService {
 
   #present(row: ConnectorRow): ConnectorAdmin {
     const service = this.#service(row.type);
-    const credentials = this.#credentials(row, service);
+    const secrets = this.#secrets(row, service);
     const snapshot = parseSnapshot(row);
     const parsed = connectorAdminSchema.safeParse({
       id: row.id,
       service,
       displayName: row.displayName,
       baseUrl: row.baseUrl,
-      credentialKind: credentials.kind,
-      credentialsConfigured: credentials.kind !== "none",
+      credentialKind: secrets.credentials.kind,
+      credentialsConfigured: secrets.credentials.kind !== "none",
       tlsPolicy: row.tlsPolicy,
+      tlsCaCertificateConfigured: secrets.tlsCaCertificatePem !== undefined,
       insecureHttpApproved: row.insecureHttpApproved === 1,
       enabled: row.enabled === 1,
       healthState: row.healthState,

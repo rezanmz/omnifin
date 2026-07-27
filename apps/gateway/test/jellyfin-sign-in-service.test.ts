@@ -721,7 +721,7 @@ describe("bootstrapConfiguredJellyfinConnector", () => {
             "connector_credentials:jellyfin:jellyfin",
           ),
         ),
-      ).toEqual({ kind: "none" });
+      ).toEqual({ credentials: { kind: "none" }, schemaVersion: 1 });
       expect(
         handle.sqlite
           .prepare("select event_type as eventType from audit_events where id = ?")
