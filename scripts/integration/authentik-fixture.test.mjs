@@ -168,6 +168,9 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   assert.match(browserSource, /retryInteraction/u);
   assert.match(browserSource, /HTMLInputElement\.prototype/u);
   assert.match(browserSource, /composed: true/u);
+  assert.match(browserSource, /input\[name="uidField"\]:visible/u);
+  assert.match(browserSource, /input\[name="password"\]:visible/u);
+  assert.match(browserSource, /button\[type="submit"\]:visible/u);
   assert.match(browserSource, /form\.requestSubmit\(\)/u);
   assert.match(browserSource, /ak-stage-identification form/u);
   assert.match(browserSource, /ak-stage-consent form/u);

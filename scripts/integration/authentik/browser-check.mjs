@@ -160,12 +160,12 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
 
     const usernameInput = page
       .locator(
-        'input[name="uidField"], input[name="username"], input[autocomplete="username"], input[type="email"]',
+        'input[name="uidField"]:visible, input[name="username"]:visible, input[autocomplete="username"]:visible, input[type="email"]:visible',
       )
       .first();
     const passwordInput = page
       .locator(
-        'input[name="password"], input[autocomplete="current-password"], input[type="password"]',
+        'input[name="password"]:visible, input[autocomplete="current-password"]:visible, input[type="password"]:visible',
       )
       .first();
     const namedAction = page
@@ -173,7 +173,9 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
         name: /^(?:allow|authorize|continue|log in|sign in|submit)$/iu,
       })
       .first();
-    const submitAction = page.locator('button[type="submit"], input[type="submit"]').last();
+    const submitAction = page
+      .locator('button[type="submit"]:visible, input[type="submit"]:visible')
+      .last();
     const credentialForm = page
       .locator("ak-stage-identification form, ak-stage-password form")
       .first();
