@@ -199,10 +199,52 @@ export function vitestExecutionPassed(execution, reporterOutput = execution.stdo
   return vitestExecutionSummary(execution, reporterOutput).passed;
 }
 
+export function nodeTestExecutionPassed(execution) {
+  if (execution.status !== 0 || typeof execution.stdout !== "string") return false;
+  const summary = new Map(
+    [...execution.stdout.matchAll(/^# (tests|pass|fail|cancelled) (\d+)$/gmu)].map((match) => [
+      match[1],
+      Number(match[2]),
+    ]),
+  );
+  return (
+    (summary.get("tests") ?? 0) >= 1 &&
+    (summary.get("pass") ?? 0) >= 1 &&
+    summary.get("fail") === 0 &&
+    summary.get("cancelled") === 0
+  );
+}
+
+function runNodeTest(file) {
+  const execution = spawnSync(
+    process.execPath,
+    ["--test", "--test-reporter=tap", file],
+    spawnOptions(),
+  );
+  return {
+    errorCategory: "fixture_contract_failed",
+    passed: nodeTestExecutionPassed(execution),
+  };
+}
+
 function runFixture(service) {
-  if (service === "oidc" || service === "authentik") {
-    const expression = service === "oidc" ? /(?:oidc|openid)/iu : /authentik/iu;
-    const absoluteFiles = discoverTests(join(root, "apps/gateway/test"), expression);
+  if (service === "authentik") {
+    const testFile = join(root, "scripts/integration/authentik-fixture.test.mjs");
+    if (!existsSync(testFile)) {
+      return { service, profile: "fixture-contract", status: "not_implemented" };
+    }
+    const execution = runNodeTest(testFile);
+    return {
+      service,
+      profile: "fixture-contract",
+      status: execution.passed ? "passed" : "failed",
+      checks: ["authentication_harness_contract"],
+      ...(execution.passed ? {} : { errorCategory: execution.errorCategory }),
+    };
+  }
+
+  if (service === "oidc") {
+    const absoluteFiles = discoverTests(join(root, "apps/gateway/test"), /(?:oidc|openid)/iu);
     if (absoluteFiles.length === 0) {
       return { service, profile: "fixture-contract", status: "not_implemented" };
     }

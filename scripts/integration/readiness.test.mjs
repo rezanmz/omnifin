@@ -4,6 +4,7 @@ import test from "node:test";
 import { SERVICES, readinessBlock, validateReadinessLedger } from "./readiness.mjs";
 import {
   fixtureChecksFor,
+  nodeTestExecutionPassed,
   parseArguments,
   vitestExecutionPassed,
   vitestExecutionSummary,
@@ -89,6 +90,21 @@ test("fixture execution reads a dedicated reporter artifact instead of command s
     vitestExecutionPassed({ status: 0, stdout: "package-manager output before JSON" }, report),
     true,
   );
+});
+
+test("node fixture execution requires a real passing test summary", () => {
+  const passing = ["TAP version 13", "# tests 10", "# pass 10", "# fail 0", "# cancelled 0"].join(
+    "\n",
+  );
+  assert.equal(nodeTestExecutionPassed({ status: 0, stdout: passing }), true);
+  assert.equal(
+    nodeTestExecutionPassed({
+      status: 0,
+      stdout: "TAP version 13\n# tests 0\n# pass 0\n# fail 0\n# cancelled 0",
+    }),
+    false,
+  );
+  assert.equal(nodeTestExecutionPassed({ status: 1, stdout: passing }), false);
 });
 
 test("fixture failures expose only bounded test-file basenames", () => {
