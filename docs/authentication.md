@@ -10,9 +10,11 @@ and contributors changing a security-sensitive flow.
 > Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
 > front-channel logout, opaque sessions, and break-glass
 > recovery. The permission-checked identity control room and API can create, list, and validate
-> encrypted configurations and administer provider lifecycles and explicit role mappings. Mapping
-> updates and the live Authentik gate remain incomplete. Phase 1 has not passed its release
-> gate; treat this document as development evidence, not a production support claim.
+> encrypted configurations and administer provider lifecycles and explicit role mappings. A pinned,
+> isolated Authentik environment exercises real authorization, role mapping, RP logout, and
+> back-channel logout. The protected live compatibility baseline remains pending, and Phase 1 has
+> not passed a tagged release gate; treat this document as development evidence, not a production
+> support claim.
 
 ## Current development surface
 
@@ -62,8 +64,8 @@ are explicit.
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
 when JIT is enabled, and creates an opaque server-side session atomically. It does not yet provide
-mapping updates, live Authentik compatibility evidence, or the complete application
-permission surface. The
+the media-operation permission surfaces planned for later phases. Every currently implemented
+administrative and self-service route has an explicit local permission boundary. The
 [roadmap](roadmap.md) and [compatibility matrix](compatibility.md) remain the source of
 truth for verified availability.
 

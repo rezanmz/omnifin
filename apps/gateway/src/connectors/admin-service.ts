@@ -299,7 +299,7 @@ export class ConnectorAdminService {
   }
 
   public list(query: ConnectorListQuery, context: ConnectorAdminContext) {
-    this.#authorize(context);
+    const scope = this.#authorize(context);
     const parsed = connectorListQuerySchema.safeParse(query);
     if (!parsed.success) throw new ConnectorAdminError("configuration_invalid");
     const after = decodeCursor(parsed.data.cursor);
@@ -320,11 +320,12 @@ export class ConnectorAdminService {
             created_at as createdAt,
             updated_at as updatedAt
            from connector_configs
-           where (? is null or id > ?)
+           where (? = 'all' or type = 'jellyfin')
+             and (? is null or id > ?)
            order by id asc
            limit ?`,
         )
-        .all(after ?? null, after ?? null, parsed.data.limit + 1) as ConnectorRow[];
+        .all(scope, after ?? null, after ?? null, parsed.data.limit + 1) as ConnectorRow[];
       const hasMore = rows.length > parsed.data.limit;
       const page = rows.slice(0, parsed.data.limit);
       return {
@@ -338,15 +339,16 @@ export class ConnectorAdminService {
   }
 
   public get(connectorId: string, context: ConnectorAdminContext) {
-    this.#authorize(context);
-    return this.#present(this.#row(connectorId));
+    const row = this.#row(connectorId);
+    this.#authorize(context, this.#service(row.type));
+    return this.#present(row);
   }
 
   public create(input: ConnectorCreateRequest, context: ConnectorAdminContext) {
-    this.#authorize(context);
     const parsed = connectorCreateRequestSchema.safeParse(input);
     if (!parsed.success) throw new ConnectorAdminError("configuration_invalid");
     const connector = parsed.data;
+    this.#authorize(context, connector.service);
     let baseUrl: string;
     try {
       baseUrl = canonicalBaseUrl(connector.baseUrl, connector.insecureHttpApproved);
@@ -439,14 +441,14 @@ export class ConnectorAdminService {
     input: ConnectorUpdateRequest,
     context: ConnectorAdminContext,
   ) {
-    this.#authorize(context);
     const parsed = connectorUpdateRequestSchema.safeParse(input);
     if (!parsed.success) throw new ConnectorAdminError("configuration_invalid");
     const current = this.#row(connectorId);
+    const service = this.#service(current.type);
+    this.#authorize(context, service);
     if (revisionFor(current) !== parsed.data.revision) {
       throw new ConnectorAdminError("revision_conflict");
     }
-    const service = this.#service(current.type);
     const currentSecrets = this.#secrets(current, service);
     const credentials = parsed.data.credentials ?? currentSecrets.credentials;
     const tlsPolicy = parsed.data.tlsPolicy ?? current.tlsPolicy;
@@ -567,9 +569,9 @@ export class ConnectorAdminService {
   }
 
   public async probe(connectorId: string, context: ConnectorAdminContext) {
-    this.#authorize(context);
     const current = this.#row(connectorId);
     const service = this.#service(current.type);
+    this.#authorize(context, service);
     const secrets = this.#secrets(current, service);
     const credentials = secrets.credentials;
     if (!credentialAllowed(service, credentials)) {
@@ -654,8 +656,8 @@ export class ConnectorAdminService {
   }
 
   public delete(connectorId: string, revision: string, context: ConnectorAdminContext) {
-    this.#authorize(context);
     const current = this.#row(connectorId);
+    this.#authorize(context, this.#service(current.type));
     if (revisionFor(current) !== revision) throw new ConnectorAdminError("revision_conflict");
     if (current.enabled === 1) throw new ConnectorAdminError("connector_must_be_disabled");
     const auditId = this.#id();
@@ -689,8 +691,16 @@ export class ConnectorAdminService {
     }
   }
 
-  #authorize(context: ConnectorAdminContext) {
-    requirePermission(context.principal, "connectors.manage");
+  #authorize(context: ConnectorAdminContext, service?: ManagedConnectorService) {
+    const recovery = context.principal.authenticationMethod.kind === "recovery";
+    if (recovery) {
+      requirePermission(context.principal, "recovery.jellyfin.manage");
+      if (service !== undefined && service !== "jellyfin") {
+        requirePermission(context.principal, "connectors.manage");
+      }
+    } else {
+      requirePermission(context.principal, "connectors.manage");
+    }
     if (
       (context.ipAddress !== undefined && context.ipAddress.length > 256) ||
       (context.requestId !== undefined &&
@@ -698,6 +708,7 @@ export class ConnectorAdminService {
     ) {
       throw new ConnectorAdminError("integrity_failure");
     }
+    return recovery ? "jellyfin" : "all";
   }
 
   #secrets(row: ConnectorRow, service: ManagedConnectorService): StoredSecrets {

@@ -64,12 +64,12 @@ and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
 
-All upstream access crosses the gateway boundary. Phase 1 is still in development:
-live Authentik verification, complete permission enforcement, and the connector
-administration interface remain release-gate work. The permission-checked identity control room
-now guides provider configuration, fresh validation, guarded enablement and deletion,
-and exact typed role mappings. Later phases add live events, media proxying, and
-complete upstream workflows.
+All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
+pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;
+the public compatibility baseline remains pending until protected live evidence records exact
+versions and dates. Permission checks cover every implemented administrative and self-service
+surface, including a deliberately Jellyfin-only recovery path. The browser connector control room
+is Phase 2 work. Later phases add live events, media proxying, and complete upstream workflows.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the

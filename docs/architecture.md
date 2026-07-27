@@ -13,9 +13,10 @@ the roadmap records when each area has passed its verification gate.
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
 > administration now exist through both normalized APIs and a permission-checked control room,
-> while complete authorization, the connector administration interface, live
-> upstream workflows, and media proxying remain incomplete. The roadmap, not branch
-> availability, determines supported-release status.
+> while the connector administration interface, live upstream workflows, and media proxying remain
+> incomplete. The implemented API surfaces enforce their local role or narrowly scoped recovery
+> permissions at both route and service boundaries. The roadmap, not branch availability,
+> determines supported-release status.
 
 ## Current implementation checkpoint
 
@@ -33,12 +34,15 @@ provides isolated connector fixture and probe tooling.
 The provider-administration boundary can create, list, replace, freshly validate, and safely delete
 encrypted, audited OIDC records and can list, create, and delete exact role mappings. Its browser
 control room exposes only normalized secret-free records, reserves exact provider endpoints before
-creation, and requires validation before offering enablement. Mapping updates remain incomplete.
+creation, and requires validation before offering enablement.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented.
 Encrypted connector administration is available through a versioned, permission-checked API;
-its browser control room, live Authentik verification, and media operations remain unavailable.
+recovery sessions see and repair only Jellyfin connector records. A pinned isolated Authentik
+environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
+protected public compatibility baseline remains pending. The connector browser control room and
+media operations remain unavailable.
 
 ## Target system shape
 

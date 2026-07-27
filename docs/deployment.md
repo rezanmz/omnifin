@@ -12,9 +12,10 @@ untagged image or default branch build as a production support promise.
 > provide RP-initiated logout, provider-initiated back- and front-channel logout, and
 > hidden recovery access. A permission-checked interface and API can create, inspect, and safely
 > validate encrypted OIDC provider records, manage their guarded lifecycle, and administer explicit
-> role mappings. Mapping updates, live Authentik verification, complete authorization, connector
-> administration, and upstream media operations remain incomplete. Tagged phase
-> releases define supported deployment claims.
+> role mappings. A separate connector API stores encrypted credentials, requires fresh probes before
+> enablement, and permits recovery sessions to repair Jellyfin configuration only. The connector
+> browser interface, protected live compatibility baseline, and upstream media operations remain
+> incomplete. Tagged phase releases define supported deployment claims.
 
 ## Deployment model
 

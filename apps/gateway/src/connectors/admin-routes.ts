@@ -14,6 +14,7 @@ import {
   connectorMutationResponseSchema,
   connectorUpdateRequestSchema,
 } from "@omnifin/contracts/connectors";
+import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import { requirePermission } from "../auth/authorization.js";
@@ -101,10 +102,15 @@ function administrationError(error: ConnectorAdminError): SafeHttpError {
 }
 
 function mutationPrincipal(request: FastifyRequest) {
-  return requirePermission(
+  return requireConnectorAdministrator(
     request.server.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
-    "connectors.manage",
   );
+}
+
+function requireConnectorAdministrator(principal: SessionPrincipal | null | undefined) {
+  return principal?.authenticationMethod.kind === "recovery"
+    ? requirePermission(principal, "recovery.jellyfin.manage")
+    : requirePermission(principal, "connectors.manage");
 }
 
 function context(request: FastifyRequest) {
@@ -147,7 +153,7 @@ export const connectorAdminRoutes: FastifyPluginAsync<ConnectorAdminRoutesOption
           session.absoluteExpiresAt,
         );
       }
-      const principal = requirePermission(session?.principal, "connectors.manage");
+      const principal = requireConnectorAdministrator(session?.principal);
       try {
         return connectorListResponseSchema.parse(
           connectors.list(connectorListQuerySchema.parse(request.query), {
@@ -185,7 +191,7 @@ export const connectorAdminRoutes: FastifyPluginAsync<ConnectorAdminRoutesOption
           session.absoluteExpiresAt,
         );
       }
-      const principal = requirePermission(session?.principal, "connectors.manage");
+      const principal = requireConnectorAdministrator(session?.principal);
       const { connectorId } = connectorAdminParamsSchema.parse(request.params);
       try {
         return connectorMutationResponseSchema.parse({

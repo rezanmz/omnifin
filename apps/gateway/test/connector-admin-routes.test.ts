@@ -166,7 +166,10 @@ async function harness() {
       userId: "admin-user",
     },
   });
-  return { app, config, createAdapter, session };
+  const recovery = app.sessionService.createSession({
+    attribution: { authMethod: "recovery" },
+  });
+  return { app, config, createAdapter, recovery, session };
 }
 
 function authenticatedHeaders(session: Awaited<ReturnType<typeof harness>>["session"]) {
@@ -190,6 +193,65 @@ const connectorRequest = {
 };
 
 describe("connector administration routes", () => {
+  it("limits recovery access to identity-critical Jellyfin repair", async () => {
+    const { app, recovery, session } = await harness();
+    try {
+      const created = await app.inject({
+        body: connectorRequest,
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/connectors",
+      });
+      expect(created.statusCode, created.body).toBe(201);
+
+      const recoveryList = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/connectors?limit=10",
+      });
+      expect(recoveryList.statusCode, recoveryList.body).toBe(200);
+      expect(connectorListResponseSchema.parse(recoveryList.json()).items).toEqual([
+        expect.objectContaining({ id: "jellyfin-admin", service: "jellyfin" }),
+      ]);
+
+      const hiddenConnector = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/connectors/radarr-main",
+      });
+      expect(hiddenConnector.statusCode).toBe(403);
+
+      const deniedCreate = await app.inject({
+        body: { ...connectorRequest, id: "radarr-recovery" },
+        headers: authenticatedHeaders(recovery),
+        method: "POST",
+        url: "/v1/admin/connectors",
+      });
+      expect(deniedCreate.statusCode).toBe(403);
+
+      const jellyfinResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/connectors/jellyfin-admin",
+      });
+      const jellyfin = connectorMutationResponseSchema.parse(jellyfinResponse.json()).connector;
+      const repaired = await app.inject({
+        body: { displayName: "Recovered Jellyfin", revision: jellyfin.revision },
+        headers: authenticatedHeaders(recovery),
+        method: "PATCH",
+        url: "/v1/admin/connectors/jellyfin-admin",
+      });
+      expect(repaired.statusCode, repaired.body).toBe(200);
+      expect(connectorMutationResponseSchema.parse(repaired.json()).connector).toMatchObject({
+        displayName: "Recovered Jellyfin",
+        enabled: true,
+        service: "jellyfin",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("creates, reads, and lists secret-free connector configuration", async () => {
     const { app, config, session } = await harness();
     try {

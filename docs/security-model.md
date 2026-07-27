@@ -11,8 +11,9 @@ design and review.
 > recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
 > and provider-initiated OIDC back- and front-channel logout are implemented, while
 > encrypted and audited connector administration is implemented through the versioned
-> gateway API. Complete permission enforcement, the connector administration interface,
-> media proxying, and upstream mutations remain incomplete. Controls
+> gateway API. Permission enforcement covers every current route and is repeated inside
+> administrative services. The connector administration interface, media proxying, and
+> upstream mutations remain incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
 
@@ -85,7 +86,9 @@ application boundary; operators must still patch and isolate the host.
   both explicit approval and a current connector-specific CA certificate, so certificate
   and hostname verification remain enabled.
 - Every mutation requires a same-origin CSRF proof and the local `connectors.manage`
-  permission. The service repeats the permission check so future non-HTTP callers cannot
+  permission. A recovery session instead uses `recovery.jellyfin.manage`; both the route and
+  service constrain that session to Jellyfin records, and list queries exclude every other
+  connector. The service repeats permission and scope checks so future non-HTTP callers cannot
   bypass authorization.
 - Updates and deletion require the latest opaque revision. Enabled connectors cannot be
   deleted, and connectors referenced by a service identity link remain protected.
@@ -170,9 +173,10 @@ diagnostic.
 
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
-erasure, revocation, relinking, and secret-preservation tests. Live Authentik logout
-verification and full permission enforcement still need completed threat-model gates
-before Phase 1 can pass.
+erasure, revocation, relinking, and secret-preservation tests. The pinned isolated Authentik gate
+exercises authorization, role mapping, RP logout, and provider-initiated back-channel revocation.
+Protected live compatibility evidence remains separate from this development gate and is required
+before a public support claim.
 
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and
