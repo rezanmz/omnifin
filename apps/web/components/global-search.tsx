@@ -374,11 +374,7 @@ export function GlobalSearch({
       )}
 
       {open ? (
-        <section
-          aria-label="Search results"
-          className="search-console"
-          id="global-search-results"
-        >
+        <section aria-label="Search results" className="search-console" id="global-search-results">
           <header className="search-console__header">
             <span>Discovery signal</span>
             {searchState.kind === "loading" ? (
