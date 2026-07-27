@@ -72,7 +72,9 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
       currentStage = "backchannel_trigger_provider_invalid";
     } else if (/no such command ['"]?shell|unknown command ['"]?shell/iu.test(diagnostic)) {
       currentStage = "backchannel_trigger_shell_unavailable";
-    } else if (/missing authority key identifier|invalid ca certificate|key usage/iu.test(diagnostic)) {
+    } else if (
+      /missing authority key identifier|invalid ca certificate|key usage/iu.test(diagnostic)
+    ) {
       currentStage = "backchannel_trigger_tls_chain_failure";
     } else if (/hostname mismatch|ip address mismatch|doesn't match/iu.test(diagnostic)) {
       currentStage = "backchannel_trigger_tls_identity_failure";

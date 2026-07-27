@@ -40,9 +40,10 @@ reviewed increments. The pull request that changes a suite from `pending` to
 `ready` places it in the strict matrix immediately, so that transition cannot
 pass with missing, skipped, or failing tests. A pending-only change still runs
 the established ready fixture baseline. The one-time empty-repository
-foundation PR is limited to the already ready fixture services. The OIDC fixture
-is now ready and enforced; the Authentik fixture remains pending until its
-isolated provider harness is implemented.
+foundation PR is limited to the already ready fixture services. The OIDC and
+isolated Authentik fixtures are ready and enforced. Authentik readiness combines
+the strict harness contract selected by the matrix with the dedicated browser flow
+that starts the pinned upstream provider in the same pull-request workflow.
 
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter
@@ -50,8 +51,8 @@ the protected `integration` environment, and activate only after the repository
 variable `OMNIFIN_LIVE_INTEGRATION_ENABLED=true` confirms that the isolated
 upstream environment has been provisioned. The weekly compatibility canary and
 any release profile that requires live evidence use the same protected
-configuration. All live entries and the Authentik fixture intentionally remain
-pending; no live support baseline is claimed.
+configuration. All live entries intentionally remain pending; no live support
+baseline is claimed.
 
 `release-coverage.json` separately declares which ready capabilities a phase
 release claims. Coverage is cumulative and validated against `readiness.json`:

@@ -106,12 +106,14 @@ CI environment. A pull request must not waive a failing check merely because it 
 on one workstation.
 
 Connector fixture work must keep `scripts/integration/readiness.json` truthful. A
-strict fixture check succeeds only for a profile reviewed as `ready`; pending identity
-coverage is expected to fail closed:
+strict fixture check succeeds only for a profile reviewed as `ready`. The deterministic
+OIDC and isolated Authentik profiles are enforced; live identity profiles remain
+pending and fail closed:
 
 ```sh
 pnpm test:integration --service jellyfin --mode fixture --strict
-pnpm test:integration --service oidc --mode fixture --strict # expected to fail while pending
+pnpm test:integration --service oidc --mode fixture --strict
+pnpm test:integration --service authentik --mode fixture --strict
 ```
 
 Do not copy live credentials into a pull-request workflow or local fixture. Scheduled,

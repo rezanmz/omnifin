@@ -47,9 +47,10 @@ version. “Latest” without a recorded version and verification date is not su
 Pull requests run the affected deterministic fixture matrix in
 `.github/workflows/integration.yml`; that workflow has no access to live service
 credentials. Its required `Connector integration` gate reflects fixture evidence only.
-At the foundation phase, Jellyfin, Seerr, Radarr, Sonarr, Bazarr, Prowlarr,
-qBittorrent, and SABnzbd fixture suites are marked ready, while OIDC and Authentik
-fixture coverage remains pending.
+All deterministic fixture suites are marked ready. OIDC is covered by protocol and
+gateway contract fixtures; Authentik additionally runs a pinned, isolated upstream
+authorization-code browser harness. Fixture readiness is development evidence and
+does not establish a public live-support baseline.
 
 Scheduled and manual probes run in `.github/workflows/integration-live.yml` only from
 `main` and only through the protected `integration` environment. Until the repository
