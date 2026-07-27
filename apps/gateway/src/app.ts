@@ -7,6 +7,10 @@ import { createApiError } from "@omnifin/contracts/errors";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
+import {
+  acquisitionProvenanceRoutes,
+  type AcquisitionProvenanceRoutesOptions,
+} from "./acquisitions/provenance-routes.js";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
@@ -80,6 +84,7 @@ export interface CreateAppOptions {
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
+  acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -377,6 +382,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.mediaRequestDependencies === undefined
         ? {}
         : { dependencies: options.mediaRequestDependencies }),
+    });
+    await app.register(acquisitionProvenanceRoutes, {
+      ...(options.acquisitionProvenanceDependencies === undefined
+        ? {}
+        : { dependencies: options.acquisitionProvenanceDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

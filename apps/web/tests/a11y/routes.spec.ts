@@ -111,6 +111,24 @@ test("request composer has no automatically detectable accessibility violations"
   expect(results.violations).toEqual([]);
 });
 
+test("acquisition timeline has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("open profile appearance controls have no automatically detectable accessibility violations", async ({
   context,
   page,

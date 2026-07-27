@@ -14,9 +14,10 @@ the roadmap records when each area has passed its verification gate.
 > password and Quick Connect OIDC-to-Jellyfin pairing, self-service link lifecycle,
 > authentication audits, recovery access, and encrypted OIDC provider lifecycle and role-mapping
 > administration now exist through both normalized APIs and permission-checked control rooms.
-> Encrypted connector administration, normalized Seerr discovery, and the first
-> identity-delegated, idempotent Seerr request mutation are implemented; request review,
-> acquisition workflows, and media proxying remain incomplete.
+> Encrypted connector administration, normalized Seerr discovery, the first
+> identity-delegated, idempotent Seerr request mutation, and permission-gated read-only
+> Radarr/Sonarr acquisition provenance are implemented; request review, acquisition
+> recovery mutations, and media proxying remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -44,9 +45,10 @@ RP-initiated and provider-initiated back- and front-channel OIDC logout are impl
 Encrypted connector administration is available through a versioned, permission-checked API;
 recovery sessions see and repair only Jellyfin connector records. A pinned isolated Authentik
 environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
-protected public compatibility baseline remains pending. The connector browser control room and
-normalized Seerr search and media-request creation are available as pre-release development
-surfaces; request review, acquisition operations, and playback remain unavailable.
+protected public compatibility baseline remains pending. The connector browser control room,
+normalized Seerr search, media-request creation, and title-level Radarr/Sonarr provenance are
+available as pre-release development surfaces; request review, acquisition mutations, and playback
+remain unavailable.
 
 ## Target system shape
 
@@ -206,7 +208,9 @@ and an account-and-access center with exact loading, unconfigured, unavailable, 
 and error states. A keyboard-, touch-, and directional-navigation-ready global search console reads
 only normalized Seerr discovery results and deliberately covers prompt, loading, empty, offline,
 permission-denied, signed-out, rate-limited, and responsive states. These surfaces use only the
-same-origin API boundary. As media workflows arrive,
+same-origin API boundary. A lazy-loaded signal-history drawer reads normalized, operator-only
+Radarr/Sonarr history and queue evidence with complete, degraded, empty, loading, offline,
+permission-denied, responsive, light, and dark states. As media workflows arrive,
 TanStack Query will own remote data and invalidation, while Zustand remains limited to
 ephemeral interface state such as an open drawer or command-palette context. Motion is
 reserved for purposeful, interruptible transitions; reduced-motion users receive

@@ -113,6 +113,19 @@ application boundary; operators must still patch and isolate the host.
   contain bounded media intent and normalized failure codes, never credentials, usernames,
   idempotency keys, private upstream messages, or media paths.
 
+## Acquisition-provenance read controls
+
+- Title provenance requires `acquisition.manage` at both the session route and service boundary.
+  Unauthorized callers are rejected before connector selection or secret decryption.
+- A request can nominate only `radarr` or `sonarr`, one bounded upstream media identifier, and an
+  optional Sonarr season. Exactly one enabled, healthy, capability-verified matching connector is
+  required.
+- History and queue reads are independently bounded and parsed. Safe partial results survive one
+  upstream failure; raw history data, queue statuses, download hashes, paths, and private errors do
+  not cross the gateway boundary.
+- The route is read-only, abort-aware, rate-limited, and explicitly non-cacheable. It offers no
+  upstream retry, search, grab, blocklist, or deletion mutation in this slice.
+
 ## Browser protections
 
 The web and gateway emit Content Security Policy, HSTS for secure requests,

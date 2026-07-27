@@ -110,7 +110,9 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   );
   await mockDiscoverySearch(page);
   await page.goto("/");
-  await page.getByRole("combobox").fill("matrix");
+  const search = page.getByRole("combobox");
+  await search.click();
+  await search.fill("matrix");
   await page.getByRole("option", { name: /The Matrix/i }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
 });
@@ -119,8 +121,12 @@ async function openRequestComposer(page: Page) {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
   await page.goto("/");
-  await page.getByRole("combobox").fill("matrix");
-  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  const search = page.getByRole("combobox");
+  await search.click();
+  await search.fill("matrix");
+  const requestAction = page.getByRole("button", { name: "Request The Matrix" });
+  await requestAction.waitFor();
+  await requestAction.click();
   await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
 }
 
@@ -445,6 +451,21 @@ test("expanded operations visual baseline", async ({ page }, testInfo) => {
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await operations.evaluate((control) => control.blur());
   await expect(page).toHaveScreenshot("dashboard-operations-expanded.png", { fullPage: true });
+});
+
+test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Acquisition provenance covers representative desktop and phone geometry",
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot("acquisition-timeline.png");
 });
 
 test("focus-visible visual baseline", async ({ page }, testInfo) => {

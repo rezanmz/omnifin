@@ -1,9 +1,7 @@
-"use client";
-
 import { Info, Play } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { DashboardModel } from "../lib/dashboard-data";
-import { handleDirectionalFocus } from "../lib/directional-focus";
+import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
 type AccentStyle = CSSProperties & { "--hero-accent": string };
 
@@ -29,10 +27,7 @@ export function HeroSpotlight({ hero }: { hero: DashboardModel["hero"] }) {
           ))}
         </ul>
         <p className="hero-spotlight__description">{hero.description}</p>
-        <div
-          className="hero-spotlight__actions"
-          onKeyDown={(event) => handleDirectionalFocus(event, { axis: "horizontal" })}
-        >
+        <DirectionalNavigationGroup className="hero-spotlight__actions">
           <button className="button button--primary" data-directional-item type="button">
             <Play aria-hidden="true" fill="currentColor" size={17} />
             Play now
@@ -41,7 +36,7 @@ export function HeroSpotlight({ hero }: { hero: DashboardModel["hero"] }) {
             <Info aria-hidden="true" size={18} />
             Details
           </button>
-        </div>
+        </DirectionalNavigationGroup>
       </div>
       <div className="hero-spotlight__position" aria-label="Spotlight 1 of 5" role="img">
         <span className="is-active" />

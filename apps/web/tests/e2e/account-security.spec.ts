@@ -150,6 +150,7 @@ test("OIDC account settings submits provider logout as an exact native form", as
   });
 
   await page.goto("/settings");
+  const expectedOrigin = new URL(page.url()).origin;
   await page.getByRole("button", { name: "Sign out through provider" }).click();
   await expect(page.getByRole("group", { name: "Confirm identity provider logout" })).toContainText(
     "Other Omnifin devices stay signed in",
@@ -162,6 +163,6 @@ test("OIDC account settings submits provider logout as an exact native form", as
     contentType: "application/x-www-form-urlencoded",
     csrfHeader: "",
     method: "POST",
-    origin: "http://127.0.0.1:3000",
+    origin: expectedOrigin,
   });
 });

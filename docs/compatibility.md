@@ -14,8 +14,8 @@ combination is described as supported.
 | Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Isolated gate ready; live baseline pending           |
 | Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending                         |
 | Seerr                             | Discovery, requests, approvals, issues, user context           | Search/request fixtures ready; live baseline pending |
-| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | Target; verification pending                         |
-| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Target; verification pending                         |
+| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | History/queue fixtures ready; live baseline pending  |
+| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | History/queue fixtures ready; live baseline pending  |
 | Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                         |
 | Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending                         |
 | qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending                         |

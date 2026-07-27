@@ -39,6 +39,7 @@ interface ProbeCase {
   name: string;
   expectedPath: string;
   expectedVersion: string;
+  expectedCapabilities?: readonly string[];
   response: unknown;
   create: (config: ConnectorTargetConfig) => ConnectorAdapter;
   assertRequest?: (request: CapturedRequest) => void;
@@ -74,6 +75,7 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/v3/system/status",
     expectedVersion: probeFixtures.radarr.version,
     response: probeFixtures.radarr,
+    expectedCapabilities: ["connector.health", "connector.version", "acquisition.history"],
     create: (config) => new RadarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);
@@ -84,6 +86,7 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/v3/system/status",
     expectedVersion: probeFixtures.sonarr.version,
     response: probeFixtures.sonarr,
+    expectedCapabilities: ["connector.health", "connector.version", "acquisition.history"],
     create: (config) => new SonarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);
@@ -190,7 +193,7 @@ describe.each(probeCases)("$name adapter", (probeCase) => {
         checkedAt: "2026-07-25T12:00:00.000Z",
         latencyMs: 12,
         version: probeCase.expectedVersion,
-        capabilities: ["connector.health", "connector.version"],
+        capabilities: probeCase.expectedCapabilities ?? ["connector.health", "connector.version"],
         failure: null,
       }),
     );

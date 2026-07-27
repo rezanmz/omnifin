@@ -19,7 +19,7 @@ export function NavigationRail() {
       aria-label="Primary navigation"
       onKeyDown={(event) => handleDirectionalFocus(event, { axis: "vertical" })}
     >
-      <Link className="navigation-rail__brand" href="/" aria-label="Omnifin home">
+      <Link className="navigation-rail__brand" href="/" aria-label="Omnifin home" prefetch={false}>
         <BrandMark compact />
       </Link>
       <nav className="navigation-rail__nav">
@@ -31,6 +31,7 @@ export function NavigationRail() {
             data-directional-item
             href={href}
             key={href}
+            prefetch={false}
           >
             <Icon aria-hidden="true" size={21} strokeWidth={1.55} />
             <span className="navigation-rail__tooltip">{label}</span>
@@ -42,6 +43,7 @@ export function NavigationRail() {
         href="/settings"
         aria-label="Settings"
         data-directional-item
+        prefetch={false}
       >
         <Settings2 aria-hidden="true" size={21} strokeWidth={1.55} />
         <span className="navigation-rail__tooltip">Settings</span>
@@ -65,12 +67,18 @@ export function MobileNavigation() {
           data-directional-item
           href={href}
           key={href}
+          prefetch={false}
         >
           <Icon aria-hidden="true" size={20} strokeWidth={1.65} />
           <span>{label}</span>
         </Link>
       ))}
-      <Link className="mobile-navigation__item" data-directional-item href="/settings">
+      <Link
+        className="mobile-navigation__item"
+        data-directional-item
+        href="/settings"
+        prefetch={false}
+      >
         <Settings2 aria-hidden="true" size={20} strokeWidth={1.65} />
         <span>Settings</span>
       </Link>
