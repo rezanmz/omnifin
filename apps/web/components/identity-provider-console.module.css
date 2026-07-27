@@ -119,10 +119,9 @@
 .providerRail,
 .workspace,
 .statePanel {
-  backdrop-filter: blur(30px) saturate(125%);
-  background: linear-gradient(145deg, rgb(255 255 255 / 3%), transparent 38%), rgb(7 11 9 / 84%);
+  background: var(--surface-card);
   border: 1px solid var(--line-strong);
-  box-shadow: 0 30px 90px rgb(0 0 0 / 24%);
+  box-shadow: var(--shadow-raised);
 }
 
 .providerRail {
@@ -470,7 +469,7 @@
 .detailSection,
 .dangerZone,
 .mappingForm {
-  background: rgb(2 6 4 / 34%);
+  background: var(--surface-recessed);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
 }
@@ -536,7 +535,7 @@
 .field input,
 .field select,
 .field textarea {
-  background: rgb(1 4 2 / 60%);
+  background: var(--surface-card-solid);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   color: var(--paper-0);
@@ -562,15 +561,15 @@
 .field input:hover,
 .field select:hover,
 .field textarea:hover {
-  border-color: rgb(238 247 238 / 24%);
+  border-color: var(--line-strong);
 }
 
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  background: rgb(5 9 6 / 82%);
-  border-color: rgb(216 255 112 / 58%);
-  box-shadow: 0 0 0 3px rgb(216 255 112 / 8%);
+  background: var(--surface-card-solid);
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .field input[aria-invalid="true"] {
@@ -1368,6 +1367,13 @@
 
 [data-display-profile="ten-foot"] .providerList button {
   min-height: 82px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .heroSeal {
+    backdrop-filter: none;
+    background: var(--surface-card-solid);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

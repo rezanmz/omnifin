@@ -60,6 +60,17 @@ async function mockAccountSecurity(page: Page) {
   });
 }
 
+async function useLightTheme(page: Page) {
+  await page.context().addCookies([
+    {
+      name: "omnifin-theme",
+      sameSite: "Lax",
+      url: "http://127.0.0.1:3000",
+      value: "light",
+    },
+  ]);
+}
+
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -68,6 +79,23 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
   await page.goto(routeForProject("/", testInfo.project.name));
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
+});
+
+test("light dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
+  await useLightTheme(page);
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-light.png", { fullPage: true });
+});
+
+test("light profile controls visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
+  await useLightTheme(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open profile menu" }).click();
+  await expect(page.getByRole("dialog", { name: "Profile and appearance" })).toBeVisible();
+  await expect(page).toHaveScreenshot("dashboard-profile-menu-light.png", { fullPage: true });
 });
 
 test("open discovery search visual baseline", async ({ page }, testInfo) => {
@@ -177,6 +205,16 @@ test("account security visual baseline", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await page.getByText("Riley Morgan", { exact: true }).waitFor();
   await expect(page).toHaveScreenshot("account-security.png", { fullPage: true });
+});
+
+test("light account security visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
+  await useLightTheme(page);
+  await mockAccountSecurity(page);
+  await page.goto("/settings");
+  await page.getByText("Riley Morgan", { exact: true }).waitFor();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("account-security-light.png", { fullPage: true });
 });
 
 test("account security provider-logout confirmation visual baseline", async ({

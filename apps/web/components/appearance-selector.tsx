@@ -45,8 +45,10 @@ export function AppearanceSelector({ compact = false }: { compact?: boolean }) {
           <h2>Choose your atmosphere.</h2>
         </div>
         <span className="appearance-selector__resolved" aria-live="polite">
-          {preference === "system"
+          {preference === "system" && resolvedTheme
             ? `System · ${resolvedTheme}`
+            : preference === "system"
+              ? "System theme"
             : `${OPTIONS[preference].label} theme`}
         </span>
       </div>

@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
@@ -14,6 +16,8 @@ function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
   return "healthy";
 }
 
+type AmbientStyle = CSSProperties & { "--ambient-accent": string };
+
 export function DashboardScreen({
   data,
   displayProfile = "standard",
@@ -22,7 +26,11 @@ export function DashboardScreen({
   displayProfile?: DisplayProfile;
 }) {
   return (
-    <div className="application-frame" data-display-profile={displayProfile}>
+    <div
+      className="application-frame"
+      data-display-profile={displayProfile}
+      style={{ "--ambient-accent": data.hero.accent } as AmbientStyle}
+    >
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">

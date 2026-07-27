@@ -19,5 +19,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Default: Story = {};
+export const System: Story = { globals: { theme: "system" } };
+export const Light: Story = { globals: { theme: "light" } };
+export const Dark: Story = { globals: { theme: "dark" } };
 export const Compact: Story = { args: { compact: true } };

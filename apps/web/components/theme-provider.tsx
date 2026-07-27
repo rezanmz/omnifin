@@ -21,7 +21,7 @@ const THEME_COLORS: Record<ResolvedTheme, string> = {
 
 interface ThemeContextValue {
   preference: ThemePreference;
-  resolvedTheme: ResolvedTheme;
+  resolvedTheme: ResolvedTheme | null;
   setPreference: (preference: ThemePreference) => void;
 }
 
@@ -55,8 +55,8 @@ export function ThemeProvider({
   initialPreference,
 }: Readonly<{ children: ReactNode; initialPreference: ThemePreference }>) {
   const [preference, setPreferenceState] = useState(initialPreference);
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    initialPreference === "system" ? "light" : initialPreference,
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme | null>(() =>
+    initialPreference === "system" ? null : initialPreference,
   );
 
   useEffect(() => {
