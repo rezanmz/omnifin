@@ -375,7 +375,6 @@ export function GlobalSearch({
 
       {open ? (
         <section
-          aria-busy={searchState.kind === "loading"}
           aria-label="Search results"
           className="search-console"
           id="global-search-results"
