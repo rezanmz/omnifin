@@ -110,7 +110,9 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   );
   await mockDiscoverySearch(page);
   await page.goto("/");
-  await page.getByRole("combobox").fill("matrix");
+  const search = page.getByRole("combobox");
+  await search.click();
+  await search.fill("matrix");
   await page.getByRole("option", { name: /The Matrix/i }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
 });
@@ -119,8 +121,12 @@ async function openRequestComposer(page: Page) {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
   await page.goto("/");
-  await page.getByRole("combobox").fill("matrix");
-  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  const search = page.getByRole("combobox");
+  await search.click();
+  await search.fill("matrix");
+  const requestAction = page.getByRole("button", { name: "Request The Matrix" });
+  await requestAction.waitFor();
+  await requestAction.click();
   await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
 }
 
