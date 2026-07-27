@@ -22,7 +22,7 @@ function GlobalSearchPlaceholder({
   setQuery?: (query: string) => void;
 }) {
   return (
-    <div className="global-search">
+    <div className="global-search" data-liquid-glass>
       <Search aria-hidden="true" className="global-search__icon" size={18} strokeWidth={1.7} />
       <label className="sr-only" htmlFor="global-search-placeholder">
         Search movies, series, and people

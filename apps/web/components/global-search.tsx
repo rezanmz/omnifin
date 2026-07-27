@@ -361,7 +361,12 @@ export function GlobalSearch({
   }
 
   return (
-    <div className="global-search" data-open={open || undefined} ref={rootReference}>
+    <div
+      className="global-search"
+      data-liquid-glass
+      data-open={open || undefined}
+      ref={rootReference}
+    >
       <Search aria-hidden="true" className="global-search__icon" size={18} strokeWidth={1.7} />
       <label className="sr-only" htmlFor="global-search">
         Search movies, series, and people
