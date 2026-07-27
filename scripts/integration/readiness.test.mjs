@@ -54,7 +54,15 @@ test("integration arguments require exactly one selection mode", () => {
 });
 
 test("fixture reports claim only authentication behavior covered by their tests", () => {
-  assert.deepEqual(fixtureChecksFor("seerr"), ["health_normalization", "version_discovery"]);
+  assert.deepEqual(fixtureChecksFor("seerr"), [
+    "authentication_header",
+    "health_normalization",
+    "identity_delegation",
+    "request_creation",
+    "response_normalization",
+    "secret_isolation",
+    "version_discovery",
+  ]);
   assert.deepEqual(fixtureChecksFor("sabnzbd"), ["health_normalization", "version_discovery"]);
   assert.equal(fixtureChecksFor("oidc"), null);
 });

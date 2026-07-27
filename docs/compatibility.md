@@ -8,18 +8,18 @@ combination is described as supported.
 > There is no verified public compatibility baseline yet. Every entry below is a
 > target for pre-release integration work, not a support claim.
 
-| Service                           | Intended use                                                   | Current status                              |
-| --------------------------------- | -------------------------------------------------------------- | ------------------------------------------- |
-| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Target; verification pending                |
-| Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Isolated gate ready; live baseline pending  |
-| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending                |
-| Seerr                             | Discovery, requests, approvals, issues, user context           | Search fixture ready; live baseline pending |
-| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | Target; verification pending                |
-| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Target; verification pending                |
-| Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                |
-| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending                |
-| qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending                |
-| SABnzbd                           | Queue, history, rates, progress, pause/resume, safe removal    | Target; verification pending                |
+| Service                           | Intended use                                                   | Current status                                       |
+| --------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Target; verification pending                         |
+| Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Isolated gate ready; live baseline pending           |
+| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending                         |
+| Seerr                             | Discovery, requests, approvals, issues, user context           | Search/request fixtures ready; live baseline pending |
+| Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | Target; verification pending                         |
+| Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Target; verification pending                         |
+| Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                         |
+| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending                         |
+| qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending                         |
+| SABnzbd                           | Queue, history, rates, progress, pause/resume, safe removal    | Target; verification pending                         |
 
 Seerr is the primary request-management target. Compatibility with older Jellyseerr
 and Overseerr installations is capability-based and will be listed only after it is

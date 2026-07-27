@@ -95,6 +95,24 @@ application boundary; operators must still patch and isolate the host.
 - Creation, validation, update, and deletion write bounded audit metadata without connector
   credentials, private response bodies, or raw client addresses.
 
+## Media-request mutation controls
+
+- Request creation requires `request.create` at both the session route and service boundary,
+  plus the global same-origin and session-bound CSRF policy. Recovery sessions cannot request
+  media.
+- The gateway derives Seerr user context only from the session's proven Jellyfin identity link.
+  It resolves the exact immutable Jellyfin user identifier and sends the resulting numeric Seerr
+  user in `X-API-User`; the browser cannot nominate another user or fall back to the API-key owner.
+- The normalized body excludes upstream administration fields, quota bypasses, storage paths,
+  profiles, tags, and arbitrary identifiers. Response parsing rejects schema drift before data
+  crosses the gateway boundary.
+- Per-user idempotency keys and canonical request fingerprints are stored only as hashes. A key
+  cannot be reused for different input, known outcomes are replayed without another write, and an
+  ambiguous pending outcome fails closed rather than risking a duplicate request.
+- The idempotency outcome and sanitized audit event commit in one SQLite transaction. Audit records
+  contain bounded media intent and normalized failure codes, never credentials, usernames,
+  idempotency keys, private upstream messages, or media paths.
+
 ## Browser protections
 
 The web and gateway emit Content Security Policy, HSTS for secure requests,

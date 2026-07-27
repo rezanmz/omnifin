@@ -18,6 +18,7 @@ const requiredTables = [
   "connector_configs",
   "external_identities",
   "jellyfin_quick_connect_transactions",
+  "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
   "operational_failures",
@@ -52,6 +53,15 @@ const requiredColumns = {
     "pairing_session_id",
     "poll_count",
     "purpose",
+  ],
+  media_request_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "response_json",
+    "state",
+    "user_id",
   ],
   oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
   oidc_providers: [
@@ -98,6 +108,10 @@ const requiredIndexes = {
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
     "jellyfin_quick_connect_transactions_pairing_session_idx",
+  ],
+  media_request_operations: [
+    "media_request_operations_state_created_idx",
+    "media_request_operations_user_key_unique",
   ],
   oidc_logout_receipts: [
     "oidc_logout_receipts_expiry_idx",
@@ -247,7 +261,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0007.",
+  "Current migration journal must contain migration 0008.",
 );
 
 try {
@@ -472,8 +486,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 8, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0007.",
+        JSON.stringify({ count: 9, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0008.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -638,7 +652,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0007, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0008, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

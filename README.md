@@ -125,6 +125,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   and recovery
 - [Discovery](docs/discovery.md) — normalized Seerr search, permissions, errors, and
   browser behavior
+- [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,
+  normalized mutations, and audits
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy

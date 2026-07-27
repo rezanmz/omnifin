@@ -7,6 +7,13 @@ import {
   type DiscoverySearchResult,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
+import {
+  mediaRequestInputSchema,
+  mediaRequestResponseSchema,
+  type MediaRequestInput,
+  type MediaRequestResponse,
+  type MediaRequestStatus,
+} from "@omnifin/contracts/requests";
 import { z } from "zod";
 
 import { SafeConnectorError } from "../http/safe-http-client.js";
@@ -85,8 +92,66 @@ const seerrSearchResponseSchema = z.object({
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 
+const seerrUserIdentitySchema = z.strictObject({
+  jellyfinUserId: z.string().trim().min(1).max(256),
+  jellyfinUsername: z.string().trim().min(1).max(160),
+});
+
+const seerrUserListResponseSchema = z.object({
+  pageInfo: z.object({
+    page: z.int().positive(),
+    pageSize: z.int().nonnegative().max(100),
+    pages: z.int().nonnegative(),
+    results: z.int().nonnegative(),
+  }),
+  results: z
+    .array(
+      z.object({
+        id: z.int().positive().max(2_147_483_647),
+        jellyfinUserId: z.string().trim().min(1).max(256).nullish(),
+        jellyfinUsername: z.string().trim().min(1).max(160).nullish(),
+      }),
+    )
+    .max(100),
+});
+
+const seerrCreatedRequestSchema = z.object({
+  createdAt: z.iso.datetime({ offset: true }),
+  id: z.int().positive().max(2_147_483_647),
+  is4k: z.boolean().default(false),
+  media: z.object({ tmdbId: upstreamIdentifierSchema }),
+  seasons: z
+    .array(z.object({ seasonNumber: z.int().nonnegative().max(10_000) }))
+    .max(100)
+    .default([]),
+  status: z.int().min(1).max(5),
+  type: z.enum(["movie", "tv"]),
+});
+
 type UpstreamKnownFor = z.infer<typeof upstreamKnownForSchema>;
 type UpstreamMediaInfo = z.infer<typeof upstreamMediaInfoSchema>;
+
+export interface SeerrUserIdentity {
+  jellyfinUserId: string;
+  jellyfinUsername: string;
+}
+
+export type SeerrRequestErrorReason =
+  | "identity_ambiguous"
+  | "identity_not_found"
+  | "no_seasons_available"
+  | "request_conflict"
+  | "request_denied";
+
+export class SeerrRequestError extends Error {
+  public readonly reason: SeerrRequestErrorReason;
+
+  public constructor(reason: SeerrRequestErrorReason) {
+    super("The Seerr media request could not be completed.");
+    this.name = "SeerrRequestError";
+    this.reason = reason;
+  }
+}
 
 function optionalText(value: string | null | undefined) {
   const normalized = value?.trim();
@@ -126,6 +191,39 @@ function knownForResult(result: UpstreamKnownFor) {
   };
 }
 
+function requestStatus(status: number): MediaRequestStatus {
+  switch (status) {
+    case 1:
+      return "pending";
+    case 2:
+      return "approved";
+    case 3:
+      return "declined";
+    case 4:
+      return "failed";
+    case 5:
+      return "completed";
+    default:
+      throw new SafeConnectorError({
+        code: "response_invalid",
+        message: "Seerr returned a response that could not be safely interpreted.",
+        operation: "request.create",
+        retryable: false,
+        service: "seerr",
+      });
+  }
+}
+
+function invalidRequestResponse() {
+  return new SafeConnectorError({
+    code: "response_invalid",
+    message: "Seerr returned a response that could not be safely interpreted.",
+    operation: "request.create",
+    retryable: false,
+    service: "seerr",
+  });
+}
+
 export class SeerrAdapter extends ProbeOnlyAdapter {
   readonly service = "seerr" as const;
   override readonly capabilities: readonly ConnectorCapability[];
@@ -136,7 +234,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     super(config, apiKey ? [apiKey] : []);
     this.#apiKey = apiKey;
     this.capabilities = apiKey
-      ? ["connector.health", "connector.version", "media.discover"]
+      ? ["connector.health", "connector.version", "media.discover", "request.create"]
       : ["connector.health", "connector.version"];
   }
 
@@ -228,6 +326,102 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       query: query.query,
       totalPages: response.totalPages,
       totalResults: response.totalResults,
+    });
+  }
+
+  async resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr requests require configured credentials.",
+        operation: "request.identity.resolve",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const parsedIdentity = seerrUserIdentitySchema.parse(identity);
+    const response = await this.client.requestJson("api/v1/user", seerrUserListResponseSchema, {
+      headers: { "X-Api-Key": this.#apiKey },
+      operation: "request.identity.resolve",
+      query: new URLSearchParams({
+        q: parsedIdentity.jellyfinUsername,
+        skip: "0",
+        take: "100",
+      }),
+      ...(signal ? { signal } : {}),
+    });
+    const matches = response.results.filter(
+      (candidate) => candidate.jellyfinUserId === parsedIdentity.jellyfinUserId,
+    );
+    if (matches.length === 0) throw new SeerrRequestError("identity_not_found");
+    if (matches.length > 1) throw new SeerrRequestError("identity_ambiguous");
+    return matches[0]!.id;
+  }
+
+  async createMediaRequest(
+    input: MediaRequestInput,
+    seerrUserId: number,
+    signal?: AbortSignal,
+  ): Promise<MediaRequestResponse> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr requests require configured credentials.",
+        operation: "request.create",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    if (!Number.isSafeInteger(seerrUserId) || seerrUserId < 1 || seerrUserId > 2_147_483_647) {
+      throw new SeerrRequestError("identity_not_found");
+    }
+    const request = mediaRequestInputSchema.parse(input);
+    const response = await this.client.requestText("api/v1/request", {
+      acceptedStatuses: [202, 403, 409],
+      body: JSON.stringify({
+        is4k: request.is4k,
+        mediaId: request.tmdbId,
+        mediaType: request.kind === "movie" ? "movie" : "tv",
+        ...(request.kind === "series" ? { seasons: request.seasons } : {}),
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": this.#apiKey,
+        "X-Api-User": String(seerrUserId),
+      },
+      method: "POST",
+      operation: "request.create",
+      ...(signal ? { signal } : {}),
+    });
+    switch (response.status) {
+      case 202:
+        throw new SeerrRequestError("no_seasons_available");
+      case 403:
+        throw new SeerrRequestError("request_denied");
+      case 409:
+        throw new SeerrRequestError("request_conflict");
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(response.body);
+    } catch {
+      throw invalidRequestResponse();
+    }
+    const parsed = seerrCreatedRequestSchema.safeParse(decoded);
+    if (!parsed.success) throw invalidRequestResponse();
+    const created = parsed.data;
+    return mediaRequestResponseSchema.parse({
+      createdAt: created.createdAt,
+      id: `request:${created.id}`,
+      is4k: created.is4k,
+      kind: created.type === "movie" ? "movie" : "series",
+      seasons:
+        created.type === "movie"
+          ? null
+          : created.seasons.map((season) => season.seasonNumber).sort((a, b) => a - b),
+      source: "seerr",
+      status: requestStatus(created.status),
+      tmdbId: created.media.tmdbId,
     });
   }
 }
