@@ -1,9 +1,10 @@
 import { DashboardScreen, DashboardStateScreen } from "../components/dashboard-screen";
 import type { DashboardStateKind } from "../components/dashboard-state";
-import { OnboardingDashboard } from "../components/onboarding-dashboard";
 import { ThemeProvider } from "../components/theme-provider";
 import { demoDashboard } from "../lib/dashboard-data";
 import { readThemePreference } from "../lib/theme-server";
+import { redirect } from "next/navigation";
+import "./globals.css";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,13 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
     );
   }
 
-  if (!showDemoDashboard) return <OnboardingDashboard displayProfile={displayProfile} />;
+  if (!showDemoDashboard) {
+    redirect(
+      testParameters["test-profile"] === "ten-foot"
+        ? "/onboarding?test-profile=ten-foot"
+        : "/onboarding",
+    );
+  }
 
   const preference = await readThemePreference();
   return (

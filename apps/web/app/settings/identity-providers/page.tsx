@@ -8,6 +8,7 @@ import type { Metadata } from "next";
 import { IdentityProviderConsoleLoader } from "../../../components/identity-provider-console-loader";
 import { IdentityProviderPageShell } from "../../../components/identity-provider-page-shell";
 import type { IdentityProviderAdminLoadOutcome } from "../../../lib/identity-provider-admin";
+import "../../globals.css";
 
 export const metadata: Metadata = { title: "Identity providers" };
 export const dynamic = "force-dynamic";

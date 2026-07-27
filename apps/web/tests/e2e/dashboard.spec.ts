@@ -44,6 +44,7 @@ test("global search discloses live discovery with keyboard and touch-safe contro
 test("production-first onboarding remains a complete route", async ({ page }) => {
   await page.goto("/?test-view=onboarding");
 
+  await expect(page).toHaveURL(/\/\?test-view=onboarding$/u);
   await expect(
     page.getByRole("heading", { level: 1, name: "Your media control room is being prepared." }),
   ).toBeVisible();

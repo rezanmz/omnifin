@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import { ConnectorControlRoom } from "../../../components/connector-control-room";
 import { ConnectorPageShell } from "../../../components/connector-page-shell";
 import type { ConnectorAdminLoadOutcome } from "../../../lib/connector-admin";
+import "../../globals.css";
 
 export const metadata: Metadata = { title: "Service connections" };
 export const dynamic = "force-dynamic";

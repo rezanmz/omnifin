@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { AccountSecurityPanel } from "../../components/account-security-panel";
 import { ThemeProvider } from "../../components/theme-provider";
 import { readThemePreference } from "../../lib/theme-server";
+import "../globals.css";
 
 export const metadata: Metadata = { title: "Account & access" };
 export const dynamic = "force-dynamic";

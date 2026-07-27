@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { JellyfinCredentialScreen } from "../../../components/jellyfin-credential-screen";
+import "../../globals.css";
 
 export const metadata: Metadata = { title: "Sign in with Jellyfin" };
 

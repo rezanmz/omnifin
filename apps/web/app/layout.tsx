@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { readThemePreference } from "../lib/theme-server";
-import "./globals.css";
+import "./foundation.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
 // framework and application script, including not-found and error surfaces.

@@ -1,5 +1,22 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+export function onboardingRewriteTarget(request: NextRequest) {
+  if (request.nextUrl.pathname !== "/" || (request.method !== "GET" && request.method !== "HEAD")) {
+    return undefined;
+  }
+
+  const requestedByTestProfile =
+    process.env.OMNIFIN_TEST_MODE === "true" &&
+    request.nextUrl.searchParams.get("test-view") === "onboarding";
+  if (process.env.OMNIFIN_DEMO_MODE === "true" && !requestedByTestProfile) return undefined;
+
+  const target = request.nextUrl.clone();
+  const testProfile = request.nextUrl.searchParams.get("test-profile");
+  target.pathname = "/onboarding";
+  target.search = testProfile === "ten-foot" ? "?test-profile=ten-foot" : "";
+  return target;
+}
+
 export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const developmentScriptSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
@@ -38,7 +55,10 @@ export function proxy(request: NextRequest) {
   requestHeaders.set("content-security-policy", contentSecurityPolicy);
   requestHeaders.set("x-nonce", nonce);
 
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  const onboardingTarget = onboardingRewriteTarget(request);
+  const response = onboardingTarget
+    ? NextResponse.rewrite(onboardingTarget, { request: { headers: requestHeaders } })
+    : NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("content-security-policy", contentSecurityPolicy);
   response.headers.set(
     "permissions-policy",
