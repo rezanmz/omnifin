@@ -44,6 +44,65 @@ function sonarrWithResponses(responses: Response[]) {
 const quality = { quality: { id: 7, name: "Bluray-1080p", source: "bluray" } };
 
 describe("Servarr acquisition provenance", () => {
+  it("queues an exact Radarr movie search with a bounded normalized response", async () => {
+    const { adapter, requests } = radarrWithResponses([
+      jsonResponse(
+        { body: { privatePath: "/media/movies" }, id: 812, name: "MoviesSearch" },
+        {
+          status: 201,
+        },
+      ),
+    ]);
+
+    await expect(
+      adapter.queueAcquisitionSearch({ mediaId: 42, service: "radarr" }),
+    ).resolves.toEqual({
+      acceptedAt: "2026-07-25T12:00:00.000Z",
+      operationId: "radarr:command:812",
+      state: "queued",
+      target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url.pathname).toBe("/api/v3/command");
+    expect(requests[0]?.init.method).toBe("POST");
+    expect(requests[0]?.init.headers.get("content-type")).toBe("application/json");
+    expect(requests[0]?.init.headers.get("x-api-key")).toBe("radarr-fixture-key");
+    expect(JSON.parse(new TextDecoder().decode(requests[0]?.init.body))).toEqual({
+      movieIds: [42],
+      name: "MoviesSearch",
+    });
+  });
+
+  it.each([
+    {
+      expected: { name: "SeriesSearch", seriesId: 8 },
+      input: { mediaId: 8, service: "sonarr" as const },
+    },
+    {
+      expected: { name: "SeasonSearch", seasonNumber: 2, seriesId: 8 },
+      input: { mediaId: 8, seasonNumber: 2, service: "sonarr" as const },
+    },
+  ])("queues the supported Sonarr search command %#", async ({ expected, input }) => {
+    const { adapter, requests } = sonarrWithResponses([
+      jsonResponse({ id: 913, name: expected.name }, { status: 201 }),
+    ]);
+
+    const result = await adapter.queueAcquisitionSearch(input);
+
+    expect(result.operationId).toBe("sonarr:command:913");
+    expect(JSON.parse(new TextDecoder().decode(requests[0]?.init.body))).toEqual(expected);
+  });
+
+  it("rejects malformed command responses without reflecting upstream data", async () => {
+    const { adapter } = radarrWithResponses([
+      jsonResponse({ id: "private-command-id", outputPath: "/private/media" }, { status: 201 }),
+    ]);
+
+    await expect(
+      adapter.queueAcquisitionSearch({ mediaId: 42, service: "radarr" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "acquisition.search" });
+  });
+
   it("normalizes Radarr history and queue data without leaking paths or download identifiers", async () => {
     const { adapter, requests } = radarrWithResponses([
       jsonResponse({

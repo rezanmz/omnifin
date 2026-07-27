@@ -75,7 +75,12 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/v3/system/status",
     expectedVersion: probeFixtures.radarr.version,
     response: probeFixtures.radarr,
-    expectedCapabilities: ["connector.health", "connector.version", "acquisition.history"],
+    expectedCapabilities: [
+      "connector.health",
+      "connector.version",
+      "acquisition.history",
+      "acquisition.search",
+    ],
     create: (config) => new RadarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);
@@ -86,7 +91,12 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/v3/system/status",
     expectedVersion: probeFixtures.sonarr.version,
     response: probeFixtures.sonarr,
-    expectedCapabilities: ["connector.health", "connector.version", "acquisition.history"],
+    expectedCapabilities: [
+      "connector.health",
+      "connector.version",
+      "acquisition.history",
+      "acquisition.search",
+    ],
     create: (config) => new SonarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);

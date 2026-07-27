@@ -5,6 +5,7 @@ import type { DatabaseHandle } from "./db/client.js";
 
 const REQUIRED_TABLES = [
   "__drizzle_migrations",
+  "acquisition_search_operations",
   "audit_budget_entries",
   "audit_budget_scopes",
   "audit_events",
@@ -42,6 +43,11 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, user_id, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from media_request_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from acquisition_search_operations limit 0",
       )
       .all();
     database.sqlite

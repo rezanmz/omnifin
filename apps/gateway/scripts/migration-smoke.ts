@@ -11,6 +11,7 @@ const collisionDatabasePath = path.join(temporaryDirectory, "collision.db");
 const currentMigrationDirectory = path.resolve(import.meta.dirname, "../drizzle");
 const historicalMigrationDirectory = path.join(temporaryDirectory, "migrations-through-0002");
 const requiredTables = [
+  "acquisition_search_operations",
   "audit_budget_entries",
   "audit_budget_scopes",
   "audit_events",
@@ -30,6 +31,15 @@ const requiredTables = [
   "users",
 ] as const;
 const requiredColumns = {
+  acquisition_search_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "response_json",
+    "state",
+    "user_id",
+  ],
   audit_budget_entries: ["bucket_hash", "created_at", "generation", "scope", "slot"],
   audit_budget_scopes: [
     "clock_watermark_at",
@@ -100,6 +110,10 @@ const requiredColumns = {
   users: ["role_source"],
 } as const;
 const requiredIndexes = {
+  acquisition_search_operations: [
+    "acquisition_search_operations_state_created_idx",
+    "acquisition_search_operations_user_key_unique",
+  ],
   audit_budget_entries: ["audit_budget_entries_bucket_unique"],
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
@@ -261,7 +275,7 @@ const { currentMigrationTimestamp, historicalMigrationTimestamp } =
   writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0008.",
+  "Current migration journal must contain migration 0009.",
 );
 
 try {
@@ -486,8 +500,8 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 9, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0008.",
+        JSON.stringify({ count: 10, latestMigrationTimestamp: currentMigrationTimestamp }),
+      "Production migration did not advance the historical fixture exactly through migration 0009.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -652,7 +666,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0008, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0009, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

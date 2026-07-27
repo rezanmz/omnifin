@@ -1,12 +1,16 @@
 import {
   ACQUISITION_MAX_EVENTS,
   acquisitionProvenanceResponseSchema,
+  acquisitionSearchInputSchema,
+  acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
   type AcquisitionEvent,
   type AcquisitionEventKind,
   type AcquisitionEventState,
   type AcquisitionProvenanceResponse,
   type AcquisitionRelease,
+  type AcquisitionSearchInput,
+  type AcquisitionSearchResponse,
   type AcquisitionTargetInput,
 } from "@omnifin/contracts/acquisition";
 import type { ConnectorCapability, PartialFailure } from "@omnifin/contracts/connectors";
@@ -20,6 +24,7 @@ const safeIdentifierSchema = z.int().positive().max(MAX_UPSTREAM_IDENTIFIER);
 const safeLabelSchema = z.string().trim().min(1).max(160);
 const releaseTitleSchema = z.string().trim().min(1).max(500);
 const dateSchema = z.iso.datetime({ offset: true });
+const commandResponseSchema = z.object({ id: safeIdentifierSchema });
 
 const qualitySchema = z
   .object({
@@ -284,7 +289,52 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "connector.health",
     "connector.version",
     "acquisition.history",
+    "acquisition.search",
   ];
+
+  async queueAcquisitionSearch(
+    input: AcquisitionSearchInput,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionSearchResponse> {
+    const target = acquisitionSearchInputSchema.parse(input);
+    if (target.service !== this.service) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "The acquisition target does not match the connector service.",
+        operation: "acquisition.search",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const body =
+      target.service === "radarr"
+        ? { movieIds: [target.mediaId], name: "MoviesSearch" }
+        : target.seasonNumber === undefined
+          ? { name: "SeriesSearch", seriesId: target.mediaId }
+          : {
+              name: "SeasonSearch",
+              seasonNumber: target.seasonNumber,
+              seriesId: target.mediaId,
+            };
+    const command = await this.client.requestJson("api/v3/command", commandResponseSchema, {
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", "X-Api-Key": this.apiKey },
+      method: "POST",
+      operation: "acquisition.search",
+      ...(signal ? { signal } : {}),
+    });
+    return acquisitionSearchResponseSchema.parse({
+      acceptedAt: this.clock.now().toISOString(),
+      operationId: `${this.service}:command:${command.id}`,
+      state: "queued",
+      target: {
+        kind: this.service === "radarr" ? "movie" : "series",
+        mediaId: target.mediaId,
+        seasonNumber: target.seasonNumber ?? null,
+        service: this.service,
+      },
+    });
+  }
 
   async readAcquisitionProvenance(
     input: AcquisitionTargetInput,
