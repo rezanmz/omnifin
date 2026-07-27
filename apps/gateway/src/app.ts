@@ -50,6 +50,10 @@ import {
 } from "./discovery/search-routes.js";
 import { healthRoutes } from "./health.js";
 import { isSafeHttpError, SafeHttpError } from "./http-error.js";
+import {
+  indexerIntelligenceRoutes,
+  type IndexerIntelligenceRoutesOptions,
+} from "./indexers/intelligence-routes.js";
 import { createLoggerOptions } from "./logger.js";
 import {
   mediaRequestRoutes,
@@ -85,6 +89,7 @@ export interface CreateAppOptions {
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
+  indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -387,6 +392,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.acquisitionProvenanceDependencies === undefined
         ? {}
         : { dependencies: options.acquisitionProvenanceDependencies }),
+    });
+    await app.register(indexerIntelligenceRoutes, {
+      ...(options.indexerIntelligenceDependencies === undefined
+        ? {}
+        : { dependencies: options.indexerIntelligenceDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

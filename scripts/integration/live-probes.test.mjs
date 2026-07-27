@@ -81,6 +81,100 @@ test("does not reject ambiguous short credential substrings", () => {
   );
 });
 
+test("Prowlarr live probe verifies every read surface used by Indexer Intelligence", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input);
+    requests.push({ headers: new Headers(init?.headers), url });
+    const bodies = {
+      "/api/v1/applications": [],
+      "/api/v1/history": { records: [], totalRecords: 0 },
+      "/api/v1/indexer": [],
+      "/api/v1/indexerstats": { indexers: [] },
+      "/api/v1/indexerstatus": [],
+      "/api/v1/system/status": { version: "2.5.2.5491" },
+    };
+    return new Response(JSON.stringify(bodies[url.pathname]), {
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const result = await runLiveProbe("prowlarr", {
+      OMNIFIN_PROWLARR_API_KEY: "protected-prowlarr-key",
+      OMNIFIN_PROWLARR_URL: "https://prowlarr.example.test",
+    });
+
+    assert.deepEqual(result, {
+      service: "prowlarr",
+      profile: "live-upstream",
+      status: "passed",
+      version: "2.5.2.5491",
+      checks: [
+        "authentication",
+        "version_discovery",
+        "indexer_inventory",
+        "statistics",
+        "failure_status",
+        "application_sync",
+        "failure_history",
+      ],
+    });
+    assert.deepEqual(requests.map(({ url }) => url.pathname).sort(), [
+      "/api/v1/applications",
+      "/api/v1/history",
+      "/api/v1/indexer",
+      "/api/v1/indexerstats",
+      "/api/v1/indexerstatus",
+      "/api/v1/system/status",
+    ]);
+    assert.equal(
+      requests.every(({ headers }) => headers.get("x-api-key") === "protected-prowlarr-key"),
+      true,
+    );
+    const history = requests.find(({ url }) => url.pathname === "/api/v1/history")?.url;
+    assert.equal(history?.searchParams.get("pageSize"), "1");
+    assert.equal(history?.searchParams.get("successful"), "false");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Prowlarr live probe rejects shifted intelligence response shapes", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const path = new URL(input).pathname;
+    const body = path.endsWith("/system/status")
+      ? { version: "2.5.2.5491" }
+      : path.endsWith("/indexerstats")
+        ? { indexers: "shifted" }
+        : path.endsWith("/history")
+          ? { records: [], totalRecords: 0 }
+          : [];
+    return new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    assert.deepEqual(
+      await runLiveProbe("prowlarr", {
+        OMNIFIN_PROWLARR_API_KEY: "protected-prowlarr-key",
+        OMNIFIN_PROWLARR_URL: "https://prowlarr.example.test",
+      }),
+      {
+        service: "prowlarr",
+        profile: "live-upstream",
+        status: "failed",
+        errorCategory: "response_invalid",
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 const credentialReflectionCases = [
   {
     service: "seerr",

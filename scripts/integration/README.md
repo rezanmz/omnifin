@@ -7,8 +7,9 @@ The integration runner has two deliberately distinct profiles:
   It does not claim that an upstream service was started.
 - `live` probes explicitly configured upstream services. The current live gate
   covers authentication where required, health/version discovery, response
-  shape validation, and OIDC metadata. Safe mutation coverage will be added per
-  connector as isolated service fixtures become available.
+  shape validation, and OIDC metadata. Prowlarr additionally verifies the read
+  surfaces used by Indexer Intelligence. Safe mutations run only in disposable
+  fixtures until isolated live service environments are provisioned.
 
 Run one service or the full matrix:
 

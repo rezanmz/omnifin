@@ -74,9 +74,10 @@ pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-chan
 the public compatibility baseline remains pending until protected live evidence records exact
 versions and dates. Permission checks cover every implemented administrative and self-service
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
-identity-delegated media requests, Radarr/Sonarr acquisition provenance, and exact-target automatic
-search recovery are available as pre-release development surfaces. Later Phase 3 slices add request review, manual recovery
-actions, and live events; Phase 4 adds media proxying and playback.
+identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
+search recovery, and Prowlarr Indexer Intelligence are available as pre-release development
+surfaces. Later Phase 3 slices add request review, manual recovery actions, and live events;
+Phase 4 adds media proxying and playback.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -130,6 +131,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   normalized mutations, and audits
 - [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
   Sonarr title history, partial failure, and operator access
+- [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
+  telemetry, application sync, failures, and safe tests
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy

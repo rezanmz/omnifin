@@ -27,7 +27,7 @@
     "test": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run test --concurrency=1",
     "test:a11y": "pnpm --filter @omnifin/web test:a11y",
     "test:authentik": "node scripts/integration/authentik/run.mjs",
-    "test:contracts": "pnpm --filter @omnifin/contracts test && pnpm --filter @omnifin/connectors test",
+    "test:contracts": "pnpm --filter @omnifin/contracts build && pnpm --filter @omnifin/contracts test && pnpm --filter @omnifin/connectors test",
     "test:e2e": "pnpm --filter @omnifin/web test:e2e",
     "test:oidc-rewrite": "pnpm --filter @omnifin/web test:oidc-rewrite",
     "test:storybook": "pnpm --filter @omnifin/web test:storybook",

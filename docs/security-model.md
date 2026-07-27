@@ -141,6 +141,23 @@ application boundary; operators must still patch and isolate the host.
 - The route is read-only, abort-aware, rate-limited, and explicitly non-cacheable. It offers no
   upstream retry, search, grab, blocklist, or deletion mutation in this slice.
 
+## Indexer Intelligence controls
+
+- Reads and tests require `acquisition.manage` at both the session route and service boundary.
+  Unauthorized callers are rejected before connector selection or credential decryption.
+- Exactly one enabled, healthy, capability-verified Prowlarr connector is required. Reads require
+  `indexer.statistics`; tests require `indexer.test`. Ambiguous, malformed, or mismatched
+  connector state fails closed.
+- Inventory, statistics, status, applications, and failure history are independently bounded and
+  schema-validated. Normalized responses exclude raw queries, hosts, sources, paths, provider
+  fields, credentials, and private upstream messages.
+- A safe test accepts only one bounded positive indexer identifier. The gateway retrieves the
+  secret-bearing provider resource, verifies its identifier, bounds it, and sends it directly to
+  Prowlarr; the provider body never enters or leaves the browser boundary.
+- Tests require an active identity, same-origin session-bound CSRF validation, abort propagation,
+  and a three-per-minute route limit. Sanitized success and failure audits contain no provider
+  payload, credential, address, or private error.
+
 ## Browser protections
 
 The web and gateway emit Content Security Policy, HSTS for secure requests,

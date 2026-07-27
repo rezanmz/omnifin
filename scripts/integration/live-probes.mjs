@@ -204,6 +204,65 @@ async function probeServarr(service, environment, apiVersion) {
   };
 }
 
+function requireArray(value) {
+  if (!Array.isArray(value)) throw new ProbeError("response_invalid");
+  return value;
+}
+
+async function probeProwlarr(environment) {
+  const config = requiredConfiguration(environment, [
+    "OMNIFIN_PROWLARR_URL",
+    "OMNIFIN_PROWLARR_API_KEY",
+  ]);
+  if (!config) return null;
+
+  const headers = { "X-Api-Key": config.OMNIFIN_PROWLARR_API_KEY };
+  const baseUrl = config.OMNIFIN_PROWLARR_URL;
+  const { value: status } = await requestJson(
+    endpoint(baseUrl, "api/v1/system/status", environment),
+    { headers },
+  );
+  const version = versionFrom(status, ["version"], environment);
+  const historyUrl = endpoint(baseUrl, "api/v1/history", environment);
+  historyUrl.search = new URLSearchParams({
+    page: "1",
+    pageSize: "1",
+    sortDirection: "descending",
+    sortKey: "date",
+    successful: "false",
+  }).toString();
+
+  const [indexers, statistics, indexerStatus, applications, history] = await Promise.all([
+    requestJson(endpoint(baseUrl, "api/v1/indexer", environment), { headers }),
+    requestJson(endpoint(baseUrl, "api/v1/indexerstats", environment), { headers }),
+    requestJson(endpoint(baseUrl, "api/v1/indexerstatus", environment), { headers }),
+    requestJson(endpoint(baseUrl, "api/v1/applications", environment), { headers }),
+    requestJson(historyUrl, { headers }),
+  ]);
+
+  requireArray(indexers.value);
+  requireArray(statistics.value?.indexers);
+  requireArray(indexerStatus.value);
+  requireArray(applications.value);
+  requireArray(history.value?.records);
+  if (!Number.isInteger(history.value?.totalRecords) || history.value.totalRecords < 0) {
+    throw new ProbeError("response_invalid");
+  }
+
+  return {
+    version,
+    checks: [
+      "authentication",
+      "version_discovery",
+      "indexer_inventory",
+      "statistics",
+      "failure_status",
+      "application_sync",
+      "failure_history",
+    ],
+  };
+}
+
 async function probeBazarr(environment) {
   const config = requiredConfiguration(environment, [
     "OMNIFIN_BAZARR_URL",
@@ -335,7 +394,7 @@ const probes = {
   seerr: probeSeerr,
   radarr: (environment) => probeServarr("radarr", environment, "v3"),
   sonarr: (environment) => probeServarr("sonarr", environment, "v3"),
-  prowlarr: (environment) => probeServarr("prowlarr", environment, "v1"),
+  prowlarr: probeProwlarr,
   bazarr: probeBazarr,
   qbittorrent: probeQBittorrent,
   sabnzbd: probeSabnzbd,

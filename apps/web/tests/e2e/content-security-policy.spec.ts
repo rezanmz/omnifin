@@ -5,6 +5,7 @@ for (const route of [
   "/login",
   "/settings",
   "/settings/identity-providers?test-view=ready",
+  "/operations/indexers?test-view=ready",
   "/does-not-exist",
 ] as const) {
   test(`${route} enforces its response nonce and trusted dynamic scripts`, async ({ page }) => {

@@ -64,6 +64,17 @@ test("fixture reports claim only authentication behavior covered by their tests"
     "version_discovery",
   ]);
   assert.deepEqual(fixtureChecksFor("sabnzbd"), ["health_normalization", "version_discovery"]);
+  assert.deepEqual(fixtureChecksFor("prowlarr"), [
+    "application_sync",
+    "authentication_header",
+    "failure_history",
+    "health_normalization",
+    "indexer_inventory",
+    "safe_test",
+    "secret_isolation",
+    "statistics",
+    "version_discovery",
+  ]);
   assert.equal(fixtureChecksFor("oidc"), null);
 });
 

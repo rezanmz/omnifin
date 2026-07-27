@@ -62,7 +62,7 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 - Seerr and metadata discovery, global search, granular requests, and approvals
 - Radarr and Sonarr calendar, queue, monitoring, searches, and manual releases
-- Prowlarr Indexer Intelligence
+- Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
 - qBittorrent and SABnzbd live queues
 - Title-level Acquisition Provenance and exact-target automatic-search recovery
   (implemented); manual release recovery remains in development

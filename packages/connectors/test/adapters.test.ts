@@ -107,6 +107,12 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/v1/system/status",
     expectedVersion: probeFixtures.prowlarr.version,
     response: probeFixtures.prowlarr,
+    expectedCapabilities: [
+      "connector.health",
+      "connector.version",
+      "indexer.statistics",
+      "indexer.test",
+    ],
     create: (config) => new ProwlarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);

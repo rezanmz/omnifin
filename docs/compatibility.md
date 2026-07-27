@@ -17,7 +17,7 @@ combination is described as supported.
 | Radarr                            | Movie monitoring, calendar, search, releases, queue, history   | History/queue fixtures ready; live baseline pending  |
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | History/queue fixtures ready; live baseline pending  |
 | Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                         |
-| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Target; verification pending                         |
+| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Intelligence fixtures ready; live baseline pending   |
 | qBittorrent                       | Queue, rates, progress, pause/resume, safe removal             | Target; verification pending                         |
 | SABnzbd                           | Queue, history, rates, progress, pause/resume, safe removal    | Target; verification pending                         |
 
