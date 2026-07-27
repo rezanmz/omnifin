@@ -201,6 +201,36 @@ test("guided identity provider connection visual baseline", async ({ page }, tes
   await expect(page).toHaveScreenshot("identity-providers-empty.png", { fullPage: true });
 });
 
+test("service connection control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Service controls cover representative desktop and phone geometry",
+  );
+  await page.goto("/settings/connectors?test-view=ready");
+  await page.getByRole("heading", { name: "Living Room Jellyfin" }).waitFor();
+  await expect(page).toHaveScreenshot("service-connections.png", { fullPage: true });
+});
+
+test("service connection onboarding visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Service onboarding covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/connectors?test-view=empty");
+  await page.getByRole("heading", { name: "Connect a service." }).waitFor();
+  await expect(page).toHaveScreenshot("service-connections-empty.png", { fullPage: true });
+});
+
+test("degraded service connection visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded service health covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/connectors?test-view=degraded");
+  await page.getByRole("heading", { name: "Radarr" }).waitFor();
+  await expect(page).toHaveScreenshot("service-connections-degraded.png", { fullPage: true });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

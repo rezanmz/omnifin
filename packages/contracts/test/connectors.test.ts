@@ -159,6 +159,18 @@ describe("connector contracts", () => {
     expect(
       connectorCreateRequestSchema.safeParse({
         ...base,
+        baseUrl: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        baseUrl: "not a URL",
+      }).success,
+    ).toBe(false);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
         credentials: { kind: "username_password", username: "admin", password: "private" },
       }).success,
     ).toBe(false);

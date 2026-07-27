@@ -1,18 +1,10 @@
-import "./zod-browser";
-
-import { sessionResponseSchema, type SessionPrincipal } from "@omnifin/contracts/auth";
-import {
-  connectorCreateRequestSchema,
-  connectorDeleteResponseSchema,
-  connectorListResponseSchema,
-  connectorMutationResponseSchema,
-  connectorUpdateRequestSchema,
-  type ConnectorAdmin,
-  type ConnectorCreateRequest,
-  type ConnectorDeleteResponse,
-  type ConnectorUpdateRequest,
+import type { SessionPrincipal } from "@omnifin/contracts/auth";
+import type {
+  ConnectorAdmin,
+  ConnectorCreateRequest,
+  ConnectorDeleteResponse,
+  ConnectorUpdateRequest,
 } from "@omnifin/contracts/connectors";
-import { apiErrorSchema } from "@omnifin/contracts/errors";
 
 const CSRF_HEADER = "x-omnifin-csrf";
 const PAGE_LIMIT = 50;
@@ -20,6 +12,23 @@ const MAX_CONNECTOR_PAGES = 20;
 
 interface ResponseSchema<T> {
   safeParse(input: unknown): { data: T; success: true } | { success: false };
+}
+
+async function loadContractSchemas() {
+  await import("./zod-browser");
+  const [auth, connectors, errors] = await Promise.all([
+    import("@omnifin/contracts/auth"),
+    import("@omnifin/contracts/connectors"),
+    import("@omnifin/contracts/errors"),
+  ]);
+  return { auth, connectors, errors };
+}
+
+let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
+
+function contractSchemas() {
+  contractSchemasPromise ??= loadContractSchemas();
+  return contractSchemasPromise;
 }
 
 export interface ConnectorAdminSnapshot {
@@ -68,7 +77,8 @@ async function responseError(response: Response): Promise<ConnectorAdminClientEr
       "Your administrative session changed. Sign in again before continuing.",
     );
   }
-  const parsed = apiErrorSchema.safeParse(await safeJson(response));
+  const { errors } = await contractSchemas();
+  const parsed = errors.apiErrorSchema.safeParse(await safeJson(response));
   if (parsed.success) {
     return new ConnectorAdminClientError(
       "rejected",
@@ -134,13 +144,14 @@ async function mutationRequest<T>(
 
 async function listEveryConnector(): Promise<readonly ConnectorAdmin[]> {
   const connectors: ConnectorAdmin[] = [];
+  const schemas = (await contractSchemas()).connectors;
   let cursor: string | null = null;
 
   for (let page = 0; page < MAX_CONNECTOR_PAGES; page += 1) {
     const parameters = new URLSearchParams({ limit: String(PAGE_LIMIT) });
     if (cursor !== null) parameters.set("cursor", cursor);
     const response = await fetchSameOrigin(`/api/admin/connectors?${parameters.toString()}`);
-    const result = await parsedResponse(response, connectorListResponseSchema);
+    const result = await parsedResponse(response, schemas.connectorListResponseSchema);
     connectors.push(...result.items);
     if (result.nextCursor === null) return connectors;
     cursor = result.nextCursor;
@@ -159,7 +170,8 @@ export async function loadConnectorAdministration(): Promise<ConnectorAdminLoadO
     if (!sessionResponse.ok) {
       return sessionResponse.status === 401 ? { status: "signed_out" } : { status: "unavailable" };
     }
-    const session = sessionResponseSchema.safeParse(await safeJson(sessionResponse));
+    const schemas = await contractSchemas();
+    const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(sessionResponse));
     if (!session.success) return { status: "unavailable" };
     if (session.data.principal === null || session.data.csrfToken === null) {
       return { status: "signed_out" };
@@ -214,53 +226,58 @@ export interface ConnectorAdminClient {
 
 export const connectorAdminClient: ConnectorAdminClient = {
   async create(input, csrfToken) {
-    const body = connectorCreateRequestSchema.parse(input);
+    const schemas = (await contractSchemas()).connectors;
+    const body = schemas.connectorCreateRequestSchema.parse(input);
     const result = await mutationRequest(
       "/api/admin/connectors",
       csrfToken,
       "POST",
-      connectorMutationResponseSchema,
+      schemas.connectorMutationResponseSchema,
       body,
     );
     return result.connector;
   },
 
-  delete(connectorId, revision, csrfToken) {
+  async delete(connectorId, revision, csrfToken) {
+    const schemas = (await contractSchemas()).connectors;
     const parameters = new URLSearchParams({ revision });
     return mutationRequest(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}?${parameters.toString()}`,
       csrfToken,
       "DELETE",
-      connectorDeleteResponseSchema,
+      schemas.connectorDeleteResponseSchema,
     );
   },
 
   async get(connectorId) {
+    const schemas = (await contractSchemas()).connectors;
     const response = await fetchSameOrigin(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}`,
     );
-    return (await parsedResponse(response, connectorMutationResponseSchema)).connector;
+    return (await parsedResponse(response, schemas.connectorMutationResponseSchema)).connector;
   },
 
   load: loadConnectorAdministration,
 
   async probe(connectorId, csrfToken) {
+    const schemas = (await contractSchemas()).connectors;
     const result = await mutationRequest(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}/probe`,
       csrfToken,
       "POST",
-      connectorMutationResponseSchema,
+      schemas.connectorMutationResponseSchema,
     );
     return result.connector;
   },
 
   async update(connectorId, input, csrfToken) {
-    const body = connectorUpdateRequestSchema.parse(input);
+    const schemas = (await contractSchemas()).connectors;
+    const body = schemas.connectorUpdateRequestSchema.parse(input);
     const result = await mutationRequest(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}`,
       csrfToken,
       "PATCH",
-      connectorMutationResponseSchema,
+      schemas.connectorMutationResponseSchema,
       body,
     );
     return result.connector;

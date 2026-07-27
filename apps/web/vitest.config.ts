@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   // Browser-mode tests need this CommonJS package pre-bundled so its named
   // accessibility exports are available as native browser modules.
-  optimizeDeps: { include: ["aria-query"] },
+  optimizeDeps: { include: ["aria-query", "next/dynamic"] },
   test: {
     coverage: {
       exclude: ["app/**", ".storybook/**", "**/*.stories.tsx"],

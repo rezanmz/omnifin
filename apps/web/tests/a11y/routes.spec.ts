@@ -28,6 +28,26 @@ const routes = [
     path: "/settings/identity-providers?test-view=forbidden",
   },
   {
+    label: "service connection control room",
+    path: "/settings/connectors?test-view=ready",
+  },
+  {
+    label: "service connection onboarding",
+    path: "/settings/connectors?test-view=empty",
+  },
+  {
+    label: "degraded service connection",
+    path: "/settings/connectors?test-view=degraded",
+  },
+  {
+    label: "Jellyfin recovery connection boundary",
+    path: "/settings/connectors?test-view=recovery",
+  },
+  {
+    label: "restricted service connection administration",
+    path: "/settings/connectors?test-view=forbidden",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
