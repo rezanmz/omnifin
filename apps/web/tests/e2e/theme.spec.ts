@@ -35,7 +35,10 @@ test("explicit appearance persists and overrides the operating system", async ({
   await expect(root).toHaveAttribute("data-resolved-theme", "light");
 });
 
-test("dashboard profile controls expose appearance and account access", async ({ page }) => {
+test("dashboard profile controls expose appearance and account access", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name === "mobile", "Mobile appearance controls live in settings");
   await page.goto("/");
   const trigger = page.getByRole("button", { name: "Open profile menu" });
   await trigger.click();

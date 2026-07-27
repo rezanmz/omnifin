@@ -92,6 +92,27 @@ test("open discovery search has no automatically detectable accessibility violat
   expect(results.violations).toEqual([]);
 });
 
+test("open profile appearance controls have no automatically detectable accessibility violations", async ({
+  context,
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Profile controls use desktop Chromium");
+  await context.addCookies([
+    {
+      name: "omnifin-theme",
+      sameSite: "Lax",
+      url: "http://127.0.0.1:3000",
+      value: "light",
+    },
+  ]);
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open profile menu" }).click();
+  await expect(page.getByRole("dialog", { name: "Profile and appearance" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },

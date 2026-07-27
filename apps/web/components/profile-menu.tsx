@@ -59,7 +59,7 @@ export function ProfileMenu() {
           id={panelId}
           role="dialog"
         >
-          <header className="profile-popover__header">
+          <div className="profile-popover__header">
             <div>
               <p className="section-kicker">Personal controls</p>
               <h2>Profile &amp; appearance</h2>
@@ -75,7 +75,7 @@ export function ProfileMenu() {
             >
               <X aria-hidden="true" size={17} />
             </button>
-          </header>
+          </div>
           <AppearanceSelector compact />
           <Link className="profile-popover__account" href="/settings">
             Account &amp; access
