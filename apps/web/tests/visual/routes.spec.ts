@@ -3,6 +3,7 @@ import { mockDiscoverySearch } from "../fixtures/discovery";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
+const lightVisualProjects = new Set(["chromium", "mobile"]);
 
 test.use({ contextOptions: { reducedMotion: "reduce" } });
 
@@ -82,7 +83,10 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
 });
 
 test("light dashboard visual baseline", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light theme covers representative desktop and phone geometry",
+  );
   await useLightTheme(page);
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -130,6 +134,17 @@ test("login visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("login.png", { fullPage: true });
 });
 
+test("light login visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light theme covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/login");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("login-light.png", { fullPage: true });
+});
+
 test("Jellyfin credential login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -138,6 +153,17 @@ test("Jellyfin credential login visual baseline", async ({ page }, testInfo) => 
   await page.goto(routeForProject("/login/jellyfin", testInfo.project.name));
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("jellyfin-login.png", { fullPage: true });
+});
+
+test("light Jellyfin credential login visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light theme covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/login/jellyfin");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("jellyfin-login-light.png", { fullPage: true });
 });
 
 test("Jellyfin credential denial visual baseline", async ({ page }, testInfo) => {
@@ -208,7 +234,10 @@ test("account security visual baseline", async ({ page }, testInfo) => {
 });
 
 test("light account security visual baseline", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light theme covers representative desktop and phone geometry",
+  );
   await useLightTheme(page);
   await mockAccountSecurity(page);
   await page.goto("/settings");
@@ -242,6 +271,15 @@ test("identity provider control room visual baseline", async ({ page }, testInfo
   await expect(page).toHaveScreenshot("identity-providers.png", { fullPage: true });
 });
 
+test("light identity provider control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Dense light controls use desktop Chromium");
+  await useLightTheme(page);
+  await page.goto("/settings/identity-providers?test-view=ready");
+  await page.getByRole("heading", { name: "Authentik" }).waitFor();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("identity-providers-light.png", { fullPage: true });
+});
+
 test("guided identity provider connection visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),
@@ -260,6 +298,15 @@ test("service connection control room visual baseline", async ({ page }, testInf
   await page.goto("/settings/connectors?test-view=ready");
   await page.getByRole("heading", { name: "Living Room Jellyfin" }).waitFor();
   await expect(page).toHaveScreenshot("service-connections.png", { fullPage: true });
+});
+
+test("light service connection control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Dense light controls use desktop Chromium");
+  await useLightTheme(page);
+  await page.goto("/settings/connectors?test-view=ready");
+  await page.getByRole("heading", { name: "Living Room Jellyfin" }).waitFor();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("service-connections-light.png", { fullPage: true });
 });
 
 test("service connection onboarding visual baseline", async ({ page }, testInfo) => {
