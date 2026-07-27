@@ -165,7 +165,11 @@ test("browser failure diagnostics are restricted to allowlisted stage identifier
   );
   assert.match(browserSource, /authentik_browser_checks_failed/u);
   assert.match(browserSource, /INTERACTION_RETRY_ATTEMPTS = 6/u);
+  assert.match(browserSource, /INTERACTION_WAIT_TIMEOUT_MS = 30_000/u);
   assert.match(browserSource, /retryInteraction/u);
+  assert.match(browserSource, /waitForStageTransition/u);
+  assert.match(browserSource, /stage\.isConnected/u);
+  assert.match(browserSource, /unrecognizedStage/u);
   assert.match(browserSource, /locator\.fill\(value/u);
   assert.match(browserSource, /ak-stage-identification input\[name="uidField"\]:visible/u);
   assert.match(browserSource, /ak-stage-password input\[name="password"\]:visible/u);

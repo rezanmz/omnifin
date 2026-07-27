@@ -14,6 +14,7 @@ const { chromium } = requireFromWeb("@playwright/test");
 const providerSlug = "authentik";
 const expectedProviderId = `oidc-${providerSlug}`;
 const INTERACTION_RETRY_ATTEMPTS = 6;
+const INTERACTION_WAIT_TIMEOUT_MS = 30_000;
 
 class BrowserCheckError extends Error {
   constructor() {
@@ -95,7 +96,7 @@ async function visible(locator) {
 }
 
 async function waitForInteraction(page, webOrigin, locators) {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + INTERACTION_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const current = new URL(page.url());
     if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return "callback";
@@ -105,6 +106,33 @@ async function waitForInteraction(page, webOrigin, locators) {
     await page.waitForTimeout(100);
   }
   return "unrecognized";
+}
+
+async function waitForStageTransition(page, activeStage, webOrigin) {
+  const deadline = Date.now() + INTERACTION_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const current = new URL(page.url());
+    if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return "callback";
+    try {
+      if (!(await activeStage.evaluate((stage) => stage.isConnected))) return "transitioned";
+    } catch {
+      return "transitioned";
+    }
+    await page.waitForTimeout(100);
+  }
+  return "timeout";
+}
+
+function unrecognizedStage(url, webOrigin, attempt) {
+  const current = new URL(url);
+  if (current.origin === webOrigin) return `${attempt}_omnifin_unexpected`;
+  if (current.pathname.startsWith("/if/flow/")) {
+    return `${attempt}_authentik_flow_unrecognized`;
+  }
+  if (current.pathname.startsWith("/application/o/authorize/")) {
+    return `${attempt}_authentik_authorize_unrecognized`;
+  }
+  return `${attempt}_unrecognized`;
 }
 
 async function retryInteraction(page, action) {
@@ -182,9 +210,17 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     ]);
     if (readiness === "callback") return;
     if (readiness === "unrecognized") {
-      currentStage = `${attempt}_unrecognized`;
+      currentStage = unrecognizedStage(page.url(), webOrigin, attempt);
       throw new BrowserCheckError();
     }
+
+    const activeStage = await page
+      .locator(
+        "ak-stage-identification:visible, ak-stage-password:visible, ak-stage-consent:visible",
+      )
+      .first()
+      .elementHandle();
+    assert(activeStage);
 
     let completedField = false;
     if (await visible(usernameInput)) {
@@ -212,8 +248,9 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       await submitStableForm(page, page.locator("ak-stage-consent form").first());
     }
     currentStage = `${attempt}_transition`;
-    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    await page.waitForTimeout(250);
+    const transition = await waitForStageTransition(page, activeStage, webOrigin);
+    if (transition === "callback") return;
+    if (transition === "timeout") throw new BrowserCheckError();
   }
   currentStage = `${attempt}_callback`;
   throw new BrowserCheckError();
