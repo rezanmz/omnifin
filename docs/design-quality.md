@@ -35,10 +35,13 @@ Omnifin uses three deliberate layers:
    use a thicker liquid material so text remains legible over changing content.
 
 Glass surfaces use adaptive tint, saturation, an inner highlight, a defined edge, and
-a restrained cast shadow. Concentric geometry makes adjacent radii feel cut from one
-shape. A glass surface is not nested inside another glass surface; content inside an
-overlay returns to standard fills. Accent tint is reserved for selection, status, or
-the primary action.
+a restrained cast shadow. The optical edge is directional: a bright upper rim and
+internal caustic imply incoming light, while the opposite edge carries a darker rim
+and cast shadow. Backdrop saturation preserves colour passing through the material
+without sacrificing local text contrast. Concentric geometry makes adjacent radii
+feel cut from one shape. A glass surface is not nested inside another glass surface;
+content inside an overlay returns to standard fills. Accent tint is reserved for
+selection, status, or the primary action.
 
 Motion may make a liquid control scale, blur, or morph to explain where an overlay
 came from. It may not distort content, delay input, or continuously shimmer. Where
