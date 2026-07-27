@@ -335,7 +335,7 @@ async function revokeAuthentikBrowserSessions(request, issuerOrigin, token, sess
 
 async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk) {
   const response = await request.get(
-    `${issuerOrigin}/api/v3/providers/oauth2/access_tokens/?page_size=100&provider=${encodeURIComponent(providerPk)}`,
+    `${issuerOrigin}/api/v3/oauth2/access_tokens/?page_size=100&provider=${encodeURIComponent(providerPk)}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
   const body = await json(response, 200, "backchannel_access_token_api");
