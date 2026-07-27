@@ -19,7 +19,7 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
 
 test("global search discloses live discovery with keyboard and touch-safe controls", async ({
   page,
-}, testInfo) => {
+}) => {
   await mockDiscoverySearch(page);
   await page.goto("/");
 
