@@ -2,6 +2,11 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
   acquisitionProvenanceResponseJsonSchema,
   acquisitionProvenanceResponseSchema,
+  acquisitionSearchIdempotencyKeySchema,
+  acquisitionSearchInputJsonSchema,
+  acquisitionSearchInputSchema,
+  acquisitionSearchResponseJsonSchema,
+  acquisitionSearchResponseSchema,
   acquisitionTargetInputJsonSchema,
   acquisitionTargetInputSchema,
 } from "@omnifin/contracts/acquisition";
@@ -32,6 +37,79 @@ function configurationError(error: AcquisitionProvenanceError) {
         cause: error,
         code: "acquisition_configuration_unavailable",
         message: "Acquisition history configuration is temporarily unavailable.",
+        statusCode: 503,
+      });
+    case "configuration_unavailable":
+    case "idempotency_conflict":
+    case "idempotency_in_progress":
+    case "identity_required":
+    case "rate_limited":
+    case "response_invalid":
+    case "temporarily_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_configuration_unavailable",
+        message: "Acquisition history configuration is temporarily unavailable.",
+        statusCode: 503,
+      });
+  }
+}
+
+function searchError(error: AcquisitionProvenanceError, reply: FastifyReply) {
+  switch (error.reason) {
+    case "idempotency_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "idempotency_key_conflict",
+        message: "The idempotency key was already used for a different acquisition search.",
+        statusCode: 409,
+      });
+    case "idempotency_in_progress":
+      reply.header("retry-after", "2");
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_outcome_pending",
+        message: "The outcome of this acquisition search is still being determined.",
+        statusCode: 409,
+      });
+    case "identity_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_identity_required",
+        message: "An active operator account is required to start an acquisition search.",
+        statusCode: 403,
+      });
+    case "rate_limited":
+      reply.header("retry-after", "30");
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_rate_limited",
+        message: "The acquisition service is cooling down before another search.",
+        statusCode: 429,
+      });
+    case "response_invalid":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_response_invalid",
+        message: "The acquisition service returned an unexpected command response.",
+        statusCode: 502,
+      });
+    case "connector_unconfigured":
+    case "connector_ambiguous":
+    case "connector_integrity_failure":
+    case "configuration_unavailable":
+    case "storage_failure":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_configuration_unavailable",
+        message: "Acquisition search is temporarily unavailable due to configuration.",
+        statusCode: 503,
+      });
+    case "temporarily_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_temporarily_unavailable",
+        message: "The acquisition search could not be safely queued.",
         statusCode: 503,
       });
   }
@@ -134,6 +212,54 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw configurationError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/acquisitions/searches",
+    {
+      bodyLimit: 2 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 6, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: acquisitionSearchInputJsonSchema,
+        response: {
+          200: acquisitionSearchResponseJsonSchema,
+          201: acquisitionSearchResponseJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "acquisition.manage",
+      );
+      const input = acquisitionSearchInputSchema.parse(request.body);
+      const idempotencyKey = acquisitionSearchIdempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const result = await provenance.queueSearch(
+          input,
+          idempotencyKey,
+          { ipAddress: request.ip, principal, requestId: request.id },
+          controller.signal,
+        );
+        reply.header("idempotency-replayed", String(result.replayed));
+        reply.status(result.replayed ? 200 : 201);
+        return acquisitionSearchResponseSchema.parse(result.search);
+      } catch (error) {
+        if (error instanceof AcquisitionProvenanceError) throw searchError(error, reply);
         throw error;
       } finally {
         request.raw.off("aborted", abort);

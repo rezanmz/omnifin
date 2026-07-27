@@ -1,7 +1,8 @@
 # Acquisition provenance
 
-Omnifin exposes a normalized, read-only title trace across Radarr and Sonarr history
-and queue data. It is a pre-release development surface; the
+Omnifin exposes a normalized title trace across Radarr and Sonarr history and queue
+data, plus a narrowly scoped automatic-search recovery action. It is a pre-release
+development surface; the
 [compatibility matrix](compatibility.md) remains authoritative for supported upstream
 versions.
 
@@ -20,7 +21,8 @@ The query names exactly one service and upstream title identifier:
 
 Exactly one enabled matching connector must exist. Its most recent validated health
 snapshot must identify the same connector and service, report healthy state, and
-advertise `acquisition.history`. Missing, ambiguous, stale, malformed, or
+advertise the capability required by the operation: `acquisition.history` for the
+trace and `acquisition.search` for recovery. Missing, ambiguous, stale, malformed, or
 capability-incompatible configuration fails closed. The API key and optional trusted
 connector CA are decrypted only inside the gateway for the duration of the request.
 
@@ -34,8 +36,9 @@ newest first.
 The public contract represents searches, grabs, queue state, active downloads,
 stalls, failures, imports, upgrades, and ignored downloads. The current connector
 slice emits the upstream-backed grab, queue, download, stall, failure, import,
-upgrade, and ignored states; search lifecycle events are reserved for the contextual
-recovery slice.
+upgrade, and ignored states. A successful recovery returns a normalized queued-search
+receipt; the drawer presents it immediately while later upstream history and queue
+reads remain authoritative.
 
 Each event may contain a bounded release title, quality, protocol, indexer, download
 client, size, season, and episode numbers. It never contains API keys, download hashes,
@@ -55,27 +58,51 @@ The route uses `Cache-Control: no-store`, `Pragma: no-cache`, and `Vary: Cookie`
 Rate limits, invalid responses, configuration failures, and temporary availability
 failures map to stable public error codes without forwarding upstream messages.
 
+## Contextual recovery
+
+`POST /v1/acquisitions/searches` accepts the same exact target contract as the read
+route. It supports only three current upstream commands: Radarr `MoviesSearch`, Sonarr
+`SeriesSearch`, and Sonarr `SeasonSearch`. A request cannot nominate a path, release,
+profile, tag, download, blocklist entry, monitoring change, or arbitrary command.
+
+The route requires an active user with `acquisition.manage`, same-origin validation,
+a session-bound CSRF token, and a bounded `Idempotency-Key`. Recovery and pending-link
+sessions cannot use it. The gateway reserves a per-user hash of the idempotency key
+and a canonical target fingerprint before any upstream call. Replays return the stored
+normalized receipt, different input under the same key is rejected, and an unresolved
+pending operation fails closed rather than issuing a second command.
+
+Search success or failure and its sanitized audit event commit together. Audit data
+contains the service, media identifier, optional season, normalized outcome, and a
+privacy-preserving IP hash. It never contains the raw key, API credential, upstream
+body, storage path, username, or private error. Because a connection can fail after an
+upstream server receives a command, the interface preserves the current key and tells
+the operator to verify history before explicitly creating a fresh attempt.
+
 ## Signal-history drawer
 
 Selecting an expanded operation opens a lazy-loaded native modal drawer. The
 interface shows summary counts, event chronology, release context, verified degraded
-data, refresh provenance, and a persistent read-only label. It deliberately offers no
-mutation from this first slice.
+data, and a persistent verification label. Its contextual-recovery card uses a
+two-step exact-target confirmation. The only mutation offered is the bounded automatic
+search described above; destructive recovery controls remain absent.
 
 The Liquid Glass surface retains focus containment, Escape dismissal, background
 inertness, keyboard-scrollable history, at least 44-pixel controls, reduced motion,
 and adaptive light, dark, system, phone, tablet, desktop, and 10-foot presentation.
-Storybook covers complete, degraded, empty, loading, offline, and permission-denied
-states. Component, browser, accessibility, and deterministic visual tests cover the
-assembled interaction.
+Storybook covers complete, degraded, empty, loading, offline, permission-denied,
+recovery-confirmation, and queued-success states. Component, browser, accessibility,
+and deterministic visual tests cover the assembled interaction.
 
 ## Verification
 
 Deterministic connector fixtures cover Radarr and Sonarr filtering, history and queue
 normalization, degraded reads, cancellation-compatible requests, malformed upstream
-responses, and secret/path isolation. Gateway tests cover authorization before storage
-access, exact connector selection, capability health, encrypted credentials, safe
-errors, response headers, and abort propagation.
+responses, exact Radarr/Sonarr search payloads, and secret/path isolation. Gateway
+tests cover authorization before storage access, CSRF and origin enforcement,
+idempotency conflicts and replay, exact connector selection, capability health,
+encrypted credentials, transactional audit outcomes, safe errors, response headers,
+and abort propagation.
 
 Live version support is not inferred from fixture success. It requires the protected
 integration environment to record exact upstream versions and dates according to the

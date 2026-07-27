@@ -4,12 +4,16 @@ import {
   type Role,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
-import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type {
+  AcquisitionProvenanceResponse,
+  AcquisitionSearchResponse,
+} from "@omnifin/contracts/acquisition";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs } from "../src/db/schema.js";
+import { connectorConfigs, users } from "../src/db/schema.js";
 import {
   AcquisitionProvenanceService,
   type AcquisitionProvenanceError,
@@ -95,10 +99,22 @@ const normalizedResponse: AcquisitionProvenanceResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const normalizedSearch: AcquisitionSearchResponse = {
+  acceptedAt: now.toISOString(),
+  operationId: "radarr:command:812",
+  state: "queued",
+  target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+};
+
 function capabilitySnapshot(id: string, service: "radarr" | "sonarr") {
   return JSON.stringify({
     health: {
-      capabilities: ["connector.health", "connector.version", "acquisition.history"],
+      capabilities: [
+        "connector.health",
+        "connector.version",
+        "acquisition.history",
+        "acquisition.search",
+      ],
       checkedAt: now.toISOString(),
       connectorId: id,
       displayName: service === "radarr" ? "Radarr" : "Sonarr",
@@ -145,14 +161,36 @@ function harness(options: { withConnector?: boolean } = {}) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
+  database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Acquisition operator",
+      id: "operator-user",
+      role: "operator",
+      roleSource: "manual",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
   if (options.withConnector !== false) insertConnector(database, config);
   const readAcquisitionProvenance = vi.fn(async () => normalizedResponse);
-  const createAdapter = vi.fn(() => ({ readAcquisitionProvenance }));
+  const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
+  let identifier = 0;
+  const createAdapter = vi.fn(() => ({ queueAcquisitionSearch, readAcquisitionProvenance }));
   const service = new AcquisitionProvenanceService(database, config, {
     clock: () => now,
     createAdapter,
+    createId: () => `acquisition-operation-${++identifier}`,
   });
-  return { config, createAdapter, database, readAcquisitionProvenance, service };
+  return {
+    config,
+    createAdapter,
+    database,
+    queueAcquisitionSearch,
+    readAcquisitionProvenance,
+    service,
+  };
 }
 
 describe("acquisition provenance service", () => {
@@ -179,6 +217,136 @@ describe("acquisition provenance service", () => {
         undefined,
       );
       expect(JSON.stringify(response)).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("queues, audits, and safely replays one idempotent operator search", async () => {
+    const { database, queueAcquisitionSearch, service } = harness();
+    try {
+      const context = {
+        ipAddress: "198.51.100.24",
+        principal: principal(),
+        requestId: "route-request-1",
+      };
+      const first = await service.queueSearch(
+        { mediaId: 42, service: "radarr" },
+        "acquisition-01234567-89ab-cdef-0123-456789abcdef",
+        context,
+      );
+      const replay = await service.queueSearch(
+        { mediaId: 42, service: "radarr" },
+        "acquisition-01234567-89ab-cdef-0123-456789abcdef",
+        context,
+      );
+
+      expect(first).toEqual({ replayed: false, search: normalizedSearch });
+      expect(replay).toEqual({ replayed: true, search: normalizedSearch });
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
+      const operation = database.sqlite
+        .prepare(
+          `select idempotency_key_hash as keyHash, fingerprint_hash as fingerprintHash,
+             response_json as responseJson, state
+           from acquisition_search_operations`,
+        )
+        .get() as {
+        fingerprintHash: string;
+        keyHash: string;
+        responseJson: string;
+        state: string;
+      };
+      expect(operation).toMatchObject({ state: "succeeded" });
+      expect(operation.keyHash).toHaveLength(43);
+      expect(operation.fingerprintHash).toHaveLength(43);
+      expect(operation.responseJson).not.toContain("acquisition-01234567");
+      const audits = database.sqlite
+        .prepare(
+          `select event_type as eventType, outcome, target_id as targetId, metadata_json as metadataJson,
+             ip_hash as ipHash from audit_events where event_type = 'acquisition.search.queued'`,
+        )
+        .all() as {
+        eventType: string;
+        ipHash: string;
+        metadataJson: string;
+        outcome: string;
+        targetId: string;
+      }[];
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        eventType: "acquisition.search.queued",
+        outcome: "success",
+        targetId: "radarr:command:812",
+      });
+      expect(audits[0]?.ipHash).toHaveLength(22);
+      expect(audits[0]?.metadataJson).not.toContain("acquisition-01234567");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects idempotency key reuse for a different target before a second mutation", async () => {
+    const { database, queueAcquisitionSearch, service } = harness();
+    try {
+      const key = "acquisition-abcdef01-2345-6789-abcd-ef0123456789";
+      await service.queueSearch({ mediaId: 42, service: "radarr" }, key, {
+        principal: principal(),
+      });
+      await expect(
+        service.queueSearch({ mediaId: 43, service: "radarr" }, key, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "idempotency_conflict" });
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("persists and audits a sanitized failed outcome without automatic resubmission", async () => {
+    const { database, queueAcquisitionSearch, service } = harness();
+    queueAcquisitionSearch.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "timeout",
+        message: "Private Radarr timeout at /private/path",
+        operation: "acquisition.search",
+        retryable: true,
+        service: "radarr",
+      }),
+    );
+    const key = "acquisition-failure-0123456789abcdef";
+    try {
+      await expect(
+        service.queueSearch({ mediaId: 42, service: "radarr" }, key, {
+          principal: principal(),
+          requestId: "failure-request",
+        }),
+      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      await expect(
+        service.queueSearch({ mediaId: 42, service: "radarr" }, key, {
+          principal: principal(),
+          requestId: "failure-request",
+        }),
+      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
+      const stored = database.sqlite
+        .prepare(
+          `select state, failure_code as failureCode, response_json as responseJson
+           from acquisition_search_operations`,
+        )
+        .get() as { failureCode: string; responseJson: null; state: string };
+      expect(stored).toEqual({
+        failureCode: "temporarily_unavailable",
+        responseJson: null,
+        state: "failed",
+      });
+      const audit = database.sqlite
+        .prepare(
+          `select event_type as eventType, metadata_json as metadataJson, outcome
+           from audit_events where event_type = 'acquisition.search.failed'`,
+        )
+        .get() as { eventType: string; metadataJson: string; outcome: string };
+      expect(audit).toMatchObject({ eventType: "acquisition.search.failed", outcome: "failure" });
+      expect(audit.metadataJson).not.toContain("Private Radarr");
+      expect(JSON.stringify(stored)).not.toContain("/private/path");
     } finally {
       database.close();
     }

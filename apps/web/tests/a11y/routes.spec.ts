@@ -125,6 +125,8 @@ test("acquisition timeline has no automatically detectable accessibility violati
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
+  await page.getByRole("button", { name: "Review search" }).click();
+  await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

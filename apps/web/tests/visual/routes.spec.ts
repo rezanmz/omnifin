@@ -468,6 +468,22 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("acquisition-timeline.png");
 });
 
+test("acquisition recovery confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Acquisition recovery covers representative desktop and phone geometry",
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  await page.getByRole("button", { name: "Review search" }).click();
+  await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot("acquisition-recovery-confirmation.png");
+});
+
 test("focus-visible visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),

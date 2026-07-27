@@ -64,7 +64,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 - Radarr and Sonarr calendar, queue, monitoring, searches, and manual releases
 - Prowlarr Indexer Intelligence
 - qBittorrent and SABnzbd live queues
-- Title-level Acquisition Provenance (read path implemented) and contextual recovery
+- Title-level Acquisition Provenance and exact-target automatic-search recovery
+  (implemented); manual release recovery remains in development
 
 **Gate:** isolated safe-write tests, idempotency, live-update resilience,
 rejection-reason fidelity, and degraded-service behavior pass for the supported

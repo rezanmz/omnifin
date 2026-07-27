@@ -1,6 +1,12 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
-import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
-import { acquisitionProvenanceResponseSchema } from "@omnifin/contracts/acquisition";
+import type {
+  AcquisitionProvenanceResponse,
+  AcquisitionSearchResponse,
+} from "@omnifin/contracts/acquisition";
+import {
+  acquisitionProvenanceResponseSchema,
+  acquisitionSearchResponseSchema,
+} from "@omnifin/contracts/acquisition";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { describe, expect, it, vi } from "vitest";
 
@@ -71,10 +77,22 @@ const normalizedResponse: AcquisitionProvenanceResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const normalizedSearch: AcquisitionSearchResponse = {
+  acceptedAt: now.toISOString(),
+  operationId: "radarr:command:814",
+  state: "queued",
+  target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+};
+
 function capabilitySnapshot() {
   return JSON.stringify({
     health: {
-      capabilities: ["connector.health", "connector.version", "acquisition.history"],
+      capabilities: [
+        "connector.health",
+        "connector.version",
+        "acquisition.history",
+        "acquisition.search",
+      ],
       checkedAt: now.toISOString(),
       connectorId: "radarr-main",
       displayName: "Radarr",
@@ -93,10 +111,13 @@ async function harness(
   options: { withConnector?: boolean } = {},
 ) {
   const config = testConfig();
+  const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
+  let operationIdentifier = 0;
   const app = await createApp({
     acquisitionProvenanceDependencies: {
       clock: () => now,
-      createAdapter: () => ({ readAcquisitionProvenance: implementation }),
+      createAdapter: () => ({ queueAcquisitionSearch, readAcquisitionProvenance: implementation }),
+      createId: () => `acquisition-operation-${++operationIdentifier}`,
     },
     config,
     sessionDependencies: sessionDependencies(),
@@ -215,10 +236,80 @@ async function harness(
       userId: "viewer-user",
     },
   });
-  return { app, implementation, operator, viewer };
+  return { app, implementation, operator, queueAcquisitionSearch, viewer };
 }
 
 describe("acquisition provenance routes", () => {
+  it("protects and idempotently queues an operator acquisition search", async () => {
+    const { app, operator, queueAcquisitionSearch, viewer } = await harness();
+    const body = { mediaId: 42, service: "radarr" };
+    const operatorHeaders = {
+      cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+      "idempotency-key": "acquisition-01234567-89ab-cdef-0123-456789abcdef",
+      origin: baseUrl,
+      "x-omnifin-csrf": operator.csrfToken,
+    };
+    try {
+      const anonymous = await app.inject({
+        headers: { "content-type": "application/json", origin: baseUrl },
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/searches",
+      });
+      expect(anonymous.statusCode).toBe(403);
+
+      const denied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": "acquisition-viewer-0123456789",
+          origin: baseUrl,
+          "x-omnifin-csrf": viewer.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/searches",
+      });
+      expect(denied.statusCode).toBe(403);
+
+      const missingCsrf = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": operatorHeaders["idempotency-key"],
+          origin: baseUrl,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/searches",
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+
+      const created = await app.inject({
+        headers: operatorHeaders,
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/searches",
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      expect(created.headers["idempotency-replayed"]).toBe("false");
+      expect(acquisitionSearchResponseSchema.parse(created.json())).toEqual(normalizedSearch);
+      expect(created.headers["cache-control"]).toBe("no-store");
+
+      const replay = await app.inject({
+        headers: operatorHeaders,
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/searches",
+      });
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.headers["idempotency-replayed"]).toBe("true");
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
+      expect(queueAcquisitionSearch).toHaveBeenCalledWith(body, expect.any(AbortSignal));
+      expect(created.body).not.toContain("route-private-api-key");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("requires an operator session and returns private normalized provenance", async () => {
     const { app, implementation, operator, viewer } = await harness();
     try {

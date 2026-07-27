@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
+import { idempotencyKeySchema } from "./requests.js";
 
 export const ACQUISITION_MAX_EVENTS = 250;
 
@@ -156,6 +157,24 @@ export const acquisitionProvenanceResponseSchema = z
   });
 export type AcquisitionProvenanceResponse = z.infer<typeof acquisitionProvenanceResponseSchema>;
 
+export const acquisitionSearchInputSchema = acquisitionTargetInputSchema;
+export type AcquisitionSearchInput = z.infer<typeof acquisitionSearchInputSchema>;
+
+export const acquisitionSearchIdempotencyKeySchema = idempotencyKeySchema;
+export type AcquisitionSearchIdempotencyKey = z.infer<typeof acquisitionSearchIdempotencyKeySchema>;
+
+export const acquisitionSearchResponseSchema = z.strictObject({
+  acceptedAt: z.iso.datetime({ offset: true }),
+  operationId: z
+    .string()
+    .min(17)
+    .max(64)
+    .regex(/^(?:radarr|sonarr):command:[1-9][0-9]*$/u),
+  state: z.literal("queued"),
+  target: acquisitionTargetSchema,
+});
+export type AcquisitionSearchResponse = z.infer<typeof acquisitionSearchResponseSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -165,4 +184,8 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 export const acquisitionTargetInputJsonSchema = withoutSchemaDialect(acquisitionTargetInputSchema);
 export const acquisitionProvenanceResponseJsonSchema = withoutSchemaDialect(
   acquisitionProvenanceResponseSchema,
+);
+export const acquisitionSearchInputJsonSchema = withoutSchemaDialect(acquisitionSearchInputSchema);
+export const acquisitionSearchResponseJsonSchema = withoutSchemaDialect(
+  acquisitionSearchResponseSchema,
 );
