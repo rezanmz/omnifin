@@ -41,6 +41,10 @@
       "types": "./dist/indexers.d.ts",
       "default": "./dist/indexers.js"
     },
+    "./issues": {
+      "types": "./dist/issues.d.ts",
+      "default": "./dist/issues.js"
+    },
     "./playback": {
       "types": "./dist/playback.d.ts",
       "default": "./dist/playback.js"

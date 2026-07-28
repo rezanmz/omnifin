@@ -2,7 +2,9 @@
 
 import type HlsType from "hls.js";
 import {
+  Bug,
   Captions,
+  CheckCircle2,
   CircleAlert,
   Headphones,
   LoaderCircle,
@@ -11,6 +13,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Send,
   Settings2,
   Volume2,
   VolumeX,
@@ -45,6 +48,8 @@ export interface TheaterPlayerProperties {
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
+type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "video_quality";
+type IssueStatus = "error" | "idle" | "submitting" | "success";
 
 interface PlaybackPreferences {
   audioStreamIndex: number | null;
@@ -62,6 +67,15 @@ const QUALITY_PRESETS = {
   QualityPreset,
   { bitrate: number; label: string; mode: "auto" | "direct" | "transcode" }
 >;
+
+const ISSUE_CATEGORIES = [
+  { label: "Buffering", value: "buffering" },
+  { label: "Audio", value: "audio" },
+  { label: "Subtitles", value: "subtitles" },
+  { label: "A/V sync", value: "sync" },
+  { label: "Video quality", value: "video_quality" },
+  { label: "Other", value: "other" },
+] as const satisfies readonly { label: string; value: IssueCategory }[];
 
 function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
@@ -138,6 +152,11 @@ export function TheaterPlayer({
   const [fullscreen, setFullscreen] = useState(false);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [issuePanelOpen, setIssuePanelOpen] = useState(false);
+  const [issueCategory, setIssueCategory] = useState<IssueCategory>("buffering");
+  const [issueDescription, setIssueDescription] = useState("");
+  const [issueStatus, setIssueStatus] = useState<IssueStatus>("idle");
+  const [issueMessage, setIssueMessage] = useState("");
   const [currentTime, setCurrentTime] = useState(media.positionSeconds);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -198,10 +217,10 @@ export function TheaterPlayer({
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current = null;
-    if (playing && !settingsOpen) {
+    if (playing && !settingsOpen && !issuePanelOpen) {
       controlsTimeoutReference.current = setTimeout(() => setControlsVisible(false), 2_800);
     }
-  }, [playing, settingsOpen]);
+  }, [issuePanelOpen, playing, settingsOpen]);
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -314,11 +333,13 @@ export function TheaterPlayer({
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current =
-      playing && !settingsOpen ? setTimeout(() => setControlsVisible(false), 2_800) : null;
+      playing && !settingsOpen && !issuePanelOpen
+        ? setTimeout(() => setControlsVisible(false), 2_800)
+        : null;
     return () => {
       if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     };
-  }, [playing, settingsOpen]);
+  }, [issuePanelOpen, playing, settingsOpen]);
 
   useEffect(
     () => () => {
@@ -401,11 +422,38 @@ export function TheaterPlayer({
     else await dialog.requestFullscreen?.();
   }
 
+  async function submitIssue(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!prepared || issueStatus === "submitting") return;
+    const description = issueDescription.trim();
+    setIssueStatus("submitting");
+    setIssueMessage("Sending the timestamp and playback context…");
+    try {
+      await client.reportIssue(
+        prepared.session.sessionId,
+        {
+          category: issueCategory,
+          description: description ? description : null,
+          positionSeconds: Math.max(0, Math.floor(absolutePosition())),
+        },
+        prepared.csrfToken,
+      );
+      setIssueStatus("success");
+      setIssueMessage("Thanks — the issue and playback context were captured privately.");
+    } catch (error) {
+      setIssueStatus("error");
+      setIssueMessage(
+        error instanceof Error ? error.message : "The issue could not be sent. Try again.",
+      );
+    }
+  }
+
   function handleKeyboard(event: React.KeyboardEvent<HTMLDialogElement>) {
     if (isInteractiveTarget(event.target)) return;
-    if (event.key === "Escape" && settingsOpen) {
+    if (event.key === "Escape" && (settingsOpen || issuePanelOpen)) {
       event.preventDefault();
       setSettingsOpen(false);
+      setIssuePanelOpen(false);
       return;
     }
     if (event.key === " " || event.key.toLowerCase() === "k") {
@@ -583,6 +631,88 @@ export function TheaterPlayer({
         )}
 
         <footer className={styles.controls}>
+          {issuePanelOpen && prepared && (
+            <section
+              aria-label="Report playback issue"
+              className={`${styles.settingsPanel} ${styles.issuePanel}`}
+              id={`${titleId}-issue`}
+            >
+              {issueStatus === "success" ? (
+                <div className={styles.issueSuccess} role="status">
+                  <span className={styles.issueSuccessIcon}>
+                    <CheckCircle2 aria-hidden="true" size={22} />
+                  </span>
+                  <div>
+                    <strong>Issue captured</strong>
+                    <p>{issueMessage}</p>
+                  </div>
+                  <button
+                    className={styles.issueDone}
+                    onClick={() => setIssuePanelOpen(false)}
+                    type="button"
+                  >
+                    Done
+                  </button>
+                </div>
+              ) : (
+                <form className={styles.issueForm} onSubmit={(event) => void submitIssue(event)}>
+                  <div className={styles.settingsHeading}>
+                    <span>Report an issue</span>
+                    <small>Current timestamp included</small>
+                  </div>
+                  <fieldset className={styles.issueCategories}>
+                    <legend className="sr-only">Issue category</legend>
+                    {ISSUE_CATEGORIES.map((category) => (
+                      <label key={category.value}>
+                        <input
+                          checked={issueCategory === category.value}
+                          name="issue-category"
+                          onChange={() => setIssueCategory(category.value)}
+                          type="radio"
+                          value={category.value}
+                        />
+                        <span>{category.label}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                  <label className={styles.issueDescription}>
+                    <span>
+                      What happened? <small>Optional</small>
+                    </span>
+                    <textarea
+                      aria-describedby={`${titleId}-issue-privacy`}
+                      maxLength={1_000}
+                      onChange={(event) => setIssueDescription(event.currentTarget.value)}
+                      placeholder="A short note helps pinpoint the problem."
+                      rows={3}
+                      value={issueDescription}
+                    />
+                  </label>
+                  <div className={styles.issueFooter}>
+                    <p
+                      data-error={issueStatus === "error" || undefined}
+                      id={`${titleId}-issue-privacy`}
+                      role={issueStatus === "error" ? "alert" : "status"}
+                    >
+                      {issueMessage || "No media paths, credentials, or account details are sent."}
+                    </p>
+                    <button
+                      className={styles.issueSubmit}
+                      disabled={issueStatus === "submitting"}
+                      type="submit"
+                    >
+                      {issueStatus === "submitting" ? (
+                        <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                      ) : (
+                        <Send aria-hidden="true" size={16} />
+                      )}
+                      {issueStatus === "submitting" ? "Sending…" : "Send report"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          )}
           {settingsOpen && prepared && (
             <section
               aria-label="Playback settings"
@@ -765,12 +895,35 @@ export function TheaterPlayer({
             </div>
             <div className={styles.controlCluster}>
               <button
+                aria-controls={`${titleId}-issue`}
+                aria-expanded={issuePanelOpen}
+                aria-label="Report playback issue"
+                className={styles.iconButton}
+                disabled={!prepared}
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setIssuePanelOpen((value) => {
+                    if (!value) {
+                      setIssueStatus("idle");
+                      setIssueMessage("");
+                    }
+                    return !value;
+                  });
+                }}
+                type="button"
+              >
+                <Bug aria-hidden="true" size={18} />
+              </button>
+              <button
                 aria-controls={`${titleId}-settings`}
                 aria-expanded={settingsOpen}
                 aria-label="Playback settings"
                 className={styles.iconButton}
                 disabled={status !== "ready"}
-                onClick={() => setSettingsOpen((value) => !value)}
+                onClick={() => {
+                  setIssuePanelOpen(false);
+                  setSettingsOpen((value) => !value);
+                }}
                 type="button"
               >
                 <Settings2 aria-hidden="true" size={19} />

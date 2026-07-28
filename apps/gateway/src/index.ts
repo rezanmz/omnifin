@@ -117,6 +117,21 @@ export {
   type MediaArtworkErrorReason,
 } from "./media/continue-watching-service.js";
 export {
+  PlaybackIssueError,
+  PlaybackIssueService,
+  type PlaybackIssueContext,
+  type PlaybackIssueDependencies,
+  type PlaybackIssueErrorReason,
+} from "./media/issue-service.js";
+export {
+  PlaybackSessionError,
+  PlaybackSessionService,
+  type PlaybackClientFactoryInput,
+  type PlaybackSessionContext,
+  type PlaybackSessionDependencies,
+  type PlaybackSessionErrorReason,
+} from "./media/playback-session-service.js";
+export {
   constantTimeTextEqual,
   EnvelopeCipher,
   hashToken,

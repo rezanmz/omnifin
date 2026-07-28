@@ -12,10 +12,12 @@ const REQUIRED_TABLES = [
   "auth_transactions",
   "connector_configs",
   "external_identities",
+  "media_issues",
   "media_references",
   "media_request_operations",
   "oidc_providers",
   "operational_failures",
+  "playback_sessions",
   "role_mappings",
   "service_identity_links",
   "session_rotation_aliases",
@@ -44,6 +46,16 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, user_id, service_identity_link_id, link_revision, item_digest, encrypted_payload, last_used_at, expires_at from media_references limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, media_reference_id, playback_session_id, category, encrypted_description, position_seconds, state, encrypted_resolution, resolved_by_user_id, resolved_at from media_issues limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, media_reference_id, encrypted_payload, state, position_seconds, revision, last_reported_at, expires_at from playback_sessions limit 0",
       )
       .all();
     database.sqlite

@@ -3,18 +3,20 @@ import type {
   PlaybackProgressRequest,
   PlaybackProgressResponse,
 } from "@omnifin/contracts/playback";
+import type { PlaybackIssue, PlaybackIssueCreateRequest } from "@omnifin/contracts/issues";
 
 const CSRF_HEADER = "x-omnifin-csrf";
 const DEFAULT_MAX_STREAMING_BITRATE = 80_000_000;
 
 async function loadContractSchemas() {
   await import("./zod-browser");
-  const [auth, errors, playback] = await Promise.all([
+  const [auth, errors, issues, playback] = await Promise.all([
     import("@omnifin/contracts/auth"),
     import("@omnifin/contracts/errors"),
+    import("@omnifin/contracts/issues"),
     import("@omnifin/contracts/playback"),
   ]);
-  return { auth, errors, playback };
+  return { auth, errors, issues, playback };
 }
 
 let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
@@ -64,6 +66,12 @@ export interface PlaybackClient {
     csrfToken: string,
     options?: { keepalive?: boolean; signal?: AbortSignal },
   ): Promise<PlaybackProgressResponse>;
+  reportIssue(
+    sessionId: string,
+    request: PlaybackIssueCreateRequest,
+    csrfToken: string,
+    signal?: AbortSignal,
+  ): Promise<PlaybackIssue>;
 }
 
 async function safeJson(response: Response): Promise<unknown> {
@@ -227,6 +235,32 @@ export const playbackClient: PlaybackClient = {
         "invalid_response",
         "invalid_progress_response",
         "The gateway returned an invalid progress response.",
+      );
+    }
+    return parsed.data;
+  },
+
+  async reportIssue(sessionId, request, csrfToken, signal) {
+    const schemas = await contractSchemas();
+    const safeSessionId = schemas.playback.playbackSessionIdSchema.parse(sessionId);
+    const body = schemas.issues.playbackIssueCreateRequestSchema.parse(request);
+    const response = await fetchSameOrigin(`/api/playback/${safeSessionId}/issues`, {
+      body: JSON.stringify(body),
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        [CSRF_HEADER]: schemas.auth.csrfTokenSchema.parse(csrfToken),
+      },
+      method: "POST",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (!response.ok) throw await responseError(response);
+    const parsed = schemas.issues.playbackIssueSchema.safeParse(await safeJson(response));
+    if (!parsed.success) {
+      throw new PlaybackClientError(
+        "invalid_response",
+        "invalid_issue_response",
+        "The gateway returned an invalid issue report response.",
       );
     }
     return parsed.data;
