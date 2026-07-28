@@ -4,6 +4,7 @@ import {
   type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
   type JellyfinPlaybackReportingSession,
+  type JellyfinPlaybackStreamResult,
   type JellyfinPlaybackTarget,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
@@ -39,7 +40,7 @@ const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
 const MAX_CREATION_ATTEMPTS = 8;
 const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
 const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
-const HLS_ASSET_MAX_BYTES = 10 * 1_024 * 1_024;
+const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
 const MAX_ASSET_TOKEN_LENGTH = 8_192;
 const SENSITIVE_QUERY_NAMES = new Set([
@@ -149,7 +150,11 @@ export interface PlaybackSessionDependencies {
     input: PlaybackClientFactoryInput,
   ) => Pick<
     JellyfinPlaybackClient,
-    "negotiate" | "readPlaybackTarget" | "reportPlaybackEvent" | "resolvePlaybackTarget"
+    | "negotiate"
+    | "readPlaybackTarget"
+    | "reportPlaybackEvent"
+    | "resolvePlaybackTarget"
+    | "streamPlaybackTarget"
   >;
   createToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
@@ -499,7 +504,7 @@ export class PlaybackSessionService {
     range: string | undefined,
     signal?: AbortSignal,
   ) {
-    const { client, payload } = this.#stream(context, sessionId, HLS_ASSET_MAX_BYTES);
+    const { client, payload } = this.#stream(context, sessionId, DIRECT_RANGE_BYTES);
     if (payload.playMethod !== "DirectPlay" || payload.upstreamTarget.path.endsWith(".m3u8")) {
       throw new PlaybackSessionError("not_found");
     }
@@ -548,7 +553,7 @@ export class PlaybackSessionService {
     ) {
       throw new PlaybackSessionError("not_found");
     }
-    const { client, payload, session } = this.#stream(context, sessionId, HLS_ASSET_MAX_BYTES);
+    const { client, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
@@ -565,10 +570,11 @@ export class PlaybackSessionService {
     }
     if (isManifestTarget(target)) return this.#manifest(client, session, target, signal);
 
-    let response: JellyfinPlaybackBytesResult;
+    let response: JellyfinPlaybackStreamResult;
     try {
-      response = await client.readPlaybackTarget({
+      response = await client.streamPlaybackTarget({
         accept: "video/*,audio/*,text/vtt,application/octet-stream",
+        maxResponseBytes: HLS_ASSET_MAX_BYTES,
         ...(signal === undefined ? {} : { signal }),
         target,
       });
@@ -579,7 +585,7 @@ export class PlaybackSessionService {
       body: response.body,
       contentType: contentType(response.headers, "application/octet-stream"),
       kind: "asset" as const,
-      status: response.status === 206 ? 206 : response.status === 416 ? 416 : 200,
+      status: response.status === 206 ? 206 : 200,
     };
   }
 

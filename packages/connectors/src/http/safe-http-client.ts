@@ -51,6 +51,22 @@ export interface SafeBytesResponse {
   headers: Headers;
 }
 
+export interface SafeStreamResponse {
+  status: number;
+  body: ReadableStream<Uint8Array>;
+  headers: Headers;
+}
+
+const MAX_STREAM_RESPONSE_BYTES = 512 * 1_024 * 1_024;
+
+interface RequestLifecycle {
+  controller: AbortController;
+  armTimeout: () => void;
+  clearTimeout: () => void;
+  cleanup: () => void;
+  didTimeout: () => boolean;
+}
+
 export class SafeConnectorError extends Error {
   readonly service: ConnectorService;
   readonly operation: string;
@@ -210,6 +226,39 @@ function safeStatusError(
   });
 }
 
+function requestLifecycle(timeoutMs: number, signal: AbortSignal | undefined): RequestLifecycle {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let cleanedUp = false;
+  const clearRequestTimeout = () => {
+    if (timeout !== undefined) clearTimeout(timeout);
+    timeout = undefined;
+  };
+  const armTimeout = () => {
+    clearRequestTimeout();
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  };
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+  if (signal?.aborted) abortFromCaller();
+  return {
+    armTimeout,
+    clearTimeout: clearRequestTimeout,
+    cleanup: () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clearRequestTimeout();
+      signal?.removeEventListener("abort", abortFromCaller);
+    },
+    controller,
+    didTimeout: () => timedOut,
+  };
+}
+
 export class SafeHttpClient {
   readonly service: ConnectorService;
   readonly origin: string;
@@ -330,6 +379,74 @@ export class SafeHttpClient {
   }
 
   async requestBytes(path: string, options: SafeRequestOptions): Promise<SafeBytesResponse> {
+    const lifecycle = requestLifecycle(this.#timeoutMs, options.signal);
+    lifecycle.armTimeout();
+    try {
+      const response = await this.#requestResponse(path, options, lifecycle.controller.signal);
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > this.#maxResponseBytes) {
+        await response.body?.cancel();
+        throw this.invalidResponse(options.operation);
+      }
+      const responseBody = await this.readBoundedBody(response, options.operation);
+
+      return { status: response.status, body: responseBody, headers: response.headers };
+    } catch (error) {
+      throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
+    } finally {
+      lifecycle.cleanup();
+    }
+  }
+
+  async requestStream(
+    path: string,
+    options: SafeRequestOptions,
+    maxResponseBytes: number,
+  ): Promise<SafeStreamResponse> {
+    if (
+      !Number.isInteger(maxResponseBytes) ||
+      maxResponseBytes < 1 ||
+      maxResponseBytes > MAX_STREAM_RESPONSE_BYTES
+    ) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: options.operation,
+        code: "configuration_invalid",
+        message: "The connector stream limit must be between 1 byte and 512 MiB.",
+        retryable: false,
+      });
+    }
+
+    const lifecycle = requestLifecycle(this.#timeoutMs, options.signal);
+    lifecycle.armTimeout();
+    try {
+      const response = await this.#requestResponse(path, options, lifecycle.controller.signal);
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > maxResponseBytes) {
+        await response.body?.cancel();
+        throw this.invalidResponse(options.operation);
+      }
+      lifecycle.clearTimeout();
+      if (!response.body) {
+        lifecycle.cleanup();
+        return {
+          body: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+          headers: response.headers,
+          status: response.status,
+        };
+      }
+      return {
+        body: this.#boundedStream(response.body, options.operation, maxResponseBytes, lifecycle),
+        headers: response.headers,
+        status: response.status,
+      };
+    } catch (error) {
+      lifecycle.cleanup();
+      throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
+    }
+  }
+
+  async #requestResponse(path: string, options: SafeRequestOptions, signal: AbortSignal) {
     if (
       !path ||
       UNSAFE_REQUEST_PATH_CHARACTER.test(path) ||
@@ -361,112 +478,145 @@ export class SafeHttpClient {
       url.search = query.toString();
     }
 
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, this.#timeoutMs);
-    const abortFromCaller = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
-    if (options.signal?.aborted) abortFromCaller();
-
+    let destination: ResolvedDestination;
     try {
-      let destination: ResolvedDestination;
-      try {
-        destination = await abortable(
-          resolveDestinationUrl(url, {
-            allowInsecureHttp: this.#allowInsecureHttp,
-            allowedHosts: [this.#baseUrl.hostname],
-            ...(this.#resolveHost ? { resolveHost: this.#resolveHost } : {}),
-          }),
-          controller.signal,
-        );
-      } catch (error) {
-        if (error instanceof DestinationPolicyError) {
-          throw new SafeConnectorError({
-            service: this.service,
-            operation: options.operation,
-            code: "destination_blocked",
-            message: error.message,
-            retryable: false,
-          });
-        }
-        throw error;
-      }
-
-      const headers = new Headers({ ...this.#headers, ...options.headers });
-      const blockedHeader = BLOCKED_REQUEST_HEADERS.find((header) => headers.has(header));
-      if (blockedHeader) {
-        throw new SafeConnectorError({
-          service: this.service,
-          operation: options.operation,
-          code: "configuration_invalid",
-          message: `Connector requests cannot override the ${blockedHeader} header.`,
-          retryable: false,
-        });
-      }
-      const body = encodeBody(options.body);
-      headers.delete("content-length");
-      if (body) {
-        headers.set("content-length", String(body.byteLength));
-      }
-      const response = await this.#transport(
-        destination.url,
-        {
-          method: options.method ?? "GET",
-          headers,
-          tlsPolicy: this.#tlsPolicy,
-          ...(this.#tlsCaCertificatePem === undefined
-            ? {}
-            : { tlsCaCertificatePem: this.#tlsCaCertificatePem }),
-          ...(body === undefined ? {} : { body }),
-          signal: controller.signal,
-        },
-        destination.addresses,
+      destination = await abortable(
+        resolveDestinationUrl(url, {
+          allowInsecureHttp: this.#allowInsecureHttp,
+          allowedHosts: [this.#baseUrl.hostname],
+          ...(this.#resolveHost ? { resolveHost: this.#resolveHost } : {}),
+        }),
+        signal,
       );
-
-      if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel();
+    } catch (error) {
+      if (error instanceof DestinationPolicyError) {
         throw new SafeConnectorError({
           service: this.service,
           operation: options.operation,
           code: "destination_blocked",
-          message: `${this.service} attempted a redirect, which connector policy blocks.`,
+          message: error.message,
           retryable: false,
-          status: response.status,
         });
       }
+      throw error;
+    }
 
-      const acceptedStatuses = options.acceptedStatuses ?? [];
-      if (!response.ok && !acceptedStatuses.includes(response.status)) {
-        await response.body?.cancel();
-        throw safeStatusError(this.service, options.operation, response);
-      }
-
-      const contentLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(contentLength) && contentLength > this.#maxResponseBytes) {
-        await response.body?.cancel();
-        throw this.invalidResponse(options.operation);
-      }
-      const responseBody = await this.readBoundedBody(response, options.operation);
-
-      return { status: response.status, body: responseBody, headers: response.headers };
-    } catch (error) {
-      if (error instanceof SafeConnectorError) throw error;
+    const headers = new Headers({ ...this.#headers, ...options.headers });
+    const blockedHeader = BLOCKED_REQUEST_HEADERS.find((header) => headers.has(header));
+    if (blockedHeader) {
       throw new SafeConnectorError({
         service: this.service,
         operation: options.operation,
-        code: timedOut ? "timeout" : "unreachable",
-        message: timedOut
-          ? `${this.service} did not respond before the deadline.`
-          : `${this.service} could not be reached.`,
-        retryable: true,
+        code: "configuration_invalid",
+        message: `Connector requests cannot override the ${blockedHeader} header.`,
+        retryable: false,
       });
-    } finally {
-      clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", abortFromCaller);
     }
+    const body = encodeBody(options.body);
+    headers.delete("content-length");
+    if (body) headers.set("content-length", String(body.byteLength));
+    const response = await this.#transport(
+      destination.url,
+      {
+        method: options.method ?? "GET",
+        headers,
+        tlsPolicy: this.#tlsPolicy,
+        ...(this.#tlsCaCertificatePem === undefined
+          ? {}
+          : { tlsCaCertificatePem: this.#tlsCaCertificatePem }),
+        ...(body === undefined ? {} : { body }),
+        signal,
+      },
+      destination.addresses,
+    );
+
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: options.operation,
+        code: "destination_blocked",
+        message: `${this.service} attempted a redirect, which connector policy blocks.`,
+        retryable: false,
+        status: response.status,
+      });
+    }
+
+    const acceptedStatuses = options.acceptedStatuses ?? [];
+    if (!response.ok && !acceptedStatuses.includes(response.status)) {
+      await response.body?.cancel();
+      throw safeStatusError(this.service, options.operation, response);
+    }
+    return response;
+  }
+
+  #boundedStream(
+    body: ReadableStream<Uint8Array>,
+    operation: string,
+    maxResponseBytes: number,
+    lifecycle: RequestLifecycle,
+  ) {
+    const reader = body.getReader();
+    let totalBytes = 0;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      lifecycle.cleanup();
+      reader.releaseLock();
+    };
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        lifecycle.armTimeout();
+        try {
+          const result = await reader.read();
+          lifecycle.clearTimeout();
+          if (result.done) {
+            finish();
+            controller.close();
+            return;
+          }
+          totalBytes += result.value.byteLength;
+          if (totalBytes > maxResponseBytes) {
+            lifecycle.controller.abort();
+            try {
+              await reader.cancel();
+            } catch {
+              // The byte-limit failure below is the stable, redaction-safe error for callers.
+            } finally {
+              finish();
+            }
+            controller.error(this.invalidResponse(operation));
+            return;
+          }
+          controller.enqueue(result.value);
+        } catch (error) {
+          finish();
+          controller.error(this.#requestError(error, lifecycle.didTimeout(), operation));
+        }
+      },
+      cancel: async (reason) => {
+        lifecycle.controller.abort(reason);
+        try {
+          await reader.cancel(reason);
+        } finally {
+          finish();
+        }
+      },
+    });
+  }
+
+  #requestError(error: unknown, timedOut: boolean, operation: string) {
+    if (error instanceof SafeConnectorError) return error;
+    return new SafeConnectorError({
+      service: this.service,
+      operation,
+      code: timedOut ? "timeout" : "unreachable",
+      message: timedOut
+        ? `${this.service} did not respond before the deadline.`
+        : `${this.service} could not be reached.`,
+      retryable: true,
+    });
   }
 
   private async readBoundedBody(response: Response, operation: string): Promise<Uint8Array> {

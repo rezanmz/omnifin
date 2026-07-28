@@ -9,6 +9,7 @@ import {
   playbackSessionIdSchema,
 } from "@omnifin/contracts/playback";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { Readable } from "node:stream";
 import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
@@ -64,6 +65,24 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
   reply.header("pragma", "no-cache");
   reply.header("vary", "Cookie");
   return payload;
+}
+
+async function* streamChunks(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  let completed = false;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        completed = true;
+        return;
+      }
+      yield result.value;
+    }
+  } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 function playbackError(error: PlaybackSessionError) {
@@ -290,7 +309,10 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
         reply.header("vary", "Cookie");
         return asset.kind === "manifest"
           ? reply.status(200).type(asset.contentType).send(asset.body)
-          : reply.status(asset.status).type(asset.contentType).send(Buffer.from(asset.body));
+          : reply
+              .status(asset.status)
+              .type(asset.contentType)
+              .send(Readable.from(streamChunks(asset.body), { objectMode: false }));
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;

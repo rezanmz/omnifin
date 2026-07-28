@@ -80,6 +80,7 @@ async function harness() {
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
   const reportPlaybackEvent = vi.fn(async () => undefined);
+  const streamPlaybackTarget = vi.fn();
   const resolvePlaybackTarget = vi.fn(
     (parent: { path: string; query: string }, candidate: string) => {
       const url = new URL(candidate, `https://jellyfin.example.test/base/${parent.path}`);
@@ -124,6 +125,7 @@ async function harness() {
         readPlaybackTarget,
         reportPlaybackEvent,
         resolvePlaybackTarget,
+        streamPlaybackTarget,
       }),
       createToken: () => "p".repeat(22),
     },
@@ -218,6 +220,7 @@ async function harness() {
     referenceId,
     reportPlaybackEvent,
     resolvePlaybackTarget,
+    streamPlaybackTarget,
   };
 }
 
@@ -299,8 +302,14 @@ describe("playback routes", () => {
   });
 
   it("rewrites HLS manifests into opaque same-origin assets and proxies their bytes", async () => {
-    const { app, headers, readPlaybackTarget, referenceId, resolvePlaybackTarget } =
-      await harness();
+    const {
+      app,
+      headers,
+      readPlaybackTarget,
+      referenceId,
+      resolvePlaybackTarget,
+      streamPlaybackTarget,
+    } = await harness();
     try {
       const created = await app.inject({
         headers,
@@ -336,8 +345,13 @@ describe("playback routes", () => {
         .find((line) => line.startsWith(`/v1/playback/${playback.sessionId}/hls/`));
       expect(assetPath).toBeDefined();
       const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
-      readPlaybackTarget.mockResolvedValueOnce({
-        body: bytes,
+      streamPlaybackTarget.mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
         headers: new Headers({ "content-type": "video/mp4" }),
         status: 200,
       });
@@ -349,8 +363,9 @@ describe("playback routes", () => {
       expect(asset.statusCode, asset.body).toBe(200);
       expect(asset.rawPayload).toEqual(Buffer.from(bytes));
       expect(asset.headers["content-type"]).toMatch(/^video\/mp4/u);
-      expect(readPlaybackTarget).toHaveBeenLastCalledWith(
+      expect(streamPlaybackTarget).toHaveBeenLastCalledWith(
         expect.objectContaining({
+          maxResponseBytes: 512 * 1_024 * 1_024,
           target: {
             path: `Videos/${privateItemId}/hls1/main/0.m4s`,
             query: "segment=0",

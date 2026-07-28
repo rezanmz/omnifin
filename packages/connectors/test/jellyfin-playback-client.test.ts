@@ -420,6 +420,30 @@ describe("JellyfinPlaybackClient", () => {
     expect(response.headers.get("content-range")).toBe("bytes */120");
   });
 
+  it("streams a normalized HLS asset with token-only authentication", async () => {
+    const bytes = new Uint8Array([0, 0, 1, 186, 68, 0, 4, 0]);
+    const { client, requests } = clientWithResponses([
+      new Response(bytes, { headers: { "content-type": "video/mp2t" } }),
+    ]);
+
+    const response = await client.streamPlaybackTarget({
+      accept: "video/*,audio/*,application/octet-stream",
+      maxResponseBytes: 64 * 1_024 * 1_024,
+      target: {
+        path: "Videos/movie-upstream-1/hls1/main/0.ts",
+        query: "segment=0",
+      },
+    });
+    const body = new Uint8Array(await new Response(response.body).arrayBuffer());
+
+    expect(body).toEqual(bytes);
+    expect(requests[0]?.url.pathname).toBe("/base/Videos/movie-upstream-1/hls1/main/0.ts");
+    expect(requests[0]?.url.search).toBe("?segment=0");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
   it("normalizes same-server HLS assets while rejecting traversal and external URLs", () => {
     const { client } = clientWithResponses([]);
     const parent = {

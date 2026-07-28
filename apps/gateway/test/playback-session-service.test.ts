@@ -196,6 +196,9 @@ function harness() {
   const readPlaybackTarget = vi.fn(async () => {
     throw new Error("Playback bytes were not expected in this service test.");
   });
+  const streamPlaybackTarget = vi.fn(async () => {
+    throw new Error("Playback streams were not expected in this service test.");
+  });
   const reportPlaybackEvent = vi.fn(async () => undefined);
   const resolvePlaybackTarget = vi.fn((parent) => parent);
   const createClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
@@ -203,6 +206,7 @@ function harness() {
     readPlaybackTarget,
     reportPlaybackEvent,
     resolvePlaybackTarget,
+    streamPlaybackTarget,
   }));
   const service = new PlaybackSessionService(database, config, {
     clock: () => now,

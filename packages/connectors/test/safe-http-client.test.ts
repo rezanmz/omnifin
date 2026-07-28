@@ -205,6 +205,40 @@ describe("SafeHttpClient", () => {
     expect(response.headers.get("content-type")).toBe("application/octet-stream");
   });
 
+  it("streams with backpressure beyond the buffered-response limit", async () => {
+    const mock = createMockTransport([new Response("123456789")]);
+    const client = clientWith(mock.transport, { maxResponseBytes: 4 });
+
+    const response = await client.requestStream("api/v3/media", { operation: "media.stream" }, 16);
+    const body = new Uint8Array(await new Response(response.body).arrayBuffer());
+
+    expect(Buffer.from(body).toString("utf8")).toBe("123456789");
+  });
+
+  it("aborts a stream when its dedicated byte ceiling is exceeded", async () => {
+    const mock = createMockTransport([
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("1234"));
+            controller.enqueue(new TextEncoder().encode("5678"));
+            controller.enqueue(new TextEncoder().encode("9"));
+          },
+          cancel() {
+            throw new Error("private upstream cancellation detail");
+          },
+        }),
+      ),
+    ]);
+    const client = clientWith(mock.transport, { maxResponseBytes: 4 });
+    const response = await client.requestStream("api/v3/media", { operation: "media.stream" }, 8);
+
+    await expect(new Response(response.body).arrayBuffer()).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "media.stream",
+    });
+  });
+
   it("turns a deadline into a retryable, redaction-safe timeout", async () => {
     const hangingTransport: ConnectorTransport = (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
@@ -239,5 +273,28 @@ describe("SafeHttpClient", () => {
     await expect(
       client.requestText("api/v3/system/status", { operation: "probe" }),
     ).rejects.toMatchObject({ code: "timeout", retryable: true });
+  });
+
+  it("applies an idle deadline between streamed chunks", async () => {
+    const slowBodyTransport: ConnectorTransport = async (_url, init) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init.signal.addEventListener(
+            "abort",
+            () => controller.error(new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        },
+      });
+      return new Response(stream);
+    };
+    const client = clientWith(slowBodyTransport, { timeoutMs: 2 });
+    const response = await client.requestStream("api/v3/media", { operation: "media.stream" }, 16);
+
+    await expect(response.body.getReader().read()).rejects.toMatchObject({
+      code: "timeout",
+      operation: "media.stream",
+      retryable: true,
+    });
   });
 });

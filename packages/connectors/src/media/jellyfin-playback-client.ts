@@ -213,6 +213,12 @@ export interface JellyfinPlaybackBytesResult {
   status: number;
 }
 
+export interface JellyfinPlaybackStreamResult {
+  body: ReadableStream<Uint8Array>;
+  headers: Headers;
+  status: number;
+}
+
 export class JellyfinPlaybackUnavailableError extends Error {
   public readonly code = "playback_unavailable";
 
@@ -508,6 +514,34 @@ export class JellyfinPlaybackClient {
       query: new URLSearchParams(target.query),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+  }
+
+  public async streamPlaybackTarget(input: {
+    accept?: string;
+    maxResponseBytes: number;
+    signal?: AbortSignal;
+    target: JellyfinPlaybackTarget;
+  }): Promise<JellyfinPlaybackStreamResult> {
+    const target = this.#validatedTarget(input.target, "media.playback.stream");
+    if (
+      input.accept !== undefined &&
+      (!/^[A-Za-z0-9*+./,;= -]{1,256}$/u.test(input.accept) || /[\r\n]/u.test(input.accept))
+    ) {
+      throw this.#client.invalidResponse("media.playback.stream");
+    }
+    return this.#client.requestStream(
+      target.path,
+      {
+        headers: {
+          ...(input.accept === undefined ? {} : { accept: input.accept }),
+          authorization: this.#authorization,
+        },
+        operation: "media.playback.stream",
+        query: new URLSearchParams(target.query),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+      input.maxResponseBytes,
+    );
   }
 
   public resolvePlaybackTarget(
