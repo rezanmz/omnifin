@@ -110,9 +110,11 @@ export {
 export {
   ContinueWatchingError,
   ContinueWatchingService,
+  MediaArtworkError,
   type ContinueWatchingClientFactoryInput,
   type ContinueWatchingContext,
   type ContinueWatchingDependencies,
+  type MediaArtworkErrorReason,
 } from "./media/continue-watching-service.js";
 export {
   constantTimeTextEqual,

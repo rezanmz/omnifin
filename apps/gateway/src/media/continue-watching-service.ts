@@ -10,7 +10,7 @@ import {
   type ContinueWatchingResponse,
 } from "@omnifin/contracts/dashboard";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { ZodError } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
@@ -62,7 +62,7 @@ export interface ContinueWatchingDependencies {
   clock?: () => Date;
   createClient?: (
     input: ContinueWatchingClientFactoryInput,
-  ) => Pick<JellyfinUserMediaClient, "readContinueWatching">;
+  ) => Pick<JellyfinUserMediaClient, "readContinueWatching" | "readImage">;
   mediaReferences?: MediaReferenceDependencies;
 }
 
@@ -72,6 +72,24 @@ export class ContinueWatchingError extends Error {
   public constructor(options?: ErrorOptions) {
     super("Continue Watching is temporarily unavailable.", options);
     this.name = "ContinueWatchingError";
+  }
+}
+
+export type MediaArtworkErrorReason = "not_found" | "unavailable";
+
+export class MediaArtworkError extends Error {
+  public readonly code = "media_artwork_unavailable";
+  public readonly reason: MediaArtworkErrorReason;
+
+  public constructor(reason: MediaArtworkErrorReason, options?: ErrorOptions) {
+    super(
+      reason === "not_found"
+        ? "The requested media artwork is not available."
+        : "Media artwork is temporarily unavailable.",
+      options,
+    );
+    this.name = "MediaArtworkError";
+    this.reason = reason;
   }
 }
 
@@ -226,32 +244,75 @@ export class ContinueWatchingService {
     const row = this.#source(principal);
     const occurredAt = this.#clock();
     try {
-      const secrets = connectorSecrets(row, this.#cipher);
-      const token = accessToken(row, this.#cipher);
-      const tlsPolicy =
-        row.tlsPolicy === "strict" || row.tlsPolicy === "allow_self_signed"
-          ? row.tlsPolicy
-          : undefined;
-      if (!tlsPolicy) throw new ContinueWatchingConfigurationError();
-      let client: Pick<JellyfinUserMediaClient, "readContinueWatching">;
-      try {
-        client = this.#createClient({
-          accessToken: token,
-          baseUrl: row.baseUrl,
-          connectorId: row.connectorId,
-          deviceId: row.deviceId,
-          displayName: safeDisplayName(row.connectorDisplayName),
-          insecureHttpApproved: row.insecureHttpApproved === 1,
-          tlsPolicy,
-          ...secrets,
-        });
-      } catch (error) {
-        throw new ContinueWatchingConfigurationError("invalid", { cause: error });
-      }
+      const client = this.#client(row);
       const result = await client.readContinueWatching(signal);
       return this.#response(row, result, occurredAt);
     } catch (error) {
       return unavailableResponse(row, safeFailure(error, occurredAt), occurredAt);
+    }
+  }
+
+  public async readArtwork(
+    context: ContinueWatchingContext,
+    referenceId: string,
+    kind: "backdrop" | "poster",
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "media.view");
+    const row = this.#source(principal);
+    let reference;
+    try {
+      reference = this.#references.resolve(
+        { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId },
+        referenceId,
+      );
+    } catch (error) {
+      throw new MediaArtworkError("not_found", { cause: error });
+    }
+    const itemId =
+      kind === "poster" ? reference.artwork.posterItemId : reference.artwork.backdropItemId;
+    if (itemId === null) throw new MediaArtworkError("not_found");
+
+    try {
+      const image = await this.#client(row, 8 * 1_024 * 1_024).readImage({
+        itemId,
+        maxWidth: kind === "poster" ? 720 : 1_920,
+        ...(signal === undefined ? {} : { signal }),
+        type: kind === "poster" ? "Primary" : "Backdrop",
+      });
+      const digest = createHash("sha256").update(image.body).digest("base64url").slice(0, 22);
+      return Object.freeze({
+        body: image.body,
+        contentType: image.contentType,
+        etag: `"artwork_${digest}"`,
+      });
+    } catch (error) {
+      throw new MediaArtworkError("unavailable", { cause: error });
+    }
+  }
+
+  #client(row: ContinueWatchingSourceRow, maxResponseBytes?: number) {
+    const secrets = connectorSecrets(row, this.#cipher);
+    const token = accessToken(row, this.#cipher);
+    const tlsPolicy =
+      row.tlsPolicy === "strict" || row.tlsPolicy === "allow_self_signed"
+        ? row.tlsPolicy
+        : undefined;
+    if (!tlsPolicy) throw new ContinueWatchingConfigurationError();
+    try {
+      return this.#createClient({
+        accessToken: token,
+        baseUrl: row.baseUrl,
+        connectorId: row.connectorId,
+        deviceId: row.deviceId,
+        displayName: safeDisplayName(row.connectorDisplayName),
+        insecureHttpApproved: row.insecureHttpApproved === 1,
+        ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
+        tlsPolicy,
+        ...secrets,
+      });
+    } catch (error) {
+      throw new ContinueWatchingConfigurationError("invalid", { cause: error });
     }
   }
 

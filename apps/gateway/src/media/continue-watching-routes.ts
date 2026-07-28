@@ -1,8 +1,10 @@
 import {
   continueWatchingResponseJsonSchema,
   continueWatchingResponseSchema,
+  mediaReferenceIdSchema,
 } from "@omnifin/contracts/dashboard";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
@@ -11,7 +13,23 @@ import {
   ContinueWatchingError,
   ContinueWatchingService,
   type ContinueWatchingDependencies,
+  MediaArtworkError,
 } from "./continue-watching-service.js";
+
+const artworkParamsSchema = z.strictObject({
+  kind: z.enum(["backdrop", "poster"]),
+  referenceId: mediaReferenceIdSchema,
+});
+
+const artworkParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "referenceId"],
+  properties: {
+    kind: { enum: ["backdrop", "poster"] },
+    referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+  },
+} as const;
 
 async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: unknown) {
   reply.header("cache-control", "no-store");
@@ -63,6 +81,74 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
             cause: error,
             code: "continue_watching_unavailable",
             message: "Continue Watching is temporarily unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/:referenceId/images/:kind",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      schema: { params: artworkParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const params = artworkParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const artwork = await service.readArtwork(
+          { principal },
+          params.referenceId,
+          params.kind,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
+        reply.header("content-disposition", "inline");
+        reply.header("etag", artwork.etag);
+        reply.header("vary", "Cookie, Accept");
+        if (request.headers["if-none-match"] === artwork.etag) {
+          return reply.status(304).send();
+        }
+        return reply.type(artwork.contentType).send(Buffer.from(artwork.body));
+      } catch (error) {
+        if (error instanceof MediaArtworkError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "media_artwork_not_found"
+                : "media_artwork_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "The requested media artwork is not available."
+                : "Media artwork is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        if (error instanceof ContinueWatchingError) {
+          throw new SafeHttpError({
+            cause: error,
+            code: "media_artwork_unavailable",
+            message: "Media artwork is temporarily unavailable.",
             statusCode: 503,
           });
         }

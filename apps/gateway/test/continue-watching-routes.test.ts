@@ -50,7 +50,10 @@ async function harness() {
   const result: JellyfinContinueWatchingResult = {
     items: [
       {
-        artwork: { backdrop: null, poster: null },
+        artwork: {
+          backdrop: null,
+          poster: { itemId: privateItemId, type: "Primary" },
+        },
         contentRating: "PG-13",
         externalId: privateItemId,
         kind: "movie",
@@ -66,11 +69,15 @@ async function harness() {
     truncated: false,
   };
   const readContinueWatching = vi.fn(async () => result);
+  const readImage = vi.fn(async () => ({
+    body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+    contentType: "image/png" as const,
+  }));
   const app = await createApp({
     config,
     continueWatchingDependencies: {
       clock: () => now,
-      createClient: () => ({ readContinueWatching }),
+      createClient: () => ({ readContinueWatching, readImage }),
       mediaReferences: {
         clock: () => now,
         createToken: () => "r".repeat(22),
@@ -139,7 +146,7 @@ async function harness() {
       userId: "viewer-user",
     },
   });
-  return { app, readContinueWatching, viewer };
+  return { app, readContinueWatching, readImage, viewer };
 }
 
 describe("Continue Watching routes", () => {
@@ -176,6 +183,86 @@ describe("Continue Watching routes", () => {
       expect(response.statusCode).toBe(401);
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readContinueWatching).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves private artwork bytes with a validator and supports revalidation", async () => {
+    const { app, readImage, viewer } = await harness();
+    try {
+      await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/continue-watching",
+      });
+      const url = `/v1/media/media_${"r".repeat(22)}/images/poster`;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      expect(response.headers["content-type"]).toMatch(/^image\/png/u);
+      expect(response.headers["cache-control"]).toBe(
+        "private, max-age=3600, stale-while-revalidate=86400",
+      );
+      expect(response.headers.etag).toMatch(/^"artwork_[A-Za-z0-9_-]{22}"$/u);
+      expect(response.headers.vary).toContain("Cookie");
+      expect(response.headers.vary).toContain("Accept");
+      expect(readImage).toHaveBeenCalledWith({
+        itemId: privateItemId,
+        maxWidth: 720,
+        signal: expect.any(AbortSignal),
+        type: "Primary",
+      });
+
+      const revalidated = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "if-none-match": response.headers.etag!,
+        },
+        method: "GET",
+        url,
+      });
+      expect(revalidated.statusCode).toBe(304);
+      expect(revalidated.rawPayload).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a safe not-found response for another artwork reference", async () => {
+    const { app, readImage, viewer } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/media_${"z".repeat(22)}/images/poster`,
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("media_artwork_not_found");
+      expect(response.body).not.toContain(privateItemId);
+      expect(readImage).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires authentication before resolving an artwork reference", async () => {
+    const { app, readImage } = await harness();
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/media/media_${"r".repeat(22)}/images/poster`,
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
+      expect(readImage).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

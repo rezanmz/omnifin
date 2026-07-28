@@ -15,6 +15,7 @@ import {
   ContinueWatchingError,
   ContinueWatchingService,
   type ContinueWatchingClientFactoryInput,
+  type MediaArtworkError,
 } from "../src/media/continue-watching-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
@@ -162,8 +163,13 @@ function harness(options: { withIdentity?: boolean } = {}) {
   database.migrate();
   if (options.withIdentity !== false) insertIdentity(database, config);
   const readContinueWatching = vi.fn(async () => resumeResult());
+  const readImage = vi.fn(async () => ({
+    body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+    contentType: "image/jpeg" as const,
+  }));
   const createClient = vi.fn((_input: ContinueWatchingClientFactoryInput) => ({
     readContinueWatching,
+    readImage,
   }));
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
@@ -173,7 +179,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
       createToken: () => "m".repeat(22),
     },
   });
-  return { config, createClient, database, readContinueWatching, service };
+  return { config, createClient, database, readContinueWatching, readImage, service };
 }
 
 describe("ContinueWatchingService", () => {
@@ -234,6 +240,66 @@ describe("ContinueWatchingService", () => {
         state: "empty",
         truncated: false,
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("resolves authenticated artwork through a user-bound opaque reference", async () => {
+    const { createClient, database, readImage, service } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      const artwork = await service.readArtwork(
+        { principal: principal() },
+        feed.items[0]!.media.id,
+        "backdrop",
+      );
+
+      expect(artwork).toMatchObject({
+        body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        contentType: "image/jpeg",
+        etag: expect.stringMatching(/^"artwork_[A-Za-z0-9_-]{22}"$/u),
+      });
+      expect(createClient).toHaveBeenLastCalledWith(
+        expect.objectContaining({ maxResponseBytes: 8 * 1_024 * 1_024 }),
+      );
+      expect(readImage).toHaveBeenCalledWith({
+        itemId: privateSeriesId,
+        maxWidth: 1_920,
+        type: "Backdrop",
+      });
+      expect(JSON.stringify(artwork)).not.toContain(privateSeriesId);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not contact Jellyfin for an unknown or unbacked artwork reference", async () => {
+    const { database, readImage, service } = harness();
+    try {
+      await expect(
+        service.readArtwork({ principal: principal() }, `media_${"z".repeat(22)}`, "poster"),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(readImage).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("maps Jellyfin image failures to a safe artwork error", async () => {
+    const { database, readImage, service } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      readImage.mockRejectedValueOnce(new Error("private upstream artwork failure"));
+
+      await expect(
+        service.readArtwork({ principal: principal() }, feed.items[0]!.media.id, "poster"),
+      ).rejects.toEqual(
+        expect.objectContaining<Partial<MediaArtworkError>>({
+          code: "media_artwork_unavailable",
+          reason: "unavailable",
+        }),
+      );
     } finally {
       database.close();
     }
