@@ -84,6 +84,7 @@ test("operators can queue one exact-target acquisition search", async ({ page })
 });
 
 test("operators can compare and explicitly override one exact manual release", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await mockManualReleaseSession(page);
   await mockManualReleaseSearch(page);
   const capture = await mockManualReleaseGrab(page);
