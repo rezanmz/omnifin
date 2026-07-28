@@ -388,4 +388,25 @@ describe("PlaybackSessionService", () => {
       database.close();
     }
   });
+
+  it("rejects an oversized playback path without evaluating a nested expression", async () => {
+    const { database, negotiate, reference, service } = harness();
+    negotiate.mockResolvedValueOnce({
+      ...negotiatedResult(),
+      upstreamTarget: {
+        path: `Videos/${privateItemId}/${"!".repeat(32_768)}`,
+        query: "",
+      },
+    });
+    try {
+      await expect(
+        service.negotiate({ principal: principal() }, reference, negotiation),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from playback_sessions").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
 });

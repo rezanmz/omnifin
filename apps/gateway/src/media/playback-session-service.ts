@@ -34,6 +34,8 @@ import {
 } from "./media-reference-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const PLAYBACK_TARGET_SEGMENT_PATTERN = /^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/u;
+const MAX_PLAYBACK_TARGET_PATH_LENGTH = 4_096;
 const PLAYBACK_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
 const STOPPED_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
@@ -54,10 +56,27 @@ const SENSITIVE_QUERY_NAMES = new Set([
 ]);
 
 const identifierSchema = z.string().regex(IDENTIFIER_PATTERN);
+
+function isPlaybackTargetPath(value: string) {
+  if (value.length > MAX_PLAYBACK_TARGET_PATH_LENGTH) return false;
+  const segments = value.split("/");
+  if (
+    segments.length < 3 ||
+    segments[0] !== "Videos" ||
+    !IDENTIFIER_PATTERN.test(segments[1] ?? "")
+  ) {
+    return false;
+  }
+  return segments
+    .slice(2)
+    .every(
+      (segment) =>
+        segment !== "." && segment !== ".." && PLAYBACK_TARGET_SEGMENT_PATTERN.test(segment),
+    );
+}
+
 const playbackTargetSchema = z.strictObject({
-  path: z
-    .string()
-    .regex(/^Videos\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/(?:[A-Za-z0-9._~!$&'()*+,;=:@%-]+\/?)+$/iu),
+  path: z.string().refine(isPlaybackTargetPath),
   query: z.string().max(32_768),
 });
 
