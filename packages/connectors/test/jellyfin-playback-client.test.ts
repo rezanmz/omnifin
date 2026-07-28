@@ -367,4 +367,77 @@ describe("JellyfinPlaybackClient", () => {
       SubtitleStreamIndex: 3,
     });
   });
+
+  it("reads a negotiated playback target with authentication and a bounded byte range", async () => {
+    const bytes = new Uint8Array([0, 1, 2, 3]);
+    const { client, requests } = clientWithResponses([
+      new Response(bytes, {
+        status: 206,
+        headers: {
+          "accept-ranges": "bytes",
+          "content-range": "bytes 0-3/120",
+          "content-type": "video/mp4",
+        },
+      }),
+    ]);
+
+    const response = await client.readPlaybackTarget({
+      accept: "video/*",
+      range: "bytes=0-3",
+      target: {
+        path: "Videos/movie-upstream-1/stream",
+        query: "static=true&mediaSourceId=media-source-1",
+      },
+    });
+
+    expect(response).toMatchObject({ body: bytes, status: 206 });
+    expect(response.headers.get("content-range")).toBe("bytes 0-3/120");
+    expect(requests[0]?.url.pathname).toBe("/base/Videos/movie-upstream-1/stream");
+    expect(requests[0]?.url.search).toBe("?static=true&mediaSourceId=media-source-1");
+    expect(requests[0]?.init.headers.get("range")).toBe("bytes=0-3");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("returns an unsatisfied range response for the gateway to sanitize", async () => {
+    const { client } = clientWithResponses([
+      new Response("upstream detail", {
+        status: 416,
+        headers: { "content-range": "bytes */120" },
+      }),
+    ]);
+
+    const response = await client.readPlaybackTarget({
+      range: "bytes=500-503",
+      target: {
+        path: "Videos/movie-upstream-1/stream",
+        query: "static=true&mediaSourceId=media-source-1",
+      },
+    });
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("content-range")).toBe("bytes */120");
+  });
+
+  it("normalizes same-server HLS assets while rejecting traversal and external URLs", () => {
+    const { client } = clientWithResponses([]);
+    const parent = {
+      path: "Videos/movie-upstream-1/master.m3u8",
+      query: "MediaSourceId=media-source-1",
+    };
+
+    expect(client.resolvePlaybackTarget(parent, "hls1/main/0.ts?api_key=leaked&segment=0")).toEqual(
+      {
+        path: "Videos/movie-upstream-1/hls1/main/0.ts",
+        query: "segment=0",
+      },
+    );
+    expect(() =>
+      client.resolvePlaybackTarget(parent, "https://attacker.example.test/segment.ts"),
+    ).toThrow(/safely interpret/i);
+    expect(() => client.resolvePlaybackTarget(parent, "../../../private/segment.ts")).toThrow(
+      /safely interpret/i,
+    );
+  });
 });

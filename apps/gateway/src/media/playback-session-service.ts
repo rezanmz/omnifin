@@ -1,8 +1,10 @@
 import {
   JellyfinPlaybackClient,
   JellyfinPlaybackUnavailableError,
+  type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
   type JellyfinPlaybackReportingSession,
+  type JellyfinPlaybackTarget,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
@@ -35,6 +37,11 @@ const PLAYBACK_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
 const STOPPED_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
 const MAX_CREATION_ATTEMPTS = 8;
+const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
+const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
+const HLS_ASSET_MAX_BYTES = 10 * 1_024 * 1_024;
+const MAX_MANIFEST_LINES = 20_000;
+const MAX_ASSET_TOKEN_LENGTH = 8_192;
 const SENSITIVE_QUERY_NAMES = new Set([
   "access_token",
   "api_key",
@@ -46,6 +53,13 @@ const SENSITIVE_QUERY_NAMES = new Set([
 ]);
 
 const identifierSchema = z.string().regex(IDENTIFIER_PATTERN);
+const playbackTargetSchema = z.strictObject({
+  path: z
+    .string()
+    .regex(/^Videos\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/(?:[A-Za-z0-9._~!$&'()*+,;=:@%-]+\/?)+$/iu),
+  query: z.string().max(32_768),
+});
+
 const storedPlaybackSchema = z
   .strictObject({
     audioStreamIndex: z.int().nonnegative().max(4_095).nullable(),
@@ -57,12 +71,7 @@ const storedPlaybackSchema = z
     playSessionId: identifierSchema,
     schemaVersion: z.literal(1),
     subtitleStreamIndex: z.int().nonnegative().max(4_095).nullable(),
-    upstreamTarget: z.strictObject({
-      path: z
-        .string()
-        .regex(/^Videos\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/(?:master\.m3u8|stream)$/iu),
-      query: z.string().max(32_768),
-    }),
+    upstreamTarget: playbackTargetSchema,
   })
   .superRefine((payload, context) => {
     let query: URLSearchParams;
@@ -80,6 +89,11 @@ const storedPlaybackSchema = z
     }
   });
 type StoredPlayback = z.infer<typeof storedPlaybackSchema>;
+
+const storedPlaybackAssetSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  target: playbackTargetSchema,
+});
 
 interface PlaybackSourceRow {
   baseUrl: string;
@@ -133,12 +147,16 @@ export interface PlaybackSessionDependencies {
   clock?: () => Date;
   createClient?: (
     input: PlaybackClientFactoryInput,
-  ) => Pick<JellyfinPlaybackClient, "negotiate" | "reportPlaybackEvent">;
+  ) => Pick<
+    JellyfinPlaybackClient,
+    "negotiate" | "readPlaybackTarget" | "reportPlaybackEvent" | "resolvePlaybackTarget"
+  >;
   createToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
 }
 
-export type PlaybackSessionErrorReason = "not_found" | "transition_invalid" | "unavailable";
+export type PlaybackSessionErrorReason =
+  "not_found" | "range_invalid" | "transition_invalid" | "unavailable";
 
 export class PlaybackSessionError extends Error {
   public readonly code = "playback_session_unavailable";
@@ -148,9 +166,11 @@ export class PlaybackSessionError extends Error {
     super(
       reason === "transition_invalid"
         ? "The playback session cannot accept that state transition."
-        : reason === "not_found"
-          ? "The playback session is no longer available."
-          : "Playback is temporarily unavailable.",
+        : reason === "range_invalid"
+          ? "The requested media range is invalid."
+          : reason === "not_found"
+            ? "The playback session is no longer available."
+            : "Playback is temporarily unavailable.",
       options,
     );
     this.name = "PlaybackSessionError";
@@ -170,6 +190,10 @@ function credentialsContext(connectorId: string) {
 
 function playbackContext(sessionId: string) {
   return `playback_session:jellyfin:${sessionId}`;
+}
+
+function playbackAssetContext(sessionId: string) {
+  return `playback_asset:jellyfin:${sessionId}`;
 }
 
 function validTime(now: Date) {
@@ -263,6 +287,56 @@ function nextState(current: PlaybackSessionRow["state"], event: PlaybackProgress
 function publicState(state: string): PlaybackProgressResponse["state"] {
   if (state === "playing" || state === "paused" || state === "stopped") return state;
   throw new PlaybackSessionError("unavailable");
+}
+
+function parseRange(value: string | undefined) {
+  if (value === undefined) return `bytes=0-${DIRECT_RANGE_BYTES - 1}`;
+  const match = /^bytes=(\d+)-(\d*)$/u.exec(value.trim());
+  if (!match?.[1]) throw new PlaybackSessionError("range_invalid");
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : start + DIRECT_RANGE_BYTES - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start < 0 ||
+    requestedEnd < start
+  ) {
+    throw new PlaybackSessionError("range_invalid");
+  }
+  return `bytes=${start}-${Math.min(requestedEnd, start + DIRECT_RANGE_BYTES - 1)}`;
+}
+
+function contentType(headers: Headers, fallback: string) {
+  const value = headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  return value && /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(value)
+    ? value
+    : fallback;
+}
+
+function contentRange(headers: Headers) {
+  const value = headers.get("content-range");
+  return value && /^bytes (?:\d+-\d+|\*)\/\d+$/u.test(value) ? value : null;
+}
+
+function decodeManifest(body: Uint8Array) {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch (error) {
+    throw new PlaybackSessionError("unavailable", { cause: error });
+  }
+  if (text.length > MANIFEST_MAX_BYTES || /[\u0000\u000B\u000C\u000E-\u001F\u007F]/u.test(text)) {
+    throw new PlaybackSessionError("unavailable");
+  }
+  const lines = text.replace(/\r\n?/gu, "\n").split("\n");
+  if (lines.length > MAX_MANIFEST_LINES || lines[0]?.trim() !== "#EXTM3U") {
+    throw new PlaybackSessionError("unavailable");
+  }
+  return lines;
+}
+
+function isManifestTarget(target: JellyfinPlaybackTarget) {
+  return target.path.toLowerCase().endsWith(".m3u8");
 }
 
 export class PlaybackSessionService {
@@ -359,14 +433,7 @@ export class PlaybackSessionService {
     const now = validTime(this.#clock());
     const session = this.#session(source, sessionId, now);
     const state = nextState(session.state, request.event);
-    let payload: StoredPlayback;
-    try {
-      payload = storedPlaybackSchema.parse(
-        JSON.parse(this.#cipher.decrypt(session.encryptedPayload, playbackContext(session.id))),
-      );
-    } catch (error) {
-      throw new PlaybackSessionError("not_found", { cause: error });
-    }
+    const payload = this.#payload(session);
     const positionSeconds = Math.min(request.positionSeconds, payload.durationSeconds);
     try {
       await this.#client(source).reportPlaybackEvent(
@@ -385,6 +452,7 @@ export class PlaybackSessionService {
         signal,
       );
     } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
       throw new PlaybackSessionError("unavailable", { cause: error });
     }
 
@@ -425,7 +493,97 @@ export class PlaybackSessionService {
     }
   }
 
-  #client(source: PlaybackSourceRow) {
+  public async readDirect(
+    context: PlaybackSessionContext,
+    sessionId: string,
+    range: string | undefined,
+    signal?: AbortSignal,
+  ) {
+    const { client, payload } = this.#stream(context, sessionId, HLS_ASSET_MAX_BYTES);
+    if (payload.playMethod !== "DirectPlay" || payload.upstreamTarget.path.endsWith(".m3u8")) {
+      throw new PlaybackSessionError("not_found");
+    }
+    let response: JellyfinPlaybackBytesResult;
+    try {
+      response = await client.readPlaybackTarget({
+        accept: "video/*,audio/*,application/octet-stream",
+        range: parseRange(range),
+        ...(signal === undefined ? {} : { signal }),
+        target: payload.upstreamTarget,
+      });
+    } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    return {
+      body: response.status === 416 ? new Uint8Array() : response.body,
+      contentRange: contentRange(response.headers),
+      contentType: contentType(response.headers, "application/octet-stream"),
+      status: response.status === 206 ? 206 : response.status === 416 ? 416 : 200,
+    } as const;
+  }
+
+  public async readManifest(
+    context: PlaybackSessionContext,
+    sessionId: string,
+    signal?: AbortSignal,
+  ) {
+    const { client, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
+    if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
+      throw new PlaybackSessionError("not_found");
+    }
+    return this.#manifest(client, session, payload.upstreamTarget, signal);
+  }
+
+  public async readAsset(
+    context: PlaybackSessionContext,
+    sessionId: string,
+    token: string,
+    signal?: AbortSignal,
+  ) {
+    if (
+      token.length < 64 ||
+      token.length > MAX_ASSET_TOKEN_LENGTH ||
+      !/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token)
+    ) {
+      throw new PlaybackSessionError("not_found");
+    }
+    const { client, payload, session } = this.#stream(context, sessionId, HLS_ASSET_MAX_BYTES);
+    if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
+      throw new PlaybackSessionError("not_found");
+    }
+    let target: JellyfinPlaybackTarget;
+    try {
+      const asset = storedPlaybackAssetSchema.parse(
+        JSON.parse(
+          this.#cipher.decrypt(token.slice("asset_".length), playbackAssetContext(session.id)),
+        ),
+      );
+      target = asset.target;
+    } catch (error) {
+      throw new PlaybackSessionError("not_found", { cause: error });
+    }
+    if (isManifestTarget(target)) return this.#manifest(client, session, target, signal);
+
+    let response: JellyfinPlaybackBytesResult;
+    try {
+      response = await client.readPlaybackTarget({
+        accept: "video/*,audio/*,text/vtt,application/octet-stream",
+        ...(signal === undefined ? {} : { signal }),
+        target,
+      });
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    return {
+      body: response.body,
+      contentType: contentType(response.headers, "application/octet-stream"),
+      kind: "asset" as const,
+      status: response.status === 206 ? 206 : response.status === 416 ? 416 : 200,
+    };
+  }
+
+  #client(source: PlaybackSourceRow, maxResponseBytes?: number) {
     const tlsPolicy =
       source.tlsPolicy === "strict" || source.tlsPolicy === "allow_self_signed"
         ? source.tlsPolicy
@@ -439,12 +597,106 @@ export class PlaybackSessionService {
         deviceId: source.deviceId,
         displayName: source.connectorDisplayName,
         insecureHttpApproved: source.insecureHttpApproved === 1,
+        ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
         tlsPolicy,
         ...connectorSecrets(source, this.#cipher),
       });
     } catch (error) {
       throw new PlaybackConfigurationError("invalid", { cause: error });
     }
+  }
+
+  #payload(session: PlaybackSessionRow) {
+    try {
+      return storedPlaybackSchema.parse(
+        JSON.parse(this.#cipher.decrypt(session.encryptedPayload, playbackContext(session.id))),
+      );
+    } catch (error) {
+      throw new PlaybackSessionError("not_found", { cause: error });
+    }
+  }
+
+  #stream(context: PlaybackSessionContext, sessionId: string, maxResponseBytes: number) {
+    const principal = requirePermission(context.principal, "media.view");
+    playbackSessionIdSchema.parse(sessionId);
+    const source = this.#source(principal);
+    const session = this.#session(source, sessionId, validTime(this.#clock()));
+    if (session.state === "stopped") throw new PlaybackSessionError("not_found");
+    return {
+      client: this.#client(source, maxResponseBytes),
+      payload: this.#payload(session),
+      session,
+    };
+  }
+
+  async #manifest(
+    client: Pick<JellyfinPlaybackClient, "readPlaybackTarget" | "resolvePlaybackTarget">,
+    session: PlaybackSessionRow,
+    target: JellyfinPlaybackTarget,
+    signal?: AbortSignal,
+  ) {
+    let response: JellyfinPlaybackBytesResult;
+    try {
+      response = await client.readPlaybackTarget({
+        accept: "application/vnd.apple.mpegurl,application/x-mpegURL,audio/mpegurl",
+        ...(signal === undefined ? {} : { signal }),
+        target,
+      });
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    if (response.status !== 200) throw new PlaybackSessionError("unavailable");
+    const lines = decodeManifest(response.body);
+    const rewritten = lines.map((line) =>
+      this.#rewriteManifestLine(client, session.id, target, line),
+    );
+    return {
+      body: `${rewritten.join("\n").replace(/\n+$/u, "")}\n`,
+      contentType: "application/vnd.apple.mpegurl" as const,
+      kind: "manifest" as const,
+      status: 200 as const,
+    };
+  }
+
+  #rewriteManifestLine(
+    client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
+    sessionId: string,
+    parent: JellyfinPlaybackTarget,
+    line: string,
+  ) {
+    const compacted = line.trim();
+    if (!compacted || compacted === "#EXTM3U") return line;
+    if (!compacted.startsWith("#")) return this.#assetPath(client, sessionId, parent, compacted);
+
+    let replacements = 0;
+    const rewritten = line.replace(/URI="([^"\r\n]{1,16384})"/gu, (_match, uri: string) => {
+      replacements += 1;
+      return `URI="${this.#assetPath(client, sessionId, parent, uri)}"`;
+    });
+    if (/\bURI\s*=/iu.test(line) && replacements === 0) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    return rewritten;
+  }
+
+  #assetPath(
+    client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
+    sessionId: string,
+    parent: JellyfinPlaybackTarget,
+    uri: string,
+  ) {
+    let target: JellyfinPlaybackTarget;
+    try {
+      target = client.resolvePlaybackTarget(parent, uri);
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    const token = `asset_${this.#cipher.encrypt(
+      JSON.stringify(storedPlaybackAssetSchema.parse({ schemaVersion: 1, target })),
+      playbackAssetContext(sessionId),
+    )}`;
+    if (token.length > MAX_ASSET_TOKEN_LENGTH) throw new PlaybackSessionError("unavailable");
+    return `/v1/playback/${sessionId}/hls/${token}`;
   }
 
   #createSession(

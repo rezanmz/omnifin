@@ -78,7 +78,15 @@ function playbackResult(): JellyfinPlaybackResult {
 async function harness() {
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
+  const readPlaybackTarget = vi.fn();
   const reportPlaybackEvent = vi.fn(async () => undefined);
+  const resolvePlaybackTarget = vi.fn(
+    (parent: { path: string; query: string }, candidate: string) => {
+      const url = new URL(candidate, `https://jellyfin.example.test/base/${parent.path}`);
+      url.searchParams.delete("api_key");
+      return { path: url.pathname.slice("/base/".length), query: url.searchParams.toString() };
+    },
+  );
   const app = await createApp({
     config,
     continueWatchingDependencies: {
@@ -111,7 +119,12 @@ async function harness() {
     },
     playbackDependencies: {
       clock: () => now,
-      createClient: () => ({ negotiate, reportPlaybackEvent }),
+      createClient: () => ({
+        negotiate,
+        readPlaybackTarget,
+        reportPlaybackEvent,
+        resolvePlaybackTarget,
+      }),
       createToken: () => "p".repeat(22),
     },
     sessionDependencies: {
@@ -197,7 +210,15 @@ async function harness() {
     cookie,
     origin: "https://omnifin.example",
   };
-  return { app, headers, negotiate, referenceId, reportPlaybackEvent };
+  return {
+    app,
+    headers,
+    negotiate,
+    readPlaybackTarget,
+    referenceId,
+    reportPlaybackEvent,
+    resolvePlaybackTarget,
+  };
 }
 
 const negotiation = {
@@ -272,6 +293,218 @@ describe("playback routes", () => {
       expect(missing.statusCode).toBe(404);
       expect(apiErrorSchema.parse(missing.json()).error.code).toBe("playback_session_not_found");
       expect(negotiate).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rewrites HLS manifests into opaque same-origin assets and proxies their bytes", async () => {
+    const { app, headers, readPlaybackTarget, referenceId, resolvePlaybackTarget } =
+      await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(
+          '#EXTM3U\n#EXT-X-MAP:URI="hls1/main/init.mp4?api_key=private&part=init"\nhls1/main/0.m4s?api_key=private&segment=0\n',
+        ),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(manifest.statusCode, manifest.body).toBe(200);
+      expect(manifest.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
+      expect(manifest.headers["cache-control"]).toBe("private, no-store");
+      expect(manifest.body).toMatch(
+        new RegExp(`/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
+      );
+      expect(manifest.body).not.toMatch(/private|route-private|media-source|upstream/u);
+      expect(resolvePlaybackTarget).toHaveBeenCalledTimes(2);
+
+      const assetPath = manifest.body
+        .split("\n")
+        .find((line) => line.startsWith(`/v1/playback/${playback.sessionId}/hls/`));
+      expect(assetPath).toBeDefined();
+      const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: bytes,
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      });
+      const asset = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: assetPath!,
+      });
+      expect(asset.statusCode, asset.body).toBe(200);
+      expect(asset.rawPayload).toEqual(Buffer.from(bytes));
+      expect(asset.headers["content-type"]).toMatch(/^video\/mp4/u);
+      expect(readPlaybackTarget).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: {
+            path: `Videos/${privateItemId}/hls1/main/0.m4s`,
+            query: "segment=0",
+          },
+        }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rewrites nested HLS manifests and rejects tampered asset tokens before upstream access", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls1/variant.m3u8\n",
+          ),
+          headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\n0.ts\n"),
+          headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+          status: 200,
+        });
+
+      const master = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      const nestedPath = master.body
+        .split("\n")
+        .find((line) => line.startsWith(`/v1/playback/${playback.sessionId}/hls/`));
+      expect(nestedPath).toBeDefined();
+
+      const nested = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: nestedPath!,
+      });
+      expect(nested.statusCode, nested.body).toBe(200);
+      expect(nested.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
+      expect(nested.body).toMatch(new RegExp(`/v1/playback/${playback.sessionId}/hls/asset_v2\\.`));
+      expect(nested.body).not.toMatch(/private|variant\.m3u8|0\.ts/u);
+
+      const token = nestedPath!.split("/").at(-1)!;
+      const tamperedToken = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+      const callsBeforeTamper = readPlaybackTarget.mock.calls.length;
+      const tampered = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/hls/${tamperedToken}`,
+      });
+      expect(tampered.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(tampered.json()).error.code).toBe("playback_session_not_found");
+      expect(readPlaybackTarget).toHaveBeenCalledTimes(callsBeforeTamper);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("bounds direct-play range requests and preserves safe range metadata", async () => {
+    const { app, headers, negotiate, readPlaybackTarget, referenceId } = await harness();
+    negotiate.mockResolvedValueOnce({
+      ...playbackResult(),
+      delivery: "direct",
+      playMethod: "DirectPlay",
+      upstreamTarget: { path: `Videos/${privateItemId}/stream`, query: "static=true" },
+    });
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const bytes = new Uint8Array([1, 2, 3, 4]);
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: bytes,
+        headers: new Headers({
+          "content-range": "bytes 1200-1203/72000000",
+          "content-type": "video/mp4",
+        }),
+        status: 206,
+      });
+
+      const stream = await app.inject({
+        headers: { cookie: headers.cookie, range: "bytes=1200-999999999" },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(stream.statusCode, stream.body).toBe(206);
+      expect(stream.rawPayload).toEqual(Buffer.from(bytes));
+      expect(stream.headers["accept-ranges"]).toBe("bytes");
+      expect(stream.headers["content-range"]).toBe("bytes 1200-1203/72000000");
+      expect(stream.headers.vary).toContain("Range");
+      expect(readPlaybackTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ range: `bytes=1200-${1200 + 8 * 1_024 * 1_024 - 1}` }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a safe 416 for malformed and unsatisfied direct-play ranges", async () => {
+    const { app, headers, negotiate, readPlaybackTarget, referenceId } = await harness();
+    negotiate.mockResolvedValueOnce({
+      ...playbackResult(),
+      delivery: "direct",
+      playMethod: "DirectPlay",
+      upstreamTarget: { path: `Videos/${privateItemId}/stream`, query: "static=true" },
+    });
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const malformed = await app.inject({
+        headers: { cookie: headers.cookie, range: "bytes=-500" },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(malformed.statusCode).toBe(416);
+      expect(apiErrorSchema.parse(malformed.json()).error.code).toBe("playback_range_invalid");
+      expect(readPlaybackTarget).not.toHaveBeenCalled();
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("private upstream error"),
+        headers: new Headers({ "content-range": "bytes */72000000" }),
+        status: 416,
+      });
+      const unsatisfied = await app.inject({
+        headers: { cookie: headers.cookie, range: "bytes=90000000-" },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(unsatisfied.statusCode).toBe(416);
+      expect(unsatisfied.rawPayload).toHaveLength(0);
+      expect(unsatisfied.body).not.toContain("private upstream error");
+      expect(unsatisfied.headers["content-range"]).toBe("bytes */72000000");
     } finally {
       await app.close();
     }

@@ -193,10 +193,16 @@ function harness() {
     },
   ])[0]!;
   const negotiate = vi.fn(async () => negotiatedResult());
+  const readPlaybackTarget = vi.fn(async () => {
+    throw new Error("Playback bytes were not expected in this service test.");
+  });
   const reportPlaybackEvent = vi.fn(async () => undefined);
+  const resolvePlaybackTarget = vi.fn((parent) => parent);
   const createClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
     negotiate,
+    readPlaybackTarget,
     reportPlaybackEvent,
+    resolvePlaybackTarget,
   }));
   const service = new PlaybackSessionService(database, config, {
     clock: () => now,

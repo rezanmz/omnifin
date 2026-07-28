@@ -202,6 +202,17 @@ export interface JellyfinPlaybackReportingSession {
   subtitleStreamIndex: number | null;
 }
 
+export interface JellyfinPlaybackTarget {
+  path: string;
+  query: string;
+}
+
+export interface JellyfinPlaybackBytesResult {
+  body: Uint8Array;
+  headers: Headers;
+  status: number;
+}
+
 export class JellyfinPlaybackUnavailableError extends Error {
   public readonly code = "playback_unavailable";
 
@@ -470,6 +481,59 @@ export class JellyfinPlaybackClient {
     });
   }
 
+  public async readPlaybackTarget(input: {
+    accept?: string;
+    range?: string;
+    signal?: AbortSignal;
+    target: JellyfinPlaybackTarget;
+  }): Promise<JellyfinPlaybackBytesResult> {
+    const target = this.#validatedTarget(input.target, "media.playback.stream");
+    if (input.range !== undefined && !/^bytes=\d+-\d+$/u.test(input.range)) {
+      throw this.#client.invalidResponse("media.playback.stream");
+    }
+    if (
+      input.accept !== undefined &&
+      (!/^[A-Za-z0-9*+./,;= -]{1,256}$/u.test(input.accept) || /[\r\n]/u.test(input.accept))
+    ) {
+      throw this.#client.invalidResponse("media.playback.stream");
+    }
+    return this.#client.requestBytes(target.path, {
+      acceptedStatuses: [206, 416],
+      headers: {
+        ...(input.accept === undefined ? {} : { accept: input.accept }),
+        authorization: this.#authorization,
+        ...(input.range === undefined ? {} : { range: input.range }),
+      },
+      operation: "media.playback.stream",
+      query: new URLSearchParams(target.query),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+
+  public resolvePlaybackTarget(
+    parent: JellyfinPlaybackTarget,
+    candidate: string,
+  ): JellyfinPlaybackTarget {
+    const normalizedParent = this.#validatedTarget(parent, "media.playback.manifest");
+    if (!candidate || candidate.length > 16_384 || /[\p{Cc}\p{Cf}\\]/u.test(candidate)) {
+      throw this.#client.invalidResponse("media.playback.manifest");
+    }
+    const parentUrl = new URL(normalizedParent.path, this.#baseUrl);
+    parentUrl.search = normalizedParent.query;
+    let target: URL;
+    try {
+      target = new URL(candidate, parentUrl);
+    } catch {
+      throw this.#client.invalidResponse("media.playback.manifest");
+    }
+    const normalized = this.#targetFromUrl(target, "media.playback.manifest");
+    const parentScope = normalizedParent.path.split("/").slice(0, 2).join("/");
+    if (!normalized.path.startsWith(`${parentScope}/`)) {
+      throw this.#client.invalidResponse("media.playback.manifest");
+    }
+    return normalized;
+  }
+
   #directTarget(itemId: string, mediaSourceId: string, playSessionId: string) {
     const query = new URLSearchParams({
       static: "true",
@@ -487,6 +551,37 @@ export class JellyfinPlaybackClient {
     } catch {
       throw this.#client.invalidResponse("media.playback.negotiate");
     }
+    const normalized = this.#targetFromUrl(target, "media.playback.negotiate");
+    const path = normalized.path;
+    if (!/^Videos\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/master\.m3u8$/iu.test(path)) {
+      throw this.#client.invalidResponse("media.playback.negotiate");
+    }
+    return normalized;
+  }
+
+  #validatedTarget(target: JellyfinPlaybackTarget, operation: string) {
+    if (
+      !target.path ||
+      target.path.length > 4_096 ||
+      target.query.length > 32_768 ||
+      target.path.startsWith("/") ||
+      /[?#\\\p{Cc}\p{Cf}\s]/u.test(target.path)
+    ) {
+      throw this.#client.invalidResponse(operation);
+    }
+    let url: URL;
+    try {
+      url = new URL(target.path, this.#baseUrl);
+      url.search = target.query;
+    } catch {
+      throw this.#client.invalidResponse(operation);
+    }
+    const normalized = this.#targetFromUrl(url, operation);
+    if (normalized.path !== target.path) throw this.#client.invalidResponse(operation);
+    return normalized;
+  }
+
+  #targetFromUrl(target: URL, operation: string): JellyfinPlaybackTarget {
     if (
       target.origin !== this.#baseUrl.origin ||
       target.username ||
@@ -494,11 +589,29 @@ export class JellyfinPlaybackClient {
       target.hash ||
       !target.pathname.startsWith(this.#baseUrl.pathname)
     ) {
-      throw this.#client.invalidResponse("media.playback.negotiate");
+      throw this.#client.invalidResponse(operation);
     }
     const path = target.pathname.slice(this.#baseUrl.pathname.length);
-    if (!/^Videos\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/master\.m3u8$/iu.test(path)) {
-      throw this.#client.invalidResponse("media.playback.negotiate");
+    if (!path || path.length > 4_096 || !path.startsWith("Videos/")) {
+      throw this.#client.invalidResponse(operation);
+    }
+    for (const rawSegment of path.split("/")) {
+      let segment = rawSegment;
+      try {
+        for (let pass = 0; pass < 2; pass += 1) segment = decodeURIComponent(segment);
+      } catch {
+        throw this.#client.invalidResponse(operation);
+      }
+      if (
+        !segment ||
+        segment === "." ||
+        segment === ".." ||
+        segment.includes("/") ||
+        segment.includes("\\") ||
+        /[\p{Cc}\p{Cf}\s]/u.test(segment)
+      ) {
+        throw this.#client.invalidResponse(operation);
+      }
     }
     for (const name of [...target.searchParams.keys()]) {
       if (sensitiveQueryNames.has(name.toLowerCase())) target.searchParams.delete(name);

@@ -12,6 +12,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
+import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import {
   PlaybackSessionError,
@@ -21,6 +22,13 @@ import {
 
 const negotiationParamsSchema = z.strictObject({ referenceId: mediaReferenceIdSchema });
 const progressParamsSchema = z.strictObject({ sessionId: playbackSessionIdSchema });
+const assetParamsSchema = progressParamsSchema.extend({
+  assetToken: z
+    .string()
+    .min(64)
+    .max(8_192)
+    .regex(/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u),
+});
 
 const negotiationParamsJsonSchema = {
   type: "object",
@@ -34,6 +42,21 @@ const progressParamsJsonSchema = {
   additionalProperties: false,
   required: ["sessionId"],
   properties: { sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" } },
+} as const;
+
+const assetParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["assetToken", "sessionId"],
+  properties: {
+    assetToken: {
+      type: "string",
+      minLength: 64,
+      maxLength: 8_192,
+      pattern: "^asset_v2\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+    },
+    sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" },
+  },
 } as const;
 
 async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: unknown) {
@@ -60,6 +83,14 @@ function playbackError(error: PlaybackSessionError) {
       statusCode: 409,
     });
   }
+  if (error.reason === "range_invalid") {
+    return new SafeHttpError({
+      cause: error,
+      code: "playback_range_invalid",
+      message: "The requested media range is invalid.",
+      statusCode: 416,
+    });
+  }
   return new SafeHttpError({
     cause: error,
     code: "playback_unavailable",
@@ -74,6 +105,21 @@ export interface PlaybackRoutesOptions {
 
 export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (app, options) => {
   const playback = new PlaybackSessionService(app.database, app.appConfig, options.dependencies);
+
+  function readPrincipal(request: FastifyRequest, reply: FastifyReply) {
+    const session = app.sessionService.resolveAndRefresh(
+      request.cookies[sessionCookieName(app.appConfig)],
+    );
+    if (session?.rotatedSessionToken) {
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        session.rotatedSessionToken,
+        session.absoluteExpiresAt,
+      );
+    }
+    return requirePermission(session?.principal, "media.view");
+  }
 
   app.post(
     "/v1/media/:referenceId/playback",
@@ -145,6 +191,106 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
         return playbackProgressResponseSchema.parse(
           await playback.report({ principal }, params.sessionId, input, controller.signal),
         );
+      } catch (error) {
+        if (error instanceof PlaybackSessionError) throw playbackError(error);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/playback/:sessionId/stream",
+    {
+      config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
+      schema: { params: progressParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const principal = readPrincipal(request, reply);
+      const params = progressParamsSchema.parse(request.params);
+      const range = request.headers.range;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const stream = await playback.readDirect(
+          { principal },
+          params.sessionId,
+          range,
+          controller.signal,
+        );
+        reply.header("accept-ranges", "bytes");
+        reply.header("cache-control", "private, no-store");
+        reply.header("content-disposition", "inline");
+        reply.header("vary", "Cookie, Range");
+        if (stream.contentRange) reply.header("content-range", stream.contentRange);
+        return reply.status(stream.status).type(stream.contentType).send(Buffer.from(stream.body));
+      } catch (error) {
+        if (error instanceof PlaybackSessionError) throw playbackError(error);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/playback/:sessionId/master.m3u8",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      schema: { params: progressParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const principal = readPrincipal(request, reply);
+      const params = progressParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const manifest = await playback.readManifest(
+          { principal },
+          params.sessionId,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, no-store");
+        reply.header("content-disposition", "inline");
+        reply.header("vary", "Cookie");
+        return reply.status(200).type(manifest.contentType).send(manifest.body);
+      } catch (error) {
+        if (error instanceof PlaybackSessionError) throw playbackError(error);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/playback/:sessionId/hls/:assetToken",
+    {
+      config: { rateLimit: { max: 600, timeWindow: "1 minute" } },
+      schema: { params: assetParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const principal = readPrincipal(request, reply);
+      const params = assetParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const asset = await playback.readAsset(
+          { principal },
+          params.sessionId,
+          params.assetToken,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, no-store");
+        reply.header("content-disposition", "inline");
+        reply.header("vary", "Cookie");
+        return asset.kind === "manifest"
+          ? reply.status(200).type(asset.contentType).send(asset.body)
+          : reply.status(asset.status).type(asset.contentType).send(Buffer.from(asset.body));
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
