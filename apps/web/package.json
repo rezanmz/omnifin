@@ -23,13 +23,14 @@
   "dependencies": {
     "@omnifin/contracts": "workspace:*",
     "@tanstack/react-query": "5.101.4",
+    "hls.js": "1.6.16",
     "lucide-react": "1.26.0",
     "motion": "12.42.2",
     "next": "16.2.11",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "zustand": "5.0.14",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "zustand": "5.0.14"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

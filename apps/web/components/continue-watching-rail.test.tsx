@@ -1,6 +1,7 @@
+import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   demoContinueWatchingFeed,
@@ -9,7 +10,32 @@ import {
 } from "../lib/continue-watching-demo";
 import { ContinueWatchingRail } from "./continue-watching-rail";
 
+const playbackSessionId = `playback_${"p".repeat(22)}`;
+const playbackSession: PlaybackNegotiationResponse = {
+  audioTracks: [],
+  delivery: "direct",
+  expiresAt: "2026-07-28T20:00:00.000Z",
+  media: {
+    audioCodec: "aac",
+    bitrate: 8_000_000,
+    container: "mp4",
+    durationSeconds: 3_600,
+    height: 1080,
+    videoCodec: "h264",
+    width: 1920,
+  },
+  mediaReferenceId: `media_${"b".repeat(22)}`,
+  positionSeconds: 1_200,
+  sessionId: playbackSessionId,
+  streamPath: `/v1/playback/${playbackSessionId}/stream`,
+  subtitleTracks: [],
+};
+
 describe("ContinueWatchingRail", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  });
+
   it("renders normalized progress and a private same-origin artwork path", () => {
     const { container } = render(
       <ContinueWatchingRail
@@ -19,7 +45,7 @@ describe("ContinueWatchingRail", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Open Northern Lights" }),
+      screen.getByRole("button", { name: "Resume Northern Lights" }),
     ).toHaveAccessibleDescription("33% watched");
     expect(container.querySelector('[data-artwork-source="remote"]')).toHaveStyle({
       "--card-artwork": `url("/api/media/media_${"b".repeat(22)}/images/poster")`,
@@ -83,5 +109,46 @@ describe("ContinueWatchingRail", () => {
     expect(load).toHaveBeenCalledOnce();
     await user.click(retry);
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  });
+
+  it("opens the private theater and returns focus to the selected card", async () => {
+    const user = userEvent.setup();
+    const playbackClient = {
+      prepare: vi.fn(async () => ({
+        csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
+        session: playbackSession,
+      })),
+      report: vi.fn(async (_sessionId, request) => ({
+        acceptedAt: "2026-07-28T12:30:00.000Z",
+        positionSeconds: request.positionSeconds,
+        sessionId: playbackSessionId,
+        state: "stopped" as const,
+      })),
+    };
+    render(
+      <ContinueWatchingRail
+        initialOutcome={{ feed: demoContinueWatchingFeed, status: "ready" }}
+        live={false}
+        playbackClient={playbackClient}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Resume Northern Lights" });
+    await user.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "Northern Lights" })).toBeVisible();
+    expect(playbackClient.prepare).toHaveBeenCalledWith(
+      `media_${"b".repeat(22)}`,
+      900,
+      expect.any(AbortSignal),
+      {
+        audioStreamIndex: null,
+        maxStreamingBitrate: 80_000_000,
+        mode: "auto",
+        subtitleStreamIndex: null,
+      },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Close player" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 });

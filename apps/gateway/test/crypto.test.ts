@@ -72,6 +72,19 @@ describe("EnvelopeCipher", () => {
     expect(() => new EnvelopeCipher(key).decrypt("v0.bad", "test")).toThrow(/Unsupported/);
     expect(() => new EnvelopeCipher(key).decrypt("v2.a..b", "test")).toThrow(/Malformed/);
   });
+
+  it("rejects non-canonical base64url encodings before authentication", () => {
+    const cipher = new EnvelopeCipher(key);
+    const canonical = "v1.AAECAwQFBgcICQoL.K9QRLayZcH1UqxXPk4DxkJKmH1JMug.tBZtd3dJPb09DS2Q9MnvbA";
+    const equivalentBytesWithUnusedBits = `${canonical.slice(0, -1)}B`;
+
+    expect(Buffer.from(canonical.split(".").at(-1)!, "base64url")).toEqual(
+      Buffer.from(equivalentBytesWithUnusedBits.split(".").at(-1)!, "base64url"),
+    );
+    expect(() => cipher.decrypt(equivalentBytesWithUnusedBits, "connector:test")).toThrow(
+      /authenticated/,
+    );
+  });
 });
 
 describe("opaque token helpers", () => {

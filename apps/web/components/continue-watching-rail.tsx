@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { CloudOff, LockKeyhole, RefreshCw, ShieldAlert } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -12,12 +13,29 @@ import {
   type ContinueWatchingClient,
   type ContinueWatchingLoadOutcome,
 } from "../lib/continue-watching";
+import type { MediaCardModel } from "../lib/dashboard-data";
+import type { PlaybackClient } from "../lib/playback";
 import { MediaRail } from "./media-rail";
+import theaterStyles from "./theater-player.module.css";
+
+const TheaterPlayer = dynamic(
+  () => import("./theater-player").then((module) => module.TheaterPlayer),
+  {
+    loading: () => (
+      <div aria-label="Opening theater player" className={theaterStyles.chunkLoader} role="status">
+        <span aria-hidden="true" className={theaterStyles.chunkLoaderOrb} />
+        <span>Opening theater…</span>
+      </div>
+    ),
+    ssr: false,
+  },
+);
 
 export interface ContinueWatchingRailProperties {
   client?: ContinueWatchingClient;
   initialOutcome?: ContinueWatchingLoadOutcome;
   live?: boolean;
+  playbackClient?: PlaybackClient;
 }
 
 function LoadingRail() {
@@ -123,8 +141,10 @@ function ContinueWatchingRailContent({
   client,
   initialOutcome,
   live,
+  playbackClient: playerClient,
 }: Required<Pick<ContinueWatchingRailProperties, "client">> &
-  Pick<ContinueWatchingRailProperties, "initialOutcome" | "live">) {
+  Pick<ContinueWatchingRailProperties, "initialOutcome" | "live" | "playbackClient">) {
+  const [selected, setSelected] = useState<MediaCardModel | null>(null);
   const refreshAvailable = live ?? initialOutcome === undefined;
   const initialFeed = initialOutcome?.status === "ready" ? initialOutcome.feed : undefined;
   const query = useQuery({
@@ -158,11 +178,39 @@ function ContinueWatchingRailContent({
     return <UnavailableRail onRetry={() => void query.refetch()} />;
   }
   return (
-    <MediaRail
-      items={continueWatchingCards(query.data)}
-      {...(query.isError ? { statusMessage: "Showing saved progress · refresh interrupted" } : {})}
-      title="Continue watching"
-    />
+    <>
+      <MediaRail
+        items={continueWatchingCards(query.data)}
+        onSelect={setSelected}
+        {...(query.isError
+          ? { statusMessage: "Showing saved progress · refresh interrupted" }
+          : {})}
+        title="Continue watching"
+      />
+      {selected && (
+        <TheaterPlayer
+          {...(playerClient === undefined ? {} : { client: playerClient })}
+          media={{
+            accent: selected.accent,
+            ...(selected.artworkPath === undefined ? {} : { artworkPath: selected.artworkPath }),
+            eyebrow: selected.eyebrow,
+            id: selected.id,
+            positionSeconds: selected.positionSeconds ?? 0,
+            title: selected.title,
+          }}
+          onClose={() => {
+            const selectedId = selected.id;
+            setSelected(null);
+            requestAnimationFrame(() => {
+              const trigger = Array.from(
+                document.querySelectorAll<HTMLButtonElement>("[data-media-id]"),
+              ).find((candidate) => candidate.dataset.mediaId === selectedId);
+              trigger?.focus();
+            });
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -170,6 +218,7 @@ export function ContinueWatchingRail({
   client = continueWatchingClient,
   initialOutcome,
   live,
+  playbackClient: playerClient,
 }: ContinueWatchingRailProperties) {
   const [queryClient] = useState(
     () =>
@@ -183,6 +232,7 @@ export function ContinueWatchingRail({
         client={client}
         {...(initialOutcome === undefined ? {} : { initialOutcome })}
         {...(live === undefined ? {} : { live })}
+        {...(playerClient === undefined ? {} : { playbackClient: playerClient })}
       />
     </QueryClientProvider>
   );

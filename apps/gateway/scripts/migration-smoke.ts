@@ -25,6 +25,7 @@ const requiredTables = [
   "oidc_logout_receipts",
   "oidc_providers",
   "operational_failures",
+  "playback_sessions",
   "role_mappings",
   "service_identity_links",
   "session_rotation_aliases",
@@ -90,6 +91,18 @@ const requiredColumns = {
     "fingerprint_hash",
     "idempotency_key_hash",
     "response_json",
+    "state",
+    "user_id",
+  ],
+  playback_sessions: [
+    "encrypted_payload",
+    "expires_at",
+    "last_reported_at",
+    "link_revision",
+    "media_reference_id",
+    "position_seconds",
+    "revision",
+    "service_identity_link_id",
     "state",
     "user_id",
   ],
@@ -160,6 +173,7 @@ const requiredIndexes = {
     "oidc_logout_receipts_expiry_idx",
     "oidc_logout_receipts_provider_jti_unique",
   ],
+  playback_sessions: ["playback_sessions_expiry_idx", "playback_sessions_user_updated_idx"],
   service_identity_links: ["service_identity_links_connector_idx"],
   session_rotation_aliases: [
     "session_rotation_aliases_expiry_idx",
@@ -309,8 +323,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0011_panoramic_nighthawk",
-  "Current migration journal must end at migration 0011.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag?.startsWith("0012_"),
+  "Current migration journal must end at migration 0012.",
 );
 
 try {
@@ -418,6 +432,33 @@ try {
       .map(({ from, to }) => `${from}:${to}`);
     if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
       throw new Error("Migration is missing the user-bound media reference foreign key.");
+    }
+
+    const playbackForeignKeys = database.sqlite.pragma("foreign_key_list(playback_sessions)") as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const playbackLinkForeignKeyId = playbackForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const playbackLinkForeignKeyColumns = playbackForeignKeys
+      .filter(({ id }) => id === playbackLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (playbackLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
+      throw new Error("Migration is missing the user-bound playback session foreign key.");
+    }
+    if (
+      !playbackForeignKeys.some(
+        ({ from, table, to }) =>
+          from === "media_reference_id" && table === "media_references" && to === "id",
+      )
+    ) {
+      throw new Error("Migration is missing the playback-to-media-reference foreign key.");
     }
 
     const rotationAliasForeignKeys = database.sqlite.pragma(
@@ -560,7 +601,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0011.",
+      "Production migration did not advance the historical fixture exactly through migration 0012.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -725,7 +766,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0011, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0012, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

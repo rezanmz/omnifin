@@ -11,10 +11,12 @@ type ArtworkStyle = CSSProperties & { "--card-artwork"?: string };
 
 export function MediaRail({
   items,
+  onSelect,
   statusMessage,
   title,
 }: {
   items: MediaCardModel[];
+  onSelect?: (item: MediaCardModel) => void;
   statusMessage?: string;
   title: string;
 }) {
@@ -72,9 +74,11 @@ export function MediaRail({
                   aria-describedby={
                     watchedPercent === undefined ? undefined : progressDescriptionId
                   }
-                  aria-label={`Open ${item.title}`}
+                  aria-label={`${onSelect && watchedPercent !== undefined ? "Resume" : "Open"} ${item.title}`}
                   className="media-card__action"
                   data-directional-item
+                  data-media-id={item.id}
+                  onClick={onSelect ? () => onSelect(item) : undefined}
                   type="button"
                 >
                   <span

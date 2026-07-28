@@ -44,7 +44,12 @@ function encode(value: Buffer) {
 }
 
 function decode(value: string) {
-  return Buffer.from(value, "base64url");
+  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
+    throw new Error("Malformed base64url value.");
+  }
+  const decoded = Buffer.from(value, "base64url");
+  if (encode(decoded) !== value) throw new Error("Non-canonical base64url value.");
+  return decoded;
 }
 
 export class EnvelopeCipher {

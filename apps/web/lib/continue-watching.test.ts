@@ -99,6 +99,7 @@ describe("Continue Watching client", () => {
         artworkPath: `/api/media/media_${"m".repeat(22)}/images/poster`,
         eyebrow: "S02E03 · The Long Meridian",
         id: `media_${"m".repeat(22)}`,
+        positionSeconds: 1_200,
         progress: 0.33299999999999996,
         title: "Northern Lights",
       },
