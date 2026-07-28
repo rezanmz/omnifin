@@ -2,8 +2,14 @@ import { SeerrAdapter } from "@omnifin/connectors/adapters/seerr";
 import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import { connectorCredentialInputSchema } from "@omnifin/contracts/connectors";
 import {
+  discoveryMediaDetailParamsSchema,
+  discoveryMediaDetailQuerySchema,
+  discoveryMediaDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
+  type DiscoveryMediaDetailParams,
+  type DiscoveryMediaDetailQuery,
+  type DiscoveryMediaDetailResponse,
   type DiscoverySearchQuery,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -35,6 +41,11 @@ export interface DiscoverySearchContext {
 }
 
 export interface DiscoverySearchAdapter {
+  detail(
+    params: DiscoveryMediaDetailParams,
+    query: DiscoveryMediaDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryMediaDetailResponse>;
   search(input: DiscoverySearchQuery, signal?: AbortSignal): Promise<DiscoverySearchResponse>;
 }
 
@@ -130,6 +141,24 @@ export class DiscoverySearchService {
   ) {
     requirePermission(context.principal, "media.view");
     const query = discoverySearchQuerySchema.parse(input);
+    const adapter = this.#adapter();
+    return discoverySearchResponseSchema.parse(await adapter.search(query, signal));
+  }
+
+  public async detail(
+    paramsInput: DiscoveryMediaDetailParams,
+    queryInput: DiscoveryMediaDetailQuery,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ) {
+    requirePermission(context.principal, "media.view");
+    const params = discoveryMediaDetailParamsSchema.parse(paramsInput);
+    const query = discoveryMediaDetailQuerySchema.parse(queryInput);
+    const adapter = this.#adapter();
+    return discoveryMediaDetailResponseSchema.parse(await adapter.detail(params, query, signal));
+  }
+
+  #adapter() {
     const row = this.#connector();
     const secrets = connectorSecrets(row, this.#cipher);
     const tlsPolicy =
@@ -146,9 +175,8 @@ export class DiscoverySearchService {
     ) {
       throw new DiscoverySearchError("connector_integrity_failure");
     }
-    let adapter: DiscoverySearchAdapter;
     try {
-      adapter = this.#createAdapter({
+      return this.#createAdapter({
         apiKey: secrets.apiKey,
         baseUrl: row.baseUrl,
         connectorId: row.id,
@@ -163,7 +191,6 @@ export class DiscoverySearchService {
     } catch (error) {
       throw new DiscoverySearchError("connector_integrity_failure", { cause: error });
     }
-    return discoverySearchResponseSchema.parse(await adapter.search(query, signal));
   }
 
   #connector() {

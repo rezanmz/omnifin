@@ -1,5 +1,11 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
+  discoveryMediaDetailParamsJsonSchema,
+  discoveryMediaDetailParamsSchema,
+  discoveryMediaDetailQueryJsonSchema,
+  discoveryMediaDetailQuerySchema,
+  discoveryMediaDetailResponseJsonSchema,
+  discoveryMediaDetailResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -124,6 +130,52 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         return discoverySearchResponseSchema.parse(
           await discovery.search(
             discoverySearchQuerySchema.parse(request.query),
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof DiscoverySearchError) throw searchError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/discovery/details/:kind/:tmdbId",
+    {
+      config: { rateLimit: { max: 80, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: discoveryMediaDetailParamsJsonSchema,
+        querystring: discoveryMediaDetailQueryJsonSchema,
+        response: { 200: discoveryMediaDetailResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return discoveryMediaDetailResponseSchema.parse(
+          await discovery.detail(
+            discoveryMediaDetailParamsSchema.parse(request.params),
+            discoveryMediaDetailQuerySchema.parse(request.query),
             { principal },
             controller.signal,
           ),
