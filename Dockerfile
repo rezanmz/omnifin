@@ -54,7 +54,7 @@ RUN mkdir -p apps/web/public \
 
 FROM ${NODE_IMAGE} AS runtime-layout
 
-RUN install --directory --mode=0700 /layout/data \
+RUN install --directory --mode=0700 /layout/backups /layout/data \
     && install --directory --mode=0755 /layout/bin
 
 COPY docker/entrypoint.mjs docker/healthcheck.mjs /layout/bin/
@@ -85,6 +85,7 @@ ENV NODE_ENV=production \
     PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY --from=runtime-layout --chown=65532:65532 --chmod=0700 /layout/data /data
+COPY --from=runtime-layout --chown=65532:65532 --chmod=0700 /layout/backups /backups
 COPY --from=build --chown=65532:65532 /out/gateway /opt/omnifin/gateway
 COPY --from=build --chown=65532:65532 /workspace/apps/web/.next/standalone /opt/omnifin/web
 COPY --from=build --chown=65532:65532 /workspace/apps/web/.next/static /opt/omnifin/web/.next/static

@@ -4,6 +4,7 @@ import path from "node:path";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.js";
+import { databaseMaintenanceLockPath } from "./maintenance-lock.js";
 import { asStartupError, StartupError } from "../startup-error.js";
 
 export interface DatabaseHandle {
@@ -58,6 +59,9 @@ function migrationDirectory() {
 
 export function openDatabase(databaseUrl: string): DatabaseHandle {
   ensureParentDirectory(databaseUrl);
+  if (databaseUrl !== ":memory:" && existsSync(databaseMaintenanceLockPath(databaseUrl))) {
+    throw new StartupError("database_maintenance_active");
+  }
   let sqlite: Database.Database;
   try {
     sqlite = new Database(databaseUrl);

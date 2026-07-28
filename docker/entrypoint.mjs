@@ -7,11 +7,12 @@ const commandArguments = process.argv.slice(3);
 
 const targets = {
   gateway: ["/opt/omnifin/gateway/dist/main.js"],
+  maintenance: ["/opt/omnifin/gateway/dist/maintenance.js"],
   web: ["/opt/omnifin/web/apps/web/server.js", "/opt/omnifin/web/server.js"],
 };
 
 if (!(commandName in targets)) {
-  process.stderr.write("Usage: omnifin {gateway|web}\n");
+  process.stderr.write("Usage: omnifin {gateway|maintenance|web}\n");
   process.exit(64);
 }
 
