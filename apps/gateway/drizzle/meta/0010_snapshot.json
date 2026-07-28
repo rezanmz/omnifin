@@ -1,0 +1,2713 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "b4988d23-d744-426c-9111-294805c70bfc",
+  "prevId": "e9e48969-f947-4421-8467-d35b7d61c21d",
+  "tables": {
+    "acquisition_grab_operations": {
+      "name": "acquisition_grab_operations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key_hash": {
+          "name": "idempotency_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint_hash": {
+          "name": "fingerprint_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "acquisition_grab_operations_user_key_unique": {
+          "name": "acquisition_grab_operations_user_key_unique",
+          "columns": [
+            "user_id",
+            "idempotency_key_hash"
+          ],
+          "isUnique": true
+        },
+        "acquisition_grab_operations_state_created_idx": {
+          "name": "acquisition_grab_operations_state_created_idx",
+          "columns": [
+            "state",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acquisition_grab_operations_user_id_users_id_fk": {
+          "name": "acquisition_grab_operations_user_id_users_id_fk",
+          "tableFrom": "acquisition_grab_operations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "acquisition_grab_operations_key_hash_check": {
+          "name": "acquisition_grab_operations_key_hash_check",
+          "value": "length(\"acquisition_grab_operations\".\"idempotency_key_hash\") = 43\n        and \"acquisition_grab_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "acquisition_grab_operations_fingerprint_hash_check": {
+          "name": "acquisition_grab_operations_fingerprint_hash_check",
+          "value": "length(\"acquisition_grab_operations\".\"fingerprint_hash\") = 43\n        and \"acquisition_grab_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "acquisition_grab_operations_state_check": {
+          "name": "acquisition_grab_operations_state_check",
+          "value": "\"acquisition_grab_operations\".\"state\" in ('pending', 'succeeded', 'failed')"
+        },
+        "acquisition_grab_operations_response_json_check": {
+          "name": "acquisition_grab_operations_response_json_check",
+          "value": "\"acquisition_grab_operations\".\"response_json\" is null\n        or (json_valid(\"acquisition_grab_operations\".\"response_json\") and json_type(\"acquisition_grab_operations\".\"response_json\") = 'object')"
+        },
+        "acquisition_grab_operations_outcome_check": {
+          "name": "acquisition_grab_operations_outcome_check",
+          "value": "(\n          \"acquisition_grab_operations\".\"state\" = 'pending'\n          and \"acquisition_grab_operations\".\"response_json\" is null\n          and \"acquisition_grab_operations\".\"failure_code\" is null\n          and \"acquisition_grab_operations\".\"completed_at\" is null\n        ) or (\n          \"acquisition_grab_operations\".\"state\" = 'succeeded'\n          and \"acquisition_grab_operations\".\"response_json\" is not null\n          and \"acquisition_grab_operations\".\"failure_code\" is null\n          and \"acquisition_grab_operations\".\"completed_at\" is not null\n        ) or (\n          \"acquisition_grab_operations\".\"state\" = 'failed'\n          and \"acquisition_grab_operations\".\"response_json\" is null\n          and length(\"acquisition_grab_operations\".\"failure_code\") between 1 and 64\n          and \"acquisition_grab_operations\".\"completed_at\" is not null\n        )"
+        },
+        "acquisition_grab_operations_timestamp_order_check": {
+          "name": "acquisition_grab_operations_timestamp_order_check",
+          "value": "\"acquisition_grab_operations\".\"completed_at\" is null or \"acquisition_grab_operations\".\"completed_at\" >= \"acquisition_grab_operations\".\"created_at\""
+        }
+      }
+    },
+    "acquisition_search_operations": {
+      "name": "acquisition_search_operations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key_hash": {
+          "name": "idempotency_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint_hash": {
+          "name": "fingerprint_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "acquisition_search_operations_user_key_unique": {
+          "name": "acquisition_search_operations_user_key_unique",
+          "columns": [
+            "user_id",
+            "idempotency_key_hash"
+          ],
+          "isUnique": true
+        },
+        "acquisition_search_operations_state_created_idx": {
+          "name": "acquisition_search_operations_state_created_idx",
+          "columns": [
+            "state",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "acquisition_search_operations_user_id_users_id_fk": {
+          "name": "acquisition_search_operations_user_id_users_id_fk",
+          "tableFrom": "acquisition_search_operations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "acquisition_search_operations_key_hash_check": {
+          "name": "acquisition_search_operations_key_hash_check",
+          "value": "length(\"acquisition_search_operations\".\"idempotency_key_hash\") = 43\n        and \"acquisition_search_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "acquisition_search_operations_fingerprint_hash_check": {
+          "name": "acquisition_search_operations_fingerprint_hash_check",
+          "value": "length(\"acquisition_search_operations\".\"fingerprint_hash\") = 43\n        and \"acquisition_search_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "acquisition_search_operations_state_check": {
+          "name": "acquisition_search_operations_state_check",
+          "value": "\"acquisition_search_operations\".\"state\" in ('pending', 'succeeded', 'failed')"
+        },
+        "acquisition_search_operations_response_json_check": {
+          "name": "acquisition_search_operations_response_json_check",
+          "value": "\"acquisition_search_operations\".\"response_json\" is null\n        or (json_valid(\"acquisition_search_operations\".\"response_json\") and json_type(\"acquisition_search_operations\".\"response_json\") = 'object')"
+        },
+        "acquisition_search_operations_outcome_check": {
+          "name": "acquisition_search_operations_outcome_check",
+          "value": "(\n          \"acquisition_search_operations\".\"state\" = 'pending'\n          and \"acquisition_search_operations\".\"response_json\" is null\n          and \"acquisition_search_operations\".\"failure_code\" is null\n          and \"acquisition_search_operations\".\"completed_at\" is null\n        ) or (\n          \"acquisition_search_operations\".\"state\" = 'succeeded'\n          and \"acquisition_search_operations\".\"response_json\" is not null\n          and \"acquisition_search_operations\".\"failure_code\" is null\n          and \"acquisition_search_operations\".\"completed_at\" is not null\n        ) or (\n          \"acquisition_search_operations\".\"state\" = 'failed'\n          and \"acquisition_search_operations\".\"response_json\" is null\n          and length(\"acquisition_search_operations\".\"failure_code\") between 1 and 64\n          and \"acquisition_search_operations\".\"completed_at\" is not null\n        )"
+        },
+        "acquisition_search_operations_timestamp_order_check": {
+          "name": "acquisition_search_operations_timestamp_order_check",
+          "value": "\"acquisition_search_operations\".\"completed_at\" is null or \"acquisition_search_operations\".\"completed_at\" >= \"acquisition_search_operations\".\"created_at\""
+        }
+      }
+    },
+    "audit_budget_entries": {
+      "name": "audit_budget_entries",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "slot": {
+          "name": "slot",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bucket_hash": {
+          "name": "bucket_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "audit_budget_entries_bucket_unique": {
+          "name": "audit_budget_entries_bucket_unique",
+          "columns": [
+            "scope",
+            "generation",
+            "bucket_hash"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "audit_budget_entries_scope_fk": {
+          "name": "audit_budget_entries_scope_fk",
+          "tableFrom": "audit_budget_entries",
+          "tableTo": "audit_budget_scopes",
+          "columnsFrom": [
+            "scope"
+          ],
+          "columnsTo": [
+            "scope"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {
+        "audit_budget_entries_scope_generation_slot_pk": {
+          "columns": [
+            "scope",
+            "generation",
+            "slot"
+          ],
+          "name": "audit_budget_entries_scope_generation_slot_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "audit_budget_entries_scope_check": {
+          "name": "audit_budget_entries_scope_check",
+          "value": "\"audit_budget_entries\".\"scope\" = 'auth.oidc.failure:v1'"
+        },
+        "audit_budget_entries_generation_check": {
+          "name": "audit_budget_entries_generation_check",
+          "value": "typeof(\"audit_budget_entries\".\"generation\") = 'integer'\n        and \"audit_budget_entries\".\"generation\" between 1 and 9007199254740990"
+        },
+        "audit_budget_entries_slot_check": {
+          "name": "audit_budget_entries_slot_check",
+          "value": "typeof(\"audit_budget_entries\".\"slot\") = 'integer' and \"audit_budget_entries\".\"slot\" between 0 and 126"
+        },
+        "audit_budget_entries_bucket_hash_check": {
+          "name": "audit_budget_entries_bucket_hash_check",
+          "value": "length(\"audit_budget_entries\".\"bucket_hash\") = 22\n        and \"audit_budget_entries\".\"bucket_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "audit_budget_entries_created_at_check": {
+          "name": "audit_budget_entries_created_at_check",
+          "value": "typeof(\"audit_budget_entries\".\"created_at\") = 'integer'\n        and \"audit_budget_entries\".\"created_at\" between 0 and 8640000000000000"
+        }
+      }
+    },
+    "audit_budget_scopes": {
+      "name": "audit_budget_scopes",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "window_started_at": {
+          "name": "window_started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "clock_watermark_at": {
+          "name": "clock_watermark_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rollback_started_at": {
+          "name": "rollback_started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "saturated": {
+          "name": "saturated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "suppressed_count": {
+          "name": "suppressed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "audit_budget_scopes_scope_generation_unique": {
+          "name": "audit_budget_scopes_scope_generation_unique",
+          "columns": [
+            "scope",
+            "generation"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "audit_budget_scopes_scope_check": {
+          "name": "audit_budget_scopes_scope_check",
+          "value": "\"audit_budget_scopes\".\"scope\" = 'auth.oidc.failure:v1'"
+        },
+        "audit_budget_scopes_generation_check": {
+          "name": "audit_budget_scopes_generation_check",
+          "value": "typeof(\"audit_budget_scopes\".\"generation\") = 'integer'\n        and \"audit_budget_scopes\".\"generation\" between 1 and 9007199254740990"
+        },
+        "audit_budget_scopes_timestamp_check": {
+          "name": "audit_budget_scopes_timestamp_check",
+          "value": "typeof(\"audit_budget_scopes\".\"window_started_at\") = 'integer'\n        and \"audit_budget_scopes\".\"window_started_at\" between 0 and 8640000000000000\n        and typeof(\"audit_budget_scopes\".\"clock_watermark_at\") = 'integer'\n        and \"audit_budget_scopes\".\"clock_watermark_at\" between 0 and 8640000000000000\n        and \"audit_budget_scopes\".\"window_started_at\" <= \"audit_budget_scopes\".\"clock_watermark_at\"\n        and (\"audit_budget_scopes\".\"rollback_started_at\" is null or (\n          typeof(\"audit_budget_scopes\".\"rollback_started_at\") = 'integer'\n          and \"audit_budget_scopes\".\"rollback_started_at\" between 0 and 8640000000000000\n          and \"audit_budget_scopes\".\"rollback_started_at\" <= \"audit_budget_scopes\".\"clock_watermark_at\"\n        ))"
+        },
+        "audit_budget_scopes_saturated_check": {
+          "name": "audit_budget_scopes_saturated_check",
+          "value": "\"audit_budget_scopes\".\"saturated\" in (0, 1)"
+        },
+        "audit_budget_scopes_suppressed_count_check": {
+          "name": "audit_budget_scopes_suppressed_count_check",
+          "value": "typeof(\"audit_budget_scopes\".\"suppressed_count\") = 'integer'\n        and \"audit_budget_scopes\".\"suppressed_count\" between 0 and 4096"
+        }
+      }
+    },
+    "audit_events": {
+      "name": "audit_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actor_user_id": {
+          "name": "actor_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "actor_session_id": {
+          "name": "actor_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "actor_auth_method": {
+          "name": "actor_auth_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "metadata_json": {
+          "name": "metadata_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "ip_hash": {
+          "name": "ip_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "audit_events_actor_idx": {
+          "name": "audit_events_actor_idx",
+          "columns": [
+            "actor_user_id"
+          ],
+          "isUnique": false
+        },
+        "audit_events_actor_session_idx": {
+          "name": "audit_events_actor_session_idx",
+          "columns": [
+            "actor_session_id",
+            "actor_auth_method"
+          ],
+          "isUnique": false
+        },
+        "audit_events_type_created_idx": {
+          "name": "audit_events_type_created_idx",
+          "columns": [
+            "event_type",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "audit_events_request_idx": {
+          "name": "audit_events_request_idx",
+          "columns": [
+            "request_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "audit_events_actor_user_id_users_id_fk": {
+          "name": "audit_events_actor_user_id_users_id_fk",
+          "tableFrom": "audit_events",
+          "tableTo": "users",
+          "columnsFrom": [
+            "actor_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "audit_events_session_id_sessions_id_fk": {
+          "name": "audit_events_session_id_sessions_id_fk",
+          "tableFrom": "audit_events",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "audit_events_outcome_check": {
+          "name": "audit_events_outcome_check",
+          "value": "\"audit_events\".\"outcome\" in ('success', 'denied', 'failure')"
+        },
+        "audit_events_metadata_json_check": {
+          "name": "audit_events_metadata_json_check",
+          "value": "json_valid(\"audit_events\".\"metadata_json\") and json_type(\"audit_events\".\"metadata_json\") = 'object'"
+        },
+        "audit_events_request_id_check": {
+          "name": "audit_events_request_id_check",
+          "value": "\"audit_events\".\"request_id\" is null or length(\"audit_events\".\"request_id\") between 1 and 128"
+        },
+        "audit_events_actor_session_check": {
+          "name": "audit_events_actor_session_check",
+          "value": "(\n          \"audit_events\".\"actor_session_id\" is null\n          and \"audit_events\".\"actor_auth_method\" is null\n        ) or (\n          \"audit_events\".\"actor_session_id\" is not null\n          and \"audit_events\".\"actor_auth_method\" is not null\n          and \"audit_events\".\"actor_auth_method\" in ('oidc', 'jellyfin', 'recovery')\n        )"
+        }
+      }
+    },
+    "auth_transactions": {
+      "name": "auth_transactions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state_hash": {
+          "name": "state_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "browser_binding_hash": {
+          "name": "browser_binding_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_code_verifier": {
+          "name": "encrypted_code_verifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_nonce": {
+          "name": "encrypted_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "redirect_uri": {
+          "name": "redirect_uri",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "return_path": {
+          "name": "return_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'/'"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "auth_transactions_state_hash_unique": {
+          "name": "auth_transactions_state_hash_unique",
+          "columns": [
+            "state_hash"
+          ],
+          "isUnique": true
+        },
+        "auth_transactions_expiry_idx": {
+          "name": "auth_transactions_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "auth_transactions_provider_id_oidc_providers_id_fk": {
+          "name": "auth_transactions_provider_id_oidc_providers_id_fk",
+          "tableFrom": "auth_transactions",
+          "tableTo": "oidc_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "auth_transactions_hashes_check": {
+          "name": "auth_transactions_hashes_check",
+          "value": "length(\"auth_transactions\".\"state_hash\") = 43\n        and \"auth_transactions\".\"state_hash\" not glob '*[^A-Za-z0-9_-]*'\n        and length(\"auth_transactions\".\"browser_binding_hash\") = 43\n        and \"auth_transactions\".\"browser_binding_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "auth_transactions_redirect_uri_check": {
+          "name": "auth_transactions_redirect_uri_check",
+          "value": "length(\"auth_transactions\".\"redirect_uri\") between 8 and 2048\n        and (\"auth_transactions\".\"redirect_uri\" like 'https://%' or \"auth_transactions\".\"redirect_uri\" like 'http://%')\n        and instr(\"auth_transactions\".\"redirect_uri\", '#') = 0"
+        },
+        "auth_transactions_return_path_check": {
+          "name": "auth_transactions_return_path_check",
+          "value": "length(\"auth_transactions\".\"return_path\") between 1 and 2048\n        and substr(\"auth_transactions\".\"return_path\", 1, 1) = '/'\n        and substr(\"auth_transactions\".\"return_path\", 1, 2) <> '//'\n        and instr(\"auth_transactions\".\"return_path\", char(92)) = 0"
+        },
+        "auth_transactions_timestamp_order_check": {
+          "name": "auth_transactions_timestamp_order_check",
+          "value": "\"auth_transactions\".\"created_at\" < \"auth_transactions\".\"expires_at\"\n        and (\"auth_transactions\".\"consumed_at\" is null or (\n          \"auth_transactions\".\"consumed_at\" >= \"auth_transactions\".\"created_at\"\n          and \"auth_transactions\".\"consumed_at\" <= \"auth_transactions\".\"expires_at\"\n        ))"
+        }
+      }
+    },
+    "connector_configs": {
+      "name": "connector_configs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "base_url": {
+          "name": "base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_credentials": {
+          "name": "encrypted_credentials",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tls_policy": {
+          "name": "tls_policy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'strict'"
+        },
+        "insecure_http_approved": {
+          "name": "insecure_http_approved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "capability_snapshot_json": {
+          "name": "capability_snapshot_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "health_state": {
+          "name": "health_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "connector_configs_id_type_unique": {
+          "name": "connector_configs_id_type_unique",
+          "columns": [
+            "id",
+            "type"
+          ],
+          "isUnique": true
+        },
+        "connector_configs_type_idx": {
+          "name": "connector_configs_type_idx",
+          "columns": [
+            "type"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "connector_configs_type_check": {
+          "name": "connector_configs_type_check",
+          "value": "\"connector_configs\".\"type\" in ('jellyfin', 'seerr', 'radarr', 'sonarr', 'prowlarr', 'bazarr', 'qbittorrent', 'sabnzbd')"
+        },
+        "connector_configs_tls_policy_check": {
+          "name": "connector_configs_tls_policy_check",
+          "value": "\"connector_configs\".\"tls_policy\" in ('strict', 'allow_self_signed')"
+        },
+        "connector_configs_capability_snapshot_json_check": {
+          "name": "connector_configs_capability_snapshot_json_check",
+          "value": "json_valid(\"connector_configs\".\"capability_snapshot_json\") and json_type(\"connector_configs\".\"capability_snapshot_json\") = 'object'"
+        },
+        "connector_configs_health_state_check": {
+          "name": "connector_configs_health_state_check",
+          "value": "\"connector_configs\".\"health_state\" in ('unknown', 'healthy', 'degraded', 'offline')"
+        },
+        "connector_configs_insecure_http_approved_check": {
+          "name": "connector_configs_insecure_http_approved_check",
+          "value": "\"connector_configs\".\"insecure_http_approved\" in (0, 1)"
+        },
+        "connector_configs_enabled_check": {
+          "name": "connector_configs_enabled_check",
+          "value": "\"connector_configs\".\"enabled\" in (0, 1)"
+        }
+      }
+    },
+    "external_identities": {
+      "name": "external_identities",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issuer": {
+          "name": "issuer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "display_claims_json": {
+          "name": "display_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "last_login_at": {
+          "name": "last_login_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "external_identities_issuer_subject_unique": {
+          "name": "external_identities_issuer_subject_unique",
+          "columns": [
+            "issuer",
+            "subject"
+          ],
+          "isUnique": true
+        },
+        "external_identities_session_binding_unique": {
+          "name": "external_identities_session_binding_unique",
+          "columns": [
+            "id",
+            "user_id",
+            "provider_id"
+          ],
+          "isUnique": true
+        },
+        "external_identities_user_idx": {
+          "name": "external_identities_user_idx",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "external_identities_user_id_users_id_fk": {
+          "name": "external_identities_user_id_users_id_fk",
+          "tableFrom": "external_identities",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "external_identities_provider_issuer_fk": {
+          "name": "external_identities_provider_issuer_fk",
+          "tableFrom": "external_identities",
+          "tableTo": "oidc_providers",
+          "columnsFrom": [
+            "provider_id",
+            "issuer"
+          ],
+          "columnsTo": [
+            "id",
+            "issuer"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "external_identities_display_claims_json_check": {
+          "name": "external_identities_display_claims_json_check",
+          "value": "json_valid(\"external_identities\".\"display_claims_json\") and json_type(\"external_identities\".\"display_claims_json\") = 'object'"
+        }
+      }
+    },
+    "jellyfin_quick_connect_transactions": {
+      "name": "jellyfin_quick_connect_transactions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "connector_id": {
+          "name": "connector_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "connector_type": {
+          "name": "connector_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'jellyfin'"
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'sign_in'"
+        },
+        "pairing_session_id": {
+          "name": "pairing_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "browser_binding_hash": {
+          "name": "browser_binding_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "next_poll_at": {
+          "name": "next_poll_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "poll_count": {
+          "name": "poll_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "jellyfin_quick_connect_transactions_expiry_idx": {
+          "name": "jellyfin_quick_connect_transactions_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "jellyfin_quick_connect_transactions_browser_expiry_idx": {
+          "name": "jellyfin_quick_connect_transactions_browser_expiry_idx",
+          "columns": [
+            "browser_binding_hash",
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "jellyfin_quick_connect_transactions_pairing_session_idx": {
+          "name": "jellyfin_quick_connect_transactions_pairing_session_idx",
+          "columns": [
+            "pairing_session_id",
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "jellyfin_quick_connect_transactions_pairing_session_id_sessions_id_fk": {
+          "name": "jellyfin_quick_connect_transactions_pairing_session_id_sessions_id_fk",
+          "tableFrom": "jellyfin_quick_connect_transactions",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "pairing_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "jellyfin_quick_connect_transactions_connector_type_fk": {
+          "name": "jellyfin_quick_connect_transactions_connector_type_fk",
+          "tableFrom": "jellyfin_quick_connect_transactions",
+          "tableTo": "connector_configs",
+          "columnsFrom": [
+            "connector_id",
+            "connector_type"
+          ],
+          "columnsTo": [
+            "id",
+            "type"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "jellyfin_quick_connect_transactions_binding_hash_check": {
+          "name": "jellyfin_quick_connect_transactions_binding_hash_check",
+          "value": "length(\"jellyfin_quick_connect_transactions\".\"browser_binding_hash\") = 43\n        and \"jellyfin_quick_connect_transactions\".\"browser_binding_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "jellyfin_quick_connect_transactions_connector_type_check": {
+          "name": "jellyfin_quick_connect_transactions_connector_type_check",
+          "value": "\"jellyfin_quick_connect_transactions\".\"connector_type\" = 'jellyfin'"
+        },
+        "jellyfin_quick_connect_transactions_purpose_check": {
+          "name": "jellyfin_quick_connect_transactions_purpose_check",
+          "value": "(\"jellyfin_quick_connect_transactions\".\"purpose\" = 'sign_in' and \"jellyfin_quick_connect_transactions\".\"pairing_session_id\" is null)\n        or (\"jellyfin_quick_connect_transactions\".\"purpose\" = 'pairing' and \"jellyfin_quick_connect_transactions\".\"pairing_session_id\" is not null)"
+        },
+        "jellyfin_quick_connect_transactions_poll_count_check": {
+          "name": "jellyfin_quick_connect_transactions_poll_count_check",
+          "value": "typeof(\"jellyfin_quick_connect_transactions\".\"poll_count\") = 'integer' and \"jellyfin_quick_connect_transactions\".\"poll_count\" between 0 and 512"
+        },
+        "jellyfin_quick_connect_transactions_timestamp_order_check": {
+          "name": "jellyfin_quick_connect_transactions_timestamp_order_check",
+          "value": "\"jellyfin_quick_connect_transactions\".\"created_at\" < \"jellyfin_quick_connect_transactions\".\"expires_at\"\n        and \"jellyfin_quick_connect_transactions\".\"next_poll_at\" >= \"jellyfin_quick_connect_transactions\".\"created_at\"\n        and \"jellyfin_quick_connect_transactions\".\"next_poll_at\" <= \"jellyfin_quick_connect_transactions\".\"expires_at\"\n        and (\"jellyfin_quick_connect_transactions\".\"consumed_at\" is null or (\n          \"jellyfin_quick_connect_transactions\".\"consumed_at\" >= \"jellyfin_quick_connect_transactions\".\"created_at\"\n          and \"jellyfin_quick_connect_transactions\".\"consumed_at\" <= \"jellyfin_quick_connect_transactions\".\"expires_at\"\n        ))"
+        }
+      }
+    },
+    "media_request_operations": {
+      "name": "media_request_operations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key_hash": {
+          "name": "idempotency_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint_hash": {
+          "name": "fingerprint_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "media_request_operations_user_key_unique": {
+          "name": "media_request_operations_user_key_unique",
+          "columns": [
+            "user_id",
+            "idempotency_key_hash"
+          ],
+          "isUnique": true
+        },
+        "media_request_operations_state_created_idx": {
+          "name": "media_request_operations_state_created_idx",
+          "columns": [
+            "state",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "media_request_operations_user_id_users_id_fk": {
+          "name": "media_request_operations_user_id_users_id_fk",
+          "tableFrom": "media_request_operations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "media_request_operations_key_hash_check": {
+          "name": "media_request_operations_key_hash_check",
+          "value": "length(\"media_request_operations\".\"idempotency_key_hash\") = 43\n        and \"media_request_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_request_operations_fingerprint_hash_check": {
+          "name": "media_request_operations_fingerprint_hash_check",
+          "value": "length(\"media_request_operations\".\"fingerprint_hash\") = 43\n        and \"media_request_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_request_operations_state_check": {
+          "name": "media_request_operations_state_check",
+          "value": "\"media_request_operations\".\"state\" in ('pending', 'succeeded', 'failed')"
+        },
+        "media_request_operations_response_json_check": {
+          "name": "media_request_operations_response_json_check",
+          "value": "\"media_request_operations\".\"response_json\" is null\n        or (json_valid(\"media_request_operations\".\"response_json\") and json_type(\"media_request_operations\".\"response_json\") = 'object')"
+        },
+        "media_request_operations_outcome_check": {
+          "name": "media_request_operations_outcome_check",
+          "value": "(\n          \"media_request_operations\".\"state\" = 'pending'\n          and \"media_request_operations\".\"response_json\" is null\n          and \"media_request_operations\".\"failure_code\" is null\n          and \"media_request_operations\".\"completed_at\" is null\n        ) or (\n          \"media_request_operations\".\"state\" = 'succeeded'\n          and \"media_request_operations\".\"response_json\" is not null\n          and \"media_request_operations\".\"failure_code\" is null\n          and \"media_request_operations\".\"completed_at\" is not null\n        ) or (\n          \"media_request_operations\".\"state\" = 'failed'\n          and \"media_request_operations\".\"response_json\" is null\n          and length(\"media_request_operations\".\"failure_code\") between 1 and 64\n          and \"media_request_operations\".\"completed_at\" is not null\n        )"
+        },
+        "media_request_operations_timestamp_order_check": {
+          "name": "media_request_operations_timestamp_order_check",
+          "value": "\"media_request_operations\".\"completed_at\" is null or \"media_request_operations\".\"completed_at\" >= \"media_request_operations\".\"created_at\""
+        }
+      }
+    },
+    "oidc_logout_receipts": {
+      "name": "oidc_logout_receipts",
+      "columns": {
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "jti_hash": {
+          "name": "jti_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issued_at": {
+          "name": "issued_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "oidc_logout_receipts_provider_jti_unique": {
+          "name": "oidc_logout_receipts_provider_jti_unique",
+          "columns": [
+            "provider_id",
+            "jti_hash"
+          ],
+          "isUnique": true
+        },
+        "oidc_logout_receipts_expiry_idx": {
+          "name": "oidc_logout_receipts_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "oidc_logout_receipts_provider_id_oidc_providers_id_fk": {
+          "name": "oidc_logout_receipts_provider_id_oidc_providers_id_fk",
+          "tableFrom": "oidc_logout_receipts",
+          "tableTo": "oidc_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "oidc_logout_receipts_jti_hash_check": {
+          "name": "oidc_logout_receipts_jti_hash_check",
+          "value": "length(\"oidc_logout_receipts\".\"jti_hash\") = 43 and \"oidc_logout_receipts\".\"jti_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "oidc_logout_receipts_timestamp_order_check": {
+          "name": "oidc_logout_receipts_timestamp_order_check",
+          "value": "\"oidc_logout_receipts\".\"issued_at\" >= 0\n        and \"oidc_logout_receipts\".\"received_at\" >= 0\n        and \"oidc_logout_receipts\".\"issued_at\" >= \"oidc_logout_receipts\".\"received_at\" - 300000\n        and \"oidc_logout_receipts\".\"issued_at\" <= \"oidc_logout_receipts\".\"received_at\" + 300000\n        and \"oidc_logout_receipts\".\"received_at\" < \"oidc_logout_receipts\".\"expires_at\""
+        }
+      }
+    },
+    "oidc_providers": {
+      "name": "oidc_providers",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issuer": {
+          "name": "issuer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_client_secret": {
+          "name": "encrypted_client_secret",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "token_endpoint_auth_method": {
+          "name": "token_endpoint_auth_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'none'"
+        },
+        "id_token_signing_alg": {
+          "name": "id_token_signing_alg",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'RS256'"
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'openid profile email'"
+        },
+        "claim_config_json": {
+          "name": "claim_config_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "approved_endpoint_origins_json": {
+          "name": "approved_endpoint_origins_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "discovery_state": {
+          "name": "discovery_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unchecked'"
+        },
+        "discovery_capabilities_json": {
+          "name": "discovery_capabilities_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "discovery_checked_at": {
+          "name": "discovery_checked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "allow_jit_provisioning": {
+          "name": "allow_jit_provisioning",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "oidc_providers_slug_unique": {
+          "name": "oidc_providers_slug_unique",
+          "columns": [
+            "slug"
+          ],
+          "isUnique": true
+        },
+        "oidc_providers_issuer_unique": {
+          "name": "oidc_providers_issuer_unique",
+          "columns": [
+            "issuer"
+          ],
+          "isUnique": true
+        },
+        "oidc_providers_id_issuer_unique": {
+          "name": "oidc_providers_id_issuer_unique",
+          "columns": [
+            "id",
+            "issuer"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "oidc_providers_token_endpoint_auth_method_check": {
+          "name": "oidc_providers_token_endpoint_auth_method_check",
+          "value": "\"oidc_providers\".\"token_endpoint_auth_method\" in ('client_secret_basic', 'client_secret_post', 'none')"
+        },
+        "oidc_providers_id_token_signing_alg_check": {
+          "name": "oidc_providers_id_token_signing_alg_check",
+          "value": "\"oidc_providers\".\"id_token_signing_alg\" in ('RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512', 'ES256', 'ES384', 'ES512', 'EdDSA')"
+        },
+        "oidc_providers_client_secret_check": {
+          "name": "oidc_providers_client_secret_check",
+          "value": "(\n          \"oidc_providers\".\"token_endpoint_auth_method\" = 'none'\n          and \"oidc_providers\".\"encrypted_client_secret\" is null\n        ) or (\n          \"oidc_providers\".\"token_endpoint_auth_method\" in ('client_secret_basic', 'client_secret_post')\n          and \"oidc_providers\".\"encrypted_client_secret\" is not null\n          and length(\"oidc_providers\".\"encrypted_client_secret\") between 1 and 8192\n        )"
+        },
+        "oidc_providers_claim_config_json_check": {
+          "name": "oidc_providers_claim_config_json_check",
+          "value": "json_valid(\"oidc_providers\".\"claim_config_json\") and json_type(\"oidc_providers\".\"claim_config_json\") = 'object'"
+        },
+        "oidc_providers_approved_endpoint_origins_json_check": {
+          "name": "oidc_providers_approved_endpoint_origins_json_check",
+          "value": "length(\"oidc_providers\".\"approved_endpoint_origins_json\") between 2 and 4096\n        and json_valid(\"oidc_providers\".\"approved_endpoint_origins_json\")\n        and json_type(\"oidc_providers\".\"approved_endpoint_origins_json\") = 'array'\n        and json_array_length(\"oidc_providers\".\"approved_endpoint_origins_json\") between 0 and 16"
+        },
+        "oidc_providers_discovery_state_check": {
+          "name": "oidc_providers_discovery_state_check",
+          "value": "\"oidc_providers\".\"discovery_state\" in ('unchecked', 'ready', 'failed')"
+        },
+        "oidc_providers_discovery_capabilities_json_check": {
+          "name": "oidc_providers_discovery_capabilities_json_check",
+          "value": "length(\"oidc_providers\".\"discovery_capabilities_json\") between 2 and 8192\n        and json_valid(\"oidc_providers\".\"discovery_capabilities_json\")\n        and json_type(\"oidc_providers\".\"discovery_capabilities_json\") = 'object'"
+        },
+        "oidc_providers_discovery_attribution_check": {
+          "name": "oidc_providers_discovery_attribution_check",
+          "value": "(\n          \"oidc_providers\".\"discovery_state\" = 'unchecked'\n          and \"oidc_providers\".\"discovery_checked_at\" is null\n          and json(\"oidc_providers\".\"discovery_capabilities_json\") = '{}'\n        ) or (\n          \"oidc_providers\".\"discovery_state\" = 'failed'\n          and \"oidc_providers\".\"discovery_checked_at\" is not null\n        ) or (\n          \"oidc_providers\".\"discovery_state\" = 'ready'\n          and \"oidc_providers\".\"discovery_checked_at\" is not null\n          and json(\"oidc_providers\".\"discovery_capabilities_json\") <> '{}'\n          and json_array_length(\"oidc_providers\".\"approved_endpoint_origins_json\") between 1 and 16\n        )"
+        },
+        "oidc_providers_discovery_timestamp_check": {
+          "name": "oidc_providers_discovery_timestamp_check",
+          "value": "\"oidc_providers\".\"discovery_checked_at\" is null or \"oidc_providers\".\"discovery_checked_at\" >= \"oidc_providers\".\"created_at\""
+        },
+        "oidc_providers_allow_jit_provisioning_check": {
+          "name": "oidc_providers_allow_jit_provisioning_check",
+          "value": "\"oidc_providers\".\"allow_jit_provisioning\" in (0, 1)"
+        },
+        "oidc_providers_enabled_check": {
+          "name": "oidc_providers_enabled_check",
+          "value": "\"oidc_providers\".\"enabled\" in (0, 1)"
+        }
+      }
+    },
+    "operational_failures": {
+      "name": "operational_failures",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "component": {
+          "name": "component",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "safe_message": {
+          "name": "safe_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "context_json": {
+          "name": "context_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurrence_count": {
+          "name": "occurrence_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "operational_failures_component_idx": {
+          "name": "operational_failures_component_idx",
+          "columns": [
+            "component",
+            "resolved_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "operational_failures_context_json_check": {
+          "name": "operational_failures_context_json_check",
+          "value": "json_valid(\"operational_failures\".\"context_json\") and json_type(\"operational_failures\".\"context_json\") = 'object'"
+        }
+      }
+    },
+    "role_mappings": {
+      "name": "role_mappings",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "claim_path_json": {
+          "name": "claim_path_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operator": {
+          "name": "operator",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "values_json": {
+          "name": "values_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "role_mappings_provider_priority_idx": {
+          "name": "role_mappings_provider_priority_idx",
+          "columns": [
+            "provider_id",
+            "enabled",
+            "priority"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "role_mappings_provider_id_oidc_providers_id_fk": {
+          "name": "role_mappings_provider_id_oidc_providers_id_fk",
+          "tableFrom": "role_mappings",
+          "tableTo": "oidc_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "role_mappings_claim_path_json_check": {
+          "name": "role_mappings_claim_path_json_check",
+          "value": "json_valid(\"role_mappings\".\"claim_path_json\") and json_type(\"role_mappings\".\"claim_path_json\") = 'array'"
+        },
+        "role_mappings_values_json_check": {
+          "name": "role_mappings_values_json_check",
+          "value": "json_valid(\"role_mappings\".\"values_json\") and json_type(\"role_mappings\".\"values_json\") = 'array'"
+        },
+        "role_mappings_operator_check": {
+          "name": "role_mappings_operator_check",
+          "value": "\"role_mappings\".\"operator\" in ('equals', 'contains_any', 'contains_all')"
+        },
+        "role_mappings_role_check": {
+          "name": "role_mappings_role_check",
+          "value": "\"role_mappings\".\"role\" in ('viewer', 'requester', 'operator', 'admin')"
+        },
+        "role_mappings_priority_check": {
+          "name": "role_mappings_priority_check",
+          "value": "\"role_mappings\".\"priority\" between 0 and 10000"
+        },
+        "role_mappings_enabled_check": {
+          "name": "role_mappings_enabled_check",
+          "value": "\"role_mappings\".\"enabled\" in (0, 1)"
+        }
+      }
+    },
+    "service_identity_links": {
+      "name": "service_identity_links",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service": {
+          "name": "service",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "connector_id": {
+          "name": "connector_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "external_server_id": {
+          "name": "external_server_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "external_user_id": {
+          "name": "external_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "external_username": {
+          "name": "external_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "external_display_name": {
+          "name": "external_display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_access_token": {
+          "name": "encrypted_access_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_created_at": {
+          "name": "token_created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "health_state": {
+          "name": "health_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'relink_required'"
+        },
+        "last_verified_at": {
+          "name": "last_verified_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "service_identity_links_user_service_unique": {
+          "name": "service_identity_links_user_service_unique",
+          "columns": [
+            "user_id",
+            "service"
+          ],
+          "isUnique": true
+        },
+        "service_identity_links_session_binding_unique": {
+          "name": "service_identity_links_session_binding_unique",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
+        },
+        "service_identity_links_external_unique": {
+          "name": "service_identity_links_external_unique",
+          "columns": [
+            "connector_id",
+            "external_server_id",
+            "external_user_id"
+          ],
+          "isUnique": true
+        },
+        "service_identity_links_connector_idx": {
+          "name": "service_identity_links_connector_idx",
+          "columns": [
+            "connector_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "service_identity_links_user_id_users_id_fk": {
+          "name": "service_identity_links_user_id_users_id_fk",
+          "tableFrom": "service_identity_links",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "service_identity_links_connector_type_fk": {
+          "name": "service_identity_links_connector_type_fk",
+          "tableFrom": "service_identity_links",
+          "tableTo": "connector_configs",
+          "columnsFrom": [
+            "connector_id",
+            "service"
+          ],
+          "columnsTo": [
+            "id",
+            "type"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "service_identity_links_service_check": {
+          "name": "service_identity_links_service_check",
+          "value": "\"service_identity_links\".\"service\" = 'jellyfin'"
+        },
+        "service_identity_links_health_state_check": {
+          "name": "service_identity_links_health_state_check",
+          "value": "\"service_identity_links\".\"health_state\" in ('linked', 'unavailable', 'relink_required', 'revoked')"
+        },
+        "service_identity_links_health_attribution_check": {
+          "name": "service_identity_links_health_attribution_check",
+          "value": "(\n          \"service_identity_links\".\"health_state\" in ('linked', 'unavailable')\n          and \"service_identity_links\".\"connector_id\" is not null\n          and \"service_identity_links\".\"encrypted_access_token\" is not null\n          and \"service_identity_links\".\"token_created_at\" is not null\n          and \"service_identity_links\".\"revoked_at\" is null\n        ) or (\n          \"service_identity_links\".\"health_state\" = 'relink_required'\n          and \"service_identity_links\".\"encrypted_access_token\" is null\n          and \"service_identity_links\".\"token_created_at\" is null\n          and \"service_identity_links\".\"revoked_at\" is null\n        ) or (\n          \"service_identity_links\".\"health_state\" = 'revoked'\n          and \"service_identity_links\".\"encrypted_access_token\" is null\n          and \"service_identity_links\".\"revoked_at\" is not null\n        )"
+        },
+        "service_identity_links_revision_check": {
+          "name": "service_identity_links_revision_check",
+          "value": "\"service_identity_links\".\"revision\" between 0 and 2147483647"
+        },
+        "service_identity_links_timestamp_order_check": {
+          "name": "service_identity_links_timestamp_order_check",
+          "value": "\"service_identity_links\".\"revoked_at\" is null or \"service_identity_links\".\"revoked_at\" >= \"service_identity_links\".\"created_at\""
+        }
+      }
+    },
+    "session_rotation_aliases": {
+      "name": "session_rotation_aliases",
+      "columns": {
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'bearer'"
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'rotation_grace'"
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "session_rotation_aliases_session_idx": {
+          "name": "session_rotation_aliases_session_idx",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
+        },
+        "session_rotation_aliases_expiry_idx": {
+          "name": "session_rotation_aliases_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "session_rotation_aliases_session_id_sessions_id_fk": {
+          "name": "session_rotation_aliases_session_id_sessions_id_fk",
+          "tableFrom": "session_rotation_aliases",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "session_rotation_aliases_reservation_fk": {
+          "name": "session_rotation_aliases_reservation_fk",
+          "tableFrom": "session_rotation_aliases",
+          "tableTo": "session_secret_reservations",
+          "columnsFrom": [
+            "token_hash",
+            "purpose",
+            "session_id"
+          ],
+          "columnsTo": [
+            "secret_hash",
+            "purpose",
+            "origin_session_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "session_rotation_aliases_token_hash_check": {
+          "name": "session_rotation_aliases_token_hash_check",
+          "value": "length(\"session_rotation_aliases\".\"token_hash\") = 43\n        and \"session_rotation_aliases\".\"token_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "session_rotation_aliases_purpose_check": {
+          "name": "session_rotation_aliases_purpose_check",
+          "value": "\"session_rotation_aliases\".\"purpose\" = 'bearer'"
+        },
+        "session_rotation_aliases_state_check": {
+          "name": "session_rotation_aliases_state_check",
+          "value": "\"session_rotation_aliases\".\"state\" = 'rotation_grace'"
+        },
+        "session_rotation_aliases_timestamp_order_check": {
+          "name": "session_rotation_aliases_timestamp_order_check",
+          "value": "\"session_rotation_aliases\".\"valid_from\" >= 0\n        and \"session_rotation_aliases\".\"expires_at\" > \"session_rotation_aliases\".\"valid_from\"\n        and \"session_rotation_aliases\".\"expires_at\" <= \"session_rotation_aliases\".\"valid_from\" + 10000"
+        }
+      }
+    },
+    "session_secret_reservations": {
+      "name": "session_secret_reservations",
+      "columns": {
+        "secret_hash": {
+          "name": "secret_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "origin_session_id": {
+          "name": "origin_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reserved_at": {
+          "name": "reserved_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "session_secret_reservations_attribution_unique": {
+          "name": "session_secret_reservations_attribution_unique",
+          "columns": [
+            "secret_hash",
+            "purpose",
+            "origin_session_id"
+          ],
+          "isUnique": true
+        },
+        "session_secret_reservations_origin_idx": {
+          "name": "session_secret_reservations_origin_idx",
+          "columns": [
+            "origin_session_id",
+            "purpose"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "session_secret_reservations_secret_hash_check": {
+          "name": "session_secret_reservations_secret_hash_check",
+          "value": "length(\"session_secret_reservations\".\"secret_hash\") = 43\n        and \"session_secret_reservations\".\"secret_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "session_secret_reservations_origin_session_id_check": {
+          "name": "session_secret_reservations_origin_session_id_check",
+          "value": "length(\"session_secret_reservations\".\"origin_session_id\") between 1 and 128\n        and \"session_secret_reservations\".\"origin_session_id\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "session_secret_reservations_purpose_check": {
+          "name": "session_secret_reservations_purpose_check",
+          "value": "\"session_secret_reservations\".\"purpose\" in ('bearer', 'csrf')"
+        },
+        "session_secret_reservations_reserved_at_check": {
+          "name": "session_secret_reservations_reserved_at_check",
+          "value": "\"session_secret_reservations\".\"reserved_at\" >= 0"
+        }
+      }
+    },
+    "sessions": {
+      "name": "sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "auth_method": {
+          "name": "auth_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "oidc_provider_id": {
+          "name": "oidc_provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "external_identity_id": {
+          "name": "external_identity_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "oidc_session_id_hash": {
+          "name": "oidc_session_id_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "encrypted_id_token_hint": {
+          "name": "encrypted_id_token_hint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "csrf_token_hash": {
+          "name": "csrf_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_csrf_token": {
+          "name": "encrypted_csrf_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ip_hash": {
+          "name": "ip_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "user_agent_hash": {
+          "name": "user_agent_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_rotated_at": {
+          "name": "last_rotated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "absolute_expires_at": {
+          "name": "absolute_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "sessions_token_hash_unique": {
+          "name": "sessions_token_hash_unique",
+          "columns": [
+            "token_hash"
+          ],
+          "isUnique": true
+        },
+        "sessions_user_idx": {
+          "name": "sessions_user_idx",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        },
+        "sessions_user_created_idx": {
+          "name": "sessions_user_created_idx",
+          "columns": [
+            "user_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "sessions_user_active_idx": {
+          "name": "sessions_user_active_idx",
+          "columns": [
+            "user_id",
+            "revoked_at",
+            "expires_at",
+            "absolute_expires_at"
+          ],
+          "isUnique": false
+        },
+        "sessions_recovery_created_idx": {
+          "name": "sessions_recovery_created_idx",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false,
+          "where": "\"sessions\".\"auth_method\" = 'recovery'"
+        },
+        "sessions_active_recovery_idx": {
+          "name": "sessions_active_recovery_idx",
+          "columns": [
+            "revoked_at"
+          ],
+          "isUnique": false,
+          "where": "\"sessions\".\"auth_method\" = 'recovery' and \"sessions\".\"revoked_at\" is null"
+        },
+        "sessions_expiry_idx": {
+          "name": "sessions_expiry_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        },
+        "sessions_external_identity_idx": {
+          "name": "sessions_external_identity_idx",
+          "columns": [
+            "external_identity_id"
+          ],
+          "isUnique": false
+        },
+        "sessions_service_identity_link_idx": {
+          "name": "sessions_service_identity_link_idx",
+          "columns": [
+            "service_identity_link_id"
+          ],
+          "isUnique": false
+        },
+        "sessions_oidc_sid_idx": {
+          "name": "sessions_oidc_sid_idx",
+          "columns": [
+            "oidc_provider_id",
+            "oidc_session_id_hash"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "sessions_user_id_users_id_fk": {
+          "name": "sessions_user_id_users_id_fk",
+          "tableFrom": "sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sessions_oidc_identity_fk": {
+          "name": "sessions_oidc_identity_fk",
+          "tableFrom": "sessions",
+          "tableTo": "external_identities",
+          "columnsFrom": [
+            "external_identity_id",
+            "user_id",
+            "oidc_provider_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id",
+            "provider_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sessions_service_identity_link_fk": {
+          "name": "sessions_service_identity_link_fk",
+          "tableFrom": "sessions",
+          "tableTo": "service_identity_links",
+          "columnsFrom": [
+            "service_identity_link_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "id",
+            "user_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "sessions_auth_method_check": {
+          "name": "sessions_auth_method_check",
+          "value": "\"sessions\".\"auth_method\" in ('oidc', 'jellyfin', 'recovery')"
+        },
+        "sessions_auth_attribution_check": {
+          "name": "sessions_auth_attribution_check",
+          "value": "(\n        \"sessions\".\"auth_method\" = 'oidc'\n        and \"sessions\".\"user_id\" is not null\n        and \"sessions\".\"oidc_provider_id\" is not null\n        and \"sessions\".\"external_identity_id\" is not null\n      ) or (\n        \"sessions\".\"auth_method\" = 'jellyfin'\n        and \"sessions\".\"user_id\" is not null\n        and \"sessions\".\"oidc_provider_id\" is null\n        and \"sessions\".\"external_identity_id\" is null\n        and \"sessions\".\"service_identity_link_id\" is not null\n        and \"sessions\".\"oidc_session_id_hash\" is null\n        and \"sessions\".\"encrypted_id_token_hint\" is null\n      ) or (\n        \"sessions\".\"auth_method\" = 'recovery'\n        and \"sessions\".\"user_id\" is null\n        and \"sessions\".\"oidc_provider_id\" is null\n        and \"sessions\".\"external_identity_id\" is null\n        and \"sessions\".\"service_identity_link_id\" is null\n        and \"sessions\".\"oidc_session_id_hash\" is null\n        and \"sessions\".\"encrypted_id_token_hint\" is null\n      )"
+        },
+        "sessions_token_hash_check": {
+          "name": "sessions_token_hash_check",
+          "value": "length(\"sessions\".\"token_hash\") = 43 and \"sessions\".\"token_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "sessions_csrf_hash_check": {
+          "name": "sessions_csrf_hash_check",
+          "value": "length(\"sessions\".\"csrf_token_hash\") = 43\n        and \"sessions\".\"csrf_token_hash\" not glob '*[^A-Za-z0-9_-]*'\n        and length(\"sessions\".\"encrypted_csrf_token\") between 1 and 8192"
+        },
+        "sessions_privacy_hashes_check": {
+          "name": "sessions_privacy_hashes_check",
+          "value": "(\"sessions\".\"oidc_session_id_hash\" is null or (\n          length(\"sessions\".\"oidc_session_id_hash\") = 22\n          and \"sessions\".\"oidc_session_id_hash\" not glob '*[^A-Za-z0-9_-]*'\n        )) and (\"sessions\".\"ip_hash\" is null or (\n          length(\"sessions\".\"ip_hash\") = 22\n          and \"sessions\".\"ip_hash\" not glob '*[^A-Za-z0-9_-]*'\n        )) and (\"sessions\".\"user_agent_hash\" is null or (\n          length(\"sessions\".\"user_agent_hash\") = 22\n          and \"sessions\".\"user_agent_hash\" not glob '*[^A-Za-z0-9_-]*'\n        ))"
+        },
+        "sessions_id_token_hint_check": {
+          "name": "sessions_id_token_hint_check",
+          "value": "\"sessions\".\"encrypted_id_token_hint\" is null or length(\"sessions\".\"encrypted_id_token_hint\") between 1 and 32768"
+        },
+        "sessions_timestamp_order_check": {
+          "name": "sessions_timestamp_order_check",
+          "value": "\"sessions\".\"created_at\" <= \"sessions\".\"last_rotated_at\"\n        and \"sessions\".\"last_rotated_at\" <= \"sessions\".\"last_seen_at\"\n        and \"sessions\".\"last_seen_at\" <= \"sessions\".\"expires_at\"\n        and \"sessions\".\"expires_at\" <= \"sessions\".\"absolute_expires_at\"\n        and (\"sessions\".\"revoked_at\" is null or \"sessions\".\"revoked_at\" >= \"sessions\".\"created_at\")"
+        }
+      }
+    },
+    "users": {
+      "name": "users",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'viewer'"
+        },
+        "role_source": {
+          "name": "role_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'default'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending_link'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "users_status_idx": {
+          "name": "users_status_idx",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "users_role_check": {
+          "name": "users_role_check",
+          "value": "\"users\".\"role\" in ('viewer', 'requester', 'operator', 'admin')"
+        },
+        "users_role_source_check": {
+          "name": "users_role_source_check",
+          "value": "\"users\".\"role_source\" in ('default', 'oidc_mapping', 'manual', 'recovery_bootstrap')"
+        },
+        "users_status_check": {
+          "name": "users_status_check",
+          "value": "\"users\".\"status\" in ('active', 'pending_link', 'disabled')"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

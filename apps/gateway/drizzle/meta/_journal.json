@@ -71,6 +71,13 @@
       "when": 1785184407738,
       "tag": "0009_acquisition_search_operations",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785191831294,
+      "tag": "0010_acquisition_grab_operations",
+      "breakpoints": true
     }
   ]
 }

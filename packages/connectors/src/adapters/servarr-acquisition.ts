@@ -1,9 +1,11 @@
 import {
   ACQUISITION_MAX_EVENTS,
+  MANUAL_RELEASE_MAX_RESULTS,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchInputSchema,
   acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
+  manualReleaseTargetInputSchema,
   type AcquisitionEvent,
   type AcquisitionEventKind,
   type AcquisitionEventState,
@@ -12,6 +14,9 @@ import {
   type AcquisitionSearchInput,
   type AcquisitionSearchResponse,
   type AcquisitionTargetInput,
+  type ManualReleaseCandidate,
+  type ManualReleaseTarget,
+  type ManualReleaseTargetInput,
 } from "@omnifin/contracts/acquisition";
 import type { ConnectorCapability, PartialFailure } from "@omnifin/contracts/connectors";
 import { z } from "zod";
@@ -25,6 +30,10 @@ const safeLabelSchema = z.string().trim().min(1).max(160);
 const releaseTitleSchema = z.string().trim().min(1).max(500);
 const dateSchema = z.iso.datetime({ offset: true });
 const commandResponseSchema = z.object({ id: safeIdentifierSchema });
+const internalReleaseReferenceSchema = z.strictObject({
+  guid: z.string().trim().min(1).max(2_048),
+  indexerId: safeIdentifierSchema,
+});
 
 const qualitySchema = z
   .object({
@@ -105,8 +114,60 @@ const queueResponseSchema = z.object({
   totalRecords: z.int().nonnegative().max(10_000_000),
 });
 
+const manualReleaseSchema = z.object({
+  ageMinutes: z.number().finite().nonnegative().max(5_256_000),
+  approved: z.boolean(),
+  customFormats: z
+    .array(z.object({ name: safeLabelSchema }))
+    .max(64)
+    .nullish(),
+  customFormatScore: z.number().finite().min(-1_000_000).max(1_000_000).nullish(),
+  downloadAllowed: z.boolean(),
+  episodeNumbers: z.array(z.int().positive().max(100_000)).max(100).nullish(),
+  fullSeason: z.boolean().nullish(),
+  guid: internalReleaseReferenceSchema.shape.guid,
+  indexer: safeLabelSchema,
+  indexerId: internalReleaseReferenceSchema.shape.indexerId,
+  languages: z.array(z.object({ name: safeLabelSchema })).max(32).nullish(),
+  leechers: z.int().nonnegative().max(MAX_UPSTREAM_IDENTIFIER).nullish(),
+  mappedEpisodeNumbers: z.array(z.int().positive().max(100_000)).max(100).nullish(),
+  protocol: z.string().trim().min(1).max(32),
+  publishDate: dateSchema,
+  quality: qualitySchema,
+  rejected: z.boolean(),
+  rejections: z.array(z.string().trim().min(1).max(1_000)).max(64).nullish(),
+  releaseGroup: safeLabelSchema.nullish(),
+  seeders: z.int().nonnegative().max(MAX_UPSTREAM_IDENTIFIER).nullish(),
+  size: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  temporarilyRejected: z.boolean(),
+  title: releaseTitleSchema,
+});
+
+const manualReleaseResponseSchema = z.array(manualReleaseSchema).max(1_000);
+const manualGrabResponseSchema = z.object({
+  guid: internalReleaseReferenceSchema.shape.guid,
+  indexerId: internalReleaseReferenceSchema.shape.indexerId,
+});
+
 type HistoryRecord = z.infer<typeof historyRecordSchema>;
 type QueueRecord = z.infer<typeof queueRecordSchema>;
+type ManualReleaseRecord = z.infer<typeof manualReleaseSchema>;
+
+export type ManualReleaseCandidateDetails = Omit<ManualReleaseCandidate, "id">;
+
+export interface ManualReleaseReference {
+  guid: string;
+  indexerId: number;
+}
+
+export interface ManualReleaseSearchResult {
+  candidates: {
+    details: ManualReleaseCandidateDetails;
+    reference: ManualReleaseReference;
+  }[];
+  generatedAt: string;
+  target: ManualReleaseTarget;
+}
 
 function optionalLabel(value: string | null | undefined) {
   const normalized = value?.trim();
@@ -121,6 +182,82 @@ function protocol(value: string | null | undefined): AcquisitionRelease["protoco
   const normalized = value?.trim().toLowerCase();
   if (normalized === "torrent" || normalized === "usenet") return normalized;
   return "unknown";
+}
+
+function sanitizeRejectionReason(value: string) {
+  const withoutUrls = value.replace(/https?:\/\/\S+/giu, "[redacted URL]");
+  const withoutPaths = withoutUrls
+    .replace(/(?:[A-Za-z]:\\|\\\\)[^\s,;]+/gu, "[redacted path]")
+    .replace(/\/(?:[^\s/]+\/){2,}[^\s,;]*/gu, "[redacted path]");
+  return withoutPaths.trim().slice(0, 240);
+}
+
+function manualTarget(target: ManualReleaseTargetInput): ManualReleaseTarget {
+  if (target.service === "radarr") {
+    return {
+      episodeId: null,
+      kind: "movie",
+      mediaId: target.mediaId,
+      seasonNumber: null,
+      service: "radarr",
+    };
+  }
+  if (target.episodeId !== undefined) {
+    return {
+      episodeId: target.episodeId,
+      kind: "episode",
+      mediaId: target.mediaId,
+      seasonNumber: null,
+      service: "sonarr",
+    };
+  }
+  return {
+    episodeId: null,
+    kind: "season",
+    mediaId: target.mediaId,
+    seasonNumber: target.seasonNumber ?? null,
+    service: "sonarr",
+  };
+}
+
+function manualReleaseDetails(record: ManualReleaseRecord): ManualReleaseCandidateDetails {
+  const decision = record.rejected
+    ? ("rejected" as const)
+    : record.temporarilyRejected
+      ? ("temporarily_rejected" as const)
+      : record.approved
+        ? ("approved" as const)
+        : ("rejected" as const);
+  const rejectionReasons =
+    decision === "approved"
+      ? []
+      : [...new Set((record.rejections ?? []).map(sanitizeRejectionReason).filter(Boolean))].slice(
+          0,
+          32,
+        );
+  return {
+    ageMinutes: Math.round(record.ageMinutes),
+    customFormats: [...new Set((record.customFormats ?? []).map(({ name }) => name))].slice(0, 32),
+    customFormatScore: Math.round(record.customFormatScore ?? 0),
+    decision,
+    downloadAllowed: record.downloadAllowed,
+    episodeNumbers: [...new Set(record.mappedEpisodeNumbers ?? record.episodeNumbers ?? [])].sort(
+      (left, right) => left - right,
+    ),
+    fullSeason: record.fullSeason ?? false,
+    indexer: record.indexer,
+    languages: [...new Set((record.languages ?? []).map(({ name }) => name))].slice(0, 16),
+    leechers: record.leechers ?? null,
+    protocol: protocol(record.protocol),
+    publishedAt: record.publishDate,
+    quality: qualityName(record.quality) ?? "Unknown quality",
+    rejectionReasons,
+    releaseGroup: optionalLabel(record.releaseGroup),
+    requiresOverride: decision !== "approved",
+    seeders: record.seeders ?? null,
+    sizeBytes: Math.round(record.size),
+    title: record.title,
+  };
 }
 
 function emptyRelease(): AcquisitionRelease {
@@ -290,7 +427,71 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "connector.version",
     "acquisition.history",
     "acquisition.search",
+    "acquisition.grab",
   ];
+
+  async searchManualReleases(
+    input: ManualReleaseTargetInput,
+    signal?: AbortSignal,
+  ): Promise<ManualReleaseSearchResult> {
+    const target = manualReleaseTargetInputSchema.parse(input);
+    if (target.service !== this.service) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "The manual release target does not match the connector service.",
+        operation: "acquisition.release.search",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const query = new URLSearchParams();
+    if (target.service === "radarr") {
+      query.set("movieId", String(target.mediaId));
+    } else if (target.episodeId !== undefined) {
+      query.set("episodeId", String(target.episodeId));
+    } else {
+      query.set("seriesId", String(target.mediaId));
+      query.set("seasonNumber", String(target.seasonNumber));
+    }
+    const releases = await this.client.requestJson(
+      "api/v3/release",
+      manualReleaseResponseSchema,
+      {
+        headers: { "X-Api-Key": this.apiKey },
+        operation: "acquisition.release.search",
+        query,
+        ...(signal ? { signal } : {}),
+      },
+    );
+    return {
+      candidates: releases.slice(0, MANUAL_RELEASE_MAX_RESULTS).map((release) => ({
+        details: manualReleaseDetails(release),
+        reference: { guid: release.guid, indexerId: release.indexerId },
+      })),
+      generatedAt: this.clock.now().toISOString(),
+      target: manualTarget(target),
+    };
+  }
+
+  async grabManualRelease(reference: ManualReleaseReference, signal?: AbortSignal): Promise<void> {
+    const release = internalReleaseReferenceSchema.parse(reference);
+    const response = await this.client.requestJson("api/v3/release", manualGrabResponseSchema, {
+      body: JSON.stringify(release),
+      headers: { "Content-Type": "application/json", "X-Api-Key": this.apiKey },
+      method: "POST",
+      operation: "acquisition.release.grab",
+      ...(signal ? { signal } : {}),
+    });
+    if (response.guid !== release.guid || response.indexerId !== release.indexerId) {
+      throw new SafeConnectorError({
+        code: "response_invalid",
+        message: "The acquisition service returned an unexpected release receipt.",
+        operation: "acquisition.release.grab",
+        retryable: false,
+        service: this.service,
+      });
+    }
+  }
 
   async queueAcquisitionSearch(
     input: AcquisitionSearchInput,

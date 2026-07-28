@@ -5,6 +5,10 @@ import {
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
+  manualReleaseCandidateSchema,
+  manualReleaseGrabResponseSchema,
+  manualReleaseSearchResponseSchema,
+  manualReleaseTargetInputSchema,
 } from "../src/acquisition.js";
 
 const release = {
@@ -128,6 +132,110 @@ describe("acquisition provenance contracts", () => {
         generatedAt: "2026-07-27T12:02:00.000Z",
         state: "degraded",
         target: { kind: "movie", mediaId: 8, seasonNumber: null, service: "sonarr" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("manual release contracts", () => {
+  const candidate = {
+    ageMinutes: 84,
+    customFormats: ["HDR10", "Surround"],
+    customFormatScore: 1350,
+    decision: "approved" as const,
+    downloadAllowed: true,
+    episodeNumbers: [],
+    fullSeason: false,
+    id: "release_0123456789abcdefghijklmnopqrstuv",
+    indexer: "Northstar",
+    languages: ["English"],
+    leechers: 12,
+    protocol: "torrent" as const,
+    publishedAt: "2026-07-27T12:00:00.000Z",
+    quality: "WEBDL-2160p",
+    rejectionReasons: [],
+    releaseGroup: "Example",
+    requiresOverride: false,
+    seeders: 84,
+    sizeBytes: 18_420_000_000,
+    title: "Example.Movie.2026.2160p.WEB-DL",
+  };
+
+  it("requires exact movie, season, or episode targets and rejects broad Sonarr RSS searches", () => {
+    expect(
+      manualReleaseTargetInputSchema.parse({ mediaId: "42", service: "radarr" }),
+    ).toEqual({ mediaId: 42, service: "radarr" });
+    expect(
+      manualReleaseTargetInputSchema.parse({ mediaId: 77, seasonNumber: "2", service: "sonarr" }),
+    ).toEqual({ mediaId: 77, seasonNumber: 2, service: "sonarr" });
+    expect(
+      manualReleaseTargetInputSchema.parse({ episodeId: "91", mediaId: 77, service: "sonarr" }),
+    ).toEqual({ episodeId: 91, mediaId: 77, service: "sonarr" });
+    expect(() => manualReleaseTargetInputSchema.parse({ mediaId: 77, service: "sonarr" })).toThrow();
+    expect(() =>
+      manualReleaseTargetInputSchema.parse({
+        episodeId: 91,
+        mediaId: 77,
+        seasonNumber: 2,
+        service: "sonarr",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts normalized candidates while excluding upstream release references", () => {
+    expect(manualReleaseCandidateSchema.parse(candidate)).toMatchObject({
+      decision: "approved",
+      id: candidate.id,
+      quality: "WEBDL-2160p",
+    });
+    expect(() =>
+      manualReleaseCandidateSchema.parse({
+        ...candidate,
+        guid: "private-indexer-guid",
+        magnetUrl: "magnet:?xt=urn:btih:secret",
+      }),
+    ).toThrow();
+    expect(() =>
+      manualReleaseCandidateSchema.parse({
+        ...candidate,
+        decision: "rejected",
+        rejectionReasons: ["Quality profile does not allow this release"],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts bounded search and grab receipts without raw upstream payloads", () => {
+    expect(
+      manualReleaseSearchResponseSchema.parse({
+        expiresAt: "2026-07-27T12:20:00.000Z",
+        generatedAt: "2026-07-27T12:00:00.000Z",
+        releases: [candidate],
+        target: {
+          episodeId: null,
+          kind: "movie",
+          mediaId: 42,
+          seasonNumber: null,
+          service: "radarr",
+        },
+      }).releases,
+    ).toHaveLength(1);
+    expect(
+      manualReleaseGrabResponseSchema.parse({
+        acceptedAt: "2026-07-27T12:01:00.000Z",
+        operationId: "release_grab_0123456789abcdefghijklmnopqrstuv",
+        releaseId: candidate.id,
+        service: "radarr",
+        state: "accepted",
+      }),
+    ).toMatchObject({ state: "accepted" });
+    expect(() =>
+      manualReleaseGrabResponseSchema.parse({
+        acceptedAt: "2026-07-27T12:01:00.000Z",
+        operationId: "release_grab_0123456789abcdefghijklmnopqrstuv",
+        releaseId: candidate.id,
+        service: "radarr",
+        state: "accepted",
+        upstream: { guid: "must-not-cross" },
       }),
     ).toThrow();
   });

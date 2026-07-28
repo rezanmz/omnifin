@@ -11,6 +11,10 @@ import {
   acquisitionProvenanceRoutes,
   type AcquisitionProvenanceRoutesOptions,
 } from "./acquisitions/provenance-routes.js";
+import {
+  manualReleaseRoutes,
+  type ManualReleaseRoutesOptions,
+} from "./acquisitions/manual-release-routes.js";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
@@ -89,6 +93,7 @@ export interface CreateAppOptions {
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
+  manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
@@ -392,6 +397,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.acquisitionProvenanceDependencies === undefined
         ? {}
         : { dependencies: options.acquisitionProvenanceDependencies }),
+    });
+    await app.register(manualReleaseRoutes, {
+      ...(options.manualReleaseDependencies === undefined
+        ? {}
+        : { dependencies: options.manualReleaseDependencies }),
     });
     await app.register(indexerIntelligenceRoutes, {
       ...(options.indexerIntelligenceDependencies === undefined
