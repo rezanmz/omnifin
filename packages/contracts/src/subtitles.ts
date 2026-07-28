@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { idempotencyKeySchema } from "./requests.js";
+
 export const SUBTITLE_SEARCH_MAX_RESULTS = 100;
 
 const safeTextSchema = z
@@ -85,6 +87,9 @@ export type SubtitleSearchResponse = z.infer<typeof subtitleSearchResponseSchema
 
 export const subtitleDownloadRequestSchema = z.strictObject({});
 export type SubtitleDownloadRequest = z.infer<typeof subtitleDownloadRequestSchema>;
+
+export const subtitleDownloadIdempotencyKeySchema = idempotencyKeySchema;
+export type SubtitleDownloadIdempotencyKey = z.infer<typeof subtitleDownloadIdempotencyKeySchema>;
 
 export const subtitleDownloadResponseSchema = z.strictObject({
   acceptedAt: z.iso.datetime({ offset: true }),

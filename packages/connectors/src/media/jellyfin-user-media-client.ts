@@ -54,12 +54,14 @@ export interface JellyfinContinueWatchingItem {
     poster: JellyfinArtworkSource | null;
   };
   contentRating: string | null;
+  episodeNumber: number | null;
   externalId: string;
   kind: "episode" | "movie" | "other";
   lastPlayedAt: string;
   overview: string | null;
   positionSeconds: number;
   runtimeSeconds: number;
+  seasonNumber: number | null;
   subtitle: string | null;
   title: string;
   year: number | null;
@@ -134,12 +136,14 @@ function normalizeResumeItem(
       poster,
     },
     contentRating: compactText(item.OfficialRating, 32),
+    episodeNumber: isEpisode ? (item.IndexNumber ?? null) : null,
     externalId: item.Id,
     kind: isEpisode ? "episode" : isMovie ? "movie" : "other",
     lastPlayedAt: item.UserData.LastPlayedDate,
     overview: compactText(item.Overview, 2_000),
     positionSeconds,
     runtimeSeconds,
+    seasonNumber: isEpisode ? (item.ParentIndexNumber ?? null) : null,
     subtitle: isEpisode ? episodeLabel(item) : null,
     title: isEpisode ? (item.SeriesName ?? item.Name) : item.Name,
     year: item.ProductionYear ?? null,
