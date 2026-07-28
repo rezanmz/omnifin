@@ -98,6 +98,7 @@ describe("opaque token helpers", () => {
       privacyHash("acquisition_calendar_event", value, rootKey),
       privacyHash("acquisition_calendar_source", value, rootKey),
       privacyHash("ip_address", value, rootKey),
+      privacyHash("media_item", value, rootKey),
       privacyHash("user_agent", value, rootKey),
       privacyHash("oidc_session_id", value, rootKey),
       privacyHash("oidc_failure_audit_bucket", value, rootKey),

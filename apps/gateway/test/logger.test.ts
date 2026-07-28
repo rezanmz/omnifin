@@ -148,6 +148,7 @@ describe("gateway logger", () => {
               encryptedCredentials: "v2.encrypted-connector-credentials-value",
               encryptedIdTokenHint: "encrypted-id-token-hint-value",
               encryptedNonce: "encrypted-nonce-value",
+              encryptedPayload: "encrypted-media-reference-payload-value",
               mediaPath: "/private/media/library/movie.mkv",
               oidcSessionIdHash: "oidc-session-id-hash-value",
               password: "password-value",
@@ -185,6 +186,7 @@ describe("gateway logger", () => {
       encryptedCredentials: "[REDACTED]",
       encryptedIdTokenHint: "[REDACTED]",
       encryptedNonce: "[REDACTED]",
+      encryptedPayload: "[REDACTED]",
       mediaPath: "[REDACTED]",
       oidcSessionIdHash: "[REDACTED]",
       password: "[REDACTED]",
@@ -202,7 +204,7 @@ describe("gateway logger", () => {
     expect(record.message).toBe("Payload accepted");
     expect(fields.body.nested[0]?.requestBody.password).toBe("password-value");
     expect(output).not.toMatch(
-      /upper-case-secret|alternate-secret|access-token-value|authorization-code-value|encrypted-(?:connector-credentials|verifier|id-token-hint|nonce)-value|signed-assertion-value|oidc-(?:session-id-hash|state)-value|password-value|private\/media|proxy-secret|quick-connect-(?:flat-)?secret-value|recovery-secret-digest-value|request-cookie-value|session-token-hash-value|set-cookie-value|upstream-session-id-value/,
+      /upper-case-secret|alternate-secret|access-token-value|authorization-code-value|encrypted-(?:connector-credentials|media-reference-payload|verifier|id-token-hint|nonce)-value|signed-assertion-value|oidc-(?:session-id-hash|state)-value|password-value|private\/media|proxy-secret|quick-connect-(?:flat-)?secret-value|recovery-secret-digest-value|request-cookie-value|session-token-hash-value|set-cookie-value|upstream-session-id-value/,
     );
   });
 

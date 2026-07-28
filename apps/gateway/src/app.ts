@@ -65,6 +65,10 @@ import {
 } from "./indexers/intelligence-routes.js";
 import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import {
+  continueWatchingRoutes,
+  type ContinueWatchingRoutesOptions,
+} from "./media/continue-watching-routes.js";
+import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
 } from "./requests/media-request-routes.js";
@@ -97,6 +101,7 @@ export interface CreateAppOptions {
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
+  continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
@@ -404,6 +409,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.downloadQueueDependencies === undefined
         ? {}
         : { dependencies: options.downloadQueueDependencies }),
+    });
+    await app.register(continueWatchingRoutes, {
+      ...(options.continueWatchingDependencies === undefined
+        ? {}
+        : { dependencies: options.continueWatchingDependencies }),
     });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined

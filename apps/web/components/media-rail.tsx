@@ -7,7 +7,17 @@ import { handleDirectionalFocus } from "../lib/directional-focus";
 
 type CardStyle = CSSProperties & { "--card-accent": string };
 
-export function MediaRail({ items, title }: { items: MediaCardModel[]; title: string }) {
+type ArtworkStyle = CSSProperties & { "--card-artwork"?: string };
+
+export function MediaRail({
+  items,
+  statusMessage,
+  title,
+}: {
+  items: MediaCardModel[];
+  statusMessage?: string;
+  title: string;
+}) {
   const headingId = `rail-${title.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
   const emptyCopy = title.toLowerCase().includes("continue")
     ? "Start watching something in Jellyfin and it will appear here with your progress."
@@ -16,11 +26,18 @@ export function MediaRail({ items, title }: { items: MediaCardModel[]; title: st
     <section className="media-rail" aria-labelledby={headingId}>
       <div className="section-heading">
         <h2 id={headingId}>{title}</h2>
-        {items.length > 0 && (
-          <button className="text-action" type="button">
-            View all <ArrowRight aria-hidden="true" size={15} />
-          </button>
-        )}
+        <div className="section-heading__actions">
+          {statusMessage && (
+            <span className="media-rail__status" role="status">
+              {statusMessage}
+            </span>
+          )}
+          {items.length > 0 && (
+            <button className="text-action" type="button">
+              View all <ArrowRight aria-hidden="true" size={15} />
+            </button>
+          )}
+        </div>
       </div>
       {items.length > 0 ? (
         <div
@@ -37,6 +54,13 @@ export function MediaRail({ items, title }: { items: MediaCardModel[]; title: st
             const watchedPercent =
               typeof item.progress === "number" ? Math.round(item.progress * 100) : undefined;
             const progressDescriptionId = `${headingId}-${item.id}-progress`;
+            const artworkPath =
+              item.artworkPath &&
+              /^\/api\/media\/media_[A-Za-z0-9_-]{22}\/images\/(?:backdrop|poster)$/u.test(
+                item.artworkPath,
+              )
+                ? item.artworkPath
+                : undefined;
 
             return (
               <article
@@ -56,7 +80,13 @@ export function MediaRail({ items, title }: { items: MediaCardModel[]; title: st
                   <span
                     className="media-card__art"
                     data-artwork={item.artwork ?? "fallback"}
+                    data-artwork-source={artworkPath ? "remote" : "generated"}
                     aria-hidden="true"
+                    style={
+                      artworkPath
+                        ? ({ "--card-artwork": `url("${artworkPath}")` } as ArtworkStyle)
+                        : undefined
+                    }
                   >
                     <span className="media-card__motif media-card__motif--one" />
                     <span className="media-card__motif media-card__motif--two" />

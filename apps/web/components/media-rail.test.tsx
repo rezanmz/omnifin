@@ -34,6 +34,26 @@ describe("MediaRail", () => {
     expect(container.querySelector('[data-artwork="fallback"]')).toBeInTheDocument();
   });
 
+  it("fails closed instead of loading an unrecognized artwork URL", () => {
+    const { container } = render(
+      <MediaRail
+        items={[
+          {
+            accent: "#51675b",
+            artworkPath: "https://unexpected.example/private-artwork",
+            eyebrow: "New",
+            id: "fallback",
+            title: "Fallback",
+          },
+        ]}
+        title="Continue watching"
+      />,
+    );
+
+    expect(container.querySelector('[data-artwork-source="generated"]')).toBeInTheDocument();
+    expect(container.innerHTML).not.toContain("unexpected.example");
+  });
+
   it("moves focus between posters with directional keys", async () => {
     const scrollTo = vi.fn();
     HTMLElement.prototype.scrollTo = scrollTo;

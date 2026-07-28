@@ -8,16 +8,14 @@ afterEach(() => {
 });
 
 describe("first-run route selection", () => {
-  it("internally serves onboarding at the public root without dropping security headers", () => {
+  it("keeps the live dashboard at root without dropping security headers", () => {
     vi.stubEnv("OMNIFIN_DEMO_MODE", "false");
     const request = new NextRequest("https://omnifin.example.test/");
 
-    expect(onboardingRewriteTarget(request)?.href).toBe("https://omnifin.example.test/onboarding");
+    expect(onboardingRewriteTarget(request)).toBeUndefined();
 
     const response = proxy(request);
-    expect(response.headers.get("x-middleware-rewrite")).toBe(
-      "https://omnifin.example.test/onboarding",
-    );
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
     expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
     expect(response.headers.get("strict-transport-security")).toContain("includeSubDomains");
   });

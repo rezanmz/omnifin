@@ -969,6 +969,7 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.auditBudgetEntries).toBeDefined();
     expect(authenticationSchema.auditBudgetScopes).toBeDefined();
     expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
+    expect(authenticationSchema.mediaReferences).toBeDefined();
     expect(authenticationSchema.sessionRotationAliases).toBeDefined();
     expect(authenticationSchema.sessionSecretReservations).toBeDefined();
     expect(authenticationSchema.serviceIdentityLinks).toBeDefined();
@@ -986,11 +987,12 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("audit_budget_entries");
       expect(names).toContain("audit_budget_scopes");
       expect(names).toContain("oidc_logout_receipts");
+      expect(names).toContain("media_references");
       expect(names).toContain("session_rotation_aliases");
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 11 });
+      ).toEqual({ count: 12 });
       expect(
         database.sqlite
           .prepare(

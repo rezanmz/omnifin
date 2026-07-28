@@ -27,24 +27,28 @@ export function HeroSpotlight({ hero }: { hero: DashboardModel["hero"] }) {
           ))}
         </ul>
         <p className="hero-spotlight__description">{hero.description}</p>
-        <DirectionalNavigationGroup className="hero-spotlight__actions">
-          <button className="button button--primary" data-directional-item type="button">
-            <Play aria-hidden="true" fill="currentColor" size={17} />
-            Play now
-          </button>
-          <button className="button button--glass" data-directional-item type="button">
-            <Info aria-hidden="true" size={18} />
-            Details
-          </button>
-        </DirectionalNavigationGroup>
+        {hero.actions !== "none" && (
+          <DirectionalNavigationGroup className="hero-spotlight__actions">
+            <button className="button button--primary" data-directional-item type="button">
+              <Play aria-hidden="true" fill="currentColor" size={17} />
+              Play now
+            </button>
+            <button className="button button--glass" data-directional-item type="button">
+              <Info aria-hidden="true" size={18} />
+              Details
+            </button>
+          </DirectionalNavigationGroup>
+        )}
       </div>
-      <div className="hero-spotlight__position" aria-label="Spotlight 1 of 5" role="img">
-        <span className="is-active" />
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
+      {hero.actions !== "none" && (
+        <div className="hero-spotlight__position" aria-label="Spotlight 1 of 5" role="img">
+          <span className="is-active" />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      )}
     </section>
   );
 }

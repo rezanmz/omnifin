@@ -147,4 +147,20 @@ describe("JellyfinAuthenticationClient", () => {
     ).toThrow(/device identifier/i);
     expect(mock.requests).toHaveLength(0);
   });
+
+  it("preserves connector-specific TLS policy for authentication requests", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-1", ServerName: "Home", Version: "10.11.11" }),
+    ]);
+    const client = new JellyfinAuthenticationClient({
+      ...target(mock.transport),
+      tlsCaCertificatePem: "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      tlsPolicy: "allow_self_signed",
+    });
+
+    await client.getPublicSystemInfo();
+
+    expect(mock.requests[0]?.init.tlsPolicy).toBe("allow_self_signed");
+    expect(mock.requests[0]?.init.tlsCaCertificatePem).toContain("BEGIN CERTIFICATE");
+  });
 });

@@ -43,6 +43,7 @@ const SENSITIVE_NORMALIZED_KEYS = new Set([
   "credentials",
   "encryptionkey",
   "encryptedidtokenhint",
+  "encryptedpayload",
   "idtokenhint",
   "masterkey",
   "mediapath",

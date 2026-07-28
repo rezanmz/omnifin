@@ -406,6 +406,63 @@ export const serviceIdentityLinks = sqliteTable(
   ],
 );
 
+export const mediaReferences = sqliteTable(
+  "media_references",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    itemDigest: text("item_digest").notNull(),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("media_references_link_item_unique").on(
+      table.serviceIdentityLinkId,
+      table.linkRevision,
+      table.itemDigest,
+    ),
+    index("media_references_user_last_used_idx").on(table.userId, table.lastUsedAt),
+    index("media_references_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "media_references_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "media_references_id_check",
+      sql`length(${table.id}) = 28
+        and substr(${table.id}, 1, 6) = 'media_'
+        and substr(${table.id}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_references_item_digest_check",
+      sql`length(${table.itemDigest}) = 22
+        and ${table.itemDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_references_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 32768`,
+    ),
+    check(
+      "media_references_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "media_references_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

@@ -12,6 +12,8 @@ import {
   partialFailureSchema,
 } from "../src/connectors.js";
 import {
+  continueWatchingResponseJsonSchema,
+  continueWatchingResponseSchema,
   continueWatchingItemSchema,
   dashboardSnapshotSchema,
   mediaSummarySchema,
@@ -291,6 +293,144 @@ describe("connector contracts", () => {
         positionSeconds: 2_600,
         durationSeconds: 2_500,
         lastPlayedAt: "2026-07-25T12:00:00.000Z",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("publishes a bounded Continue Watching response with opaque media references", () => {
+    const response = continueWatchingResponseSchema.parse({
+      failures: [],
+      generatedAt: "2026-07-28T08:00:00.000Z",
+      items: [
+        {
+          media: {
+            id: "media_0123456789abcdefghijkl",
+            kind: "episode",
+            title: "A Narrow Signal",
+            subtitle: "Northern Lights · S2 E3",
+            overview: "The observatory receives a reply.",
+            year: 2026,
+            contentRating: "TV-14",
+            runtimeMinutes: 52,
+            artwork: {
+              posterPath: "/v1/media/media_0123456789abcdefghijkl/images/primary",
+              backdropPath: null,
+              blurHash: null,
+              accentColor: null,
+            },
+            availability: "available",
+            upstreamItemId: "must-not-cross-the-gateway",
+          },
+          progressPercent: 42,
+          positionSeconds: 1_310,
+          durationSeconds: 3_120,
+          lastPlayedAt: "2026-07-28T07:45:00.000Z",
+        },
+      ],
+      source: {
+        connectorId: "jellyfin-main",
+        displayName: "Living Room Jellyfin",
+        failure: null,
+        status: "healthy",
+      },
+      state: "complete",
+      truncated: false,
+    });
+
+    expect(response.items[0]?.media).not.toHaveProperty("upstreamItemId");
+    expect(continueWatchingResponseJsonSchema).not.toHaveProperty("$schema");
+  });
+
+  it("keeps unavailable Continue Watching responses failure-bound and media-free", () => {
+    const failure = {
+      service: "jellyfin" as const,
+      operation: "continue_watching",
+      code: "timeout" as const,
+      message: "Jellyfin did not respond before the deadline.",
+      retryable: true,
+      occurredAt: "2026-07-28T08:00:00.000Z",
+    };
+    expect(
+      continueWatchingResponseSchema.safeParse({
+        failures: [failure],
+        generatedAt: "2026-07-28T08:00:00.000Z",
+        items: [],
+        source: {
+          connectorId: "jellyfin-main",
+          displayName: "Living Room Jellyfin",
+          failure,
+          status: "unavailable",
+        },
+        state: "unavailable",
+        truncated: false,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      continueWatchingResponseSchema.safeParse({
+        failures: [],
+        generatedAt: "2026-07-28T08:00:00.000Z",
+        items: [],
+        source: {
+          connectorId: "jellyfin-main",
+          displayName: "Living Room Jellyfin",
+          failure,
+          status: "unavailable",
+        },
+        state: "empty",
+        truncated: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects raw and duplicate upstream identifiers in Continue Watching responses", () => {
+    const media = {
+      id: "raw-jellyfin-item-id",
+      kind: "movie",
+      title: "Fixture",
+      subtitle: null,
+      overview: null,
+      year: 2026,
+      contentRating: null,
+      runtimeMinutes: 90,
+      artwork: {
+        posterPath: null,
+        backdropPath: null,
+        blurHash: null,
+        accentColor: null,
+      },
+      availability: "available",
+    };
+    const response = {
+      failures: [],
+      generatedAt: "2026-07-28T08:00:00.000Z",
+      items: [
+        {
+          media,
+          progressPercent: 50,
+          positionSeconds: 2_700,
+          durationSeconds: 5_400,
+          lastPlayedAt: "2026-07-28T07:45:00.000Z",
+        },
+      ],
+      source: {
+        connectorId: "jellyfin-main",
+        displayName: "Jellyfin",
+        failure: null,
+        status: "healthy",
+      },
+      state: "complete",
+      truncated: false,
+    };
+
+    expect(continueWatchingResponseSchema.safeParse(response).success).toBe(false);
+    expect(
+      continueWatchingResponseSchema.safeParse({
+        ...response,
+        items: [
+          { ...response.items[0], media: { ...media, id: "media_0123456789abcdefghijkl" } },
+          { ...response.items[0], media: { ...media, id: "media_0123456789abcdefghijkl" } },
+        ],
       }).success,
     ).toBe(false);
   });

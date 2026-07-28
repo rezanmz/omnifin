@@ -20,6 +20,7 @@ const requiredTables = [
   "connector_configs",
   "external_identities",
   "jellyfin_quick_connect_transactions",
+  "media_references",
   "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
@@ -73,6 +74,15 @@ const requiredColumns = {
     "pairing_session_id",
     "poll_count",
     "purpose",
+  ],
+  media_references: [
+    "encrypted_payload",
+    "expires_at",
+    "item_digest",
+    "last_used_at",
+    "link_revision",
+    "service_identity_link_id",
+    "user_id",
   ],
   media_request_operations: [
     "completed_at",
@@ -136,6 +146,11 @@ const requiredIndexes = {
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
     "jellyfin_quick_connect_transactions_pairing_session_idx",
+  ],
+  media_references: [
+    "media_references_expiry_idx",
+    "media_references_link_item_unique",
+    "media_references_user_last_used_idx",
   ],
   media_request_operations: [
     "media_request_operations_state_created_idx",
@@ -229,6 +244,8 @@ function writeHistoricalMigrationFixture() {
     { mode: 0o600 },
   );
   return {
+    currentMigrationCount: journal.entries.length,
+    currentMigrationTag: journal.entries.at(-1)?.tag,
     currentMigrationTimestamp: journal.entries.at(-1)?.when,
     historicalMigrationTimestamp: historicalEntries.at(-1)!.when,
   };
@@ -285,11 +302,15 @@ function assertNoForeignKeyViolations(database: DatabaseHandle, context: string)
   );
 }
 
-const { currentMigrationTimestamp, historicalMigrationTimestamp } =
-  writeHistoricalMigrationFixture();
+const {
+  currentMigrationCount,
+  currentMigrationTag,
+  currentMigrationTimestamp,
+  historicalMigrationTimestamp,
+} = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined,
-  "Current migration journal must contain migration 0010.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0011_panoramic_nighthawk",
+  "Current migration journal must end at migration 0011.",
 );
 
 try {
@@ -376,6 +397,27 @@ try {
       throw new Error(
         "Migration is missing the connector type-bound service identity foreign key.",
       );
+    }
+
+    const mediaReferenceForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_references)",
+    ) as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const linkForeignKeyId = mediaReferenceForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const linkForeignKeyColumns = mediaReferenceForeignKeys
+      .filter(({ id }) => id === linkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
+      throw new Error("Migration is missing the user-bound media reference foreign key.");
     }
 
     const rotationAliasForeignKeys = database.sqlite.pragma(
@@ -514,8 +556,11 @@ try {
     upgradeDatabase.migrate();
     assertCondition(
       JSON.stringify(migrationJournalState(upgradeDatabase)) ===
-        JSON.stringify({ count: 11, latestMigrationTimestamp: currentMigrationTimestamp }),
-      "Production migration did not advance the historical fixture exactly through migration 0010.",
+        JSON.stringify({
+          count: currentMigrationCount,
+          latestMigrationTimestamp: currentMigrationTimestamp,
+        }),
+      "Production migration did not advance the historical fixture exactly through migration 0011.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -680,7 +725,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0010, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0011, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

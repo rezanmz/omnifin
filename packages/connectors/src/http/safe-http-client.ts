@@ -45,6 +45,12 @@ export interface SafeTextResponse {
   headers: Headers;
 }
 
+export interface SafeBytesResponse {
+  status: number;
+  body: Uint8Array;
+  headers: Headers;
+}
+
 export class SafeConnectorError extends Error {
   readonly service: ConnectorService;
   readonly operation: string;
@@ -315,6 +321,15 @@ export class SafeHttpClient {
   }
 
   async requestText(path: string, options: SafeRequestOptions): Promise<SafeTextResponse> {
+    const response = await this.requestBytes(path, options);
+    return {
+      body: Buffer.from(response.body).toString("utf8"),
+      headers: response.headers,
+      status: response.status,
+    };
+  }
+
+  async requestBytes(path: string, options: SafeRequestOptions): Promise<SafeBytesResponse> {
     if (
       !path ||
       UNSAFE_REQUEST_PATH_CHARACTER.test(path) ||
@@ -454,8 +469,8 @@ export class SafeHttpClient {
     }
   }
 
-  private async readBoundedBody(response: Response, operation: string): Promise<string> {
-    if (!response.body) return "";
+  private async readBoundedBody(response: Response, operation: string): Promise<Uint8Array> {
+    if (!response.body) return new Uint8Array();
 
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -475,7 +490,7 @@ export class SafeHttpClient {
       reader.releaseLock();
     }
 
-    return Buffer.concat(chunks, totalBytes).toString("utf8");
+    return new Uint8Array(Buffer.concat(chunks, totalBytes));
   }
 
   invalidResponse(operation: string): SafeConnectorError {

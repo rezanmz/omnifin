@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { demoContinueWatchingFeed } from "../../lib/continue-watching-demo";
 import {
   acquisitionRecoveryCsrfToken,
   mockAcquisitionRecoverySession,
@@ -28,6 +29,41 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await page.keyboard.press("Enter");
   await expect(operations).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("button", { name: /Signal · S01E07/i })).toBeVisible();
+});
+
+test("authenticated Continue Watching renders normalized progress and private artwork", async ({
+  page,
+}) => {
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(demoContinueWatchingFeed),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("**/api/media/*/images/poster", async (route) => {
+    await route.fulfill({
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+      contentType: "image/png",
+      status: 200,
+    });
+  });
+
+  await page.goto("/?test-view=continue-watching-live");
+  const card = page.getByRole("button", { name: "Open Northern Lights" });
+  await expect(card).toHaveAccessibleDescription("33% watched");
+  await expect(
+    page.getByRole("progressbar", { name: "Northern Lights watch progress" }),
+  ).toHaveAttribute("aria-valuenow", "33");
+  await expect(card.locator(".media-card__art")).toHaveAttribute("data-artwork-source", "remote");
+  await expect(card.locator(".media-card__art")).toHaveCSS(
+    "background-image",
+    /\/api\/media\/media_b{22}\/images\/poster/u,
+  );
+  await expect(page.getByText("jellyfin-main")).toHaveCount(0);
 });
 
 test("operators can inspect a title-level acquisition trace before choosing recovery", async ({

@@ -192,6 +192,19 @@ describe("SafeHttpClient", () => {
     ).rejects.toMatchObject({ code: "response_invalid" });
   });
 
+  it("returns bounded binary payloads without UTF-8 coercion", async () => {
+    const bytes = new Uint8Array([0, 255, 128, 64, 1]);
+    const mock = createMockTransport([
+      new Response(bytes, { headers: { "content-type": "application/octet-stream" } }),
+    ]);
+    const client = clientWith(mock.transport, { maxResponseBytes: bytes.byteLength });
+
+    const response = await client.requestBytes("api/v3/artwork", { operation: "artwork" });
+
+    expect([...response.body]).toEqual([...bytes]);
+    expect(response.headers.get("content-type")).toBe("application/octet-stream");
+  });
+
   it("turns a deadline into a retryable, redaction-safe timeout", async () => {
     const hangingTransport: ConnectorTransport = (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
