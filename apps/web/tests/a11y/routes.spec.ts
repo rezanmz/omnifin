@@ -104,6 +104,22 @@ const routes = [
     path: "/calendar?test-view=unconfigured",
   },
   {
+    label: "library care",
+    path: "/library?test-view=ready",
+  },
+  {
+    label: "empty library care",
+    path: "/library?test-view=empty",
+  },
+  {
+    label: "unavailable library care",
+    path: "/library?test-view=unavailable",
+  },
+  {
+    label: "restricted library care",
+    path: "/library?test-view=forbidden",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
@@ -235,6 +251,21 @@ test("calendar event details have no automatically detectable accessibility viol
   await page.goto("/calendar?test-view=ready");
   await page.getByRole("button", { name: /Inspect The Far Meridian/i }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("library item inspector has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: "Inspect Northern Lights" }).click();
+  await expect(page.getByRole("button", { name: "Close library inspector" })).toBeFocused();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

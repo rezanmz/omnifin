@@ -20,6 +20,8 @@ const requiredTables = [
   "connector_configs",
   "external_identities",
   "jellyfin_quick_connect_transactions",
+  "library_artwork_searches",
+  "library_mutation_operations",
   "media_issues",
   "media_references",
   "media_request_operations",
@@ -78,6 +80,24 @@ const requiredColumns = {
     "pairing_session_id",
     "poll_count",
     "purpose",
+  ],
+  library_artwork_searches: [
+    "encrypted_payload",
+    "expires_at",
+    "link_revision",
+    "media_reference_id",
+    "service_identity_link_id",
+    "user_id",
+  ],
+  library_mutation_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "reference_id",
+    "response_json",
+    "state",
+    "user_id",
   ],
   media_references: [
     "encrypted_payload",
@@ -195,6 +215,16 @@ const requiredIndexes = {
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
     "jellyfin_quick_connect_transactions_pairing_session_idx",
+  ],
+  library_artwork_searches: [
+    "library_artwork_searches_expiry_idx",
+    "library_artwork_searches_media_idx",
+    "library_artwork_searches_user_created_idx",
+  ],
+  library_mutation_operations: [
+    "library_mutation_operations_reference_idx",
+    "library_mutation_operations_state_created_idx",
+    "library_mutation_operations_user_key_unique",
   ],
   media_references: [
     "media_references_expiry_idx",
@@ -373,8 +403,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0014_subtitle_operations",
-  "Current migration journal must end at migration 0014_subtitle_operations.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0015_library_operations",
+  "Current migration journal must end at migration 0015_library_operations.",
 );
 
 try {
@@ -728,7 +758,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0014.",
+      "Production migration did not advance the historical fixture exactly through migration 0015.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -893,7 +923,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0014, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0015, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

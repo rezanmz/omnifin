@@ -55,9 +55,13 @@ disabled state, application sync, normalized failures, and exact-target safe tes
 also available through the operator-only Indexer Intelligence workspace. An operator-only
 download workspace reads bounded, normalized qBittorrent and SABnzbd queues without exposing
 upstream identifiers or credentials. Request review, monitoring controls, broader acquisition
-mutations, and playback remain unavailable. A viewer-accessible acquisition calendar combines
-bounded Radarr and Sonarr timing through opaque identifiers while keeping monitoring mutations
-unavailable.
+mutations, and live operational events remain unavailable. A viewer-accessible acquisition
+calendar combines bounded Radarr and Sonarr timing through opaque identifiers while keeping
+monitoring mutations unavailable. Jellyfin playback, progress, and Continue Watching use the
+paired user's permissions through server-held tokens and normalized, opaque media targets. The
+gateway also exposes role-gated player issue reporting, Bazarr subtitle operations, and Jellyfin
+scan, unmatched-item, artwork, and metadata maintenance without exposing upstream identifiers or
+filesystem paths to the browser.
 
 ## Target system shape
 

@@ -45,6 +45,10 @@
       "types": "./dist/issues.d.ts",
       "default": "./dist/issues.js"
     },
+    "./library": {
+      "types": "./dist/library.d.ts",
+      "default": "./dist/library.js"
+    },
     "./playback": {
       "types": "./dist/playback.d.ts",
       "default": "./dist/playback.js"

@@ -506,6 +506,66 @@ test("acquisition calendar event drawer visual baseline", async ({ page }, testI
   await expect(page).toHaveScreenshot("acquisition-calendar-event.png");
 });
 
+test("library care visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Library care covers representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("heading", { name: "Make every title feel finished." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("library-care.png", { fullPage: true });
+});
+
+test("light library care visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light library care covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("heading", { name: "Make every title feel finished." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("library-care-light.png", { fullPage: true });
+});
+
+test("library item inspector visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Library item inspection covers representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: "Inspect Northern Lights" }).click();
+  await expect(page.getByRole("button", { name: "Close library inspector" })).toBeFocused();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("library-care-inspector.png");
+});
+
+test("raised library card visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Hover treatment uses desktop Chromium");
+  await page.goto("/library?test-view=ready");
+  const card = page.getByRole("button", { name: "Inspect Ember Coast" });
+  await card.hover();
+  await removeDevelopmentIndicator(page);
+  await expect(page.getByRole("region", { name: "Details worth finishing" })).toHaveScreenshot(
+    "library-care-card-hover.png",
+  );
+});
+
+for (const state of ["empty", "unavailable"] as const) {
+  test(`${state} library care visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Library care boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/library?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`library-care-${state}.png`, { fullPage: true });
+  });
+}
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

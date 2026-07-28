@@ -37,6 +37,10 @@
       "types": "./dist/media/jellyfin-playback-client.d.ts",
       "default": "./dist/media/jellyfin-playback-client.js"
     },
+    "./media/jellyfin-library-client": {
+      "types": "./dist/media/jellyfin-library-client.d.ts",
+      "default": "./dist/media/jellyfin-library-client.js"
+    },
     "./security/destination": {
       "types": "./dist/security/destination.d.ts",
       "default": "./dist/security/destination.js"

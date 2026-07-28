@@ -77,9 +77,11 @@ versions and dates. Permission checks cover every implemented administrative and
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
 identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
 and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
-queue and acquisition calendar are available as pre-release development surfaces. Later Phase 3
-slices add request review, monitoring controls, and live events;
-Phase 4 adds media proxying and playback.
+queue and acquisition calendar are available as pre-release development surfaces. Phase 4 also
+provides Jellyfin playback negotiation and protected media proxying, progress reporting and
+Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
+maintenance. Request review, monitoring controls, broader acquisition mutations, and live events
+remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the

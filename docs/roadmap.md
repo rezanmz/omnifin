@@ -74,13 +74,15 @@ matrix.
 
 ## Phase 4 — Playback and library operations
 
-**Status: Planned**
+**Status: In development**
 
 - Jellyfin playback negotiation, direct play and HLS, range proxying, tracks,
-  subtitles, bitrate control, progress, and Continue Watching
-- Player issue reporting
-- Bazarr subtitle search and download
-- Jellyfin scans, unmatched-media handling, and metadata artwork editing
+  subtitles, bitrate control, progress, and Continue Watching (implemented;
+  protected live evidence pending)
+- Player issue reporting (implemented)
+- Bazarr subtitle search and download (implemented; protected live evidence pending)
+- Jellyfin scans, unmatched-media handling, and metadata artwork editing (implemented;
+  protected live evidence pending)
 
 **Gate:** generated copyright-free fixtures verify seeking, reconnects, audio and
 subtitle switching, progress accuracy, token isolation, transcoding, and supported
