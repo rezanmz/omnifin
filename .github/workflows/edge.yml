@@ -52,7 +52,7 @@ jobs:
     if: needs.prerequisite.outputs.eligible == 'true'
     needs: prerequisite
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       actions: read
       contents: read
@@ -72,7 +72,7 @@ jobs:
         run: >-
           node scripts/ci/verify-main-gates.mjs
           --sha "${{ github.event.workflow_run.head_sha }}"
-          --require-main-tip --wait-seconds 900
+          --require-main-tip --wait-seconds 1800
 
   build-candidate:
     name: Build immutable edge candidate

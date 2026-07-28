@@ -328,6 +328,19 @@ test("edge promotion revalidates protected main immediately before moving aliase
   );
 });
 
+test("release automation allows protected main CI to finish under runner contention", () => {
+  for (const workflowName of ["edge.yml", "release-please.yml"]) {
+    const document = workflowDocument(workflowName);
+    const gate = document.jobs["verify-main-gates"];
+    assert.equal(gate["timeout-minutes"], 40);
+    const verification = namedStep(
+      gate.steps,
+      "Require CI and Security for the exact current main SHA",
+    );
+    assert.match(verification.run, /--require-main-tip --wait-seconds 1800/u);
+  }
+});
+
 test("CI builds Storybook before exercising stories", () => {
   const source = workflow("ci.yml");
   const build = source.indexOf("pnpm --filter @omnifin/web build:storybook");
