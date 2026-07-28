@@ -176,8 +176,8 @@ export class OidcProviderAdminService {
     }
     const provider = parsedInput.data;
     const providerId = `oidc-${provider.slug}`;
-    const auditId = this.#nextId();
-    if (!validIdentifier(providerId) || !validIdentifier(auditId)) {
+    const auditId = this.#nextIdentifier("audit");
+    if (!validIdentifier(providerId)) {
       throw new OidcProviderAdminError("integrity_failure");
     }
     const now = this.#currentTime();
@@ -294,8 +294,7 @@ export class OidcProviderAdminService {
     if (!validIdentifier(providerId) || !parsedInput.success || !this.#validContext(context)) {
       throw new OidcProviderAdminError("integrity_failure");
     }
-    const auditId = this.#nextId();
-    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     const provider = parsedInput.data;
     let revokedSessions = 0;
@@ -437,8 +436,7 @@ export class OidcProviderAdminService {
     if (!validIdentifier(providerId) || !this.#validContext(context)) {
       throw new OidcProviderAdminError("integrity_failure");
     }
-    const auditId = this.#nextId();
-    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     let deletedRoleMappings = 0;
     let revokedSessions = 0;
@@ -513,8 +511,7 @@ export class OidcProviderAdminService {
     ) {
       throw new OidcProviderAdminError("integrity_failure");
     }
-    const auditId = this.#nextId();
-    if (!validIdentifier(auditId)) throw new OidcProviderAdminError("integrity_failure");
+    const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     try {
       this.#database.sqlite
@@ -629,12 +626,18 @@ export class OidcProviderAdminService {
     return new Date(milliseconds);
   }
 
-  #nextId() {
+  #nextIdentifier(namespace: "audit") {
+    let entropy: string;
     try {
-      return this.#createId();
+      entropy = this.#createId();
     } catch (error) {
       throw new OidcProviderAdminError("integrity_failure", { cause: error });
     }
+    const identifier = `${namespace}-${entropy}`;
+    if (!validIdentifier(identifier)) {
+      throw new OidcProviderAdminError("integrity_failure");
+    }
+    return identifier;
   }
 
   #validContext(context: OidcProviderAdminContext) {

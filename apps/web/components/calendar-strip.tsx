@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarOff, CalendarRange } from "lucide-react";
+import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { CalendarItemModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
@@ -16,9 +17,9 @@ export function CalendarStrip({ items }: { items: CalendarItemModel[] }) {
           <h2 id="upcoming-heading">This week</h2>
         </div>
         {items.length > 0 && (
-          <button className="icon-text-action" type="button">
+          <Link className="icon-text-action" href="/calendar" prefetch={false}>
             <CalendarRange aria-hidden="true" size={17} /> Open calendar
-          </button>
+          </Link>
         )}
       </div>
       {items.length > 0 ? (

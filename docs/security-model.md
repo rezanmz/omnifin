@@ -159,6 +159,23 @@ application boundary; operators must still patch and isolate the host.
   The browser offers filtering and refresh but no pause, resume, removal, priority, or path
   mutation in this slice.
 
+## Acquisition-calendar read controls
+
+- Calendar reads require `media.view` at both the session route and service boundary. Unauthorized
+  callers are rejected before connector selection or credential decryption.
+- Only enabled, currently healthy Radarr or Sonarr connectors advertising `acquisition.calendar`
+  are eligible. The gateway bounds source fan-out, executes reads concurrently, and returns safe
+  partial results when one source fails.
+- Credentials are decrypted only inside the gateway. Raw upstream media identifiers, paths,
+  provider fields, credentials, and private errors never enter the public contract; events and
+  sources receive deployment-local opaque identifiers.
+- Date windows, page sizes, source counts, source events, text, episode coordinates, runtimes, and
+  aggregate response size are independently bounded and schema-validated. Gateway-signed cursors
+  are bound to the exact requested range and compared in constant time.
+- `GET /v1/acquisitions/calendar` is abort-aware, rate-limited, explicitly non-cacheable, and
+  read-only. The browser offers search, filtering, week navigation, and refresh but no monitoring,
+  search, grab, deletion, or rescheduling mutation in this slice.
+
 ## Indexer Intelligence controls
 
 - Reads and tests require `acquisition.manage` at both the session route and service boundary.

@@ -9,6 +9,10 @@
       "types": "./dist/acquisition.d.ts",
       "default": "./dist/acquisition.js"
     },
+    "./calendar": {
+      "types": "./dist/calendar.d.ts",
+      "default": "./dist/calendar.js"
+    },
     "./auth": {
       "types": "./dist/auth.d.ts",
       "default": "./dist/auth.js"

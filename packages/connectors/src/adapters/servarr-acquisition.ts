@@ -21,6 +21,13 @@ import {
 import type { ConnectorCapability, PartialFailure } from "@omnifin/contracts/connectors";
 import { z } from "zod";
 
+import {
+  ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
+  acquisitionCalendarReadRequestSchema,
+  type AcquisitionCalendarReadRequest,
+  type AcquisitionCalendarSourceEvent,
+  type AcquisitionCalendarSourceResult,
+} from "../calendar.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import { ServarrAdapter } from "./servarr.js";
 
@@ -152,9 +159,48 @@ const manualGrabResponseSchema = z.object({
   indexerId: internalReleaseReferenceSchema.shape.indexerId,
 });
 
+const nullableDateSchema = dateSchema.nullish();
+const calendarTextSchema = z.string().trim().min(1).max(10_000);
+const calendarOverviewSchema = z.string().trim().max(20_000).nullish();
+const radarrCalendarRecordSchema = z.object({
+  digitalRelease: nullableDateSchema,
+  grabbed: z.boolean().nullish(),
+  hasFile: z.boolean().nullish(),
+  id: safeIdentifierSchema,
+  inCinemas: nullableDateSchema,
+  monitored: z.boolean(),
+  overview: calendarOverviewSchema,
+  physicalRelease: nullableDateSchema,
+  releaseDate: nullableDateSchema,
+  runtime: z.int().nonnegative().max(100_000).nullish(),
+  title: calendarTextSchema,
+  year: z.int().nonnegative().max(2200).nullish(),
+});
+const sonarrCalendarRecordSchema = z.object({
+  airDateUtc: nullableDateSchema,
+  endTime: nullableDateSchema,
+  episodeNumber: z.int().nonnegative().max(100_000),
+  grabbed: z.boolean().nullish(),
+  hasFile: z.boolean(),
+  id: safeIdentifierSchema,
+  monitored: z.boolean(),
+  overview: calendarOverviewSchema,
+  runtime: z.int().nonnegative().max(100_000).nullish(),
+  seasonNumber: z.int().nonnegative().max(100_000),
+  series: z.object({
+    title: calendarTextSchema,
+    year: z.int().nonnegative().max(2200).nullish(),
+  }),
+  title: calendarTextSchema,
+});
+const radarrCalendarResponseSchema = z.array(radarrCalendarRecordSchema).max(5_000);
+const sonarrCalendarResponseSchema = z.array(sonarrCalendarRecordSchema).max(5_000);
+
 type HistoryRecord = z.infer<typeof historyRecordSchema>;
 type QueueRecord = z.infer<typeof queueRecordSchema>;
 type ManualReleaseRecord = z.infer<typeof manualReleaseSchema>;
+type RadarrCalendarRecord = z.infer<typeof radarrCalendarRecordSchema>;
+type SonarrCalendarRecord = z.infer<typeof sonarrCalendarRecordSchema>;
 
 export type ManualReleaseCandidateDetails = Omit<ManualReleaseCandidate, "id">;
 
@@ -175,6 +221,145 @@ export interface ManualReleaseSearchResult {
 function optionalLabel(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function safeCalendarText(value: string | null | undefined, maximum: number) {
+  const normalized = value
+    ?.replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return normalized ? normalized.slice(0, maximum) : null;
+}
+
+function availability(
+  hasFile: boolean | null | undefined,
+  grabbed: boolean | null | undefined,
+  monitored: boolean,
+  eventAt: string,
+  now: Date,
+): AcquisitionCalendarSourceEvent["availability"] {
+  if (hasFile) return "available";
+  if (grabbed) return "queued";
+  if (!monitored) return "unknown";
+  return Date.parse(eventAt) < now.getTime() ? "missing" : "monitored";
+}
+
+function validYear(value: number | null | undefined) {
+  return value !== undefined && value !== null && value >= 1870 ? value : null;
+}
+
+function validRuntime(value: number | null | undefined) {
+  return value !== undefined && value !== null && value > 0 ? value : null;
+}
+
+function insideRange(value: string | null | undefined, start: number, end: number) {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return timestamp >= start && timestamp < end;
+}
+
+function movieDate(record: RadarrCalendarRecord, request: AcquisitionCalendarReadRequest) {
+  const start = Date.parse(request.startAt);
+  const end = Date.parse(request.endAt);
+  const candidates = [
+    { kind: "digital" as const, value: record.digitalRelease },
+    { kind: "physical" as const, value: record.physicalRelease },
+    { kind: "cinema" as const, value: record.inCinemas },
+  ].filter((candidate): candidate is { kind: "cinema" | "digital" | "physical"; value: string } =>
+    insideRange(candidate.value, start, end),
+  );
+  if (record.releaseDate && insideRange(record.releaseDate, start, end)) {
+    return {
+      kind:
+        candidates.find(({ value }) => value === record.releaseDate)?.kind ?? ("unknown" as const),
+      value: record.releaseDate,
+    };
+  }
+  return candidates.toSorted((left, right) => Date.parse(left.value) - Date.parse(right.value))[0];
+}
+
+function movieCalendarEvent(
+  record: RadarrCalendarRecord,
+  request: AcquisitionCalendarReadRequest,
+  now: Date,
+): AcquisitionCalendarSourceEvent | null {
+  const release = movieDate(record, request);
+  const title = safeCalendarText(record.title, 300);
+  if (!release || !title) return null;
+  const releaseLabel =
+    release.kind === "cinema"
+      ? "Cinema release"
+      : release.kind === "digital"
+        ? "Digital release"
+        : release.kind === "physical"
+          ? "Physical release"
+          : "Scheduled release";
+  return {
+    availability: availability(
+      record.hasFile,
+      record.grabbed,
+      record.monitored,
+      release.value,
+      now,
+    ),
+    endAt: null,
+    episodeNumber: null,
+    eventAt: release.value,
+    externalId: `movie:${record.id}:${release.kind}:${release.value}`,
+    kind: "movie",
+    monitored: record.monitored,
+    overview: safeCalendarText(record.overview, 2_000),
+    releaseKind: release.kind,
+    runtimeMinutes: validRuntime(record.runtime),
+    seasonNumber: null,
+    service: "radarr",
+    subtitle: releaseLabel,
+    title,
+    year: validYear(record.year),
+  };
+}
+
+function episodeLabel(record: SonarrCalendarRecord) {
+  const season = String(record.seasonNumber).padStart(2, "0");
+  const episode = String(record.episodeNumber).padStart(2, "0");
+  const title = safeCalendarText(record.title, 220);
+  return title ? `S${season}E${episode} · ${title}` : `S${season}E${episode}`;
+}
+
+function episodeCalendarEvent(
+  record: SonarrCalendarRecord,
+  request: AcquisitionCalendarReadRequest,
+  now: Date,
+): AcquisitionCalendarSourceEvent | null {
+  const start = Date.parse(request.startAt);
+  const end = Date.parse(request.endAt);
+  const eventAt = record.airDateUtc;
+  const title = safeCalendarText(record.series.title, 300);
+  if (!eventAt || !insideRange(eventAt, start, end) || !title) return null;
+  const runtimeMinutes = validRuntime(record.runtime);
+  const explicitEnd =
+    record.endTime && Date.parse(record.endTime) > Date.parse(eventAt) ? record.endTime : null;
+  return {
+    availability: availability(record.hasFile, record.grabbed, record.monitored, eventAt, now),
+    endAt:
+      explicitEnd ??
+      (runtimeMinutes === null
+        ? null
+        : new Date(Date.parse(eventAt) + runtimeMinutes * 60 * 1_000).toISOString()),
+    episodeNumber: record.episodeNumber,
+    eventAt,
+    externalId: `episode:${record.id}`,
+    kind: "episode",
+    monitored: record.monitored,
+    overview: safeCalendarText(record.overview, 2_000),
+    releaseKind: "episode",
+    runtimeMinutes,
+    seasonNumber: record.seasonNumber,
+    service: "sonarr",
+    subtitle: episodeLabel(record),
+    title,
+    year: validYear(record.series.year),
+  };
 }
 
 function qualityName(value: z.infer<typeof qualitySchema>) {
@@ -431,7 +616,61 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "acquisition.history",
     "acquisition.search",
     "acquisition.grab",
+    "acquisition.calendar",
   ];
+
+  async readAcquisitionCalendar(
+    input: AcquisitionCalendarReadRequest,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionCalendarSourceResult> {
+    const request = acquisitionCalendarReadRequestSchema.parse(input);
+    const query = new URLSearchParams({ end: request.endAt, start: request.startAt });
+    if (this.service === "sonarr") {
+      query.set("includeEpisodeFile", "false");
+      query.set("includeEpisodeImages", "false");
+      query.set("includeSeries", "true");
+      const records = await this.client.requestJson(
+        "api/v3/calendar",
+        sonarrCalendarResponseSchema,
+        {
+          headers: { "X-Api-Key": this.apiKey },
+          operation: "acquisition.calendar",
+          query,
+          ...(signal ? { signal } : {}),
+        },
+      );
+      const now = this.clock.now();
+      const events = records
+        .map((record) => episodeCalendarEvent(record, request, now))
+        .filter((event): event is AcquisitionCalendarSourceEvent => event !== null)
+        .toSorted((left, right) => {
+          const byTime = Date.parse(left.eventAt) - Date.parse(right.eventAt);
+          return byTime === 0 ? left.externalId.localeCompare(right.externalId) : byTime;
+        });
+      return {
+        events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
+        truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
+      };
+    }
+    const records = await this.client.requestJson("api/v3/calendar", radarrCalendarResponseSchema, {
+      headers: { "X-Api-Key": this.apiKey },
+      operation: "acquisition.calendar",
+      query,
+      ...(signal ? { signal } : {}),
+    });
+    const now = this.clock.now();
+    const events = records
+      .map((record) => movieCalendarEvent(record, request, now))
+      .filter((event): event is AcquisitionCalendarSourceEvent => event !== null)
+      .toSorted((left, right) => {
+        const byTime = Date.parse(left.eventAt) - Date.parse(right.eventAt);
+        return byTime === 0 ? left.externalId.localeCompare(right.externalId) : byTime;
+      });
+    return {
+      events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
+      truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
+    };
+  }
 
   async searchManualReleases(
     input: ManualReleaseTargetInput,

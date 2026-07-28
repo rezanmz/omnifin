@@ -27,6 +27,9 @@ class BrowserCheckError extends Error {
 }
 
 let currentStage = "configuration";
+let failureDetail = {};
+let issuerRequestFailed = false;
+let pageErrorObserved = false;
 
 function required(name) {
   const value = process.env[name];
@@ -99,6 +102,26 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
 
 async function json(response, expectedStatus, failureStage) {
   if (response.status() !== expectedStatus) {
+    const requestId = response.headers()["x-request-id"];
+    let errorCode;
+    try {
+      const body = await response.json();
+      if (
+        typeof body?.error?.code === "string" &&
+        /^[a-z][a-z0-9_]{2,63}$/u.test(body.error.code)
+      ) {
+        errorCode = body.error.code;
+      }
+    } catch {
+      // Failure diagnostics stay useful even when an upstream response is not JSON.
+    }
+    failureDetail = {
+      ...(errorCode === undefined ? {} : { errorCode }),
+      ...(typeof requestId === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId)
+        ? { requestId }
+        : {}),
+      status: response.status(),
+    };
     if (failureStage) currentStage = httpFailureStage(failureStage, response.status());
     throw new BrowserCheckError();
   }
@@ -211,8 +234,29 @@ async function waitForStageTransition(page, activeStage, webOrigin) {
   return "timeout";
 }
 
-function unrecognizedStage(url, webOrigin, attempt) {
-  const current = new URL(url);
+async function unrecognizedStage(page, webOrigin, attempt) {
+  const knownStages = [
+    ["ak-stage-access-denied", "access_denied"],
+    ["ak-stage-authenticator-validate", "authenticator_validate"],
+    ["ak-stage-autosubmit", "autosubmit_stalled"],
+    ["ak-stage-consent", "consent_unrecognized"],
+    ["ak-stage-flow-error", "flow_error"],
+    ["ak-stage-identification", "identification_unrecognized"],
+    ["ak-stage-password", "password_unrecognized"],
+    ["ak-stage-redirect", "redirect_stalled"],
+    ["ak-stage-user-login", "user_login_stalled"],
+  ];
+  for (const [selector, diagnostic] of knownStages) {
+    if (await visible(page.locator(`${selector}:visible`).first())) {
+      return `${attempt}_${diagnostic}`;
+    }
+  }
+  if (pageErrorObserved) return `${attempt}_page_error`;
+  if (issuerRequestFailed) return `${attempt}_issuer_request_failed`;
+  if (await visible(page.locator("ak-flow-executor:visible").first())) {
+    return `${attempt}_flow_executor_stalled`;
+  }
+  const current = new URL(page.url());
   if (current.origin === webOrigin) return `${attempt}_omnifin_unexpected`;
   if (current.pathname.startsWith("/if/flow/")) {
     return `${attempt}_authentik_flow_unrecognized`;
@@ -256,8 +300,15 @@ async function submitStableForm(page, locator) {
 }
 
 async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
+  issuerRequestFailed = false;
+  pageErrorObserved = false;
   currentStage = `${attempt}_navigation`;
-  await page.goto(startPath, { waitUntil: "domcontentloaded" });
+  const navigation = await page.goto(startPath, { waitUntil: "domcontentloaded" });
+  if (!navigation || navigation.status() >= 400) {
+    currentStage = `${attempt}_navigation_response`;
+    failureDetail = { status: navigation?.status() ?? 0 };
+    throw new BrowserCheckError();
+  }
 
   for (let step = 0; step < 12; step += 1) {
     if (
@@ -298,7 +349,7 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     ]);
     if (readiness === "callback") return;
     if (readiness === "unrecognized") {
-      currentStage = unrecognizedStage(page.url(), webOrigin, attempt);
+      currentStage = await unrecognizedStage(page, webOrigin, attempt);
       throw new BrowserCheckError();
     }
 
@@ -555,8 +606,18 @@ async function run() {
     });
     const page = await context.newPage();
     page.on("console", (message) => observedBrowserText.push(message.text()));
-    page.on("pageerror", () => observedBrowserText.push("browser_page_error"));
+    page.on("pageerror", () => {
+      pageErrorObserved = true;
+      observedBrowserText.push("browser_page_error");
+    });
     page.on("request", (request) => observedBrowserText.push(request.url()));
+    page.on("requestfailed", (request) => {
+      try {
+        if (new URL(request.url()).origin === issuerOrigin) issuerRequestFailed = true;
+      } catch {
+        issuerRequestFailed = true;
+      }
+    });
 
     currentStage = "recovery_session";
     const recovery = await context.request.post("/api/auth/recovery/session", {
@@ -757,7 +818,7 @@ try {
   process.stdout.write('{"event":"authentik_browser_checks_passed"}\n');
 } catch {
   process.stderr.write(
-    `${JSON.stringify({ event: "authentik_browser_checks_failed", stage: currentStage })}\n`,
+    `${JSON.stringify({ event: "authentik_browser_checks_failed", stage: currentStage, ...failureDetail })}\n`,
   );
   process.exitCode = 1;
 }

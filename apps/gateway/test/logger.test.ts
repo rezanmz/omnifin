@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { Writable } from "node:stream";
 import type { AppConfig } from "../src/config.js";
-import { createLoggerOptions } from "../src/logger.js";
+import { createLoggerOptions, safeFailureDiagnostics } from "../src/logger.js";
 
 function config(environment: AppConfig["environment"]): AppConfig {
   return {
@@ -67,6 +67,54 @@ describe("gateway logger", () => {
     expect(output).toContain('"message":"Request failed"');
     expect(output).not.toMatch(/ey\.fake\.jwt|private\/media|secret-value|hunter2|assertion/i);
     expect(output).not.toContain(error.stack ?? "unreachable-stack");
+  });
+
+  it("retains only allowlisted failure classifications from nested causes", async () => {
+    let output = "";
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        output += chunk.toString();
+        callback();
+      },
+    });
+    const logger = pino(createLoggerOptions(config("production")), destination);
+    const databaseError = Object.assign(new Error("private database path and row value"), {
+      code: "SQLITE_CONSTRAINT_PRIMARYKEY",
+    });
+    const administrationError = Object.assign(
+      new Error("private administration context", { cause: databaseError }),
+      { reason: "integrity_failure" },
+    );
+    const publicError = Object.assign(
+      new Error("public-safe failure", { cause: administrationError }),
+      {
+        code: "oidc_provider_configuration_unavailable",
+        name: "SafeHttpError",
+        statusCode: 503,
+      },
+    );
+
+    logger.error(
+      {
+        err: publicError,
+        ...safeFailureDiagnostics(publicError),
+        operation: "http.request",
+      },
+      "Request failed",
+    );
+    await new Promise<void>((resolve) => destination.end(resolve));
+
+    const record = JSON.parse(output) as Record<string, unknown> & {
+      err: Record<string, unknown>;
+    };
+    expect(record.err).toEqual({
+      errorCode: "oidc_provider_configuration_unavailable",
+      statusCode: 503,
+      type: "SafeHttpError",
+    });
+    expect(record.failureReason).toBe("integrity_failure");
+    expect(record.infrastructureCode).toBe("SQLITE_CONSTRAINT_PRIMARYKEY");
+    expect(output).not.toMatch(/private database path|row value|private administration context/iu);
   });
 
   it("redacts sensitive key variants at arbitrary request-body depths without hiding metadata", async () => {

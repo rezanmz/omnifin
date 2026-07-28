@@ -128,12 +128,13 @@ async function harness(
   registryDependencies: ReturnType<
     typeof providerRegistryDependencies
   > = providerRegistryDependencies(),
+  adminDependencies: ReturnType<typeof providerDependencies> = providerDependencies(),
 ) {
   const config = testConfig();
   const app = await createApp({
     config,
     oidcProviderAdminDependencies: {
-      ...providerDependencies(),
+      ...adminDependencies,
       providerRegistry: registryDependencies,
     },
     sessionDependencies: sessionDependencies(),
@@ -361,6 +362,30 @@ describe("OIDC provider administration routes", () => {
         providers: [provider],
       });
       expect(list.body).not.toContain(providerRequest.clientSecret);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("namespaces base64url audit entropy before enforcing identifier shape", async () => {
+    const { app, session } = await harness(providerRegistryDependencies(), {
+      clock: () => new Date(now),
+      createId: () => "-fixture-entropy",
+    });
+    try {
+      const response = await app.inject({
+        body: providerRequest,
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      expect(
+        app.database.sqlite
+          .prepare("select id from audit_events where event_type = 'auth.oidc.provider.created'")
+          .get(),
+      ).toEqual({ id: "audit--fixture-entropy" });
     } finally {
       await app.close();
     }
@@ -822,6 +847,73 @@ describe("OIDC provider administration routes", () => {
         .get() as { metadataJson: string; outcome: string };
       expect(audit.outcome).toBe("success");
       expect(JSON.parse(audit.metadataJson)).toEqual({ reason: "ready", retryable: false });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("enables a validated confidential provider while retaining its encrypted secret", async () => {
+    const { app, config, session } = await harness();
+    try {
+      const createdResponse = await app.inject({
+        body: { ...providerRequest, enabled: false },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const created = oidcProviderAdminSchema.parse(createdResponse.json());
+
+      const validatedResponse = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${created.id}/validate`,
+      });
+      expect(validatedResponse.statusCode, validatedResponse.body).toBe(200);
+
+      const mappingResponse = await app.inject({
+        body: {
+          claimPath: ["groups"],
+          enabled: true,
+          operator: "contains_any",
+          priority: 1_000,
+          role: "admin",
+          values: ["authentik Admins"],
+        },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${created.id}/role-mappings`,
+      });
+      expect(mappingResponse.statusCode, mappingResponse.body).toBe(201);
+
+      const enabledResponse = await app.inject({
+        body: { ...providerConfiguration, clientSecret: undefined },
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(enabledResponse.statusCode, enabledResponse.body).toBe(200);
+      expect(oidcProviderMutationResponseSchema.parse(enabledResponse.json())).toMatchObject({
+        provider: {
+          clientSecretConfigured: true,
+          discoveryState: "ready",
+          enabled: true,
+          id: created.id,
+        },
+        revokedSessions: 0,
+      });
+
+      const stored = app.database.sqlite
+        .prepare(
+          `select encrypted_client_secret as encryptedClientSecret
+           from oidc_providers where id = ?`,
+        )
+        .get(created.id) as { encryptedClientSecret: string };
+      expect(
+        new EnvelopeCipher(config.encryptionKey).decrypt(
+          stored.encryptedClientSecret,
+          oidcClientSecretEncryptionContext(created.id),
+        ),
+      ).toBe(providerRequest.clientSecret);
     } finally {
       await app.close();
     }

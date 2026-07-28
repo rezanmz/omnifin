@@ -54,6 +54,45 @@ function appendBounded(current, chunk) {
   return `${current}${chunk.toString("utf8")}`.slice(-MAX_CAPTURE_BYTES);
 }
 
+function sanitizedGatewayFailure(runtime, requestId) {
+  if (!runtime || typeof requestId !== "string") return undefined;
+  const lines = `${runtime.stdout}\n${runtime.stderr}`.split("\n").reverse();
+  for (const line of lines) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (record?.requestId !== requestId) continue;
+    const errorType = record?.err?.type;
+    const errorCode = record?.err?.errorCode;
+    const failureReason = record?.failureReason;
+    const infrastructureCode = record?.infrastructureCode;
+    const statusCode = record?.err?.statusCode;
+    return {
+      ...(typeof errorCode === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/u.test(errorCode)
+        ? { errorCode }
+        : {}),
+      ...(typeof errorType === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(errorType)
+        ? { errorType }
+        : {}),
+      ...(typeof failureReason === "string" &&
+      ["integrity_failure", "storage_failure"].includes(failureReason)
+        ? { failureReason }
+        : {}),
+      ...(typeof infrastructureCode === "string" &&
+      /^SQLITE_[A-Z_]{2,48}$/u.test(infrastructureCode)
+        ? { infrastructureCode }
+        : {}),
+      ...(Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
+        ? { statusCode }
+        : {}),
+    };
+  }
+  return undefined;
+}
+
 function commandEnvironment(overrides = {}) {
   return {
     ...process.env,
@@ -473,6 +512,13 @@ async function main(options) {
 
     const classifyBrowserFailure = ({ stderr }) => {
       const match = stderr.match(/"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u);
+      const requestId = stderr.match(/"requestId":"([A-Za-z0-9._:-]{1,128})"/u)?.[1];
+      const gatewayFailure = sanitizedGatewayFailure(gateway, requestId);
+      if (gatewayFailure && Object.keys(gatewayFailure).length > 0) {
+        process.stderr.write(
+          `${JSON.stringify({ event: "authentik_gateway_failure", ...gatewayFailure })}\n`,
+        );
+      }
       const allowedStages = new Set([
         "authentik_provider_configuration",
         "backchannel_access_token",
@@ -517,17 +563,29 @@ async function main(options) {
         "first_browser_login",
         "first_login_authentik_authorize_unrecognized",
         "first_login_authentik_flow_unrecognized",
+        "first_login_access_denied",
+        "first_login_authenticator_validate",
         "first_login_callback",
         "first_login_consent",
         "first_login_consent_submit",
+        "first_login_consent_unrecognized",
+        "first_login_flow_error",
+        "first_login_flow_executor_stalled",
         "first_login_form_submit",
+        "first_login_identification_unrecognized",
+        "first_login_issuer_request_failed",
         "first_login_navigation",
+        "first_login_navigation_response",
         "first_login_omnifin_unexpected",
+        "first_login_page_error",
         "first_login_password",
+        "first_login_password_unrecognized",
+        "first_login_redirect_stalled",
         "first_login_submit",
         "first_login_transition",
         "first_login_unrecognized",
         "first_login_username",
+        "first_login_user_login_stalled",
         "first_session",
         "provider_create",
         "provider_enable",
@@ -546,17 +604,29 @@ async function main(options) {
         "second_browser_login",
         "second_login_authentik_authorize_unrecognized",
         "second_login_authentik_flow_unrecognized",
+        "second_login_access_denied",
+        "second_login_authenticator_validate",
         "second_login_callback",
         "second_login_consent",
         "second_login_consent_submit",
+        "second_login_consent_unrecognized",
+        "second_login_flow_error",
+        "second_login_flow_executor_stalled",
         "second_login_form_submit",
+        "second_login_identification_unrecognized",
+        "second_login_issuer_request_failed",
         "second_login_navigation",
+        "second_login_navigation_response",
         "second_login_omnifin_unexpected",
+        "second_login_page_error",
         "second_login_password",
+        "second_login_password_unrecognized",
+        "second_login_redirect_stalled",
         "second_login_submit",
         "second_login_transition",
         "second_login_unrecognized",
         "second_login_username",
+        "second_login_user_login_stalled",
         "second_session",
         "secret_leak_inspection",
       ]);
