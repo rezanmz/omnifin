@@ -71,6 +71,22 @@ const routes = [
     path: "/operations/indexers?test-view=forbidden",
   },
   {
+    label: "download queue",
+    path: "/operations/downloads?test-view=ready",
+  },
+  {
+    label: "empty download queue",
+    path: "/operations/downloads?test-view=empty",
+  },
+  {
+    label: "degraded download queue",
+    path: "/operations/downloads?test-view=degraded",
+  },
+  {
+    label: "download client onboarding",
+    path: "/operations/downloads?test-view=unconfigured",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
@@ -201,6 +217,7 @@ for (const route of [
   },
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
   { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },
+  { label: "download queue", path: "/operations/downloads?test-view=ready" },
 ] as const) {
   test(`${route.label} light theme has no automatically detectable accessibility violations`, async ({
     context,

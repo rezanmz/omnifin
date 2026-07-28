@@ -178,14 +178,26 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 });
 
-test("operations navigation opens the dedicated indexer intelligence workspace", async ({
-  page,
-}) => {
+test("operations navigation opens the live download queue workspace", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute(
     "href",
-    "/operations/indexers",
+    "/operations/downloads",
   );
+});
+
+test("download queue supports focused search and attention filtering", async ({ page }) => {
+  await page.goto("/operations/downloads?test-view=ready");
+  await expect(page.getByRole("heading", { name: "Every byte, in motion." })).toBeVisible();
+
+  await page.getByRole("button", { name: "Attention" }).click();
+  await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toBeVisible();
+  await expect(page.getByText("Signal.S01E07.1080p.WEB-DL")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "All" }).click();
+  await page.getByRole("searchbox", { name: "Search downloads" }).fill("signal");
+  await expect(page.getByText("Signal.S01E07.1080p.WEB-DL")).toBeVisible();
+  await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toHaveCount(0);
 });
 
 test("indexer intelligence hydrates without changing deterministic telemetry", async ({ page }) => {

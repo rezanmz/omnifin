@@ -9,7 +9,7 @@ const destinations = [
   { current: true, href: "/", icon: Compass, label: "Discover" },
   { current: false, href: "/#rail-continue-watching", icon: Library, label: "Library" },
   { current: false, href: "/#upcoming-heading", icon: CalendarDays, label: "Calendar" },
-  { current: false, href: "/operations/indexers", icon: Gauge, label: "Operations" },
+  { current: false, href: "/operations/downloads", icon: Gauge, label: "Operations" },
 ] as const;
 
 export function NavigationRail() {
