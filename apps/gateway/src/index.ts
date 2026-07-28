@@ -100,6 +100,14 @@ export { openDatabase, type DatabaseHandle } from "./db/client.js";
 export * as databaseSchema from "./db/schema.js";
 export { SafeHttpError } from "./http-error.js";
 export {
+  MediaReferenceError,
+  MediaReferenceService,
+  type MediaReferenceDependencies,
+  type MediaReferenceInput,
+  type MediaReferenceLinkContext,
+  type ResolvedMediaReference,
+} from "./media/media-reference-service.js";
+export {
   constantTimeTextEqual,
   EnvelopeCipher,
   hashToken,

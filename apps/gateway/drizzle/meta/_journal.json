@@ -78,6 +78,13 @@
       "when": 1785191831294,
       "tag": "0010_acquisition_grab_operations",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785227273416,
+      "tag": "0011_panoramic_nighthawk",
+      "breakpoints": true
     }
   ]
 }
