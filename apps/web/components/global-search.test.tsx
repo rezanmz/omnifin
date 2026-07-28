@@ -1,9 +1,13 @@
-import type { DiscoverySearchResponse } from "@omnifin/contracts/discovery";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type {
+  DiscoveryMediaDetailResponse,
+  DiscoverySearchResponse,
+} from "@omnifin/contracts/discovery";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
+import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import { GlobalSearch } from "./global-search";
 
 const searchResponse: DiscoverySearchResponse = {
@@ -48,6 +52,29 @@ const searchResponse: DiscoverySearchResponse = {
   totalResults: 3,
 };
 
+const detailResponse: DiscoveryMediaDetailResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    availability: "available",
+    cast: [{ character: "Neo", name: "Keanu Reeves" }],
+    crew: [{ name: "Lana Wachowski", role: "Director" }],
+    genres: ["Action", "Science Fiction"],
+    id: "movie:603",
+    kind: "movie",
+    originalTitle: "The Matrix",
+    overview: "A hacker discovers that the world he knows is a constructed reality.",
+    productionStatus: "Released",
+    runtimeMinutes: 136,
+    source: "seerr",
+    tagline: "Free your mind.",
+    title: "The Matrix",
+    tmdbId: 603,
+    voteAverage: 8.2,
+    voteCount: 27_000,
+    year: 1999,
+  },
+};
+
 function client(
   search: DiscoverySearchClient["search"] = async () => searchResponse,
 ): DiscoverySearchClient {
@@ -55,6 +82,26 @@ function client(
 }
 
 describe("global search", () => {
+  it("opens normalized title details without keeping the search console behind the dialog", async () => {
+    const user = userEvent.setup();
+    const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
+    render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        detailClient={{ load }}
+        initialOpen
+        initialQuery="matrix"
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "View details for The Matrix" }));
+    const dialog = await screen.findByRole("dialog", { name: "The Matrix details" });
+    expect(within(dialog).getByRole("heading", { name: "The Matrix" })).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   it("opens a keyboard-guided prompt without requesting one-character queries", async () => {
     const search = vi.fn(async () => searchResponse);
     const user = userEvent.setup();

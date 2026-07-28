@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import { mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -191,6 +191,24 @@ test("open discovery search has no automatically detectable accessibility violat
   await page.goto("/");
   await page.getByRole("combobox").fill("matrix");
   await expect(page.getByRole("option", { name: /The Matrix/i })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("media detail drawer has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockDiscoverySearch(page);
+  await mockDiscoveryDetails(page);
+  await page.goto("/");
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "View details for The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

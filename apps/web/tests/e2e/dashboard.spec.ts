@@ -5,7 +5,7 @@ import {
   mockAcquisitionRecoverySession,
   mockAcquisitionSearch,
 } from "../fixtures/acquisition-recovery";
-import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import {
   mediaRequestCsrfToken,
   mockMediaRequestCreation,
@@ -172,6 +172,35 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await expect(page.getByRole("option", { name: /Breaking Bad/i })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(search).toHaveAttribute("aria-expanded", "false");
+  await expect(search).toHaveValue("matrix");
+});
+
+test("media details preserve search context and expose a guarded request handoff", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await mockDiscoveryDetails(page);
+  await page.goto("/");
+
+  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  await search.fill("matrix");
+  await page.getByRole("button", { name: "View details for The Matrix" }).click();
+  const drawer = page.getByRole("dialog", { name: "The Matrix details" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "The Matrix" })).toBeVisible();
+  await expect(drawer.getByText("Keanu Reeves")).toBeVisible();
+  const requestAction = drawer.getByRole("button", { name: "Request The Matrix" });
+  await requestAction.scrollIntoViewIfNeeded();
+  await expect(requestAction).toBeInViewport();
+  await expect(search).toHaveAttribute("aria-expanded", "false");
+  expect(
+    await drawer
+      .locator(".media-detail__scroll")
+      .evaluate((scrollRegion) => scrollRegion.scrollWidth <= scrollRegion.clientWidth + 1),
+  ).toBe(true);
+
+  await drawer.getByRole("button", { name: "Close media details" }).click();
+  await expect(drawer).toHaveCount(0);
   await expect(search).toHaveValue("matrix");
 });
 
