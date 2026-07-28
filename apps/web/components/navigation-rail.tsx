@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Compass, Gauge, Library, Settings2 } from "lucide-react";
+import { CalendarDays, ClipboardCheck, Compass, Gauge, Library, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 import { BrandMark } from "./brand-mark";
@@ -10,6 +10,7 @@ const destinations = [
   { current: false, href: "/library", icon: Library, label: "Library" },
   { current: false, href: "/calendar", icon: CalendarDays, label: "Calendar" },
   { current: false, href: "/operations/downloads", icon: Gauge, label: "Operations" },
+  { current: false, href: "/operations/requests", icon: ClipboardCheck, label: "Requests" },
 ] as const;
 
 export function NavigationRail() {

@@ -88,6 +88,22 @@ const routes = [
     path: "/operations/downloads?test-view=unconfigured",
   },
   {
+    label: "request review",
+    path: "/operations/requests?test-view=ready",
+  },
+  {
+    label: "empty request review",
+    path: "/operations/requests?test-view=empty",
+  },
+  {
+    label: "unavailable request review",
+    path: "/operations/requests?test-view=unavailable",
+  },
+  {
+    label: "restricted request review",
+    path: "/operations/requests?test-view=forbidden",
+  },
+  {
     label: "acquisition calendar",
     path: "/calendar?test-view=ready",
   },
@@ -266,6 +282,22 @@ test("library item inspector has no automatically detectable accessibility viola
   await page.goto("/library?test-view=ready");
   await page.getByRole("button", { name: "Inspect Northern Lights" }).click();
   await expect(page.getByRole("button", { name: "Close library inspector" })).toBeFocused();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("request approval confirmation has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Request decisions cover representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/operations/requests?test-view=ready");
+  const card = page.getByText("A House of Dynamite").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("dialog", { name: "Send this into acquisition?" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

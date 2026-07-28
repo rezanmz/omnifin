@@ -566,6 +566,56 @@ for (const state of ["empty", "unavailable"] as const) {
   });
 }
 
+test("request review visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Request review covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/requests?test-view=ready");
+  await page.getByRole("heading", { name: "Decide what enters the library." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("request-review.png", { fullPage: true });
+});
+
+test("light request review visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light request review covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/requests?test-view=ready");
+  await page.getByRole("heading", { name: "Decide what enters the library." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("request-review-light.png", { fullPage: true });
+});
+
+test("request approval confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Request approval confirmation covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/requests?test-view=ready");
+  const card = page.getByText("A House of Dynamite").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("dialog", { name: "Send this into acquisition?" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("request-review-confirmation.png");
+});
+
+for (const state of ["empty", "unavailable"] as const) {
+  test(`${state} request review visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Request review boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/operations/requests?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`request-review-${state}.png`, { fullPage: true });
+  });
+}
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
