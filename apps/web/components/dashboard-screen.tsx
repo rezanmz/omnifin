@@ -3,9 +3,9 @@ import type { CSSProperties } from "react";
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
-import { ContinueWatchingRail } from "./continue-watching-rail";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
 import { HeroSpotlight } from "./hero-spotlight";
+import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MediaRail } from "./media-rail";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
@@ -43,7 +43,7 @@ export function DashboardScreen({
         <main className="dashboard" id="main-content" tabIndex={-1}>
           <HeroSpotlight hero={data.hero} />
           {liveContinueWatching ? (
-            <ContinueWatchingRail />
+            <LazyContinueWatchingRail />
           ) : (
             <MediaRail items={data.continueWatching} title="Continue watching" />
           )}
