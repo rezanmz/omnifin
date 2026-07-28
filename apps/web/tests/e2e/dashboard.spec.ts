@@ -100,7 +100,9 @@ test("operators can compare and explicitly override one exact manual release", a
   await expect(submit).toBeDisabled();
   await workbench.getByRole("checkbox", { name: /reviewed the rejection evidence/u }).check();
   await expect(submit).toBeEnabled();
-  await submit.click();
+  await submit.focus();
+  await expect(submit).toBeFocused();
+  await submit.press("Enter");
 
   await expect(workbench.getByText("Release accepted")).toBeVisible();
   expect(capture.requests).toBe(1);
