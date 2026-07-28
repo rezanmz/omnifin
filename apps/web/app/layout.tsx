@@ -46,11 +46,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         />
       </head>
       <body>
-        <nav aria-label="Skip links">
-          <a className="skip-link" href="#main-content">
-            Skip to main content
-          </a>
-        </nav>
+        <a className="skip-link" href="#main-content">
+          Skip to main content
+        </a>
         {children}
       </body>
     </html>
