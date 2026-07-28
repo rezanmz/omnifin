@@ -49,9 +49,10 @@ for principals with `media.view`. Recovery access can inspect and repair Jellyfi
 without seeing or mutating other service configuration. A pinned isolated Authentik gate exercises
 authorization, role mapping, RP logout, and back-channel logout. The browser connector control room
 and global discovery, request, acquisition-provenance, manual release, Indexer Intelligence, and
-download-queue and acquisition-calendar flows are pre-release development surfaces; the protected
-live compatibility baseline, request review, monitoring controls, broader acquisition mutations, and playback remain
-unavailable.
+download-queue and acquisition-calendar flows are pre-release development surfaces. The same is
+true of Jellyfin playback and progress, Continue Watching, issue reporting, Bazarr subtitle search
+and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
+request review, monitoring controls, and broader acquisition mutations remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the
