@@ -459,6 +459,53 @@ test("download client onboarding visual baseline", async ({ page }, testInfo) =>
   await expect(page).toHaveScreenshot("download-queue-unconfigured.png", { fullPage: true });
 });
 
+test("acquisition calendar visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Acquisition calendars cover representative desktop and phone geometry",
+  );
+  await page.goto("/calendar?test-view=ready");
+  await page.getByRole("heading", { name: "See what arrives next." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("acquisition-calendar.png", { fullPage: true });
+});
+
+test("light acquisition calendar visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light acquisition calendars cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/calendar?test-view=ready");
+  await page.getByRole("heading", { name: "See what arrives next." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("acquisition-calendar-light.png", { fullPage: true });
+});
+
+test("degraded acquisition calendar visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded acquisition calendars cover representative desktop and phone geometry",
+  );
+  await page.goto("/calendar?test-view=degraded");
+  await page.getByText("Partial horizon", { exact: true }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("acquisition-calendar-degraded.png", { fullPage: true });
+});
+
+test("acquisition calendar event drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Calendar event details cover representative desktop and phone geometry",
+  );
+  await page.goto("/calendar?test-view=ready");
+  await page.getByRole("button", { name: /Inspect The Far Meridian/i }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("acquisition-calendar-event.png");
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

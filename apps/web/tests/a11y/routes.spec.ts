@@ -87,6 +87,22 @@ const routes = [
     path: "/operations/downloads?test-view=unconfigured",
   },
   {
+    label: "acquisition calendar",
+    path: "/calendar?test-view=ready",
+  },
+  {
+    label: "empty acquisition calendar",
+    path: "/calendar?test-view=empty",
+  },
+  {
+    label: "degraded acquisition calendar",
+    path: "/calendar?test-view=degraded",
+  },
+  {
+    label: "acquisition calendar onboarding",
+    path: "/calendar?test-view=unconfigured",
+  },
+  {
     label: "Jellyfin credential denial",
     path: "/login/jellyfin?test-view=invalid-credentials",
   },
@@ -207,6 +223,21 @@ test("open profile appearance controls have no automatically detectable accessib
   expect(results.violations).toEqual([]);
 });
 
+test("calendar event details have no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/calendar?test-view=ready");
+  await page.getByRole("button", { name: /Inspect The Far Meridian/i }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },
@@ -218,6 +249,7 @@ for (const route of [
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
   { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },
   { label: "download queue", path: "/operations/downloads?test-view=ready" },
+  { label: "acquisition calendar", path: "/calendar?test-view=ready" },
 ] as const) {
   test(`${route.label} light theme has no automatically detectable accessibility violations`, async ({
     context,

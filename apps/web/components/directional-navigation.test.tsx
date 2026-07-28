@@ -23,10 +23,7 @@ describe("directional navigation", () => {
       "href",
       "/#rail-continue-watching",
     );
-    expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute(
-      "href",
-      "/#upcoming-heading",
-    );
+    expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute("href", "/calendar");
     expect(screen.getByRole("link", { name: "Operations" })).toHaveAttribute(
       "href",
       "/operations/downloads",

@@ -18,8 +18,9 @@ the roadmap records when each area has passed its verification gate.
 > identity-delegated, idempotent Seerr request mutation, and permission-gated read-only
 > Radarr/Sonarr acquisition provenance, exact-target search recovery, and Prowlarr
 > Indexer Intelligence are implemented. Exact-target manual release search and grabs plus
-> normalized qBittorrent/SABnzbd queue reads are also implemented; request review,
-> calendar controls, broader acquisition mutations, and media proxying remain incomplete.
+> normalized qBittorrent/SABnzbd queue reads and the read-only Radarr/Sonarr acquisition calendar
+> are also implemented; request review, monitoring controls, broader acquisition mutations, and
+> media proxying remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -53,8 +54,10 @@ available as pre-release development surfaces. Prowlarr inventory, 24-hour stati
 disabled state, application sync, normalized failures, and exact-target safe tests are
 also available through the operator-only Indexer Intelligence workspace. An operator-only
 download workspace reads bounded, normalized qBittorrent and SABnzbd queues without exposing
-upstream identifiers or credentials. Request review, calendar controls, broader acquisition
-mutations, and playback remain unavailable.
+upstream identifiers or credentials. Request review, monitoring controls, broader acquisition
+mutations, and playback remain unavailable. A viewer-accessible acquisition calendar combines
+bounded Radarr and Sonarr timing through opaque identifiers while keeping monitoring mutations
+unavailable.
 
 ## Target system shape
 

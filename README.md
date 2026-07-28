@@ -64,8 +64,8 @@ and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
 Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
-Prowlarr intelligence, and qBittorrent/SABnzbd queue reads through normalized,
-browser-safe contracts and responsive operational workspaces.
+Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, and qBittorrent/SABnzbd queue
+reads through normalized, browser-safe contracts and responsive operational workspaces.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces.
@@ -77,8 +77,8 @@ versions and dates. Permission checks cover every implemented administrative and
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
 identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
 and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
-queue are available as pre-release development surfaces. Later Phase 3 slices add request review,
-calendar and monitoring controls, and live events;
+queue and acquisition calendar are available as pre-release development surfaces. Later Phase 3
+slices add request review, monitoring controls, and live events;
 Phase 4 adds media proxying and playback.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
@@ -137,6 +137,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   telemetry, application sync, failures, and safe tests
 - [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd
   telemetry, partial failure, polling, and secret isolation
+- [Acquisition calendar](docs/acquisition-calendar.md) — normalized Radarr and Sonarr
+  release timing, pagination, partial failure, and privacy boundaries
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy
