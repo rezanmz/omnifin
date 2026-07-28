@@ -162,6 +162,7 @@ export function continueWatchingCards(feed: ContinueWatchingResponse): MediaCard
       ...(artworkPath === undefined ? {} : { artworkPath }),
       eyebrow: item.media.subtitle ?? minutesLeft(item),
       id: item.media.id,
+      positionSeconds: item.positionSeconds,
       progress: item.progressPercent / 100,
       title: item.media.title,
     };

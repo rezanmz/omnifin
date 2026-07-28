@@ -8,6 +8,7 @@ export interface MediaCardModel {
   artworkPath?: string;
   eyebrow: string;
   id: string;
+  positionSeconds?: number;
   progress?: number;
   title: string;
 }
