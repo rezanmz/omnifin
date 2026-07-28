@@ -9,7 +9,9 @@ import {
   firstManifestUri,
   hlsSegmentFormat,
   hostContainerUser,
+  isLibraryProbePending,
   selectConnectorAddress,
+  validateImportedItem,
 } from "../integration/jellyfin/playback.mjs";
 
 test("emits only allowlisted connector diagnostics", () => {
@@ -32,6 +34,17 @@ test("runs the rootless fixture container as the invoking host identity", () => 
   assert.throws(() => hostContainerUser(undefined, 121), /host_identity_unavailable/u);
   assert.throws(() => hostContainerUser(1_001, -1), /host_identity_unavailable/u);
   assert.throws(() => hostContainerUser(1.5, 121), /host_identity_unavailable/u);
+});
+
+test("waits for Jellyfin to finish probing imported media streams", () => {
+  let probeError;
+  try {
+    validateImportedItem({ Id: "a".repeat(32), MediaStreams: [] });
+  } catch (error) {
+    probeError = error;
+  }
+  assert.equal(isLibraryProbePending(probeError), true);
+  assert.equal(isLibraryProbePending(new Error("unrelated")), false);
 });
 
 test("selects a private non-loopback connector address deterministically", () => {

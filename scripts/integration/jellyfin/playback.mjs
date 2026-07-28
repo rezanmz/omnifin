@@ -317,7 +317,7 @@ async function configureFixtureServer(baseUrl, authentication) {
   });
 }
 
-function validateImportedItem(item) {
+export function validateImportedItem(item) {
   if (!item || typeof item !== "object" || !IDENTIFIER_PATTERN.test(item.Id)) {
     throw new JellyfinFixtureFailure("library_item_invalid");
   }
@@ -342,6 +342,10 @@ function validateImportedItem(item) {
   };
 }
 
+export function isLibraryProbePending(error) {
+  return error instanceof JellyfinFixtureFailure && error.code === "library_streams_invalid";
+}
+
 async function importFixture(baseUrl, authentication) {
   const headers = tokenHeaders(authentication.accessToken);
   const query = new URLSearchParams({
@@ -353,6 +357,7 @@ async function importFixture(baseUrl, authentication) {
   await request(baseUrl, "Library/Refresh", { headers, method: "POST" });
 
   const deadline = Date.now() + LIBRARY_READY_TIMEOUT_MS;
+  let lastProbeFailure;
   while (Date.now() < deadline) {
     const itemQuery = new URLSearchParams({
       Fields: "MediaSources,MediaStreams,UserData",
@@ -362,10 +367,16 @@ async function importFixture(baseUrl, authentication) {
     });
     const response = await requestJson(baseUrl, `Items?${itemQuery}`, { headers });
     if (Array.isArray(response?.Items) && response.Items[0]) {
-      return validateImportedItem(response.Items[0]);
+      try {
+        return validateImportedItem(response.Items[0]);
+      } catch (error) {
+        if (!isLibraryProbePending(error)) throw error;
+        lastProbeFailure = error;
+      }
     }
     await sleep(500);
   }
+  if (lastProbeFailure) throw lastProbeFailure;
   throw new JellyfinFixtureFailure("library_scan_timeout");
 }
 
