@@ -53,7 +53,7 @@ test("authenticated Continue Watching renders normalized progress and private ar
   });
 
   await page.goto("/?test-view=continue-watching-live");
-  const card = page.getByRole("button", { name: "Open Northern Lights" });
+  const card = page.getByRole("button", { name: "Resume Northern Lights" });
   await expect(card).toHaveAccessibleDescription("33% watched");
   await expect(
     page.getByRole("progressbar", { name: "Northern Lights watch progress" }),
