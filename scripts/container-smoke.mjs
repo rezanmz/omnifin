@@ -280,6 +280,7 @@ async function main() {
 
   const suffix = `${process.pid}-${Date.now()}`;
   const network = `omnifin-smoke-network-${suffix}`;
+  const backupVolume = `omnifin-smoke-backups-${suffix}`;
   const volume = `omnifin-smoke-data-${suffix}`;
   const gateway = `omnifin-smoke-gateway-${suffix}`;
   const web = `omnifin-smoke-web-${suffix}`;
@@ -291,6 +292,7 @@ async function main() {
   let encryptionSecret = "";
   let recoverySecret = "";
   let networkCreated = false;
+  let backupVolumeCreated = false;
   let volumeCreated = false;
 
   try {
@@ -322,6 +324,8 @@ async function main() {
     networkCreated = true;
     docker(["volume", "create", volume], "volume_create");
     volumeCreated = true;
+    docker(["volume", "create", backupVolume], "backup_volume_create");
+    backupVolumeCreated = true;
 
     docker(
       [
@@ -367,6 +371,40 @@ async function main() {
     await waitForHealthy(gateway, "gateway_health");
     inContainerRequest(gateway, "http://127.0.0.1:4000/readyz", "gateway_readiness");
     inContainerProvidersRequest(gateway, "http://127.0.0.1:4000/v1/auth/providers", "gateway_api");
+
+    const maintenanceRuntime = [
+      "run",
+      "--rm",
+      "--network",
+      network,
+      "--read-only",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--tmpfs",
+      "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
+      "--volume",
+      `${volume}:/data`,
+      "--volume",
+      `${backupVolume}:/backups`,
+      "--env",
+      "OMNIFIN_DATABASE_URL=/data/omnifin.db",
+      "--env",
+      "OMNIFIN_GATEWAY_HEALTH_URL=http://gateway:4000/healthz",
+      "--env",
+      `OMNIFIN_IMAGE_REF=${image}`,
+      image,
+      "maintenance",
+    ];
+    docker(
+      [...maintenanceRuntime, "backup", "--output", "/backups/container-smoke.sqlite"],
+      "maintenance_backup",
+    );
+    docker(
+      [...maintenanceRuntime, "verify", "--input", "/backups/container-smoke.sqlite"],
+      "maintenance_backup_verification",
+    );
 
     docker(
       [
@@ -422,6 +460,8 @@ async function main() {
           "gateway_health",
           "gateway_readiness",
           "gateway_api",
+          "maintenance_backup",
+          "maintenance_backup_verification",
           "web_health",
           "web_gateway_proxy",
         ],
@@ -455,6 +495,13 @@ async function main() {
         docker(["volume", "rm", volume], "cleanup_volume");
       } catch {
         // The unique smoke-test volume contains no user data.
+      }
+    }
+    if (backupVolumeCreated) {
+      try {
+        docker(["volume", "rm", backupVolume], "cleanup_backup_volume");
+      } catch {
+        // The unique smoke-test volume contains only generated fixture data.
       }
     }
     await rm(temporaryDirectory, { recursive: true, force: true });
