@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateWorkflowRuns, validateMainBranch, verifyMainGates } from "./verify-main-gates.mjs";
+import {
+  evaluateWorkflowRuns,
+  githubJson,
+  validateMainBranch,
+  verifyMainGates,
+} from "./verify-main-gates.mjs";
 
 const repository = "rezanmz/omnifin";
 const sha = "a".repeat(40);
@@ -55,6 +60,68 @@ test("requires the verified commit to remain the main tip", () => {
     () => validateMainBranch({ commit: { sha: "b".repeat(40) }, protected: true }, sha),
     /no longer the current main tip/u,
   );
+});
+
+test("retries bounded transient GitHub API responses", async () => {
+  const statuses = [504, 429, 200];
+  const delays = [];
+  const payload = await githubJson(
+    "https://api.github.test/gates",
+    { token: "test-token" },
+    {
+      fetch: async () => {
+        const status = statuses.shift();
+        return status === 200
+          ? Response.json({ workflow_runs: [] })
+          : new Response(null, { headers: { "retry-after": "0" }, status });
+      },
+      wait: async (milliseconds) => delays.push(milliseconds),
+    },
+  );
+
+  assert.deepEqual(payload, { workflow_runs: [] });
+  assert.deepEqual(delays, [0, 0]);
+  assert.deepEqual(statuses, []);
+});
+
+test("does not retry permanent GitHub API denials", async () => {
+  let requests = 0;
+  await assert.rejects(
+    githubJson(
+      "https://api.github.test/gates",
+      { token: "test-token" },
+      {
+        fetch: async () => {
+          requests += 1;
+          return new Response(null, { status: 403 });
+        },
+        wait: async () => undefined,
+      },
+    ),
+    /HTTP 403/u,
+  );
+  assert.equal(requests, 1);
+});
+
+test("fails closed after the bounded transient retry budget", async () => {
+  let requests = 0;
+  const delays = [];
+  await assert.rejects(
+    githubJson(
+      "https://api.github.test/gates",
+      { token: "test-token" },
+      {
+        fetch: async () => {
+          requests += 1;
+          return new Response(null, { status: 504 });
+        },
+        wait: async (milliseconds) => delays.push(milliseconds),
+      },
+    ),
+    /HTTP 504/u,
+  );
+  assert.equal(requests, 4);
+  assert.deepEqual(delays, [1_000, 2_000, 4_000]);
 });
 
 test("rechecks protected main immediately before accepting successful gates", async () => {

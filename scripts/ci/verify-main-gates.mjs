@@ -6,6 +6,8 @@ const requiredWorkflows = Object.freeze([
   { file: "security.yml", name: "Security" },
 ]);
 const fullShaPattern = /^[0-9a-f]{40}$/u;
+const githubQueryAttempts = 4;
+const retryableGithubStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export function evaluateWorkflowRuns(runs, { repository, sha }) {
   const matching = runs
@@ -62,19 +64,63 @@ function configuration(environment) {
   };
 }
 
-async function githubJson(url, config) {
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${config.token}`,
-      "user-agent": "omnifin-main-gate",
-      "x-github-api-version": "2022-11-28",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!response.ok) throw new Error(`GitHub gate query failed with HTTP ${response.status}.`);
-  return response.json();
+function retryDelay(response, attempt) {
+  const retryAfterHeader = response?.headers.get("retry-after");
+  if (retryAfterHeader !== null && retryAfterHeader !== undefined) {
+    const retryAfter = Number(retryAfterHeader);
+    if (Number.isFinite(retryAfter) && retryAfter >= 0) {
+      return Math.min(retryAfter * 1_000, 15_000);
+    }
+  }
+  return 1_000 * 2 ** attempt;
+}
+
+export async function githubJson(url, config, dependencies = {}) {
+  const request = dependencies.fetch ?? fetch;
+  const wait =
+    dependencies.wait ??
+    ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+
+  for (let attempt = 0; attempt < githubQueryAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await request(url, {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${config.token}`,
+          "user-agent": "omnifin-main-gate",
+          "x-github-api-version": "2022-11-28",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      if (attempt === githubQueryAttempts - 1) {
+        throw new Error("GitHub gate query failed after bounded network retries.");
+      }
+      await wait(1_000 * 2 ** attempt);
+      continue;
+    }
+
+    if (!response.ok) {
+      if (!retryableGithubStatuses.has(response.status) || attempt === githubQueryAttempts - 1) {
+        throw new Error(`GitHub gate query failed with HTTP ${response.status}.`);
+      }
+      await wait(retryDelay(response, attempt));
+      continue;
+    }
+
+    try {
+      return await response.json();
+    } catch {
+      if (attempt === githubQueryAttempts - 1) {
+        throw new Error("GitHub gate query returned invalid JSON after bounded retries.");
+      }
+      await wait(1_000 * 2 ** attempt);
+    }
+  }
+
+  throw new Error("GitHub gate query exhausted its retry budget.");
 }
 
 export function validateMainBranch(branch, sha) {
