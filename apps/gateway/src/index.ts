@@ -108,6 +108,13 @@ export {
   type ResolvedMediaReference,
 } from "./media/media-reference-service.js";
 export {
+  ContinueWatchingError,
+  ContinueWatchingService,
+  type ContinueWatchingClientFactoryInput,
+  type ContinueWatchingContext,
+  type ContinueWatchingDependencies,
+} from "./media/continue-watching-service.js";
+export {
   constantTimeTextEqual,
   EnvelopeCipher,
   hashToken,
