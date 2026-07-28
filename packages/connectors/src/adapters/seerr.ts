@@ -10,9 +10,17 @@ import {
 import {
   mediaRequestInputSchema,
   mediaRequestResponseSchema,
+  requestReviewDecisionInputSchema,
+  requestReviewItemSchema,
+  requestReviewPageSchema,
+  requestReviewQuerySchema,
   type MediaRequestInput,
   type MediaRequestResponse,
   type MediaRequestStatus,
+  type RequestReviewDecisionInput,
+  type RequestReviewItem,
+  type RequestReviewPage,
+  type RequestReviewQuery,
 } from "@omnifin/contracts/requests";
 import { z } from "zod";
 
@@ -128,6 +136,43 @@ const seerrCreatedRequestSchema = z.object({
   type: z.enum(["movie", "tv"]),
 });
 
+const seerrReviewRequestSchema = z.object({
+  createdAt: z.iso.datetime({ offset: true }),
+  id: upstreamIdentifierSchema,
+  is4k: z.boolean().default(false),
+  media: z.object({
+    mediaType: z.enum(["movie", "tv"]),
+    tmdbId: upstreamIdentifierSchema,
+  }),
+  requestedBy: z.object({
+    jellyfinUsername: z.string().trim().min(1).max(160).nullish(),
+    username: z.string().trim().min(1).max(160).nullish(),
+  }),
+  seasons: z
+    .array(z.object({ seasonNumber: z.int().nonnegative().max(10_000) }))
+    .max(100)
+    .default([]),
+  status: z.int().min(1).max(5),
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+
+const seerrReviewListSchema = z.object({
+  pageInfo: z.object({
+    results: z.int().nonnegative().max(10_000_000),
+  }),
+  results: z.array(seerrReviewRequestSchema).max(50),
+});
+
+const seerrMovieDetailsSchema = z.object({
+  releaseDate: upstreamDateSchema,
+  title: upstreamTitleSchema,
+});
+
+const seerrSeriesDetailsSchema = z.object({
+  firstAirDate: upstreamDateSchema,
+  name: upstreamTitleSchema,
+});
+
 type UpstreamKnownFor = z.infer<typeof upstreamKnownForSchema>;
 type UpstreamMediaInfo = z.infer<typeof upstreamMediaInfoSchema>;
 
@@ -141,7 +186,8 @@ export type SeerrRequestErrorReason =
   | "identity_not_found"
   | "no_seasons_available"
   | "request_conflict"
-  | "request_denied";
+  | "request_denied"
+  | "request_not_found";
 
 export class SeerrRequestError extends Error {
   public readonly reason: SeerrRequestErrorReason;
@@ -191,7 +237,7 @@ function knownForResult(result: UpstreamKnownFor) {
   };
 }
 
-function requestStatus(status: number): MediaRequestStatus {
+function requestStatus(status: number, operation = "request.create"): MediaRequestStatus {
   switch (status) {
     case 1:
       return "pending";
@@ -207,18 +253,18 @@ function requestStatus(status: number): MediaRequestStatus {
       throw new SafeConnectorError({
         code: "response_invalid",
         message: "Seerr returned a response that could not be safely interpreted.",
-        operation: "request.create",
+        operation,
         retryable: false,
         service: "seerr",
       });
   }
 }
 
-function invalidRequestResponse() {
+function invalidRequestResponse(operation = "request.create") {
   return new SafeConnectorError({
     code: "response_invalid",
     message: "Seerr returned a response that could not be safely interpreted.",
-    operation: "request.create",
+    operation,
     retryable: false,
     service: "seerr",
   });
@@ -234,7 +280,13 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     super(config, apiKey ? [apiKey] : []);
     this.#apiKey = apiKey;
     this.capabilities = apiKey
-      ? ["connector.health", "connector.version", "media.discover", "request.create"]
+      ? [
+          "connector.health",
+          "connector.version",
+          "media.discover",
+          "request.create",
+          "request.review",
+        ]
       : ["connector.health", "connector.version"];
   }
 
@@ -422,6 +474,159 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       source: "seerr",
       status: requestStatus(created.status),
       tmdbId: created.media.tmdbId,
+    });
+  }
+
+  async listMediaRequests(
+    input: RequestReviewQuery,
+    signal?: AbortSignal,
+  ): Promise<RequestReviewPage> {
+    this.#requireRequestReview();
+    const query = requestReviewQuerySchema.parse(input);
+    const skip = query.cursor ? Number(query.cursor.slice("requests:".length)) : 0;
+    const parameters = new URLSearchParams({
+      filter: query.status,
+      mediaType: "all",
+      skip: String(skip),
+      sort: "added",
+      sortDirection: "desc",
+      take: String(query.limit),
+    });
+    const response = await this.client.requestJson("api/v1/request", seerrReviewListSchema, {
+      headers: { "X-Api-Key": this.#apiKey! },
+      operation: "request.review.list",
+      query: parameters,
+      ...(signal ? { signal } : {}),
+    });
+    const items: RequestReviewItem[] = [];
+    for (let index = 0; index < response.results.length; index += 5) {
+      items.push(
+        ...(await Promise.all(
+          response.results
+            .slice(index, index + 5)
+            .map((request) => this.#reviewItem(request, signal)),
+        )),
+      );
+    }
+    const nextOffset = skip + response.results.length;
+    return requestReviewPageSchema.parse({
+      generatedAt: this.clock.now().toISOString(),
+      items,
+      nextCursor: nextOffset < response.pageInfo.results ? `requests:${nextOffset}` : null,
+      status: query.status,
+    });
+  }
+
+  async reviewMediaRequest(
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    signal?: AbortSignal,
+  ): Promise<RequestReviewItem> {
+    this.#requireRequestReview();
+    const match = /^request:([1-9][0-9]*)$/u.exec(requestId);
+    const upstreamId = Number(match?.[1]);
+    if (!Number.isSafeInteger(upstreamId) || upstreamId > 2_147_483_647) {
+      throw invalidRequestResponse("request.review");
+    }
+    const decision = requestReviewDecisionInputSchema.parse(input);
+    const response = await this.client.requestText(
+      `api/v1/request/${upstreamId}/${decision.decision}`,
+      {
+        acceptedStatuses: [403, 404, 409],
+        headers: { "X-Api-Key": this.#apiKey! },
+        method: "POST",
+        operation: "request.review",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    switch (response.status) {
+      case 403:
+        throw new SeerrRequestError("request_denied");
+      case 404:
+        throw new SeerrRequestError("request_not_found");
+      case 409:
+        throw new SeerrRequestError("request_conflict");
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(response.body);
+    } catch {
+      throw invalidRequestResponse("request.review");
+    }
+    const parsed = seerrReviewRequestSchema.safeParse(decoded);
+    if (!parsed.success) throw invalidRequestResponse("request.review");
+    const reviewed = parsed.data;
+    const expectedStatus = decision.decision === "approve" ? "approved" : "declined";
+    if (requestStatus(reviewed.status, "request.review") !== expectedStatus) {
+      throw invalidRequestResponse("request.review");
+    }
+    return this.#reviewItem(reviewed, signal);
+  }
+
+  #requireRequestReview() {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr request review requires configured credentials.",
+        operation: "request.review",
+        retryable: false,
+        service: this.service,
+      });
+    }
+  }
+
+  async #reviewItem(
+    request: z.infer<typeof seerrReviewRequestSchema>,
+    signal?: AbortSignal,
+  ): Promise<RequestReviewItem> {
+    const common = {
+      createdAt: request.createdAt,
+      id: `request:${request.id}`,
+      is4k: request.is4k,
+      requestedBy:
+        optionalText(request.requestedBy.jellyfinUsername) ??
+        optionalText(request.requestedBy.username) ??
+        "Seerr user",
+      seasons:
+        request.media.mediaType === "movie"
+          ? null
+          : request.seasons.map((season) => season.seasonNumber).sort((a, b) => a - b),
+      source: "seerr" as const,
+      status: requestStatus(request.status, "request.review"),
+      tmdbId: request.media.tmdbId,
+      updatedAt: request.updatedAt,
+    };
+    if (request.media.mediaType === "movie") {
+      const details = await this.client.requestJson(
+        `api/v1/movie/${request.media.tmdbId}`,
+        seerrMovieDetailsSchema,
+        {
+          headers: { "X-Api-Key": this.#apiKey! },
+          operation: "request.review.details",
+          ...(signal ? { signal } : {}),
+        },
+      );
+      return requestReviewItemSchema.parse({
+        ...common,
+        kind: "movie",
+        title: details.title,
+        year: yearFromDate(details.releaseDate),
+      });
+    }
+    const details = await this.client.requestJson(
+      `api/v1/tv/${request.media.tmdbId}`,
+      seerrSeriesDetailsSchema,
+      {
+        headers: { "X-Api-Key": this.#apiKey! },
+        operation: "request.review.details",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    return requestReviewItemSchema.parse({
+      ...common,
+      kind: "series",
+      title: details.name,
+      year: yearFromDate(details.firstAirDate),
     });
   }
 }
