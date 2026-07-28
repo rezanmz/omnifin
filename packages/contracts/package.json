@@ -25,6 +25,10 @@
       "types": "./dist/discovery.d.ts",
       "default": "./dist/discovery.js"
     },
+    "./downloads": {
+      "types": "./dist/downloads.d.ts",
+      "default": "./dist/downloads.js"
+    },
     "./errors": {
       "types": "./dist/errors.d.ts",
       "default": "./dist/errors.js"
