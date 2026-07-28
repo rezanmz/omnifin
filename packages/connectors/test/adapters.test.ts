@@ -127,6 +127,12 @@ const probeCases: ProbeCase[] = [
     expectedPath: "/api/system/status",
     expectedVersion: probeFixtures.bazarr.data.bazarr_version,
     response: probeFixtures.bazarr,
+    expectedCapabilities: [
+      "connector.health",
+      "connector.version",
+      "subtitle.search",
+      "subtitle.download",
+    ],
     create: (config) => new BazarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
       expect(request.init.headers.get("x-api-key")).toBe(TEST_API_KEY);
