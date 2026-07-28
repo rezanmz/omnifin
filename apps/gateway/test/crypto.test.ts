@@ -94,6 +94,9 @@ describe("opaque token helpers", () => {
     const rootKey = Buffer.alloc(32, 9);
     const value = "same-sensitive-value";
     const hashes = [
+      privacyHash("acquisition_calendar_cursor", value, rootKey),
+      privacyHash("acquisition_calendar_event", value, rootKey),
+      privacyHash("acquisition_calendar_source", value, rootKey),
       privacyHash("ip_address", value, rootKey),
       privacyHash("user_agent", value, rootKey),
       privacyHash("oidc_session_id", value, rootKey),
@@ -104,7 +107,7 @@ describe("opaque token helpers", () => {
     ];
 
     expect(new Set(hashes).size).toBe(hashes.length);
-    expect(privacyHash("ip_address", value, rootKey)).toBe(hashes[0]);
+    expect(privacyHash("ip_address", value, rootKey)).toBe(hashes[3]);
   });
 
   it("compares text without early length exits", () => {

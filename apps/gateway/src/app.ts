@@ -8,6 +8,10 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import {
+  acquisitionCalendarRoutes,
+  type AcquisitionCalendarRoutesOptions,
+} from "./acquisitions/calendar-routes.js";
+import {
   acquisitionProvenanceRoutes,
   type AcquisitionProvenanceRoutesOptions,
 } from "./acquisitions/provenance-routes.js";
@@ -95,6 +99,7 @@ export interface CreateAppOptions {
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
+  acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
@@ -404,6 +409,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.acquisitionProvenanceDependencies === undefined
         ? {}
         : { dependencies: options.acquisitionProvenanceDependencies }),
+    });
+    await app.register(acquisitionCalendarRoutes, {
+      ...(options.acquisitionCalendarDependencies === undefined
+        ? {}
+        : { dependencies: options.acquisitionCalendarDependencies }),
     });
     await app.register(manualReleaseRoutes, {
       ...(options.manualReleaseDependencies === undefined
