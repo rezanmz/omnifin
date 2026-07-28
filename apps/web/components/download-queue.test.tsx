@@ -70,8 +70,10 @@ describe("DownloadQueue", () => {
     await user.click(screen.getByRole("radio", { name: "Light theme" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("radio", { name: "Dark theme" })).toHaveFocus();
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: "Dark theme" })).toHaveFocus();
+      expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    });
   });
 
   it("renders empty and unconfigured queue states honestly", () => {
