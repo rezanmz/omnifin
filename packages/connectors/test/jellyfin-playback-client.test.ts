@@ -1,0 +1,370 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  JellyfinPlaybackClient,
+  JellyfinPlaybackUnavailableError,
+} from "../src/media/jellyfin-playback-client.js";
+import { createMockTransport, jsonResponse, publicResolver } from "./helpers/mock-fetch.js";
+
+function clientWithResponses(responses: Response[]) {
+  const mock = createMockTransport(responses);
+  return {
+    client: new JellyfinPlaybackClient({
+      accessToken: "private-access-token",
+      deviceId: "installation-1",
+      metadata: { appVersion: "1.2.3" },
+      target: {
+        baseUrl: "https://jellyfin.example.test/base/",
+        connectorId: "jellyfin-home",
+        displayName: "Home Jellyfin",
+        resolveHost: publicResolver,
+        transport: mock.transport,
+      },
+    }),
+    requests: mock.requests,
+  };
+}
+
+const mediaStreams = [
+  {
+    BitRate: 8_000_000,
+    Codec: "h264",
+    Height: 1080,
+    Index: 0,
+    Type: "Video",
+    Width: 1920,
+  },
+  {
+    Channels: 6,
+    Codec: "aac",
+    DisplayTitle: "English · 5.1",
+    Index: 1,
+    IsDefault: true,
+    Language: "eng",
+    Type: "Audio",
+  },
+  {
+    Channels: 2,
+    Codec: "aac",
+    DisplayTitle: "French · Stereo",
+    Index: 2,
+    Language: "fra",
+    Type: "Audio",
+  },
+  {
+    Codec: "vtt",
+    DeliveryMethod: "External",
+    DisplayTitle: "English",
+    Index: 3,
+    IsDefault: true,
+    Language: "eng",
+    Type: "Subtitle",
+  },
+  {
+    Codec: "pgssub",
+    DeliveryMethod: "Encode",
+    DisplayTitle: "English forced",
+    Index: 4,
+    IsForced: true,
+    Language: "eng",
+    Type: "Subtitle",
+  },
+];
+
+const directSource = {
+  Bitrate: 8_640_000,
+  Container: "mp4",
+  DefaultAudioStreamIndex: 1,
+  DefaultSubtitleStreamIndex: 3,
+  Id: "media-source-1",
+  MediaStreams: mediaStreams,
+  RunTimeTicks: 7_200_000_000,
+  SupportsDirectPlay: true,
+  SupportsTranscoding: true,
+  TranscodingContainer: "mp4",
+  TranscodingSubProtocol: "hls",
+  TranscodingUrl:
+    "/base/Videos/movie-upstream-1/master.m3u8?MediaSourceId=media-source-1&PlaySessionId=play-session-upstream-1",
+};
+
+describe("JellyfinPlaybackClient", () => {
+  it("negotiates an authenticated direct-play source with bounded browser capabilities", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({ MediaSources: [directSource], PlaySessionId: "play-session-upstream-1" }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: 2,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 20_000_000,
+        mode: "auto",
+        positionSeconds: 180,
+        subtitleStreamIndex: 3,
+      }),
+    ).resolves.toEqual({
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: false,
+          title: "English · 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 2,
+          language: "fra",
+          selected: true,
+          title: "French · Stereo",
+        },
+      ],
+      delivery: "direct",
+      itemId: "movie-upstream-1",
+      liveStreamId: null,
+      media: {
+        audioCodec: "aac",
+        bitrate: 8_640_000,
+        container: "mp4",
+        durationSeconds: 720,
+        height: 1080,
+        videoCodec: "h264",
+        width: 1920,
+      },
+      mediaSourceId: "media-source-1",
+      playMethod: "DirectPlay",
+      playSessionId: "play-session-upstream-1",
+      positionSeconds: 180,
+      subtitleTracks: [
+        {
+          codec: "vtt",
+          default: true,
+          delivery: "external",
+          forced: false,
+          index: 3,
+          language: "eng",
+          selected: true,
+          title: "English",
+        },
+        {
+          codec: "pgssub",
+          default: false,
+          delivery: "video",
+          forced: true,
+          index: 4,
+          language: "eng",
+          selected: false,
+          title: "English forced",
+        },
+      ],
+      upstreamTarget: {
+        path: "Videos/movie-upstream-1/stream",
+        query:
+          "static=true&mediaSourceId=media-source-1&playSessionId=play-session-upstream-1&deviceId=installation-1",
+      },
+    });
+
+    expect(requests[0]?.url.pathname).toBe("/base/Items/movie-upstream-1/PlaybackInfo");
+    expect(requests[0]?.init.method).toBe("POST");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+    expect(requests[0]?.init.headers.get("content-type")).toBe("application/json");
+    const body = JSON.parse(Buffer.from(requests[0]?.init.body ?? []).toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toMatchObject({
+      AllowAudioStreamCopy: true,
+      AllowVideoStreamCopy: true,
+      AudioStreamIndex: 2,
+      EnableDirectPlay: true,
+      EnableDirectStream: false,
+      EnableTranscoding: true,
+      MaxAudioChannels: 2,
+      MaxStreamingBitrate: 20_000_000,
+      StartTimeTicks: 1_800_000_000,
+      SubtitleStreamIndex: 3,
+    });
+    expect(body).not.toHaveProperty("UserId");
+    expect(body.DeviceProfile).toMatchObject({
+      DirectPlayProfiles: expect.arrayContaining([
+        expect.objectContaining({ Container: "mp4,m4v", Type: "Video" }),
+        expect.objectContaining({ Container: "webm", Type: "Video" }),
+      ]),
+      SubtitleProfiles: expect.arrayContaining([
+        { Format: "vtt", Method: "External" },
+        { Format: "pgssub,dvdsub", Method: "Encode" },
+      ]),
+      TranscodingProfiles: [
+        expect.objectContaining({
+          AudioCodec: "aac",
+          Container: "mp4",
+          Protocol: "hls",
+          Type: "Video",
+          VideoCodec: "h264",
+        }),
+      ],
+    });
+  });
+
+  it("falls back to the same-origin HLS target and removes returned credential parameters", async () => {
+    const hlsSource = {
+      ...directSource,
+      SupportsDirectPlay: false,
+      TranscodingUrl:
+        "/base/Videos/movie-upstream-1/master.m3u8?MediaSourceId=media-source-1&api_key=leaked&PlaySessionId=play-session-upstream-1",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse({ MediaSources: [hlsSource], PlaySessionId: "play-session-upstream-1" }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 8_000_000,
+        mode: "auto",
+        positionSeconds: 0,
+        subtitleStreamIndex: null,
+      }),
+    ).resolves.toMatchObject({
+      delivery: "hls",
+      playMethod: "Transcode",
+      subtitleTracks: expect.arrayContaining([
+        expect.objectContaining({ index: 3, selected: false }),
+      ]),
+      upstreamTarget: {
+        path: "Videos/movie-upstream-1/master.m3u8",
+        query: "MediaSourceId=media-source-1&PlaySessionId=play-session-upstream-1",
+      },
+    });
+  });
+
+  it("fails closed when an explicit delivery mode is unavailable or a selection is invalid", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        MediaSources: [{ ...directSource, SupportsDirectPlay: false }],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+      jsonResponse({ MediaSources: [directSource], PlaySessionId: "play-session-upstream-1" }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 8_000_000,
+        mode: "direct",
+        positionSeconds: 0,
+        subtitleStreamIndex: null,
+      }),
+    ).rejects.toBeInstanceOf(JellyfinPlaybackUnavailableError);
+    await expect(
+      client.negotiate({
+        audioStreamIndex: 99,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 8_000_000,
+        mode: "auto",
+        positionSeconds: 0,
+        subtitleStreamIndex: null,
+      }),
+    ).rejects.toBeInstanceOf(JellyfinPlaybackUnavailableError);
+  });
+
+  it("does not proxy media sources that require arbitrary upstream headers", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        MediaSources: [
+          {
+            ...directSource,
+            RequiredHttpHeaders: { "X-Private-Upstream-Context": "private" },
+          },
+        ],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 8_000_000,
+        mode: "auto",
+        positionSeconds: 0,
+        subtitleStreamIndex: null,
+      }),
+    ).rejects.toBeInstanceOf(JellyfinPlaybackUnavailableError);
+  });
+
+  it("rejects cross-origin and malformed transcoding targets", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        MediaSources: [
+          {
+            ...directSource,
+            SupportsDirectPlay: false,
+            TranscodingUrl: "https://attacker.example.test/private/master.m3u8",
+          },
+        ],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 8_000_000,
+        mode: "auto",
+        positionSeconds: 0,
+        subtitleStreamIndex: null,
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.playback.negotiate" });
+  });
+
+  it("reports start, pause/progress, and stop events without putting tokens in URLs", async () => {
+    const { client, requests } = clientWithResponses([
+      new Response(null, { status: 204 }),
+      new Response(null, { status: 204 }),
+      new Response(null, { status: 204 }),
+    ]);
+    const session = {
+      audioStreamIndex: 2,
+      itemId: "movie-upstream-1",
+      mediaSourceId: "media-source-1",
+      playMethod: "DirectPlay" as const,
+      playSessionId: "play-session-upstream-1",
+      subtitleStreamIndex: 3,
+    };
+
+    await client.reportPlaybackEvent({ event: "started", positionSeconds: 180, session });
+    await client.reportPlaybackEvent({ event: "paused", positionSeconds: 240, session });
+    await client.reportPlaybackEvent({ event: "stopped", positionSeconds: 250, session });
+
+    expect(requests.map((request) => request.url.pathname)).toEqual([
+      "/base/Sessions/Playing",
+      "/base/Sessions/Playing/Progress",
+      "/base/Sessions/Playing/Stopped",
+    ]);
+    for (const request of requests) {
+      expect(request.url.search).toBe("");
+      expect(request.init.headers.get("authorization")).toContain('Token="private-access-token"');
+    }
+    expect(JSON.parse(Buffer.from(requests[1]?.init.body ?? []).toString("utf8"))).toMatchObject({
+      AudioStreamIndex: 2,
+      CanSeek: true,
+      IsPaused: true,
+      ItemId: "movie-upstream-1",
+      MediaSourceId: "media-source-1",
+      PlayMethod: "DirectPlay",
+      PlaySessionId: "play-session-upstream-1",
+      PositionTicks: 2_400_000_000,
+      SubtitleStreamIndex: 3,
+    });
+  });
+});
