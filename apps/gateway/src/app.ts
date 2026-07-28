@@ -93,6 +93,7 @@ import {
   subtitleOperationRoutes,
   type SubtitleOperationRoutesOptions,
 } from "./subtitles/operation-routes.js";
+import { systemStatusRoutes, type SystemStatusRoutesOptions } from "./system/status-routes.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -131,6 +132,7 @@ export interface CreateAppOptions {
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
+  systemStatusDependencies?: SystemStatusRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -493,6 +495,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.indexerIntelligenceDependencies === undefined
         ? {}
         : { dependencies: options.indexerIntelligenceDependencies }),
+    });
+    await app.register(systemStatusRoutes, {
+      ...(options.systemStatusDependencies === undefined
+        ? {}
+        : { dependencies: options.systemStatusDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined
