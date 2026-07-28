@@ -32,6 +32,8 @@ export const connectorCapabilitySchema = z.enum([
   "acquisition.calendar",
   "indexer.statistics",
   "indexer.test",
+  "system.health",
+  "storage.read",
   "download.queue.read",
   "download.queue.mutate",
   "subtitle.search",
