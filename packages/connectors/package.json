@@ -41,6 +41,10 @@
       "types": "./dist/media/jellyfin-library-client.d.ts",
       "default": "./dist/media/jellyfin-library-client.js"
     },
+    "./issues/seerr-issue-client": {
+      "types": "./dist/issues/seerr-issue-client.d.ts",
+      "default": "./dist/issues/seerr-issue-client.js"
+    },
     "./security/destination": {
       "types": "./dist/security/destination.d.ts",
       "default": "./dist/security/destination.js"
