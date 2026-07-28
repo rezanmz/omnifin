@@ -79,7 +79,8 @@ docker compose up -d web
 ```
 
 The pre-restore rollback database and its manifest are created and fully synced before the
-selected backup atomically replaces the active database. Keep that pair until the restored
+selected backup is staged, checked against its previously verified digest and schema, and
+atomically replaces the active database. Keep that pair until the restored
 deployment passes readiness, authentication, connector decryption, a representative read,
 and a permission-checked mutation. A running container is not sufficient proof that the
 matching encryption key was supplied.

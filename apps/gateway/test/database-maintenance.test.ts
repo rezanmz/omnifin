@@ -161,6 +161,28 @@ describe("database restore maintenance", () => {
     ).rejects.toMatchObject({ code: "restore_confirmation_required" });
   });
 
+  it("rejects a tampered checkpoint before replacing the active database", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    const backupPath = path.join(directory, "selected.sqlite");
+    const rollbackOutputPath = path.join(directory, "pre-restore.sqlite");
+    writeMarker(databasePath, "selected checkpoint");
+    await createDatabaseBackup({ databasePath, outputPath: backupPath });
+    writeMarker(databasePath, "active state");
+    await writeFile(backupPath, Buffer.from("tampered"), { flag: "a" });
+
+    await expect(
+      restoreDatabaseBackup({
+        backupPath,
+        confirmedGatewayStopped: true,
+        databasePath,
+        rollbackOutputPath,
+      }),
+    ).rejects.toMatchObject({ code: "backup_mismatch" });
+    expect(readMarker(databasePath)).toBe("active state");
+    await expect(lstat(rollbackOutputPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("refuses restoration whenever the configured gateway endpoint responds", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(503, { "content-type": "application/json" });

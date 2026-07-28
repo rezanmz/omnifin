@@ -456,7 +456,7 @@ export async function restoreDatabaseBackup(options: RestoreOptions): Promise<Re
       throw new MaintenanceError("gateway_still_running");
     }
     await assertDistinctPaths(databasePath, backupPath, rollbackOutputPath);
-    await readAndValidateManifest(backupPath);
+    const selected = await readAndValidateManifest(backupPath);
     await assertDatabaseQuiescent(databasePath);
     const rollback = await createDatabaseBackup({
       databasePath,
@@ -467,14 +467,21 @@ export async function restoreDatabaseBackup(options: RestoreOptions): Promise<Re
 
     await copyFile(backupPath, temporaryPath, constants.COPYFILE_EXCL);
     await chmod(temporaryPath, 0o600);
-    inspectDatabase(temporaryPath);
+    const staged = inspectDatabase(temporaryPath);
+    const stagedSha256 = await sha256File(temporaryPath);
+    if (
+      stagedSha256 !== selected.manifest.databaseSha256 ||
+      staged.migrationCount !== selected.inspection.migrationCount ||
+      staged.schemaSha256 !== selected.inspection.schemaSha256
+    ) {
+      throw new MaintenanceError("backup_mismatch");
+    }
     await syncFile(temporaryPath);
     await rename(temporaryPath, databasePath);
     databaseReplaced = true;
     await syncDirectory(path.dirname(databasePath));
 
     const restored = inspectDatabase(databasePath);
-    const selected = await readAndValidateManifest(backupPath);
     if (
       restored.migrationCount !== selected.inspection.migrationCount ||
       restored.schemaSha256 !== selected.inspection.schemaSha256
