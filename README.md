@@ -132,8 +132,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   failure handling
 - [Authentication](docs/authentication.md) — OIDC, Jellyfin pairing, roles, sessions,
   and recovery
-- [Discovery](docs/discovery.md) — normalized Seerr search, permissions, errors, and
-  browser behavior
+- [Discovery](docs/discovery.md) — normalized Seerr search and media details,
+  permissions, errors, and browser behavior
 - [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,
   normalized mutations, and audits
 - [Media issues](docs/media-issues.md) — normalized player and Seerr issue lifecycle,

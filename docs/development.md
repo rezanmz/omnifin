@@ -40,7 +40,7 @@ migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pend
 the permission-checked OIDC provider and role-mapping control room, and connector fixture/probe
 tooling. Account and provider administration are available as pre-release development surfaces.
 The versioned gateway API can administer encrypted connector records, validate capabilities, and
-guard enablement and deletion. It exposes normalized Seerr discovery for principals with
+guard enablement and deletion. It exposes normalized Seerr search and media details for principals with
 `media.view`, identity-delegated, idempotent Seerr request creation for principals with
 `request.create`, and read-only Radarr/Sonarr title provenance for principals with
 `acquisition.manage`. It also exposes permission-gated, read-only qBittorrent and SABnzbd queue
