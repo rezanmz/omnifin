@@ -115,6 +115,7 @@ describe("ContinueWatchingRail", () => {
     const user = userEvent.setup();
     const playbackClient = {
       prepare: vi.fn(async () => ({
+        canManageLibrary: false,
         csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
         session: playbackSession,
       })),

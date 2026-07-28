@@ -37,6 +37,12 @@ function renderCalendar(
 }
 
 describe("AcquisitionCalendar", () => {
+  it("renders deterministic UTC verification copy", () => {
+    renderCalendar();
+
+    expect(screen.getByText("Verified Jul 27, 6:00 PM UTC")).toBeVisible();
+  });
+
   it("renders a seven-day normalized horizon without exposing opaque identifiers", () => {
     renderCalendar();
 

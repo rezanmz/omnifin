@@ -19,6 +19,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
@@ -28,7 +29,21 @@ import {
   type PlaybackPreparationOptions,
   type PreparedPlayback,
 } from "../lib/playback";
+import type { SubtitleClient } from "../lib/subtitles";
 import styles from "./theater-player.module.css";
+
+const SubtitleWorkbench = dynamic(
+  () => import("./subtitle-workbench").then((module) => module.SubtitleWorkbench),
+  {
+    loading: () => (
+      <section aria-label="Opening subtitle workbench" className={styles.subtitleChunkLoader}>
+        <LoaderCircle aria-hidden="true" className={styles.spinner} size={18} />
+        <span>Opening subtitle workbench…</span>
+      </section>
+    ),
+    ssr: false,
+  },
+);
 
 export interface TheaterMedia {
   accent: string;
@@ -43,6 +58,7 @@ export interface TheaterPlayerProperties {
   client?: PlaybackClient;
   media: TheaterMedia;
   onClose: () => void;
+  subtitleClient?: SubtitleClient;
 }
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
@@ -124,6 +140,7 @@ export function TheaterPlayer({
   client = playbackClient,
   media,
   onClose,
+  subtitleClient,
 }: TheaterPlayerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const videoReference = useRef<HTMLVideoElement>(null);
@@ -134,6 +151,8 @@ export function TheaterPlayer({
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumeAfterPreparationReference = useRef(false);
+  const restoreSubtitleFocusReference = useRef(false);
+  const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
@@ -153,6 +172,7 @@ export function TheaterPlayer({
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [issuePanelOpen, setIssuePanelOpen] = useState(false);
+  const [subtitleWorkbenchOpen, setSubtitleWorkbenchOpen] = useState(false);
   const [issueCategory, setIssueCategory] = useState<IssueCategory>("buffering");
   const [issueDescription, setIssueDescription] = useState("");
   const [issueStatus, setIssueStatus] = useState<IssueStatus>("idle");
@@ -217,10 +237,10 @@ export function TheaterPlayer({
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current = null;
-    if (playing && !settingsOpen && !issuePanelOpen) {
+    if (playing && !settingsOpen && !issuePanelOpen && !subtitleWorkbenchOpen) {
       controlsTimeoutReference.current = setTimeout(() => setControlsVisible(false), 2_800);
     }
-  }, [issuePanelOpen, playing, settingsOpen]);
+  }, [issuePanelOpen, playing, settingsOpen, subtitleWorkbenchOpen]);
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -230,6 +250,12 @@ export function TheaterPlayer({
       else dialog.setAttribute("open", "");
     }
   }, []);
+
+  useEffect(() => {
+    if (!restoreSubtitleFocusReference.current || subtitleWorkbenchOpen || !settingsOpen) return;
+    subtitleTriggerReference.current?.focus();
+    restoreSubtitleFocusReference.current = false;
+  }, [settingsOpen, subtitleWorkbenchOpen]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement !== null);
@@ -450,10 +476,11 @@ export function TheaterPlayer({
 
   function handleKeyboard(event: React.KeyboardEvent<HTMLDialogElement>) {
     if (isInteractiveTarget(event.target)) return;
-    if (event.key === "Escape" && (settingsOpen || issuePanelOpen)) {
+    if (event.key === "Escape" && (settingsOpen || issuePanelOpen || subtitleWorkbenchOpen)) {
       event.preventDefault();
       setSettingsOpen(false);
       setIssuePanelOpen(false);
+      setSubtitleWorkbenchOpen(false);
       return;
     }
     if (event.key === " " || event.key.toLowerCase() === "k") {
@@ -631,6 +658,19 @@ export function TheaterPlayer({
         )}
 
         <footer className={styles.controls}>
+          {subtitleWorkbenchOpen && prepared?.canManageLibrary && (
+            <SubtitleWorkbench
+              csrfToken={prepared.csrfToken}
+              mediaReferenceId={media.id}
+              mediaTitle={media.title}
+              onClose={() => {
+                setSubtitleWorkbenchOpen(false);
+                setSettingsOpen(true);
+                restoreSubtitleFocusReference.current = true;
+              }}
+              {...(subtitleClient === undefined ? {} : { client: subtitleClient })}
+            />
+          )}
           {issuePanelOpen && prepared && (
             <section
               aria-label="Report playback issue"
@@ -789,6 +829,26 @@ export function TheaterPlayer({
                   ))}
                 </select>
               </label>
+              {prepared.canManageLibrary && (
+                <button
+                  className={styles.subtitleWorkbenchButton}
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setSubtitleWorkbenchOpen(true);
+                  }}
+                  ref={subtitleTriggerReference}
+                  type="button"
+                >
+                  <span className={styles.subtitleWorkbenchButtonIcon} aria-hidden="true">
+                    <Captions size={17} />
+                  </span>
+                  <span>
+                    <strong>Find subtitles</strong>
+                    <small>Search connected Bazarr providers</small>
+                  </span>
+                  <span aria-hidden="true">Open</span>
+                </button>
+              )}
               <label className={styles.settingField}>
                 <span>
                   <Settings2 aria-hidden="true" size={16} /> Quality
@@ -902,6 +962,7 @@ export function TheaterPlayer({
                 disabled={!prepared}
                 onClick={() => {
                   setSettingsOpen(false);
+                  setSubtitleWorkbenchOpen(false);
                   setIssuePanelOpen((value) => {
                     if (!value) {
                       setIssueStatus("idle");
@@ -922,6 +983,7 @@ export function TheaterPlayer({
                 disabled={status !== "ready"}
                 onClick={() => {
                   setIssuePanelOpen(false);
+                  setSubtitleWorkbenchOpen(false);
                   setSettingsOpen((value) => !value);
                 }}
                 type="button"

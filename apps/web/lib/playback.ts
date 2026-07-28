@@ -42,6 +42,7 @@ export class PlaybackClientError extends Error {
 }
 
 export interface PreparedPlayback {
+  canManageLibrary: boolean;
   csrfToken: string;
   session: PlaybackNegotiationResponse;
 }
@@ -208,7 +209,11 @@ export const playbackClient: PlaybackClient = {
       );
     }
     browserPlaybackPath(parsed.data.streamPath);
-    return { csrfToken: session.data.csrfToken, session: parsed.data };
+    return {
+      canManageLibrary: session.data.principal.permissions.includes("library.manage"),
+      csrfToken: session.data.csrfToken,
+      session: parsed.data,
+    };
   },
 
   async report(sessionId, request, csrfToken, options = {}) {

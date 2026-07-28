@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlaybackClient } from "../lib/playback";
+import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
 const hlsHarness = vi.hoisted(() => ({
@@ -79,12 +80,15 @@ const session: PlaybackNegotiationResponse = {
   subtitleTracks: [],
 };
 
-function readyClient(preparedSession: PlaybackNegotiationResponse = session): PlaybackClient & {
+function readyClient(
+  preparedSession: PlaybackNegotiationResponse = session,
+  canManageLibrary = false,
+): PlaybackClient & {
   prepare: ReturnType<typeof vi.fn>;
   report: ReturnType<typeof vi.fn>;
   reportIssue: ReturnType<typeof vi.fn>;
 } {
-  const prepare = vi.fn(async () => ({ csrfToken, session: preparedSession }));
+  const prepare = vi.fn(async () => ({ canManageLibrary, csrfToken, session: preparedSession }));
   const report = vi.fn<PlaybackClient["report"]>(async (_id, request) => ({
     acceptedAt: "2026-07-28T12:30:00.000Z",
     positionSeconds: request.positionSeconds,
@@ -346,6 +350,54 @@ describe("TheaterPlayer", () => {
       expect.any(AbortSignal),
       expect.objectContaining({ maxStreamingBitrate: 10_000_000, mode: "transcode" }),
     );
+  });
+
+  it("exposes Bazarr discovery only to local library operators", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <TheaterPlayer
+        client={readyClient(session, false)}
+        media={media}
+        onClose={() => undefined}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.queryByRole("button", { name: /Find subtitles/u })).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <TheaterPlayer client={readyClient(session, true)} media={media} onClose={() => undefined} />,
+    );
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("button", { name: /Find subtitles/u })).toBeVisible();
+  });
+
+  it("opens the lazy subtitle workbench and returns focus to its settings trigger", async () => {
+    const user = userEvent.setup();
+    const subtitles: SubtitleClient = {
+      download: vi.fn(),
+      search: () => new Promise(() => undefined),
+    };
+    render(
+      <TheaterPlayer
+        client={readyClient(session, true)}
+        media={media}
+        onClose={() => undefined}
+        subtitleClient={subtitles}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    const trigger = screen.getByRole("button", { name: /Find subtitles/u });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("button", { name: "Close subtitle workbench" }));
+
+    const restoredTrigger = await screen.findByRole("button", { name: /Find subtitles/u });
+    expect(restoredTrigger).toHaveFocus();
   });
 
   it("submits a private playback issue with category, note, and current timestamp", async () => {
