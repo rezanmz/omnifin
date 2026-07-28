@@ -1,8 +1,16 @@
 import type { ConnectorCapability, ConnectorHealth } from "@omnifin/contracts/connectors";
 import {
+  DISCOVERY_DETAIL_MAX_CAST,
+  DISCOVERY_DETAIL_MAX_CREW,
+  discoveryMediaDetailParamsSchema,
+  discoveryMediaDetailQuerySchema,
+  discoveryMediaDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryAvailability,
+  type DiscoveryMediaDetailParams,
+  type DiscoveryMediaDetailQuery,
+  type DiscoveryMediaDetailResponse,
   type DiscoverySearchQuery,
   type DiscoverySearchResult,
   type DiscoverySearchResponse,
@@ -100,6 +108,67 @@ const seerrSearchResponseSchema = z.object({
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 
+const upstreamGenreSchema = z.object({
+  id: upstreamIdentifierSchema,
+  name: z.string().trim().min(1).max(100),
+});
+
+const upstreamCastCreditSchema = z.object({
+  character: z.string().trim().max(200).nullish(),
+  name: z.string().trim().min(1).max(160),
+  order: z.int().nonnegative().max(100_000).default(100_000),
+});
+
+const upstreamCrewCreditSchema = z.object({
+  job: z.string().trim().min(1).max(160),
+  name: z.string().trim().min(1).max(160),
+});
+
+const upstreamCreditsSchema = z
+  .object({
+    cast: z.array(upstreamCastCreditSchema).max(1_000).default([]),
+    crew: z.array(upstreamCrewCreditSchema).max(1_000).default([]),
+  })
+  .default({ cast: [], crew: [] });
+
+const upstreamDetailBase = {
+  credits: upstreamCreditsSchema,
+  genres: z.array(upstreamGenreSchema).max(100).default([]),
+  id: upstreamIdentifierSchema,
+  mediaInfo: upstreamMediaInfoSchema,
+  overview: upstreamOverviewSchema,
+  status: z.string().trim().max(100).nullish(),
+  tagline: z.string().trim().max(500).nullish(),
+  voteAverage: upstreamVoteAverageSchema,
+  voteCount: z.int().nonnegative().max(1_000_000_000).nullish(),
+} as const;
+
+const upstreamMovieDetailSchema = z.object({
+  ...upstreamDetailBase,
+  originalTitle: upstreamOptionalTitleSchema,
+  releaseDate: upstreamDateSchema,
+  runtime: z.int().nonnegative().max(10_000).nullish(),
+  title: upstreamTitleSchema,
+});
+
+const upstreamSeasonSummarySchema = z.object({
+  airDate: upstreamDateSchema,
+  episodeCount: z.int().nonnegative().max(10_000),
+  name: upstreamTitleSchema,
+  seasonNumber: z.int().nonnegative().max(10_000),
+});
+
+const upstreamSeriesDetailSchema = z.object({
+  ...upstreamDetailBase,
+  episodeRunTime: z.array(z.int().nonnegative().max(10_000)).max(100).default([]),
+  firstAirDate: upstreamDateSchema,
+  name: upstreamTitleSchema,
+  numberOfEpisodes: z.int().nonnegative().max(100_000).default(0),
+  numberOfSeasons: z.int().nonnegative().max(10_000).default(0),
+  originalName: upstreamOptionalTitleSchema,
+  seasons: z.array(upstreamSeasonSummarySchema).max(100).default([]),
+});
+
 const seerrUserIdentitySchema = z.strictObject({
   jellyfinUserId: z.string().trim().min(1).max(256),
   jellyfinUsername: z.string().trim().min(1).max(160),
@@ -175,6 +244,20 @@ const seerrSeriesDetailsSchema = z.object({
 
 type UpstreamKnownFor = z.infer<typeof upstreamKnownForSchema>;
 type UpstreamMediaInfo = z.infer<typeof upstreamMediaInfoSchema>;
+type UpstreamCredits = z.infer<typeof upstreamCreditsSchema>;
+type UpstreamMovieDetail = z.infer<typeof upstreamMovieDetailSchema>;
+type UpstreamDetailBase = Pick<
+  UpstreamMovieDetail,
+  | "credits"
+  | "genres"
+  | "id"
+  | "mediaInfo"
+  | "overview"
+  | "status"
+  | "tagline"
+  | "voteAverage"
+  | "voteCount"
+>;
 
 export interface SeerrUserIdentity {
   jellyfinUserId: string;
@@ -237,6 +320,82 @@ function knownForResult(result: UpstreamKnownFor) {
   };
 }
 
+const FEATURED_CREW_ROLES = new Set([
+  "Creator",
+  "Director",
+  "Director of Photography",
+  "Executive Producer",
+  "Original Music Composer",
+  "Producer",
+  "Screenplay",
+  "Writer",
+]);
+
+function normalizedGenres(genres: readonly z.infer<typeof upstreamGenreSchema>[]) {
+  return [...new Set(genres.map((genre) => genre.name))].slice(0, 20);
+}
+
+function normalizedCast(credits: UpstreamCredits) {
+  const seen = new Set<string>();
+  return [...credits.cast]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((credit) => {
+      const character = optionalText(credit.character);
+      const key = `${credit.name}\0${character ?? ""}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ character, name: credit.name }];
+    })
+    .slice(0, DISCOVERY_DETAIL_MAX_CAST);
+}
+
+function normalizedCrew(credits: UpstreamCredits) {
+  const seen = new Set<string>();
+  return credits.crew
+    .flatMap((credit) => {
+      if (!FEATURED_CREW_ROLES.has(credit.job)) return [];
+      const key = `${credit.name}\0${credit.job}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ name: credit.name, role: credit.job }];
+    })
+    .slice(0, DISCOVERY_DETAIL_MAX_CREW);
+}
+
+function runtimeMinutes(values: readonly number[]) {
+  return values.find((value) => value > 0) ?? null;
+}
+
+function invalidDetailResponse() {
+  return new SafeConnectorError({
+    code: "response_invalid",
+    message: "Seerr returned a response that could not be safely interpreted.",
+    operation: "discovery.detail",
+    retryable: false,
+    service: "seerr",
+  });
+}
+
+function normalizedDetailBase(
+  response: UpstreamDetailBase,
+  originalTitle: string | null | undefined,
+) {
+  return {
+    availability: availabilityFromMediaInfo(response.mediaInfo),
+    cast: normalizedCast(response.credits),
+    crew: normalizedCrew(response.credits),
+    genres: normalizedGenres(response.genres),
+    originalTitle: optionalText(originalTitle),
+    overview: optionalText(response.overview),
+    productionStatus: optionalText(response.status),
+    source: "seerr" as const,
+    tagline: optionalText(response.tagline),
+    tmdbId: response.id,
+    voteAverage: response.voteAverage ?? null,
+    voteCount: response.voteCount ?? null,
+  };
+}
+
 function requestStatus(status: number, operation = "request.create"): MediaRequestStatus {
   switch (status) {
     case 1:
@@ -283,6 +442,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       ? [
           "connector.health",
           "connector.version",
+          "media.detail",
           "media.discover",
           "request.create",
           "request.review",
@@ -380,6 +540,75 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       query: query.query,
       totalPages: response.totalPages,
       totalResults: response.totalResults,
+    });
+  }
+
+  async detail(
+    paramsInput: DiscoveryMediaDetailParams,
+    queryInput: DiscoveryMediaDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryMediaDetailResponse> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr media details require configured credentials.",
+        operation: "discovery.detail",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const params = discoveryMediaDetailParamsSchema.parse(paramsInput);
+    const query = discoveryMediaDetailQuerySchema.parse(queryInput);
+    const options = {
+      headers: { "X-Api-Key": this.#apiKey },
+      operation: "discovery.detail",
+      query: new URLSearchParams({ language: query.language }),
+      ...(signal ? { signal } : {}),
+    } as const;
+    if (params.kind === "movie") {
+      const response = await this.client.requestJson(
+        `api/v1/movie/${params.tmdbId}`,
+        upstreamMovieDetailSchema,
+        options,
+      );
+      if (response.id !== params.tmdbId) throw invalidDetailResponse();
+      return discoveryMediaDetailResponseSchema.parse({
+        generatedAt: this.clock.now().toISOString(),
+        item: {
+          ...normalizedDetailBase(response, response.originalTitle),
+          id: `movie:${response.id}`,
+          kind: "movie",
+          runtimeMinutes: response.runtime && response.runtime > 0 ? response.runtime : null,
+          title: response.title,
+          year: yearFromDate(response.releaseDate),
+        },
+      });
+    }
+
+    const response = await this.client.requestJson(
+      `api/v1/tv/${params.tmdbId}`,
+      upstreamSeriesDetailSchema,
+      options,
+    );
+    if (response.id !== params.tmdbId) throw invalidDetailResponse();
+    return discoveryMediaDetailResponseSchema.parse({
+      generatedAt: this.clock.now().toISOString(),
+      item: {
+        ...normalizedDetailBase(response, response.originalName),
+        episodeCount: response.numberOfEpisodes,
+        id: `series:${response.id}`,
+        kind: "series",
+        runtimeMinutes: runtimeMinutes(response.episodeRunTime),
+        seasonCount: response.numberOfSeasons,
+        seasons: response.seasons.map((season) => ({
+          episodeCount: season.episodeCount,
+          number: season.seasonNumber,
+          title: season.name,
+          year: yearFromDate(season.airDate),
+        })),
+        title: response.name,
+        year: yearFromDate(response.firstAirDate),
+      },
     });
   }
 

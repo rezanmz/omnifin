@@ -18,6 +18,7 @@ export const connectorCapabilitySchema = z.enum([
   "connector.version",
   "identity.authenticate",
   "identity.quick_connect",
+  "media.detail",
   "media.discover",
   "media.library.read",
   "media.library.mutate",
