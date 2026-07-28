@@ -132,9 +132,13 @@ export class PlaybackIssueService {
         for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt += 1) {
           const candidate = playbackIssueIdSchema.safeParse(`issue_${this.#createToken()}`);
           if (!candidate.success) throw new PlaybackIssueError("integrity_failure");
-          const existing = this.#database.sqlite
-            .prepare("select 1 from media_issues where id = ? limit 1")
-            .get(candidate.data);
+          const existing =
+            this.#database.sqlite
+              .prepare("select 1 from media_issues where id = ? limit 1")
+              .get(candidate.data) ??
+            this.#database.sqlite
+              .prepare("select 1 from external_issue_references where id = ? limit 1")
+              .get(candidate.data);
           if (!existing) {
             issueId = candidate.data;
             break;

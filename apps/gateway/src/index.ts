@@ -124,6 +124,16 @@ export {
   type PlaybackIssueErrorReason,
 } from "./media/issue-service.js";
 export {
+  IssueWorkbenchService,
+  IssueWorkbenchServiceError,
+  type IssueWorkbenchConnector,
+  type IssueWorkbenchContext,
+  type IssueWorkbenchDependencies,
+  type IssueWorkbenchFailureCode,
+  type IssueWorkbenchServiceErrorReason,
+  type IssueWorkbenchUpdateResult,
+} from "./media/issue-workbench-service.js";
+export {
   PlaybackSessionError,
   PlaybackSessionService,
   type PlaybackClientFactoryInput,

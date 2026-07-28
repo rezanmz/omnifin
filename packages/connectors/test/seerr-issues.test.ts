@@ -1,6 +1,7 @@
 import type { SafeConnectorError } from "../src/http/safe-http-client.js";
 import { describe, expect, it } from "vitest";
 
+import { SeerrAdapter } from "../src/adapters/seerr.js";
 import { SeerrIssueClient, type SeerrIssueError } from "../src/issues/seerr-issue-client.js";
 import { createMockTransport, jsonResponse, publicResolver } from "./helpers/mock-fetch.js";
 
@@ -41,6 +42,20 @@ const issue = {
 };
 
 describe("Seerr issue management", () => {
+  it("advertises read and mutation capabilities only with credentials", () => {
+    const target = {
+      baseUrl: "https://seerr.example.test/",
+      connectorId: "seerr-main",
+      displayName: "Seerr",
+    };
+    expect(new SeerrAdapter({ ...target, apiKey: "fixture-api-key" }).capabilities).toEqual(
+      expect.arrayContaining(["issue.read", "issue.manage"]),
+    );
+    expect(new SeerrAdapter(target).capabilities).not.toEqual(
+      expect.arrayContaining(["issue.read", "issue.manage"]),
+    );
+  });
+
   it("normalizes issue listings and strips private upstream identity fields", async () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({
@@ -85,7 +100,7 @@ describe("Seerr issue management", () => {
       jsonResponse({ firstAirDate: "2011-04-17", name: "Northern Lights" }),
     ]);
 
-    const result = await client.updateIssueStatus(19, { note: null, status: "resolved" });
+    const result = await client.updateIssueStatus(19, { status: "resolved" });
 
     expect(result).toMatchObject({ status: "resolved", upstreamId: 19 });
     expect(requests[0]?.url.pathname).toBe("/api/v1/issue/19/resolved");

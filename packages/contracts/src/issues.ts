@@ -105,7 +105,6 @@ export const mediaIssueWorkbenchPageSchema = z.strictObject({
 export type MediaIssueWorkbenchPage = z.infer<typeof mediaIssueWorkbenchPageSchema>;
 
 export const mediaIssueStatusUpdateSchema = z.strictObject({
-  note: issuePublicTextSchema.nullable().default(null),
   status: z.enum(["open", "resolved"]),
 });
 export type MediaIssueStatusUpdate = z.infer<typeof mediaIssueStatusUpdateSchema>;

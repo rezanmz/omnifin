@@ -96,11 +96,10 @@ describe("playback issue contracts", () => {
 
   it("accepts bounded resolve and reopen decisions", () => {
     expect(mediaIssueStatusUpdateSchema.parse({ status: "resolved" })).toEqual({
-      note: null,
       status: "resolved",
     });
     expect(() =>
-      mediaIssueStatusUpdateSchema.parse({ note: "visible\u0000hidden", status: "open" }),
+      mediaIssueStatusUpdateSchema.parse({ note: "not accepted", status: "open" }),
     ).toThrow();
   });
 });

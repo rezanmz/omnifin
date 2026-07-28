@@ -286,6 +286,8 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
           "media.discover",
           "request.create",
           "request.review",
+          "issue.read",
+          "issue.manage",
         ]
       : ["connector.health", "connector.version"];
   }
