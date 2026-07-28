@@ -1,6 +1,6 @@
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 
 import type { PlaybackClient } from "../lib/playback";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
@@ -24,6 +24,15 @@ const directSession: PlaybackNegotiationResponse = {
       selected: true,
       title: "English 5.1",
     },
+    {
+      channels: 2,
+      codec: "aac",
+      default: false,
+      index: 3,
+      language: "fra",
+      selected: false,
+      title: "Français",
+    },
   ],
   delivery: "direct",
   expiresAt: "2027-07-28T20:00:00.000Z",
@@ -40,7 +49,28 @@ const directSession: PlaybackNegotiationResponse = {
   positionSeconds: media.positionSeconds,
   sessionId,
   streamPath: `/v1/playback/${sessionId}/stream`,
-  subtitleTracks: [],
+  subtitleTracks: [
+    {
+      codec: "ass",
+      default: false,
+      delivery: "video",
+      forced: false,
+      index: 7,
+      language: "eng",
+      selected: false,
+      title: "English SDH",
+    },
+    {
+      codec: "ass",
+      default: false,
+      delivery: "video",
+      forced: false,
+      index: 8,
+      language: "fra",
+      selected: false,
+      title: "Français",
+    },
+  ],
 };
 const csrfToken = "storybook_playback_csrf_0123456789abcdefghijklmnop";
 
@@ -88,6 +118,14 @@ export const HlsReady: Story = {
       delivery: "hls",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     }),
+  },
+};
+
+export const SettingsOpen: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Playback settings" }));
+    await expect(canvas.getByRole("region", { name: "Playback settings" })).toBeVisible();
   },
 };
 

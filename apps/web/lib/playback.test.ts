@@ -105,6 +105,32 @@ describe("playback client", () => {
     });
   });
 
+  it("sends bounded track and quality preferences during re-negotiation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(authenticatedSession()))
+      .mockResolvedValueOnce(jsonResponse(playback, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await playbackClient.prepare(mediaReferenceId, 2_400, controller.signal, {
+      audioStreamIndex: 3,
+      maxStreamingBitrate: 10_000_000,
+      mode: "transcode",
+      subtitleStreamIndex: 7,
+    });
+
+    const [, request] = fetchMock.mock.calls[1]!;
+    expect(request.signal).toBe(controller.signal);
+    expect(JSON.parse(request.body)).toEqual({
+      audioStreamIndex: 3,
+      maxStreamingBitrate: 10_000_000,
+      mode: "transcode",
+      positionSeconds: 2_400,
+      subtitleStreamIndex: 7,
+    });
+  });
+
   it("reports progress through the opaque playback session", async () => {
     const response = {
       acceptedAt: "2026-07-28T12:30:00.000Z",

@@ -140,6 +140,12 @@ describe("ContinueWatchingRail", () => {
       `media_${"b".repeat(22)}`,
       900,
       expect.any(AbortSignal),
+      {
+        audioStreamIndex: null,
+        maxStreamingBitrate: 80_000_000,
+        mode: "auto",
+        subtitleStreamIndex: null,
+      },
     );
 
     await user.click(screen.getByRole("button", { name: "Close player" }));

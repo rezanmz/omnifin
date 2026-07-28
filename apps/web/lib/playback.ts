@@ -44,11 +44,19 @@ export interface PreparedPlayback {
   session: PlaybackNegotiationResponse;
 }
 
+export interface PlaybackPreparationOptions {
+  audioStreamIndex?: number | null;
+  maxStreamingBitrate?: number;
+  mode?: "auto" | "direct" | "transcode";
+  subtitleStreamIndex?: number | null;
+}
+
 export interface PlaybackClient {
   prepare(
     mediaReferenceId: string,
     positionSeconds: number,
     signal?: AbortSignal,
+    options?: PlaybackPreparationOptions,
   ): Promise<PreparedPlayback>;
   report(
     sessionId: string,
@@ -133,7 +141,7 @@ export function browserPlaybackPath(path: string) {
 }
 
 export const playbackClient: PlaybackClient = {
-  async prepare(mediaReferenceId, positionSeconds, signal) {
+  async prepare(mediaReferenceId, positionSeconds, signal, options = {}) {
     const schemas = await contractSchemas();
     const sessionResponse = await fetchSameOrigin("/api/auth/session", {
       headers: { accept: "application/json" },
@@ -164,11 +172,11 @@ export const playbackClient: PlaybackClient = {
     }
 
     const body = schemas.playback.playbackNegotiationRequestSchema.parse({
-      audioStreamIndex: null,
-      maxStreamingBitrate: DEFAULT_MAX_STREAMING_BITRATE,
-      mode: "auto",
+      audioStreamIndex: options.audioStreamIndex ?? null,
+      maxStreamingBitrate: options.maxStreamingBitrate ?? DEFAULT_MAX_STREAMING_BITRATE,
+      mode: options.mode ?? "auto",
       positionSeconds,
-      subtitleStreamIndex: null,
+      subtitleStreamIndex: options.subtitleStreamIndex ?? null,
     });
     const response = await fetchSameOrigin(`/api/media/${mediaReferenceId}/playback`, {
       body: JSON.stringify(body),

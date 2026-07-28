@@ -2,12 +2,16 @@
 
 import type HlsType from "hls.js";
 import {
+  Captions,
   CircleAlert,
+  Headphones,
   LoaderCircle,
   Maximize2,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
+  Settings2,
   Volume2,
   VolumeX,
   X,
@@ -18,6 +22,7 @@ import {
   browserPlaybackPath,
   playbackClient,
   type PlaybackClient,
+  type PlaybackPreparationOptions,
   type PreparedPlayback,
 } from "../lib/playback";
 import styles from "./theater-player.module.css";
@@ -39,6 +44,51 @@ export interface TheaterPlayerProperties {
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
+type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
+
+interface PlaybackPreferences {
+  audioStreamIndex: number | null;
+  quality: QualityPreset;
+  subtitleStreamIndex: number | null;
+}
+
+const QUALITY_PRESETS = {
+  auto: { bitrate: 80_000_000, label: "Auto", mode: "auto" },
+  original: { bitrate: 200_000_000, label: "Original", mode: "direct" },
+  high: { bitrate: 20_000_000, label: "High · 20 Mbps", mode: "transcode" },
+  balanced: { bitrate: 10_000_000, label: "Balanced · 10 Mbps", mode: "transcode" },
+  "data-saver": { bitrate: 4_000_000, label: "Data saver · 4 Mbps", mode: "transcode" },
+} as const satisfies Record<
+  QualityPreset,
+  { bitrate: number; label: string; mode: "auto" | "direct" | "transcode" }
+>;
+
+function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
+  const quality = QUALITY_PRESETS[preferences.quality];
+  const customTracks =
+    preferences.audioStreamIndex !== null || preferences.subtitleStreamIndex !== null;
+  return {
+    audioStreamIndex: preferences.audioStreamIndex,
+    maxStreamingBitrate: quality.bitrate,
+    mode: customTracks ? "transcode" : quality.mode,
+    subtitleStreamIndex: preferences.subtitleStreamIndex,
+  };
+}
+
+function trackLabel(track: {
+  channels?: number | null;
+  codec: string | null;
+  index: number;
+  language: string | null;
+  title: string | null;
+}) {
+  const primary = track.title ?? track.language?.toUpperCase() ?? track.codec?.toUpperCase();
+  const detail = [track.language?.toUpperCase(), track.codec?.toUpperCase()]
+    .filter((value, index, values) => value && value !== primary && values.indexOf(value) === index)
+    .join(" · ");
+  const channels = track.channels && track.channels > 2 ? `${track.channels} channels` : null;
+  return [primary ?? `Track ${track.index}`, detail, channels].filter(Boolean).join(" · ");
+}
 
 function formatTime(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
@@ -69,15 +119,25 @@ export function TheaterPlayer({
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeAfterPreparationReference = useRef(false);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
+  const [requestedPosition, setRequestedPosition] = useState(media.positionSeconds);
+  const [preferences, setPreferences] = useState<PlaybackPreferences>({
+    audioStreamIndex: null,
+    quality: "auto",
+    subtitleStreamIndex: null,
+  });
   const [prepared, setPrepared] = useState<PreparedPlayback | null>(null);
   const [status, setStatus] = useState<PlayerStatus>("preparing");
   const [message, setMessage] = useState("Opening a private playback session…");
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [seekPreview, setSeekPreview] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(media.positionSeconds);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -138,10 +198,10 @@ export function TheaterPlayer({
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current = null;
-    if (playing) {
+    if (playing && !settingsOpen) {
       controlsTimeoutReference.current = setTimeout(() => setControlsVisible(false), 2_800);
     }
-  }, [playing]);
+  }, [playing, settingsOpen]);
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -153,14 +213,22 @@ export function TheaterPlayer({
   }, []);
 
   useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement !== null);
+    document.addEventListener("fullscreenchange", updateFullscreen);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     reportedStateReference.current = "negotiated";
     void client
-      .prepare(media.id, media.positionSeconds, controller.signal)
+      .prepare(media.id, requestedPosition, controller.signal, preparationOptions(preferences))
       .then((result) => {
+        if (controller.signal.aborted) return;
         setPrepared(result);
         setDuration(result.session.media.durationSeconds);
         setCurrentTime(result.session.positionSeconds);
+        setSeekPreview(null);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -168,7 +236,7 @@ export function TheaterPlayer({
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id, media.positionSeconds]);
+  }, [attempt, client, media.id, preferences, requestedPosition]);
 
   useEffect(() => {
     if (!prepared) return;
@@ -245,13 +313,12 @@ export function TheaterPlayer({
 
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
-    controlsTimeoutReference.current = playing
-      ? setTimeout(() => setControlsVisible(false), 2_800)
-      : null;
+    controlsTimeoutReference.current =
+      playing && !settingsOpen ? setTimeout(() => setControlsVisible(false), 2_800) : null;
     return () => {
       if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     };
-  }, [playing]);
+  }, [playing, settingsOpen]);
 
   useEffect(
     () => () => {
@@ -270,13 +337,45 @@ export function TheaterPlayer({
     }
   }
 
-  function seek(next: number) {
+  function replacePlayback(
+    nextPreferences: PlaybackPreferences,
+    nextPosition: number,
+    nextMessage: string,
+  ) {
+    const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
+    resumeAfterPreparationReference.current = playing;
+    queueReport("stopped", absolutePosition(), false);
+    setPlaying(false);
+    setBuffering(false);
+    setPrepared(null);
+    setPreferences(nextPreferences);
+    setRequestedPosition(safePosition);
+    setCurrentTime(safePosition);
+    setSeekPreview(null);
+    setSettingsOpen(false);
+    setStatus("preparing");
+    setMessage(nextMessage);
+  }
+
+  function seekWithinSession(next: number) {
     const video = videoReference.current;
     if (!video || !prepared) return;
     const minimum = prepared.session.delivery === "hls" ? prepared.session.positionSeconds : 0;
-    const safe = Math.min(duration, Math.max(minimum, next));
+    const safe = Math.min(duration, Math.max(0, next));
+    if (prepared.session.delivery === "hls" && safe < minimum) {
+      replacePlayback(preferences, safe, "Rebuilding the stream from that moment…");
+      return;
+    }
     video.currentTime = prepared.session.delivery === "hls" ? safe - minimum : safe;
     setCurrentTime(safe);
+  }
+
+  function commitSeek(rawValue: string) {
+    const next = Number(rawValue);
+    if (!Number.isFinite(next)) return;
+    if (seekPreview === null && Math.abs(next - currentTime) < 1) return;
+    seekWithinSession(next);
+    setSeekPreview(null);
   }
 
   function changeVolume(next: number) {
@@ -304,15 +403,20 @@ export function TheaterPlayer({
 
   function handleKeyboard(event: React.KeyboardEvent<HTMLDialogElement>) {
     if (isInteractiveTarget(event.target)) return;
+    if (event.key === "Escape" && settingsOpen) {
+      event.preventDefault();
+      setSettingsOpen(false);
+      return;
+    }
     if (event.key === " " || event.key.toLowerCase() === "k") {
       event.preventDefault();
       void togglePlayback();
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
-      seek(currentTime - 10);
+      seekWithinSession(currentTime - 10);
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      seek(currentTime + 10);
+      seekWithinSession(currentTime + 10);
     } else if (event.key.toLowerCase() === "m") {
       event.preventDefault();
       toggleMuted();
@@ -323,7 +427,13 @@ export function TheaterPlayer({
     revealControls();
   }
 
-  const minimumSeek = prepared?.session.delivery === "hls" ? prepared.session.positionSeconds : 0;
+  const displayedPosition = seekPreview ?? currentTime;
+  const selectedAudioIndex =
+    preferences.audioStreamIndex ??
+    prepared?.session.audioTracks.find((track) => track.selected)?.index ??
+    prepared?.session.audioTracks.find((track) => track.default)?.index ??
+    prepared?.session.audioTracks[0]?.index ??
+    null;
   const poster = media.artworkPath;
 
   return (
@@ -352,6 +462,11 @@ export function TheaterPlayer({
         <video
           aria-label={`${media.title} video`}
           className={styles.video}
+          onCanPlay={(event) => {
+            if (!resumeAfterPreparationReference.current) return;
+            resumeAfterPreparationReference.current = false;
+            void event.currentTarget.play().catch(() => undefined);
+          }}
           onDurationChange={(event) => {
             if (Number.isFinite(event.currentTarget.duration)) {
               setDuration(prepared?.session.media.durationSeconds ?? event.currentTarget.duration);
@@ -468,17 +583,142 @@ export function TheaterPlayer({
         )}
 
         <footer className={styles.controls}>
+          {settingsOpen && prepared && (
+            <section
+              aria-label="Playback settings"
+              className={styles.settingsPanel}
+              id={`${titleId}-settings`}
+            >
+              <div className={styles.settingsHeading}>
+                <span>Playback</span>
+                <small>Changes preserve your place</small>
+              </div>
+              <label className={styles.settingField}>
+                <span>
+                  <Headphones aria-hidden="true" size={16} /> Audio
+                </span>
+                <select
+                  aria-label="Audio track"
+                  disabled={prepared.session.audioTracks.length === 0}
+                  onChange={(event) => {
+                    const nextIndex = Number(event.currentTarget.value);
+                    const defaultIndex =
+                      prepared.session.audioTracks.find((track) => track.default)?.index ??
+                      prepared.session.audioTracks[0]?.index ??
+                      null;
+                    const nextPreferences = {
+                      ...preferences,
+                      audioStreamIndex: nextIndex === defaultIndex ? null : nextIndex,
+                      quality: preferences.quality === "original" ? "auto" : preferences.quality,
+                    } satisfies PlaybackPreferences;
+                    replacePlayback(nextPreferences, absolutePosition(), "Switching audio track…");
+                  }}
+                  value={selectedAudioIndex ?? ""}
+                >
+                  {prepared.session.audioTracks.length === 0 && <option value="">Auto</option>}
+                  {prepared.session.audioTracks.map((track) => (
+                    <option key={track.index} value={track.index}>
+                      {trackLabel(track)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.settingField}>
+                <span>
+                  <Captions aria-hidden="true" size={17} /> Subtitles
+                </span>
+                <select
+                  aria-label="Subtitle track"
+                  onChange={(event) => {
+                    const nextIndex =
+                      event.currentTarget.value === "off"
+                        ? null
+                        : Number(event.currentTarget.value);
+                    const nextPreferences = {
+                      ...preferences,
+                      quality:
+                        nextIndex !== null && preferences.quality === "original"
+                          ? "auto"
+                          : preferences.quality,
+                      subtitleStreamIndex: nextIndex,
+                    } satisfies PlaybackPreferences;
+                    replacePlayback(
+                      nextPreferences,
+                      absolutePosition(),
+                      nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+                    );
+                  }}
+                  value={preferences.subtitleStreamIndex ?? "off"}
+                >
+                  <option value="off">Off</option>
+                  {prepared.session.subtitleTracks.map((track) => (
+                    <option key={track.index} value={track.index}>
+                      {trackLabel(track)}
+                      {track.forced ? " · Forced" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.settingField}>
+                <span>
+                  <Settings2 aria-hidden="true" size={16} /> Quality
+                </span>
+                <select
+                  aria-label="Playback quality"
+                  onChange={(event) => {
+                    const quality = event.currentTarget.value as QualityPreset;
+                    replacePlayback(
+                      { ...preferences, quality },
+                      absolutePosition(),
+                      "Applying playback quality…",
+                    );
+                  }}
+                  value={preferences.quality}
+                >
+                  {(
+                    Object.entries(QUALITY_PRESETS) as Array<
+                      [QualityPreset, (typeof QUALITY_PRESETS)[QualityPreset]]
+                    >
+                  ).map(([value, option]) => (
+                    <option
+                      disabled={
+                        value === "original" &&
+                        (preferences.audioStreamIndex !== null ||
+                          preferences.subtitleStreamIndex !== null)
+                      }
+                      key={value}
+                      value={value}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
+          )}
           <label className={styles.progressControl}>
             <span className="sr-only">Playback position</span>
             <input
-              aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
+              aria-valuetext={`${formatTime(displayedPosition)} of ${formatTime(duration)}`}
               disabled={status !== "ready" || duration <= 0}
-              max={Math.max(minimumSeek, duration)}
-              min={minimumSeek}
-              onChange={(event) => seek(Number(event.currentTarget.value))}
+              max={Math.max(0, duration)}
+              min={0}
+              onBlur={(event) => commitSeek(event.currentTarget.value)}
+              onChange={(event) => setSeekPreview(Number(event.currentTarget.value))}
+              onKeyUp={(event) => {
+                if (
+                  ["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "End", "Home"].includes(
+                    event.key,
+                  )
+                ) {
+                  commitSeek(event.currentTarget.value);
+                }
+              }}
+              onPointerCancel={() => setSeekPreview(null)}
+              onPointerUp={(event) => commitSeek(event.currentTarget.value)}
               step={1}
               type="range"
-              value={Math.min(Math.max(minimumSeek, currentTime), Math.max(minimumSeek, duration))}
+              value={Math.min(Math.max(0, displayedPosition), Math.max(0, duration))}
             />
           </label>
           <div className={styles.controlRow}>
@@ -520,17 +760,34 @@ export function TheaterPlayer({
                 />
               </label>
               <span className={styles.timecode}>
-                {formatTime(currentTime)} <i>/</i> {formatTime(duration)}
+                {formatTime(displayedPosition)} <i>/</i> {formatTime(duration)}
               </span>
             </div>
-            <button
-              aria-label="Enter full screen"
-              className={styles.iconButton}
-              onClick={() => void toggleFullscreen()}
-              type="button"
-            >
-              <Maximize2 aria-hidden="true" size={19} />
-            </button>
+            <div className={styles.controlCluster}>
+              <button
+                aria-controls={`${titleId}-settings`}
+                aria-expanded={settingsOpen}
+                aria-label="Playback settings"
+                className={styles.iconButton}
+                disabled={status !== "ready"}
+                onClick={() => setSettingsOpen((value) => !value)}
+                type="button"
+              >
+                <Settings2 aria-hidden="true" size={19} />
+              </button>
+              <button
+                aria-label={fullscreen ? "Exit full screen" : "Enter full screen"}
+                className={styles.iconButton}
+                onClick={() => void toggleFullscreen()}
+                type="button"
+              >
+                {fullscreen ? (
+                  <Minimize2 aria-hidden="true" size={19} />
+                ) : (
+                  <Maximize2 aria-hidden="true" size={19} />
+                )}
+              </button>
+            </div>
           </div>
         </footer>
       </div>

@@ -183,6 +183,9 @@ describe("TheaterPlayer", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Playback position" }), {
       target: { value: "1800" },
     });
+    fireEvent.pointerUp(screen.getByRole("slider", { name: "Playback position" }), {
+      target: { value: "1800" },
+    });
     expect(video.currentTime).toBe(1_800);
     fireEvent.change(screen.getByRole("slider", { name: "Volume" }), {
       target: { value: "0.35" },
@@ -249,6 +252,115 @@ describe("TheaterPlayer", () => {
 
     onError?.("error", { fatal: true, type: "networkError" });
     expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+  });
+
+  it("re-negotiates track and quality changes at the current position", async () => {
+    const user = userEvent.setup();
+    const selectableSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ],
+      subtitleTracks: [
+        {
+          codec: "ass",
+          default: false,
+          delivery: "video",
+          forced: false,
+          index: 7,
+          language: "eng",
+          selected: false,
+          title: "English SDH",
+        },
+      ],
+    };
+    const client = readyClient(selectableSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_333;
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("region", { name: "Playback settings" })).toBeVisible();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Audio track" }), "3");
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_333, expect.any(AbortSignal), {
+      audioStreamIndex: 3,
+      maxStreamingBitrate: 80_000_000,
+      mode: "transcode",
+      subtitleStreamIndex: null,
+    });
+
+    await screen.findByRole("button", { name: "Playback settings" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Subtitle track" }), "7");
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      1_333,
+      expect.any(AbortSignal),
+      expect.objectContaining({
+        audioStreamIndex: 3,
+        mode: "transcode",
+        subtitleStreamIndex: 7,
+      }),
+    );
+
+    await screen.findByRole("button", { name: "Playback settings" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(4));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      1_333,
+      expect.any(AbortSignal),
+      expect.objectContaining({ maxStreamingBitrate: 10_000_000, mode: "transcode" }),
+    );
+  });
+
+  it("rebuilds HLS from an earlier point without exposing an upstream seek URL", async () => {
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(hlsSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const progress = screen.getByRole("slider", { name: "Playback position" });
+    expect(progress).toHaveAttribute("min", "0");
+    fireEvent.change(progress, { target: { value: "300" } });
+    fireEvent.pointerUp(progress, { target: { value: "300" } });
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      300,
+      expect.any(AbortSignal),
+      expect.objectContaining({ mode: "auto" }),
+    );
   });
 
   it("recovers one fatal HLS media error and destroys the engine on close", async () => {
