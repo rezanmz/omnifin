@@ -10,14 +10,51 @@ const MEDIA_REFERENCE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_MEDIA_REFERENCES_PER_USER = 1_024;
 const MAX_REFERENCE_CREATION_ATTEMPTS = 8;
 
-const storedMediaReferenceSchema = z.strictObject({
-  artwork: z.strictObject({
-    backdropItemId: z.string().regex(IDENTIFIER_PATTERN).nullable(),
-    posterItemId: z.string().regex(IDENTIFIER_PATTERN).nullable(),
-  }),
-  itemId: z.string().regex(IDENTIFIER_PATTERN),
+const artworkSchema = z.strictObject({
+  backdropItemId: z.string().regex(IDENTIFIER_PATTERN).nullable(),
+  posterItemId: z.string().regex(IDENTIFIER_PATTERN).nullable(),
+});
+const itemIdSchema = z.string().regex(IDENTIFIER_PATTERN);
+const referenceTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(300)
+  .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value));
+const episodeNumberSchema = z.int().nonnegative().max(100_000).nullable();
+
+const storedMediaReferenceV1Schema = z.strictObject({
+  artwork: artworkSchema,
+  itemId: itemIdSchema,
   schemaVersion: z.literal(1),
 });
+
+const storedMediaReferenceV2Schema = z
+  .strictObject({
+    artwork: artworkSchema,
+    episodeNumber: episodeNumberSchema,
+    itemId: itemIdSchema,
+    kind: z.enum(["movie", "episode", "other"]),
+    schemaVersion: z.literal(2),
+    seasonNumber: episodeNumberSchema,
+    title: referenceTitleSchema,
+    year: z.int().min(1870).max(2200).nullable(),
+  })
+  .superRefine((reference, context) => {
+    const hasEpisodeNumbers = reference.seasonNumber !== null && reference.episodeNumber !== null;
+    if ((reference.kind === "episode") !== hasEpisodeNumbers) {
+      context.addIssue({
+        code: "custom",
+        message: "Only episode references can include complete episode coordinates.",
+        path: ["episodeNumber"],
+      });
+    }
+  });
+
+const storedMediaReferenceSchema = z.union([
+  storedMediaReferenceV2Schema,
+  storedMediaReferenceV1Schema,
+]);
 type StoredMediaReference = z.infer<typeof storedMediaReferenceSchema>;
 
 export interface MediaReferenceInput {
@@ -25,7 +62,12 @@ export interface MediaReferenceInput {
     backdropItemId: string | null;
     posterItemId: string | null;
   };
+  episodeNumber: number | null;
   itemId: string;
+  kind: "episode" | "movie" | "other";
+  seasonNumber: number | null;
+  title: string;
+  year: number | null;
 }
 
 export interface MediaReferenceLinkContext {
@@ -34,8 +76,16 @@ export interface MediaReferenceLinkContext {
   userId: string;
 }
 
-export interface ResolvedMediaReference extends StoredMediaReference {
+export interface ResolvedMediaReference {
+  artwork: z.infer<typeof artworkSchema>;
+  episodeNumber: number | null;
   id: string;
+  itemId: string;
+  kind: "episode" | "movie" | "other";
+  schemaVersion: 1 | 2;
+  seasonNumber: number | null;
+  title: string | null;
+  year: number | null;
   toJSON(): never;
 }
 
@@ -83,33 +133,56 @@ function referenceContext(referenceId: string) {
 }
 
 function storedPayload(input: MediaReferenceInput): StoredMediaReference {
-  return storedMediaReferenceSchema.parse({
+  return storedMediaReferenceV2Schema.parse({
     artwork: input.artwork,
+    episodeNumber: input.episodeNumber,
     itemId: input.itemId,
-    schemaVersion: 1,
+    kind: input.kind,
+    schemaVersion: 2,
+    seasonNumber: input.seasonNumber,
+    title: input.title,
+    year: input.year,
   });
 }
 
 function resolvedReference(id: string, payload: StoredMediaReference): ResolvedMediaReference {
+  const normalized =
+    payload.schemaVersion === 2
+      ? payload
+      : {
+          ...payload,
+          episodeNumber: null,
+          kind: "other" as const,
+          seasonNumber: null,
+          title: null,
+          year: null,
+        };
   const reference = Object.create(null) as ResolvedMediaReference;
-  Object.defineProperties(reference, {
-    artwork: { configurable: false, enumerable: false, value: payload.artwork, writable: false },
-    id: { configurable: false, enumerable: false, value: id, writable: false },
-    itemId: { configurable: false, enumerable: false, value: payload.itemId, writable: false },
-    schemaVersion: {
+  for (const [key, value] of Object.entries({
+    artwork: normalized.artwork,
+    episodeNumber: normalized.episodeNumber,
+    id,
+    itemId: normalized.itemId,
+    kind: normalized.kind,
+    schemaVersion: normalized.schemaVersion,
+    seasonNumber: normalized.seasonNumber,
+    title: normalized.title,
+    year: normalized.year,
+  })) {
+    Object.defineProperty(reference, key, {
       configurable: false,
       enumerable: false,
-      value: payload.schemaVersion,
+      value,
       writable: false,
+    });
+  }
+  Object.defineProperty(reference, "toJSON", {
+    configurable: false,
+    enumerable: false,
+    value: () => {
+      throw new TypeError("Resolved media references cannot be serialized.");
     },
-    toJSON: {
-      configurable: false,
-      enumerable: false,
-      value: () => {
-        throw new TypeError("Resolved media references cannot be serialized.");
-      },
-      writable: false,
-    },
+    writable: false,
   });
   return Object.freeze(reference);
 }

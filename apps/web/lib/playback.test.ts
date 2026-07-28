@@ -85,6 +85,7 @@ describe("playback client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(playbackClient.prepare(mediaReferenceId, 1_200)).resolves.toEqual({
+      canManageLibrary: false,
       csrfToken,
       session: playback,
     });
@@ -102,6 +103,25 @@ describe("playback client", () => {
       mode: "auto",
       positionSeconds: 1_200,
       subtitleStreamIndex: null,
+    });
+  });
+
+  it("carries local library-management permission without exposing the principal", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          authenticatedSession({
+            permissions: [...ROLE_PERMISSIONS.operator],
+            role: "operator",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(playback, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(playbackClient.prepare(mediaReferenceId, 0)).resolves.toMatchObject({
+      canManageLibrary: true,
     });
   });
 

@@ -77,6 +77,10 @@ import {
 import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
+import {
+  subtitleOperationRoutes,
+  type SubtitleOperationRoutesOptions,
+} from "./subtitles/operation-routes.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -106,6 +110,7 @@ export interface CreateAppOptions {
   continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
+  subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
@@ -428,6 +433,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.playbackIssueDependencies === undefined
         ? {}
         : { dependencies: options.playbackIssueDependencies }),
+    });
+    await app.register(subtitleOperationRoutes, {
+      ...(options.subtitleOperationDependencies === undefined
+        ? {}
+        : { dependencies: options.subtitleOperationDependencies }),
     });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined

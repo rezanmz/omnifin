@@ -603,6 +603,145 @@ export const mediaIssues = sqliteTable(
   ],
 );
 
+export const subtitleSearches = sqliteTable(
+  "subtitle_searches",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("subtitle_searches_user_created_idx").on(table.userId, table.createdAt),
+    index("subtitle_searches_expiry_idx").on(table.expiresAt),
+    index("subtitle_searches_media_idx").on(table.mediaReferenceId),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "subtitle_searches_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "subtitle_searches_id_check",
+      sql`length(${table.id}) = 38
+        and substr(${table.id}, 1, 16) = 'subtitle_search_'
+        and substr(${table.id}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_searches_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 4194304`,
+    ),
+    check(
+      "subtitle_searches_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "subtitle_searches_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const subtitleDownloadOperations = sqliteTable(
+  "subtitle_download_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    searchId: text("search_id").notNull(),
+    resultId: text("result_id").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("subtitle_download_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("subtitle_download_operations_state_created_idx").on(table.state, table.createdAt),
+    check(
+      "subtitle_download_operations_id_check",
+      sql`length(${table.id}) = 40
+        and substr(${table.id}, 1, 18) = 'subtitle_download_'
+        and substr(${table.id}, 19) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_search_id_check",
+      sql`length(${table.searchId}) = 38
+        and substr(${table.searchId}, 1, 16) = 'subtitle_search_'
+        and substr(${table.searchId}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_result_id_check",
+      sql`length(${table.resultId}) = 38
+        and substr(${table.resultId}, 1, 16) = 'subtitle_result_'
+        and substr(${table.resultId}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "subtitle_download_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "subtitle_download_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "subtitle_download_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

@@ -32,6 +32,8 @@ const requiredTables = [
   "session_rotation_aliases",
   "session_secret_reservations",
   "sessions",
+  "subtitle_download_operations",
+  "subtitle_searches",
   "users",
 ] as const;
 const requiredColumns = {
@@ -154,6 +156,26 @@ const requiredColumns = {
     "last_rotated_at",
     "service_identity_link_id",
   ],
+  subtitle_download_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "response_json",
+    "result_id",
+    "search_id",
+    "state",
+    "user_id",
+  ],
+  subtitle_searches: [
+    "connector_id",
+    "encrypted_payload",
+    "expires_at",
+    "link_revision",
+    "media_reference_id",
+    "service_identity_link_id",
+    "user_id",
+  ],
   users: ["role_source"],
 } as const;
 const requiredIndexes = {
@@ -207,6 +229,15 @@ const requiredIndexes = {
     "sessions_recovery_created_idx",
     "sessions_user_active_idx",
     "sessions_user_created_idx",
+  ],
+  subtitle_download_operations: [
+    "subtitle_download_operations_state_created_idx",
+    "subtitle_download_operations_user_key_unique",
+  ],
+  subtitle_searches: [
+    "subtitle_searches_expiry_idx",
+    "subtitle_searches_media_idx",
+    "subtitle_searches_user_created_idx",
   ],
 } as const;
 const requiredTriggers = [
@@ -342,8 +373,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0013_media_issues",
-  "Current migration journal must end at migration 0013_media_issues.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0014_subtitle_operations",
+  "Current migration journal must end at migration 0014_subtitle_operations.",
 );
 
 try {
@@ -509,6 +540,54 @@ try {
       throw new Error("Migration is missing the issue-to-media-reference foreign key.");
     }
 
+    const subtitleSearchForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(subtitle_searches)",
+    ) as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const subtitleSearchLinkForeignKeyId = subtitleSearchForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const subtitleSearchLinkForeignKeyColumns = subtitleSearchForeignKeys
+      .filter(({ id }) => id === subtitleSearchLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (
+      subtitleSearchLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error("Migration is missing the user-bound subtitle search identity foreign key.");
+    }
+    for (const [column, table] of [
+      ["media_reference_id", "media_references"],
+      ["connector_id", "connector_configs"],
+    ] as const) {
+      if (
+        !subtitleSearchForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the subtitle-search ${column} foreign key.`);
+      }
+    }
+
+    const subtitleDownloadForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(subtitle_download_operations)",
+    ) as { from: string; table: string; to: string }[];
+    if (
+      !subtitleDownloadForeignKeys.some(
+        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+      )
+    ) {
+      throw new Error("Migration is missing the subtitle-download user foreign key.");
+    }
+
     const rotationAliasForeignKeys = database.sqlite.pragma(
       "foreign_key_list(session_rotation_aliases)",
     ) as {
@@ -649,7 +728,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0013.",
+      "Production migration did not advance the historical fixture exactly through migration 0014.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -814,7 +893,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0013, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0014, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

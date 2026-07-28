@@ -74,9 +74,9 @@ const directSession: PlaybackNegotiationResponse = {
 };
 const csrfToken = "storybook_playback_csrf_0123456789abcdefghijklmnop";
 
-function clientFor(session: PlaybackNegotiationResponse): PlaybackClient {
+function clientFor(session: PlaybackNegotiationResponse, canManageLibrary = true): PlaybackClient {
   return {
-    prepare: async () => ({ csrfToken, session }),
+    prepare: async () => ({ canManageLibrary, csrfToken, session }),
     report: async (_currentSessionId, request) => ({
       acceptedAt: "2026-07-28T12:30:00.000Z",
       positionSeconds: request.positionSeconds,

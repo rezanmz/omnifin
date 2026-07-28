@@ -132,6 +132,16 @@ export {
   type PlaybackSessionErrorReason,
 } from "./media/playback-session-service.js";
 export {
+  SubtitleOperationError,
+  SubtitleOperationService,
+  type SubtitleAdapter,
+  type SubtitleDownloadFailureCode,
+  type SubtitleDownloadResult,
+  type SubtitleOperationContext,
+  type SubtitleOperationDependencies,
+  type SubtitleOperationErrorReason,
+} from "./subtitles/operation-service.js";
+export {
   constantTimeTextEqual,
   EnvelopeCipher,
   hashToken,

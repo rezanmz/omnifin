@@ -52,6 +52,10 @@
     "./requests": {
       "types": "./dist/requests.d.ts",
       "default": "./dist/requests.js"
+    },
+    "./subtitles": {
+      "types": "./dist/subtitles.d.ts",
+      "default": "./dist/subtitles.js"
     }
   },
   "files": [

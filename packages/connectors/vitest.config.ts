@@ -16,6 +16,9 @@ export default defineConfig({
       "@omnifin/contracts/requests": fileURLToPath(
         new URL("../contracts/src/requests.ts", import.meta.url),
       ),
+      "@omnifin/contracts/subtitles": fileURLToPath(
+        new URL("../contracts/src/subtitles.ts", import.meta.url),
+      ),
     },
   },
   test: {

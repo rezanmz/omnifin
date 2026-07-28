@@ -23,6 +23,8 @@ const REQUIRED_TABLES = [
   "session_rotation_aliases",
   "session_secret_reservations",
   "sessions",
+  "subtitle_download_operations",
+  "subtitle_searches",
   "users",
 ] as const;
 
@@ -56,6 +58,16 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, user_id, service_identity_link_id, media_reference_id, encrypted_payload, state, position_seconds, revision, last_reported_at, expires_at from playback_sessions limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, link_revision, media_reference_id, connector_id, encrypted_payload, expires_at from subtitle_searches limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, search_id, result_id, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from subtitle_download_operations limit 0",
       )
       .all();
     database.sqlite

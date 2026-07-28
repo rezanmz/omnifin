@@ -139,14 +139,25 @@ function formatEventTime(value: string) {
 }
 
 function formatVerifiedAt(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-    timeZone: "UTC",
-    timeZoneName: "short",
-  }).format(new Date(value));
+  const date = new Date(value);
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ] as const;
+  const hour = date.getUTCHours();
+  const displayHour = hour % 12 || 12;
+  const period = hour >= 12 ? "PM" : "AM";
+  return `${months[date.getUTCMonth()]} ${date.getUTCDate()}, ${displayHour}:${String(date.getUTCMinutes()).padStart(2, "0")} ${period} UTC`;
 }
 
 export function summarize(events: readonly AcquisitionCalendarEvent[]) {
