@@ -28,6 +28,7 @@ export const connectorCapabilitySchema = z.enum([
   "acquisition.search",
   "acquisition.grab",
   "acquisition.history",
+  "acquisition.calendar",
   "indexer.statistics",
   "indexer.test",
   "download.queue.read",
