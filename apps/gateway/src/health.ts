@@ -11,7 +11,9 @@ const REQUIRED_TABLES = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "external_issue_references",
   "external_identities",
+  "media_issue_operations",
   "media_issues",
   "media_references",
   "media_request_operations",
@@ -53,6 +55,16 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, user_id, service_identity_link_id, media_reference_id, playback_session_id, category, encrypted_description, position_seconds, state, encrypted_resolution, resolved_by_user_id, resolved_at from media_issues limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, connector_id, upstream_id_digest, encrypted_upstream_id, last_used_at, expires_at from external_issue_references limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, issue_id, source, desired_status, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from media_issue_operations limit 0",
       )
       .all();
     database.sqlite

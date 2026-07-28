@@ -60,7 +60,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 **Status: In development**
 
-- Seerr and metadata discovery, global search, granular requests, and approvals
+- Seerr and metadata discovery, global search, granular requests, and operator
+  approvals (implemented; protected live evidence pending)
 - Radarr and Sonarr read-only calendar (implemented; protected live evidence pending), queue,
   monitoring, searches, and manual releases
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
@@ -79,7 +80,8 @@ matrix.
 - Jellyfin playback negotiation, direct play and HLS, range proxying, tracks,
   subtitles, bitrate control, progress, and Continue Watching (implemented;
   protected live evidence pending)
-- Player issue reporting (implemented)
+- Player issue reporting plus a unified local/Seerr resolve and reopen workbench
+  (implemented; protected live evidence pending)
 - Bazarr subtitle search and download (implemented; protected live evidence pending)
 - Jellyfin scans, unmatched-media handling, and metadata artwork editing (implemented;
   protected live evidence pending)
@@ -93,7 +95,8 @@ browser behavior.
 **Status: Planned**
 
 - Full compatibility matrix, threat-model-driven security review, load testing,
-  container scans, backup and restore, migration and rollback rehearsals
+  container scans, backup and restore (implemented; protected release evidence pending),
+  migration and rollback rehearsals
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 

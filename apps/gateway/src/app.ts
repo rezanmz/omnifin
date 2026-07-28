@@ -73,6 +73,10 @@ import {
   type ContinueWatchingRoutesOptions,
 } from "./media/continue-watching-routes.js";
 import { playbackIssueRoutes, type PlaybackIssueRoutesOptions } from "./media/issue-routes.js";
+import {
+  issueWorkbenchRoutes,
+  type IssueWorkbenchRoutesOptions,
+} from "./media/issue-workbench-routes.js";
 import { playbackRoutes, type PlaybackRoutesOptions } from "./media/playback-routes.js";
 import {
   mediaRequestRoutes,
@@ -117,6 +121,7 @@ export interface CreateAppOptions {
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
   continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
+  issueWorkbenchDependencies?: IssueWorkbenchRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
   subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
   libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
@@ -443,6 +448,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.playbackIssueDependencies === undefined
         ? {}
         : { dependencies: options.playbackIssueDependencies }),
+    });
+    await app.register(issueWorkbenchRoutes, {
+      ...(options.issueWorkbenchDependencies === undefined
+        ? {}
+        : { dependencies: options.issueWorkbenchDependencies }),
     });
     await app.register(subtitleOperationRoutes, {
       ...(options.subtitleOperationDependencies === undefined

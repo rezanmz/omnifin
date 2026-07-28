@@ -42,6 +42,8 @@ The current roadmap covers:
 - Unified discovery, search, requests, approvals, calendars, queues, and manual
   release selection.
 - Jellyfin playback, watch progress, subtitle management, and library operations.
+- One operator issue queue for in-player reports and Seerr issues, with guarded
+  resolve and reopen decisions.
 - Prowlarr indexer intelligence and title-level acquisition provenance.
 - Capability-aware integration with Jellyfin, Seerr, Radarr, Sonarr, Bazarr,
   Prowlarr, qBittorrent, and SABnzbd.
@@ -80,8 +82,9 @@ and manual release recovery, Prowlarr Indexer Intelligence, and a read-only mult
 queue and acquisition calendar are available as pre-release development surfaces. Phase 4 also
 provides Jellyfin playback negotiation and protected media proxying, progress reporting and
 Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
-maintenance. Request review, monitoring controls, broader acquisition mutations, and live events
-remain later pre-release work.
+maintenance. Operator request review and the unified player/Seerr issue lifecycle are also
+available as guarded pre-release surfaces. Monitoring controls, broader acquisition mutations,
+and live events remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -133,6 +136,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   browser behavior
 - [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,
   normalized mutations, and audits
+- [Media issues](docs/media-issues.md) — normalized player and Seerr issue lifecycle,
+  opaque references, partial failure, and idempotent decisions
 - [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
   Sonarr title history, partial failure, and operator access
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr

@@ -19,7 +19,8 @@ export function onboardingRewriteTarget(request: NextRequest) {
 
 export function proxy(request: NextRequest) {
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  const developmentScriptSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+  const development = process.env.NODE_ENV === "development";
+  const scriptTrustSources = development ? " 'unsafe-eval'" : " 'strict-dynamic'";
   const forwardedProtocol = request.headers
     .get("x-forwarded-proto")
     ?.split(",", 1)[0]
@@ -32,7 +33,7 @@ export function proxy(request: NextRequest) {
       : "connect-src 'self'";
   const contentSecurityPolicyDirectives = [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${developmentScriptSource}`,
+    `script-src 'self' 'nonce-${nonce}'${scriptTrustSources}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",

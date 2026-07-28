@@ -7,6 +7,7 @@ for (const route of [
   "/settings/identity-providers?test-view=ready",
   "/operations/indexers?test-view=ready",
   "/operations/downloads?test-view=ready",
+  "/operations/issues?test-view=ready",
   "/does-not-exist",
 ] as const) {
   test(`${route} enforces its response nonce and trusted dynamic scripts`, async ({ page }) => {
@@ -39,6 +40,7 @@ for (const route of [
         const script = element as HTMLScriptElement;
         const source = script.src ? new URL(script.src, window.location.href) : undefined;
         return {
+          executable: Boolean(script.src || script.textContent?.trim()),
           nonce: script.nonce,
           path: source?.pathname,
           sameOrigin: source?.origin === window.location.origin,
@@ -51,12 +53,15 @@ for (const route of [
     expect(responseScripts.length).toBeGreaterThan(0);
     expect(new Set(responseScripts.map((script) => script.nonce))).toEqual(new Set([nonce]));
 
-    // `strict-dynamic` deliberately propagates trust from a nonced framework
-    // script to chunks it imports at runtime. They are not part of the server
-    // response, so require an immutable Next.js chunk path and same origin.
-    for (const script of scripts.filter((candidate) => !candidate.nonce)) {
+    // Production `strict-dynamic` propagates trust from a nonced framework
+    // script. Turbopack development uses the explicit same-origin source
+    // because its route-loading chunks are not consistently nonce-bearing.
+    // In either profile, runtime chunks must remain canonical Next.js assets.
+    for (const script of scripts.filter((candidate) => !candidate.nonce && candidate.executable)) {
       expect(script.sameOrigin).toBe(true);
-      expect(script.path).toMatch(/^\/_next\/static\/chunks\/[a-zA-Z0-9._/-]+\.js$/u);
+      expect(decodeURIComponent(script.path ?? "")).toMatch(
+        /^\/_next\/static\/chunks\/[A-Za-z0-9._/\[\]-]+\.js$/u,
+      );
     }
 
     await page.waitForLoadState("load");

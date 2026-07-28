@@ -35,6 +35,8 @@ export const connectorCapabilitySchema = z.enum([
   "download.queue.mutate",
   "subtitle.search",
   "subtitle.download",
+  "issue.read",
+  "issue.manage",
 ]);
 export type ConnectorCapability = z.infer<typeof connectorCapabilitySchema>;
 

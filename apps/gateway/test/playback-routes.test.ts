@@ -10,7 +10,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
-import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIssueReferences,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:30:00.000Z");
@@ -76,7 +81,7 @@ function playbackResult(): JellyfinPlaybackResult {
   };
 }
 
-async function harness() {
+async function harness(options: { playbackIssueTokens?: readonly string[] } = {}) {
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
@@ -89,6 +94,7 @@ async function harness() {
       return { path: url.pathname.slice("/base/".length), query: url.searchParams.toString() };
     },
   );
+  let issueTokenIndex = 0;
   const app = await createApp({
     config,
     continueWatchingDependencies: {
@@ -135,7 +141,7 @@ async function harness() {
     playbackIssueDependencies: {
       clock: () => now,
       createAuditId: () => "playback-issue-audit-event",
-      createToken: () => "i".repeat(22),
+      createToken: () => options.playbackIssueTokens?.[issueTokenIndex++] ?? "i".repeat(22),
     },
     sessionDependencies: {
       clock: () => now,
@@ -313,6 +319,47 @@ describe("playback routes", () => {
         targetId: issue.id,
         targetType: "media_issue",
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps local and external issue references in one collision-free opaque namespace", async () => {
+    const firstToken = "i".repeat(22);
+    const secondToken = "j".repeat(22);
+    const { app, headers, referenceId } = await harness({
+      playbackIssueTokens: [firstToken, secondToken],
+    });
+    app.database.db
+      .insert(externalIssueReferences)
+      .values({
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        encryptedUpstreamId: "v2.external-issue-fixture",
+        expiresAt: new Date(now.getTime() + 60_000),
+        id: `issue_${firstToken}`,
+        lastUsedAt: now,
+        upstreamIdDigest: "d".repeat(22),
+        updatedAt: now,
+      })
+      .run();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { category: "other", description: null, positionSeconds: 1_200 },
+        url: `/v1/playback/${playback.sessionId}/issues`,
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      expect(playbackIssueSchema.parse(response.json()).id).toBe(`issue_${secondToken}`);
     } finally {
       await app.close();
     }

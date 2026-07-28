@@ -616,6 +616,56 @@ for (const state of ["empty", "unavailable"] as const) {
   });
 }
 
+test("media issue workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Issue workbench covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/issues?test-view=ready");
+  await page.getByRole("heading", { name: "Close the loop on every stream." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("media-issue-workbench.png", { fullPage: true });
+});
+
+test("light media issue workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light issue workbench covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/issues?test-view=ready");
+  await page.getByRole("heading", { name: "Close the loop on every stream." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("media-issue-workbench-light.png", { fullPage: true });
+});
+
+test("issue resolution confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Issue resolution covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/issues?test-view=ready");
+  const card = page.getByText("Northern Lights").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Resolve" }).click();
+  await expect(page.getByRole("dialog", { name: "Mark issue resolved?" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("media-issue-resolution.png");
+});
+
+for (const state of ["empty", "degraded", "unavailable"] as const) {
+  test(`${state} media issue workbench visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Issue workbench boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/operations/issues?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`media-issue-workbench-${state}.png`, { fullPage: true });
+  });
+}
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

@@ -18,11 +18,13 @@ const requiredTables = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "external_issue_references",
   "external_identities",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
   "media_issues",
+  "media_issue_operations",
   "media_references",
   "media_request_operations",
   "oidc_logout_receipts",
@@ -69,6 +71,13 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  external_issue_references: [
+    "connector_id",
+    "encrypted_upstream_id",
+    "expires_at",
+    "last_used_at",
+    "upstream_id_digest",
+  ],
   jellyfin_quick_connect_transactions: [
     "browser_binding_hash",
     "connector_id",
@@ -118,6 +127,18 @@ const requiredColumns = {
     "resolved_at",
     "resolved_by_user_id",
     "service_identity_link_id",
+    "state",
+    "user_id",
+  ],
+  media_issue_operations: [
+    "completed_at",
+    "desired_status",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "issue_id",
+    "response_json",
+    "source",
     "state",
     "user_id",
   ],
@@ -211,6 +232,10 @@ const requiredIndexes = {
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  external_issue_references: [
+    "external_issue_references_connector_digest_unique",
+    "external_issue_references_expiry_idx",
+  ],
   jellyfin_quick_connect_transactions: [
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
@@ -235,6 +260,11 @@ const requiredIndexes = {
     "media_issues_media_created_idx",
     "media_issues_state_created_idx",
     "media_issues_user_created_idx",
+  ],
+  media_issue_operations: [
+    "media_issue_operations_issue_created_idx",
+    "media_issue_operations_state_created_idx",
+    "media_issue_operations_user_key_unique",
   ],
   media_request_operations: [
     "media_request_operations_state_created_idx",
@@ -403,8 +433,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0015_library_operations",
-  "Current migration journal must end at migration 0015_library_operations.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0016_issue_lifecycle",
+  "Current migration journal must end at migration 0016_issue_lifecycle.",
 );
 
 try {

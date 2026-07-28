@@ -104,6 +104,22 @@ const routes = [
     path: "/operations/requests?test-view=forbidden",
   },
   {
+    label: "media issue workbench",
+    path: "/operations/issues?test-view=ready",
+  },
+  {
+    label: "empty media issue workbench",
+    path: "/operations/issues?test-view=empty",
+  },
+  {
+    label: "degraded media issue workbench",
+    path: "/operations/issues?test-view=degraded",
+  },
+  {
+    label: "restricted media issue workbench",
+    path: "/operations/issues?test-view=forbidden",
+  },
+  {
     label: "acquisition calendar",
     path: "/calendar?test-view=ready",
   },
@@ -302,6 +318,22 @@ test("request approval confirmation has no automatically detectable accessibilit
   expect(results.violations).toEqual([]);
 });
 
+test("issue resolution confirmation has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Issue decisions cover representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/operations/issues?test-view=ready");
+  const card = page.getByText("Northern Lights").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Resolve" }).click();
+  await expect(page.getByRole("dialog", { name: "Mark issue resolved?" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },
@@ -313,6 +345,7 @@ for (const route of [
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
   { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },
   { label: "download queue", path: "/operations/downloads?test-view=ready" },
+  { label: "media issue workbench", path: "/operations/issues?test-view=ready" },
   { label: "acquisition calendar", path: "/calendar?test-view=ready" },
 ] as const) {
   test(`${route.label} light theme has no automatically detectable accessibility violations`, async ({

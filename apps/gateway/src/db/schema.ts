@@ -603,6 +603,50 @@ export const mediaIssues = sqliteTable(
   ],
 );
 
+export const externalIssueReferences = sqliteTable(
+  "external_issue_references",
+  {
+    id: text("id").primaryKey(),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    upstreamIdDigest: text("upstream_id_digest").notNull(),
+    encryptedUpstreamId: text("encrypted_upstream_id").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("external_issue_references_connector_digest_unique").on(
+      table.connectorId,
+      table.upstreamIdDigest,
+    ),
+    index("external_issue_references_expiry_idx").on(table.expiresAt),
+    check(
+      "external_issue_references_id_check",
+      sql`length(${table.id}) = 28
+        and substr(${table.id}, 1, 6) = 'issue_'
+        and substr(${table.id}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "external_issue_references_digest_check",
+      sql`length(${table.upstreamIdDigest}) = 22
+        and ${table.upstreamIdDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "external_issue_references_payload_check",
+      sql`length(${table.encryptedUpstreamId}) between 1 and 8192`,
+    ),
+    check(
+      "external_issue_references_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
 export const subtitleSearches = sqliteTable(
   "subtitle_searches",
   {
@@ -1404,6 +1448,95 @@ export const mediaRequestOperations = sqliteTable(
     ),
     check(
       "media_request_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const mediaIssueOperations = sqliteTable(
+  "media_issue_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
+    source: text("source", { enum: ["omnifin", "seerr"] }).notNull(),
+    desiredStatus: text("desired_status", { enum: ["open", "resolved"] }).notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("media_issue_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("media_issue_operations_state_created_idx").on(table.state, table.createdAt),
+    index("media_issue_operations_issue_created_idx").on(table.issueId, table.createdAt),
+    check(
+      "media_issue_operations_id_check",
+      sql`length(${table.id}) = 38
+        and substr(${table.id}, 1, 16) = 'issue_operation_'
+        and substr(${table.id}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_issue_id_check",
+      sql`length(${table.issueId}) = 28
+        and substr(${table.issueId}, 1, 6) = 'issue_'
+        and substr(${table.issueId}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("media_issue_operations_source_check", sql`${table.source} in ('omnifin', 'seerr')`),
+    check(
+      "media_issue_operations_desired_status_check",
+      sql`${table.desiredStatus} in ('open', 'resolved')`,
+    ),
+    check(
+      "media_issue_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "media_issue_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "media_issue_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "media_issue_operations_timestamp_order_check",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
     ),
   ],
