@@ -548,8 +548,17 @@
 .poster img,
 .inspectorPoster img {
   height: 100%;
+  inset: 0;
   object-fit: cover;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 180ms ease-out;
   width: 100%;
+}
+
+.poster img[data-loaded],
+.inspectorPoster img[data-loaded] {
+  opacity: 1;
 }
 
 .posterFallback {
@@ -785,6 +794,7 @@
   display: flex;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 
 .inspectorSummary p {
@@ -1387,16 +1397,20 @@
         color-mix(in srgb, var(--glass) 18%, var(--canvas))
       );
     bottom: max(14px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
     left: 14px;
-    max-height: calc(100dvh - 28px);
+    max-height: none;
     position: fixed;
     right: 14px;
-    top: auto;
+    top: max(98px, calc(env(safe-area-inset-top) + 88px));
     z-index: 50;
   }
 
   .inspectorScroll {
-    max-height: calc(100dvh - 146px);
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 0;
   }
 }
 
@@ -1512,6 +1526,7 @@
     bottom: max(8px, env(safe-area-inset-bottom));
     left: 8px;
     right: 8px;
+    top: max(88px, calc(env(safe-area-inset-top) + 78px));
   }
 
   .inspectorScroll {

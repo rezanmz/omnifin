@@ -276,16 +276,29 @@ function PosterArtwork({
   title: string;
 }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   if (path && !failed) {
     return (
-      // The gateway emits bounded, authenticated artwork through this same-origin path.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        alt=""
-        {...(inspector ? {} : { loading: "lazy" as const })}
-        onError={() => setFailed(true)}
-        src={webApiPath(path)}
-      />
+      <>
+        {loaded ? null : inspector ? (
+          <ImageIcon aria-hidden="true" size={34} strokeWidth={1.2} />
+        ) : (
+          <span className={styles.posterFallback} aria-hidden="true">
+            <ImageIcon size={31} strokeWidth={1.25} />
+            <i>{title.slice(0, 1)}</i>
+          </span>
+        )}
+        {/* The gateway emits bounded, authenticated artwork through this same-origin path. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          alt=""
+          data-loaded={loaded || undefined}
+          {...(inspector ? {} : { loading: "lazy" as const })}
+          onError={() => setFailed(true)}
+          onLoad={() => setLoaded(true)}
+          src={webApiPath(path)}
+        />
+      </>
     );
   }
   if (inspector) return <ImageIcon aria-hidden="true" size={34} strokeWidth={1.2} />;

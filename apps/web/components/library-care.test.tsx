@@ -1,5 +1,5 @@
 import type { LibraryArtworkSearchResponse } from "@omnifin/contracts/library";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -86,6 +86,15 @@ describe("LibraryCare", () => {
     await user.type(screen.getByRole("searchbox", { name: "Search attention items" }), "northern");
     expect(screen.getByText("1 title")).toBeVisible();
     expect(screen.getByRole("button", { name: "Inspect Northern Lights" })).toBeVisible();
+  });
+
+  it("keeps remote artwork hidden until it has decoded into the designed poster frame", () => {
+    renderLibrary(client());
+    const poster = screen.getByRole("button", { name: "Inspect Ember Coast" }).querySelector("img");
+
+    expect(poster).not.toHaveAttribute("data-loaded");
+    fireEvent.load(poster!);
+    expect(poster).toHaveAttribute("data-loaded");
   });
 
   it("opens a keyboard-dismissible inspector and restores focus to its card", async () => {
