@@ -138,8 +138,26 @@ application boundary; operators must still patch and isolate the host.
 - The normalized outcome and bounded audit event commit in one SQLite transaction. Stored and
   returned data exclude credentials, raw upstream commands, response bodies, paths, idempotency
   keys, and private errors.
-- The route is read-only, abort-aware, rate-limited, and explicitly non-cacheable. It offers no
-  upstream retry, search, grab, blocklist, or deletion mutation in this slice.
+- `POST /v1/acquisitions/searches` is abort-aware, rate-limited, and explicitly non-cacheable. Its
+  exact-target body cannot express direct release selection, grabs, blocklisting, deletion, or
+  arbitrary retry commands.
+
+## Download-queue read controls
+
+- Queue reads require `downloads.manage` at both the session route and service boundary.
+  Unauthorized callers are rejected before connector selection or credential decryption.
+- Only enabled, recently validated qBittorrent or SABnzbd connectors advertising
+  `download.queue.read` are eligible. The gateway bounds connector fan-out, executes eligible
+  reads concurrently, and returns safe partial results when one client fails.
+- Client credentials are decrypted only inside the gateway. qBittorrent session cookies and
+  SABnzbd API keys never cross the adapter boundary; raw hashes, upstream identifiers, paths,
+  and private response fields never enter the public contract.
+- Every returned transfer receives a deployment-local opaque identifier derived from its
+  connector and upstream identifier. Item counts, byte values, rates, text, client count, and
+  aggregate response size are independently bounded and schema-validated.
+- `GET /v1/downloads/queue` is abort-aware, rate-limited, explicitly non-cacheable, and read-only.
+  The browser offers filtering and refresh but no pause, resume, removal, priority, or path
+  mutation in this slice.
 
 ## Indexer Intelligence controls
 
