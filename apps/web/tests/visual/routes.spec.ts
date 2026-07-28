@@ -413,6 +413,52 @@ test("degraded indexer intelligence visual baseline", async ({ page }, testInfo)
   await expect(page).toHaveScreenshot("indexer-intelligence-degraded.png", { fullPage: true });
 });
 
+test("download queue visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Download queues cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("heading", { name: "Every byte, in motion." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue.png", { fullPage: true });
+});
+
+test("light download queue visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light download queues cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("heading", { name: "Every byte, in motion." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("download-queue-light.png", { fullPage: true });
+});
+
+test("degraded download queue visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded queues cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=degraded");
+  await page.getByText("Partial queue", { exact: true }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-degraded.png", { fullPage: true });
+});
+
+test("download client onboarding visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Download client onboarding covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=unconfigured");
+  await page.getByRole("heading", { name: "Connect the transfer plane." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-unconfigured.png", { fullPage: true });
+});
+
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),

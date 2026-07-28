@@ -63,8 +63,9 @@ normalized contracts, connector probes, migration tooling, and the application s
 and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
-The first Phase 3 read path adds permission-checked Seerr discovery through a normalized,
-browser-safe search contract and a responsive global-search console.
+Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
+Prowlarr intelligence, and qBittorrent/SABnzbd queue reads through normalized,
+browser-safe contracts and responsive operational workspaces.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces.
@@ -75,8 +76,9 @@ the public compatibility baseline remains pending until protected live evidence 
 versions and dates. Permission checks cover every implemented administrative and self-service
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
 identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
-search recovery, and Prowlarr Indexer Intelligence are available as pre-release development
-surfaces. Later Phase 3 slices add request review, manual recovery actions, and live events;
+and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
+queue are available as pre-release development surfaces. Later Phase 3 slices add request review,
+calendar and monitoring controls, and live events;
 Phase 4 adds media proxying and playback.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
@@ -133,6 +135,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   Sonarr title history, partial failure, and operator access
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
   telemetry, application sync, failures, and safe tests
+- [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd
+  telemetry, partial failure, polling, and secret isolation
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy

@@ -17,8 +17,9 @@ the roadmap records when each area has passed its verification gate.
 > Encrypted connector administration, normalized Seerr discovery, the first
 > identity-delegated, idempotent Seerr request mutation, and permission-gated read-only
 > Radarr/Sonarr acquisition provenance, exact-target search recovery, and Prowlarr
-> Indexer Intelligence are implemented; request review, manual acquisition recovery
-> mutations, and media proxying remain incomplete.
+> Indexer Intelligence are implemented. Exact-target manual release search and grabs plus
+> normalized qBittorrent/SABnzbd queue reads are also implemented; request review,
+> calendar controls, broader acquisition mutations, and media proxying remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -50,8 +51,10 @@ protected public compatibility baseline remains pending. The connector browser c
 normalized Seerr search, media-request creation, and title-level Radarr/Sonarr provenance are
 available as pre-release development surfaces. Prowlarr inventory, 24-hour statistics,
 disabled state, application sync, normalized failures, and exact-target safe tests are
-also available through the operator-only Indexer Intelligence workspace. Request review,
-broader acquisition mutations, and playback remain unavailable.
+also available through the operator-only Indexer Intelligence workspace. An operator-only
+download workspace reads bounded, normalized qBittorrent and SABnzbd queues without exposing
+upstream identifiers or credentials. Request review, calendar controls, broader acquisition
+mutations, and playback remain unavailable.
 
 ## Target system shape
 
@@ -214,13 +217,14 @@ permission-denied, signed-out, rate-limited, and responsive states. These surfac
 same-origin API boundary. A lazy-loaded signal-history drawer reads normalized, operator-only
 Radarr/Sonarr history and queue evidence with complete, degraded, empty, loading, offline,
 permission-denied, responsive, light, and dark states. As media workflows arrive,
-TanStack Query will own remote data and invalidation, while Zustand remains limited to
+The download workspace uses TanStack Query for abort-aware polling, explicit refresh, and
+last-verified degraded rendering. TanStack Query owns remote data and invalidation, while Zustand remains limited to
 ephemeral interface state such as an open drawer or command-palette context. Motion is
 reserved for purposeful, interruptible transitions; reduced-motion users receive
 stable state changes without decorative movement.
 
-Heavy surfaces—the theater player, manual release workbench, expanded calendar, and
-administrative tools—will be loaded on demand when implemented. Reusable components
+Heavy surfaces—the theater player, expanded calendar, and administrative tools—will be loaded
+on demand when implemented; the manual release workbench is already lazy-loaded. Reusable components
 are exercised in Storybook across normal, loading, empty, offline, error, denied, and
 responsive states before route assembly.
 
