@@ -5,11 +5,27 @@ import test from "node:test";
 import { parse } from "yaml";
 
 import {
+  connectorFailureCode,
   firstManifestUri,
   hlsSegmentFormat,
   hostContainerUser,
   selectConnectorAddress,
 } from "../integration/jellyfin/playback.mjs";
+
+test("emits only allowlisted connector diagnostics", () => {
+  assert.equal(
+    connectorFailureCode("direct_negotiation", { code: "timeout" }),
+    "direct_negotiation_timeout",
+  );
+  assert.equal(
+    connectorFailureCode("direct_negotiation", { code: "secret-value" }),
+    "direct_negotiation",
+  );
+  assert.throws(
+    () => connectorFailureCode("invalid stage", { code: "timeout" }),
+    /diagnostic_stage_invalid/u,
+  );
+});
 
 test("runs the rootless fixture container as the invoking host identity", () => {
   assert.equal(hostContainerUser(1_001, 121), "1001:121");

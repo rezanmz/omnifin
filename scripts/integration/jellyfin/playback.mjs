@@ -21,6 +21,18 @@ const LIBRARY_READY_TIMEOUT_MS = 60_000;
 const TICKS_PER_SECOND = 10_000_000;
 const IDENTIFIER_PATTERN = /^[a-f0-9]{32}$/u;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
+const SAFE_CONNECTOR_FAILURE_CODES = new Set([
+  "configuration_invalid",
+  "destination_blocked",
+  "invalid_credentials",
+  "playback_unavailable",
+  "rate_limited",
+  "response_invalid",
+  "timeout",
+  "unreachable",
+  "unsupported_version",
+  "upstream_error",
+]);
 
 class JellyfinFixtureFailure extends Error {
   constructor(code, options) {
@@ -35,6 +47,29 @@ export function hostContainerUser(uid, gid) {
     throw new JellyfinFixtureFailure("host_identity_unavailable");
   }
   return `${uid}:${gid}`;
+}
+
+export function connectorFailureCode(stage, error) {
+  if (!/^[a-z][a-z0-9_]{0,63}$/u.test(stage)) {
+    throw new JellyfinFixtureFailure("diagnostic_stage_invalid");
+  }
+  const causeCode =
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    SAFE_CONNECTOR_FAILURE_CODES.has(error.code)
+      ? error.code
+      : null;
+  return causeCode ? `${stage}_${causeCode}` : stage;
+}
+
+async function connectorOperation(stage, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw new JellyfinFixtureFailure(connectorFailureCode(stage, error), { cause: error });
+  }
 }
 
 function parseArguments(arguments_) {
@@ -402,24 +437,32 @@ export function hlsSegmentFormat(bytes) {
 async function readFirstHlsSegment(client, initialTarget) {
   let target = initialTarget;
   for (let depth = 0; depth < 3; depth += 1) {
-    const manifestResponse = await client.readPlaybackTarget({
-      accept: "application/vnd.apple.mpegurl, application/x-mpegURL, */*",
-      target,
-    });
+    const manifestResponse = await connectorOperation("hls_manifest_read", () =>
+      client.readPlaybackTarget({
+        accept: "application/vnd.apple.mpegurl, application/x-mpegURL, */*",
+        target,
+      }),
+    );
     const manifest = new TextDecoder().decode(manifestResponse.body);
     if (!manifest.startsWith("#EXTM3U")) throw new JellyfinFixtureFailure("manifest_invalid");
     const uri = firstManifestUri(manifest);
-    const nextTarget = client.resolvePlaybackTarget(target, uri);
+    const nextTarget = await connectorOperation("hls_manifest_target", () =>
+      client.resolvePlaybackTarget(target, uri),
+    );
     if (/\.m3u8(?:$|\?)/iu.test(uri)) {
       target = nextTarget;
       continue;
     }
-    const segment = await client.streamPlaybackTarget({
-      accept: "video/mp2t, application/octet-stream, */*",
-      maxResponseBytes: MAX_SEGMENT_BYTES,
-      target: nextTarget,
-    });
-    const bytes = await readStream(segment.body, MAX_SEGMENT_BYTES);
+    const segment = await connectorOperation("hls_segment_open", () =>
+      client.streamPlaybackTarget({
+        accept: "video/mp2t, application/octet-stream, */*",
+        maxResponseBytes: MAX_SEGMENT_BYTES,
+        target: nextTarget,
+      }),
+    );
+    const bytes = await connectorOperation("hls_segment_read", () =>
+      readStream(segment.body, MAX_SEGMENT_BYTES),
+    );
     if (bytes.byteLength < 1_024) throw new JellyfinFixtureFailure("hls_segment_invalid");
     return {
       bytes: bytes.byteLength,
@@ -434,14 +477,16 @@ async function verifyPlayback(context, server, authentication, item) {
   const client = playbackClient(context, server, authentication.accessToken, context.deviceId);
   const frenchAudioIndex = trackIndex(item.audio, "fra");
   const englishSubtitleIndex = trackIndex(item.subtitles, "eng");
-  const direct = await client.negotiate({
-    audioStreamIndex: frenchAudioIndex,
-    itemId: item.id,
-    maxStreamingBitrate: 20_000_000,
-    mode: "direct",
-    positionSeconds: 0,
-    subtitleStreamIndex: englishSubtitleIndex,
-  });
+  const direct = await connectorOperation("direct_negotiation", () =>
+    client.negotiate({
+      audioStreamIndex: frenchAudioIndex,
+      itemId: item.id,
+      maxStreamingBitrate: 20_000_000,
+      mode: "direct",
+      positionSeconds: 0,
+      subtitleStreamIndex: englishSubtitleIndex,
+    }),
+  );
   if (
     direct.delivery !== "direct" ||
     !direct.audioTracks.some((track) => track.language === "fra" && track.selected) ||
@@ -449,23 +494,27 @@ async function verifyPlayback(context, server, authentication, item) {
   ) {
     throw new JellyfinFixtureFailure("direct_negotiation_invalid");
   }
-  const range = await client.readPlaybackTarget({
-    accept: "video/mp4, video/*",
-    range: "bytes=0-4095",
-    target: direct.upstreamTarget,
-  });
+  const range = await connectorOperation("direct_range", () =>
+    client.readPlaybackTarget({
+      accept: "video/mp4, video/*",
+      range: "bytes=0-4095",
+      target: direct.upstreamTarget,
+    }),
+  );
   if (range.status !== 206 || range.body.byteLength !== 4_096) {
     throw new JellyfinFixtureFailure("direct_range_invalid");
   }
 
-  const transcode = await client.negotiate({
-    audioStreamIndex: frenchAudioIndex,
-    itemId: item.id,
-    maxStreamingBitrate: 500_000,
-    mode: "transcode",
-    positionSeconds: 4,
-    subtitleStreamIndex: null,
-  });
+  const transcode = await connectorOperation("transcode_negotiation", () =>
+    client.negotiate({
+      audioStreamIndex: frenchAudioIndex,
+      itemId: item.id,
+      maxStreamingBitrate: 500_000,
+      mode: "transcode",
+      positionSeconds: 4,
+      subtitleStreamIndex: null,
+    }),
+  );
   if (
     transcode.delivery !== "hls" ||
     transcode.positionSeconds !== 4 ||
@@ -483,21 +532,19 @@ async function verifyPlayback(context, server, authentication, item) {
     playSessionId: direct.playSessionId,
     subtitleStreamIndex: englishSubtitleIndex,
   };
-  await client.reportPlaybackEvent({
-    event: "started",
-    positionSeconds: 1,
-    session: reportingSession,
-  });
-  await client.reportPlaybackEvent({
-    event: "progress",
-    positionSeconds: 5,
-    session: reportingSession,
-  });
-  await client.reportPlaybackEvent({
-    event: "stopped",
-    positionSeconds: 6,
-    session: reportingSession,
-  });
+  for (const [event, positionSeconds] of [
+    ["started", 1],
+    ["progress", 5],
+    ["stopped", 6],
+  ]) {
+    await connectorOperation(`playback_report_${event}`, () =>
+      client.reportPlaybackEvent({
+        event,
+        positionSeconds,
+        session: reportingSession,
+      }),
+    );
+  }
 
   return {
     direct: { bytes: range.body.byteLength, status: range.status },
@@ -634,19 +681,21 @@ async function main(options) {
       secondAuthentication,
       item.id,
     );
-    const reconnected = await playbackClient(
-      context,
-      secondServer,
-      secondAuthentication.accessToken,
-      context.deviceId,
-    ).negotiate({
-      audioStreamIndex: null,
-      itemId: item.id,
-      maxStreamingBitrate: 20_000_000,
-      mode: "direct",
-      positionSeconds: restartPosition,
-      subtitleStreamIndex: null,
-    });
+    const reconnected = await connectorOperation("restart_negotiation", () =>
+      playbackClient(
+        context,
+        secondServer,
+        secondAuthentication.accessToken,
+        context.deviceId,
+      ).negotiate({
+        audioStreamIndex: null,
+        itemId: item.id,
+        maxStreamingBitrate: 20_000_000,
+        mode: "direct",
+        positionSeconds: restartPosition,
+        subtitleStreamIndex: null,
+      }),
+    );
     if (reconnected.delivery !== "direct") {
       throw new JellyfinFixtureFailure("restart_playback_invalid");
     }
