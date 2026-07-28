@@ -55,19 +55,23 @@ const mediaStreams = [
     Codec: "vtt",
     DeliveryMethod: "External",
     DisplayTitle: "English",
+    Height: 0,
     Index: 3,
     IsDefault: true,
     Language: "eng",
     Type: "Subtitle",
+    Width: 0,
   },
   {
     Codec: "pgssub",
     DeliveryMethod: "Encode",
     DisplayTitle: "English forced",
+    Height: 0,
     Index: 4,
     IsForced: true,
     Language: "eng",
     Type: "Subtitle",
+    Width: 0,
   },
 ];
 
@@ -217,7 +221,7 @@ describe("JellyfinPlaybackClient", () => {
       ...directSource,
       SupportsDirectPlay: false,
       TranscodingUrl:
-        "/base/Videos/movie-upstream-1/master.m3u8?MediaSourceId=media-source-1&api_key=leaked&PlaySessionId=play-session-upstream-1",
+        "/base/videos/movie-upstream-1/master.m3u8?MediaSourceId=media-source-1&api_key=leaked&PlaySessionId=play-session-upstream-1",
     };
     const { client } = clientWithResponses([
       jsonResponse({ MediaSources: [hlsSource], PlaySessionId: "play-session-upstream-1" }),
@@ -239,7 +243,7 @@ describe("JellyfinPlaybackClient", () => {
         expect.objectContaining({ index: 3, selected: false }),
       ]),
       upstreamTarget: {
-        path: "Videos/movie-upstream-1/master.m3u8",
+        path: "videos/movie-upstream-1/master.m3u8",
         query: "MediaSourceId=media-source-1&PlaySessionId=play-session-upstream-1",
       },
     });

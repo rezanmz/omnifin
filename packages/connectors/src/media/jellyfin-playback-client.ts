@@ -33,7 +33,7 @@ const mediaStreamSchema = z.object({
   Codec: z.string().trim().min(1).max(64).nullish(),
   DeliveryMethod: z.enum(["Encode", "Embed", "External", "Hls"]).optional(),
   DisplayTitle: nullableBoundedTextSchema,
-  Height: z.int().positive().max(16_384).nullish(),
+  Height: z.int().nonnegative().max(16_384).nullish(),
   Index: optionalIndexSchema,
   IsDefault: z.boolean().optional(),
   IsExternal: z.boolean().optional(),
@@ -41,7 +41,7 @@ const mediaStreamSchema = z.object({
   Language: z.string().trim().min(1).max(64).nullish(),
   Title: nullableBoundedTextSchema,
   Type: z.enum(["Audio", "Subtitle", "Video"]),
-  Width: z.int().positive().max(16_384).nullish(),
+  Width: z.int().nonnegative().max(16_384).nullish(),
 });
 
 const mediaSourceSchema = z.object({
@@ -626,7 +626,7 @@ export class JellyfinPlaybackClient {
       throw this.#client.invalidResponse(operation);
     }
     const path = target.pathname.slice(this.#baseUrl.pathname.length);
-    if (!path || path.length > 4_096 || !path.startsWith("Videos/")) {
+    if (!path || path.length > 4_096 || !/^Videos\//iu.test(path)) {
       throw this.#client.invalidResponse(operation);
     }
     for (const rawSegment of path.split("/")) {

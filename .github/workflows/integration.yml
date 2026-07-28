@@ -137,9 +137,9 @@ jobs:
           retention-days: 7
 
   playback-fixture:
-    name: Generated playback fixture
+    name: Isolated Jellyfin playback integration
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,12 +159,21 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Generate and transcode media
         run: pnpm fixture:media --output artifacts/media/playback-fixture
+      - name: Build playback connector
+        run: pnpm --filter @omnifin/connectors... build
+      - name: Exercise isolated Jellyfin playback
+        run: >-
+          pnpm fixture:jellyfin-playback
+          --fixture artifacts/media/playback-fixture/omnifin-playback-fixture.mp4
+          --output artifacts/integration/jellyfin-playback/report.json
       - name: Upload sanitized fixture evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: generated-playback-fixture-report
-          path: artifacts/media/playback-fixture/playback-fixture-report.json
+          path: |
+            artifacts/media/playback-fixture/playback-fixture-report.json
+            artifacts/integration/jellyfin-playback/report.json
           if-no-files-found: error
           retention-days: 7
 

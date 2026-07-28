@@ -61,11 +61,15 @@ test("the fixture workflow uses the immutable official Jellyfin image", () => {
     readFileSync(new URL("../../.github/workflows/integration.yml", import.meta.url), "utf8"),
   );
   const fixture = workflow.jobs["playback-fixture"];
-  assert.equal(fixture.name, "Generated playback fixture");
+  assert.equal(fixture.name, "Isolated Jellyfin playback integration");
   assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
   const generation = fixture.steps.find((step) => step.name === "Generate and transcode media");
   assert.equal(generation.run, "pnpm fixture:media --output artifacts/media/playback-fixture");
   const upload = fixture.steps.find((step) => step.name === "Upload sanitized fixture evidence");
-  assert.equal(upload.with.path, "artifacts/media/playback-fixture/playback-fixture-report.json");
+  assert.match(
+    upload.with.path,
+    /artifacts\/media\/playback-fixture\/playback-fixture-report\.json/u,
+  );
+  assert.match(upload.with.path, /artifacts\/integration\/jellyfin-playback\/report\.json/u);
   assert.equal(upload.with["if-no-files-found"], "error");
 });
