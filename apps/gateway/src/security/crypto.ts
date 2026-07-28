@@ -22,6 +22,7 @@ export type PrivacyHashDomain =
   | "acquisition_calendar_source"
   | "download_queue_item"
   | "ip_address"
+  | "library_attention_cursor"
   | "media_item"
   | "oidc_failure_audit_bucket"
   | "oidc_failure_audit_ip_address"

@@ -742,6 +742,145 @@ export const subtitleDownloadOperations = sqliteTable(
   ],
 );
 
+export const libraryArtworkSearches = sqliteTable(
+  "library_artwork_searches",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("library_artwork_searches_user_created_idx").on(table.userId, table.createdAt),
+    index("library_artwork_searches_expiry_idx").on(table.expiresAt),
+    index("library_artwork_searches_media_idx").on(table.mediaReferenceId),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "library_artwork_searches_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "library_artwork_searches_id_check",
+      sql`length(${table.id}) = 45
+        and substr(${table.id}, 1, 23) = 'library_artwork_search_'
+        and substr(${table.id}, 24) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_artwork_searches_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 4194304`,
+    ),
+    check(
+      "library_artwork_searches_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "library_artwork_searches_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const libraryMutationOperations = sqliteTable(
+  "library_mutation_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["scan", "item_refresh", "metadata_update", "artwork_apply"],
+    }).notNull(),
+    referenceId: text("reference_id"),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("library_mutation_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("library_mutation_operations_state_created_idx").on(table.state, table.createdAt),
+    index("library_mutation_operations_reference_idx").on(table.referenceId, table.createdAt),
+    check(
+      "library_mutation_operations_id_check",
+      sql`length(${table.id}) = 40
+        and substr(${table.id}, 1, 18) = 'library_operation_'
+        and substr(${table.id}, 19) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_kind_check",
+      sql`${table.kind} in ('scan', 'item_refresh', 'metadata_update', 'artwork_apply')`,
+    ),
+    check(
+      "library_mutation_operations_reference_check",
+      sql`(${table.kind} = 'scan' and ${table.referenceId} is null)
+        or (${table.kind} <> 'scan'
+          and length(${table.referenceId}) = 28
+          and substr(${table.referenceId}, 1, 6) = 'media_'
+          and substr(${table.referenceId}, 7) not glob '*[^A-Za-z0-9_-]*')`,
+    ),
+    check(
+      "library_mutation_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "library_mutation_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "library_mutation_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "library_mutation_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

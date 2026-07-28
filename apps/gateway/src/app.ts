@@ -63,6 +63,10 @@ import {
   indexerIntelligenceRoutes,
   type IndexerIntelligenceRoutesOptions,
 } from "./indexers/intelligence-routes.js";
+import {
+  libraryOperationRoutes,
+  type LibraryOperationRoutesOptions,
+} from "./library/operation-routes.js";
 import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import {
   continueWatchingRoutes,
@@ -111,6 +115,7 @@ export interface CreateAppOptions {
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
   subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
+  libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
@@ -438,6 +443,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.subtitleOperationDependencies === undefined
         ? {}
         : { dependencies: options.subtitleOperationDependencies }),
+    });
+    await app.register(libraryOperationRoutes, {
+      ...(options.libraryOperationDependencies === undefined
+        ? {}
+        : { dependencies: options.libraryOperationDependencies }),
     });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined

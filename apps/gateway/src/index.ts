@@ -132,6 +132,17 @@ export {
   type PlaybackSessionErrorReason,
 } from "./media/playback-session-service.js";
 export {
+  LibraryOperationError,
+  LibraryOperationService,
+  type LibraryClientFactoryInput,
+  type LibraryMutationResult,
+  type LibraryOperationClient,
+  type LibraryOperationContext,
+  type LibraryOperationDependencies,
+  type LibraryOperationErrorReason,
+  type LibraryOperationFailureCode,
+} from "./library/operation-service.js";
+export {
   SubtitleOperationError,
   SubtitleOperationService,
   type SubtitleAdapter,
