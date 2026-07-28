@@ -7,8 +7,16 @@ import { parse } from "yaml";
 import {
   firstManifestUri,
   hlsSegmentFormat,
+  hostContainerUser,
   selectConnectorAddress,
 } from "../integration/jellyfin/playback.mjs";
+
+test("runs the rootless fixture container as the invoking host identity", () => {
+  assert.equal(hostContainerUser(1_001, 121), "1001:121");
+  assert.throws(() => hostContainerUser(undefined, 121), /host_identity_unavailable/u);
+  assert.throws(() => hostContainerUser(1_001, -1), /host_identity_unavailable/u);
+  assert.throws(() => hostContainerUser(1.5, 121), /host_identity_unavailable/u);
+});
 
 test("selects a private non-loopback connector address deterministically", () => {
   assert.equal(

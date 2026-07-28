@@ -30,6 +30,13 @@ class JellyfinFixtureFailure extends Error {
   }
 }
 
+export function hostContainerUser(uid, gid) {
+  if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
+    throw new JellyfinFixtureFailure("host_identity_unavailable");
+  }
+  return `${uid}:${gid}`;
+}
+
 function parseArguments(arguments_) {
   const fixtureIndex = arguments_.indexOf("--fixture");
   const outputIndex = arguments_.indexOf("--output");
@@ -163,6 +170,8 @@ function startContainer(context) {
     "--rm",
     "--name",
     context.containerName,
+    "--user",
+    context.containerUser,
     "--cap-drop",
     "ALL",
     "--security-opt",
@@ -540,6 +549,7 @@ async function prepareContext(fixturePath) {
     configDirectory: resolve(temporaryDirectory, "config"),
     connectorAddress: selectConnectorAddress(),
     containerName: `omnifin-jellyfin-playback-${process.pid}-${randomBytes(4).toString("hex")}`,
+    containerUser: hostContainerUser(process.getuid?.(), process.getgid?.()),
     deviceId: `omnifin-integration-${randomUUID()}`,
     mediaDirectory: resolve(temporaryDirectory, "media"),
     temporaryDirectory,
