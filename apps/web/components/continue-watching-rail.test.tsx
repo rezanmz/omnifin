@@ -124,6 +124,13 @@ describe("ContinueWatchingRail", () => {
         sessionId: playbackSessionId,
         state: "stopped" as const,
       })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-28T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
+      })),
     };
     render(
       <ContinueWatchingRail

@@ -20,6 +20,7 @@ const requiredTables = [
   "connector_configs",
   "external_identities",
   "jellyfin_quick_connect_transactions",
+  "media_issues",
   "media_references",
   "media_request_operations",
   "oidc_logout_receipts",
@@ -83,6 +84,19 @@ const requiredColumns = {
     "last_used_at",
     "link_revision",
     "service_identity_link_id",
+    "user_id",
+  ],
+  media_issues: [
+    "category",
+    "encrypted_description",
+    "encrypted_resolution",
+    "media_reference_id",
+    "playback_session_id",
+    "position_seconds",
+    "resolved_at",
+    "resolved_by_user_id",
+    "service_identity_link_id",
+    "state",
     "user_id",
   ],
   media_request_operations: [
@@ -164,6 +178,11 @@ const requiredIndexes = {
     "media_references_expiry_idx",
     "media_references_link_item_unique",
     "media_references_user_last_used_idx",
+  ],
+  media_issues: [
+    "media_issues_media_created_idx",
+    "media_issues_state_created_idx",
+    "media_issues_user_created_idx",
   ],
   media_request_operations: [
     "media_request_operations_state_created_idx",
@@ -323,8 +342,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag?.startsWith("0012_"),
-  "Current migration journal must end at migration 0012.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0013_media_issues",
+  "Current migration journal must end at migration 0013_media_issues.",
 );
 
 try {
@@ -459,6 +478,35 @@ try {
       )
     ) {
       throw new Error("Migration is missing the playback-to-media-reference foreign key.");
+    }
+
+    const mediaIssueForeignKeys = database.sqlite.pragma("foreign_key_list(media_issues)") as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const mediaIssueLinkForeignKeyId = mediaIssueForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const mediaIssueLinkForeignKeyColumns = mediaIssueForeignKeys
+      .filter(({ id }) => id === mediaIssueLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (
+      mediaIssueLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error("Migration is missing the user-bound media issue identity foreign key.");
+    }
+    if (
+      !mediaIssueForeignKeys.some(
+        ({ from, table, to }) =>
+          from === "media_reference_id" && table === "media_references" && to === "id",
+      )
+    ) {
+      throw new Error("Migration is missing the issue-to-media-reference foreign key.");
     }
 
     const rotationAliasForeignKeys = database.sqlite.pragma(
@@ -601,7 +649,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0012.",
+      "Production migration did not advance the historical fixture exactly through migration 0013.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -766,7 +814,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0012, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0013, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -521,6 +521,88 @@ export const playbackSessions = sqliteTable(
   ],
 );
 
+export const mediaIssues = sqliteTable(
+  "media_issues",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    playbackSessionId: text("playback_session_id").notNull(),
+    category: text("category", {
+      enum: ["audio", "buffering", "subtitles", "sync", "video_quality", "other"],
+    }).notNull(),
+    encryptedDescription: text("encrypted_description"),
+    positionSeconds: integer("position_seconds").notNull(),
+    state: text("state", { enum: ["open", "resolved"] })
+      .notNull()
+      .default("open"),
+    encryptedResolution: text("encrypted_resolution"),
+    resolvedByUserId: text("resolved_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("media_issues_state_created_idx").on(table.state, table.createdAt),
+    index("media_issues_user_created_idx").on(table.userId, table.createdAt),
+    index("media_issues_media_created_idx").on(table.mediaReferenceId, table.createdAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "media_issues_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "media_issues_id_check",
+      sql`length(${table.id}) = 28
+        and substr(${table.id}, 1, 6) = 'issue_'
+        and substr(${table.id}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issues_playback_session_id_check",
+      sql`length(${table.playbackSessionId}) = 31
+        and substr(${table.playbackSessionId}, 1, 9) = 'playback_'
+        and substr(${table.playbackSessionId}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issues_category_check",
+      sql`${table.category} in ('audio', 'buffering', 'subtitles', 'sync', 'video_quality', 'other')`,
+    ),
+    check(
+      "media_issues_description_check",
+      sql`${table.encryptedDescription} is null or length(${table.encryptedDescription}) between 1 and 8192`,
+    ),
+    check("media_issues_position_check", sql`${table.positionSeconds} between 0 and 10000000`),
+    check("media_issues_state_check", sql`${table.state} in ('open', 'resolved')`),
+    check(
+      "media_issues_resolution_check",
+      sql`(
+          ${table.state} = 'open'
+          and ${table.encryptedResolution} is null
+          and ${table.resolvedByUserId} is null
+          and ${table.resolvedAt} is null
+        ) or (
+          ${table.state} = 'resolved'
+          and ${table.encryptedResolution} is not null
+          and length(${table.encryptedResolution}) between 1 and 8192
+          and ${table.resolvedByUserId} is not null
+          and ${table.resolvedAt} is not null
+        )`,
+    ),
+    check(
+      "media_issues_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.resolvedAt} is null or ${table.resolvedAt} between ${table.createdAt} and ${table.updatedAt})`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

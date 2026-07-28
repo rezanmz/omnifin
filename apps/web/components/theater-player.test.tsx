@@ -82,6 +82,7 @@ const session: PlaybackNegotiationResponse = {
 function readyClient(preparedSession: PlaybackNegotiationResponse = session): PlaybackClient & {
   prepare: ReturnType<typeof vi.fn>;
   report: ReturnType<typeof vi.fn>;
+  reportIssue: ReturnType<typeof vi.fn>;
 } {
   const prepare = vi.fn(async () => ({ csrfToken, session: preparedSession }));
   const report = vi.fn<PlaybackClient["report"]>(async (_id, request) => ({
@@ -91,7 +92,14 @@ function readyClient(preparedSession: PlaybackNegotiationResponse = session): Pl
     state:
       request.event === "paused" ? "paused" : request.event === "stopped" ? "stopped" : "playing",
   }));
-  return { prepare, report };
+  const reportIssue = vi.fn<PlaybackClient["reportIssue"]>(async (_id, request) => ({
+    category: request.category,
+    createdAt: "2026-07-28T12:30:00.000Z",
+    id: `issue_${"i".repeat(22)}`,
+    positionSeconds: request.positionSeconds,
+    status: "open",
+  }));
+  return { prepare, report, reportIssue };
 }
 
 describe("TheaterPlayer", () => {
@@ -107,6 +115,7 @@ describe("TheaterPlayer", () => {
     const client: PlaybackClient = {
       prepare: () => new Promise<never>(() => undefined),
       report: vi.fn(),
+      reportIssue: vi.fn(),
     };
     render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
 
@@ -337,6 +346,55 @@ describe("TheaterPlayer", () => {
       expect.any(AbortSignal),
       expect.objectContaining({ maxStreamingBitrate: 10_000_000, mode: "transcode" }),
     );
+  });
+
+  it("submits a private playback issue with category, note, and current timestamp", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_337.8;
+    await user.click(screen.getByRole("button", { name: "Report playback issue" }));
+    expect(screen.getByRole("region", { name: "Report playback issue" })).toBeVisible();
+
+    await user.click(screen.getByRole("radio", { name: "A/V sync" }));
+    await user.type(
+      screen.getByRole("textbox", { name: /What happened/u }),
+      "Dialogue is late after seeking.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send report" }));
+
+    await waitFor(() =>
+      expect(client.reportIssue).toHaveBeenCalledWith(
+        sessionId,
+        {
+          category: "sync",
+          description: "Dialogue is late after seeking.",
+          positionSeconds: 1_337,
+        },
+        csrfToken,
+      ),
+    );
+    expect(await screen.findByText("Issue captured")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("captured privately");
+  });
+
+  it("keeps an unsuccessful issue report editable for retry", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    client.reportIssue.mockRejectedValueOnce(
+      new Error("Issue reporting is temporarily unavailable."),
+    );
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Report playback issue" }));
+    await user.click(screen.getByRole("button", { name: "Send report" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("temporarily unavailable");
+    expect(screen.getByRole("button", { name: "Send report" })).toBeEnabled();
   });
 
   it("rebuilds HLS from an earlier point without exposing an upstream seek URL", async () => {
