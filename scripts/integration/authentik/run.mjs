@@ -67,6 +67,8 @@ function sanitizedGatewayFailure(runtime, requestId) {
     if (record?.requestId !== requestId) continue;
     const errorType = record?.err?.type;
     const errorCode = record?.err?.errorCode;
+    const failureReason = record?.failureReason;
+    const infrastructureCode = record?.infrastructureCode;
     const statusCode = record?.err?.statusCode;
     return {
       ...(typeof errorCode === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/u.test(errorCode)
@@ -74,6 +76,14 @@ function sanitizedGatewayFailure(runtime, requestId) {
         : {}),
       ...(typeof errorType === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(errorType)
         ? { errorType }
+        : {}),
+      ...(typeof failureReason === "string" &&
+      ["integrity_failure", "storage_failure"].includes(failureReason)
+        ? { failureReason }
+        : {}),
+      ...(typeof infrastructureCode === "string" &&
+      /^SQLITE_[A-Z_]{2,48}$/u.test(infrastructureCode)
+        ? { infrastructureCode }
         : {}),
       ...(Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
         ? { statusCode }

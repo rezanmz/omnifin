@@ -128,12 +128,13 @@ async function harness(
   registryDependencies: ReturnType<
     typeof providerRegistryDependencies
   > = providerRegistryDependencies(),
+  adminDependencies: ReturnType<typeof providerDependencies> = providerDependencies(),
 ) {
   const config = testConfig();
   const app = await createApp({
     config,
     oidcProviderAdminDependencies: {
-      ...providerDependencies(),
+      ...adminDependencies,
       providerRegistry: registryDependencies,
     },
     sessionDependencies: sessionDependencies(),
@@ -361,6 +362,30 @@ describe("OIDC provider administration routes", () => {
         providers: [provider],
       });
       expect(list.body).not.toContain(providerRequest.clientSecret);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("namespaces base64url audit entropy before enforcing identifier shape", async () => {
+    const { app, session } = await harness(providerRegistryDependencies(), {
+      clock: () => new Date(now),
+      createId: () => "-fixture-entropy",
+    });
+    try {
+      const response = await app.inject({
+        body: providerRequest,
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      expect(
+        app.database.sqlite
+          .prepare("select id from audit_events where event_type = 'auth.oidc.provider.created'")
+          .get(),
+      ).toEqual({ id: "audit--fixture-entropy" });
     } finally {
       await app.close();
     }

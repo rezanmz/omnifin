@@ -63,7 +63,7 @@ import {
   indexerIntelligenceRoutes,
   type IndexerIntelligenceRoutesOptions,
 } from "./indexers/intelligence-routes.js";
-import { createLoggerOptions } from "./logger.js";
+import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
@@ -344,7 +344,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
             : "The gateway rejected the request.";
       if (statusCode >= 500) {
         request.log.error(
-          { err: handledError, operation: "http.request", requestId: request.id },
+          {
+            err: handledError,
+            ...safeFailureDiagnostics(handledError),
+            operation: "http.request",
+            requestId: request.id,
+          },
           "Request failed",
         );
       } else {

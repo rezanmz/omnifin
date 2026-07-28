@@ -135,11 +135,8 @@ export class OidcRoleMappingAdminService {
     if (!validIdentifier(providerId) || !parsed.success || !this.#validContext(context)) {
       throw new OidcRoleMappingAdminError("integrity_failure");
     }
-    const mappingId = `mapping-${this.#nextId()}`;
-    const auditId = this.#nextId();
-    if (!validIdentifier(mappingId) || !validIdentifier(auditId)) {
-      throw new OidcRoleMappingAdminError("integrity_failure");
-    }
+    const mappingId = this.#nextIdentifier("mapping");
+    const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     const configuration = parsed.data;
     const canonicalValues = [...configuration.values].sort((left, right) => {
@@ -240,8 +237,7 @@ export class OidcRoleMappingAdminService {
     ) {
       throw new OidcRoleMappingAdminError("integrity_failure");
     }
-    const auditId = this.#nextId();
-    if (!validIdentifier(auditId)) throw new OidcRoleMappingAdminError("integrity_failure");
+    const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     let revokedSessions = 0;
 
@@ -397,12 +393,18 @@ export class OidcRoleMappingAdminService {
     return new Date(milliseconds);
   }
 
-  #nextId(): string {
+  #nextIdentifier(namespace: "audit" | "mapping"): string {
+    let entropy: string;
     try {
-      return this.#createId();
+      entropy = this.#createId();
     } catch (error) {
       throw new OidcRoleMappingAdminError("integrity_failure", { cause: error });
     }
+    const identifier = `${namespace}-${entropy}`;
+    if (!validIdentifier(identifier)) {
+      throw new OidcRoleMappingAdminError("integrity_failure");
+    }
+    return identifier;
   }
 
   #validContext(context: OidcRoleMappingAdminContext): boolean {

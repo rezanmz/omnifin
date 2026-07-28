@@ -5,6 +5,24 @@ const REDACTED = "[REDACTED]";
 const TRUNCATED = "[TRUNCATED]";
 const OPAQUE_OBJECT = "[OPAQUE_OBJECT]";
 const MAX_LOG_NESTING = 24;
+const MAX_ERROR_CAUSE_DEPTH = 6;
+const SAFE_FAILURE_REASONS = new Set(["integrity_failure", "storage_failure"]);
+const SAFE_INFRASTRUCTURE_ERROR_CODES = new Set([
+  "SQLITE_BUSY",
+  "SQLITE_BUSY_SNAPSHOT",
+  "SQLITE_CANTOPEN",
+  "SQLITE_CONSTRAINT",
+  "SQLITE_CONSTRAINT_CHECK",
+  "SQLITE_CONSTRAINT_FOREIGNKEY",
+  "SQLITE_CONSTRAINT_PRIMARYKEY",
+  "SQLITE_CONSTRAINT_UNIQUE",
+  "SQLITE_CORRUPT",
+  "SQLITE_FULL",
+  "SQLITE_IOERR",
+  "SQLITE_LOCKED",
+  "SQLITE_NOTADB",
+  "SQLITE_READONLY",
+]);
 const SAFE_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
   "gateway.shutdown": "Graceful shutdown failed",
   "gateway.startup": "Gateway startup failed",
@@ -83,6 +101,42 @@ function safeErrorType(value: unknown) {
     return fallback;
   }
   return value;
+}
+
+export function safeFailureDiagnostics(error: unknown) {
+  let current: unknown = error;
+  let failureReason: string | undefined;
+  let infrastructureCode: string | undefined;
+  const seen = new WeakSet<object>();
+
+  for (let depth = 0; depth < MAX_ERROR_CAUSE_DEPTH && isRecord(current); depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    try {
+      if (
+        failureReason === undefined &&
+        typeof current.reason === "string" &&
+        SAFE_FAILURE_REASONS.has(current.reason)
+      ) {
+        failureReason = current.reason;
+      }
+      if (
+        infrastructureCode === undefined &&
+        typeof current.code === "string" &&
+        SAFE_INFRASTRUCTURE_ERROR_CODES.has(current.code)
+      ) {
+        infrastructureCode = current.code;
+      }
+      current = current.cause;
+    } catch {
+      break;
+    }
+  }
+
+  return {
+    ...(failureReason === undefined ? {} : { failureReason }),
+    ...(infrastructureCode === undefined ? {} : { infrastructureCode }),
+  };
 }
 
 function safeError(error: unknown) {

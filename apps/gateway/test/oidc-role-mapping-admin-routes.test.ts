@@ -71,10 +71,10 @@ function mappingDependencies() {
   };
 }
 
-async function harness() {
+async function harness(dependencies = mappingDependencies()) {
   const app = await createApp({
     config: testConfig(),
-    oidcRoleMappingAdminDependencies: mappingDependencies(),
+    oidcRoleMappingAdminDependencies: dependencies,
     sessionDependencies: sessionDependencies(),
   });
   app.database.db
@@ -352,6 +352,36 @@ describe("OIDC role mapping administration routes", () => {
       ]);
       expect(JSON.stringify(audits)).not.toContain("media-operators");
       expect(JSON.stringify(audits)).not.toContain("claimPath");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("namespaces base64url mapping and audit entropy before persistence", async () => {
+    const entropy = ["_mapping-entropy", "-audit-entropy"];
+    const { app, recovery } = await harness({
+      clock: () => new Date(now),
+      createId: () => entropy.shift() ?? "unexpected-entropy",
+    });
+    try {
+      const created = await app.inject({
+        body: mappingRequest,
+        headers: authenticatedHeaders(recovery),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${providerId}/role-mappings`,
+      });
+
+      expect(created.statusCode, created.body).toBe(201);
+      expect(oidcRoleMappingMutationResponseSchema.parse(created.json()).mapping.id).toBe(
+        "mapping-_mapping-entropy",
+      );
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select id from audit_events where event_type = 'auth.oidc.role_mapping.created'",
+          )
+          .get(),
+      ).toEqual({ id: "audit--audit-entropy" });
     } finally {
       await app.close();
     }
