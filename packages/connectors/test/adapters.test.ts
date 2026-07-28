@@ -82,6 +82,8 @@ const probeCases: ProbeCase[] = [
       "acquisition.search",
       "acquisition.grab",
       "acquisition.calendar",
+      "system.health",
+      "storage.read",
     ],
     create: (config) => new RadarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
@@ -100,6 +102,8 @@ const probeCases: ProbeCase[] = [
       "acquisition.search",
       "acquisition.grab",
       "acquisition.calendar",
+      "system.health",
+      "storage.read",
     ],
     create: (config) => new SonarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
@@ -116,6 +120,7 @@ const probeCases: ProbeCase[] = [
       "connector.version",
       "indexer.statistics",
       "indexer.test",
+      "system.health",
     ],
     create: (config) => new ProwlarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {

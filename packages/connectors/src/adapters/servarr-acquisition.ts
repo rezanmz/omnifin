@@ -29,6 +29,7 @@ import {
   type AcquisitionCalendarSourceResult,
 } from "../calendar.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
+import type { ConnectorStorageCapacity } from "../system.js";
 import { ServarrAdapter } from "./servarr.js";
 
 const MAX_UPSTREAM_IDENTIFIER = 2_147_483_647;
@@ -41,6 +42,21 @@ const internalReleaseReferenceSchema = z.strictObject({
   guid: z.string().trim().min(1).max(2_048),
   indexerId: safeIdentifierSchema,
 });
+
+const diskSpaceResponseSchema = z
+  .array(
+    z
+      .object({
+        freeSpace: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        path: z.string().trim().min(1).max(4_096),
+        totalSpace: z.int().positive().max(Number.MAX_SAFE_INTEGER),
+      })
+      .refine((storage) => storage.freeSpace <= storage.totalSpace, {
+        message: "Free storage cannot exceed total storage.",
+        path: ["freeSpace"],
+      }),
+  )
+  .max(64);
 
 const qualitySchema = z
   .object({
@@ -617,6 +633,8 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "acquisition.search",
     "acquisition.grab",
     "acquisition.calendar",
+    "system.health",
+    "storage.read",
   ];
 
   async readAcquisitionCalendar(
@@ -670,6 +688,25 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
       events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
       truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
     };
+  }
+
+  async readStorageCapacity(signal?: AbortSignal): Promise<readonly ConnectorStorageCapacity[]> {
+    const records = await this.client.requestJson(
+      `${this.apiRoot}/diskspace`,
+      diskSpaceResponseSchema,
+      {
+        headers: { "X-Api-Key": this.apiKey },
+        operation: "storage.read",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    return records
+      .map((record) => ({
+        externalId: record.path,
+        freeBytes: record.freeSpace,
+        totalBytes: record.totalSpace,
+      }))
+      .toSorted((left, right) => left.externalId.localeCompare(right.externalId));
   }
 
   async searchManualReleases(
