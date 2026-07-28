@@ -13,7 +13,7 @@ import {
 } from "../../lib/acquisition-calendar-demo";
 import type { AcquisitionCalendarLoadOutcome } from "../../lib/acquisition-calendar";
 import { readThemePreference } from "../../lib/theme-server";
-import "../globals.css";
+import "./calendar.css";
 
 export const metadata: Metadata = { title: "Acquisition calendar" };
 export const dynamic = "force-dynamic";

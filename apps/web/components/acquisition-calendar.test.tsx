@@ -73,7 +73,7 @@ describe("AcquisitionCalendar", () => {
 
     const eventCard = screen.getByRole("button", { name: /Inspect The Far Meridian/i });
     await user.click(eventCard);
-    const drawer = screen.getByRole("dialog");
+    const drawer = await screen.findByRole("dialog");
     expect(drawer).toBeVisible();
     expect(within(drawer).getByRole("heading", { name: "The Far Meridian" })).toBeVisible();
     expect(within(drawer).getByText("Read-only calendar signal")).toBeVisible();

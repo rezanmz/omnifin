@@ -1,0 +1,119 @@
+.cinematic-backdrop {
+  background: var(--ink-0);
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: -2;
+}
+
+.cinematic-backdrop__aurora {
+  border-radius: 999px;
+  filter: blur(110px);
+  opacity: 0.18;
+  position: absolute;
+}
+
+.cinematic-backdrop__aurora--one {
+  background: color-mix(
+    in srgb,
+    var(--ambient-accent, var(--backdrop-aurora-one)) 36%,
+    var(--backdrop-aurora-one)
+  );
+  height: 42vw;
+  right: -14vw;
+  top: -18vw;
+  width: 52vw;
+}
+
+.cinematic-backdrop__aurora--two {
+  background: var(--backdrop-aurora-two);
+  bottom: -26vw;
+  height: 48vw;
+  left: 12vw;
+  width: 44vw;
+}
+
+.cinematic-backdrop__vignette {
+  background: var(--backdrop-vignette);
+  inset: 0;
+  position: absolute;
+}
+
+.cinematic-backdrop__noise {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+  inset: 0;
+  opacity: 0.025;
+  position: absolute;
+}
+
+.brand {
+  align-items: center;
+  display: inline-flex;
+  gap: 11px;
+}
+
+.brand__glyph {
+  align-items: center;
+  border: 2px solid var(--acid);
+  border-radius: 50%;
+  box-shadow: 0 0 28px rgb(216 255 112 / 15%);
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  position: relative;
+  width: 28px;
+}
+
+.brand__glyph::before,
+.brand__glyph::after {
+  background: var(--paper-0);
+  border-radius: 99px;
+  content: "";
+  height: 2px;
+  left: -5px;
+  position: absolute;
+  right: -5px;
+}
+
+.brand__glyph::after {
+  height: auto;
+  inset: -5px auto -5px 50%;
+  width: 2px;
+}
+
+.brand__core {
+  background: var(--acid);
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+.brand__word {
+  font-size: 1.08rem;
+  font-weight: 610;
+  letter-spacing: -0.025em;
+}
+
+.eyebrow,
+.section-kicker {
+  color: var(--acid);
+  font-size: 0.69rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .cinematic-backdrop__aurora,
+  .cinematic-backdrop__noise {
+    display: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .cinematic-backdrop {
+    display: none;
+  }
+}

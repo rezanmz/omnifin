@@ -7,7 +7,7 @@ import type {
 import { Eye, Film, Tv, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import styles from "./acquisition-calendar.module.css";
+import styles from "./acquisition-calendar-event-detail.module.css";
 
 const AVAILABILITY_LABELS: Record<AcquisitionCalendarAvailability, string> = {
   available: "Available",
