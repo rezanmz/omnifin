@@ -54,6 +54,35 @@ function appendBounded(current, chunk) {
   return `${current}${chunk.toString("utf8")}`.slice(-MAX_CAPTURE_BYTES);
 }
 
+function sanitizedGatewayFailure(runtime, requestId) {
+  if (!runtime || typeof requestId !== "string") return undefined;
+  const lines = `${runtime.stdout}\n${runtime.stderr}`.split("\n").reverse();
+  for (const line of lines) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (record?.requestId !== requestId) continue;
+    const errorType = record?.err?.type;
+    const errorCode = record?.err?.errorCode;
+    const statusCode = record?.err?.statusCode;
+    return {
+      ...(typeof errorCode === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/u.test(errorCode)
+        ? { errorCode }
+        : {}),
+      ...(typeof errorType === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(errorType)
+        ? { errorType }
+        : {}),
+      ...(Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
+        ? { statusCode }
+        : {}),
+    };
+  }
+  return undefined;
+}
+
 function commandEnvironment(overrides = {}) {
   return {
     ...process.env,
@@ -473,6 +502,13 @@ async function main(options) {
 
     const classifyBrowserFailure = ({ stderr }) => {
       const match = stderr.match(/"event":"authentik_browser_checks_failed","stage":"([a-z_]+)"/u);
+      const requestId = stderr.match(/"requestId":"([A-Za-z0-9._:-]{1,128})"/u)?.[1];
+      const gatewayFailure = sanitizedGatewayFailure(gateway, requestId);
+      if (gatewayFailure && Object.keys(gatewayFailure).length > 0) {
+        process.stderr.write(
+          `${JSON.stringify({ event: "authentik_gateway_failure", ...gatewayFailure })}\n`,
+        );
+      }
       const allowedStages = new Set([
         "authentik_provider_configuration",
         "backchannel_access_token",

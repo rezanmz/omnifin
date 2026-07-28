@@ -27,6 +27,7 @@ class BrowserCheckError extends Error {
 }
 
 let currentStage = "configuration";
+let failureDetail = {};
 
 function required(name) {
   const value = process.env[name];
@@ -99,6 +100,26 @@ function dispatchAuthentikBackchannel(project, environmentFile) {
 
 async function json(response, expectedStatus, failureStage) {
   if (response.status() !== expectedStatus) {
+    const requestId = response.headers()["x-request-id"];
+    let errorCode;
+    try {
+      const body = await response.json();
+      if (
+        typeof body?.error?.code === "string" &&
+        /^[a-z][a-z0-9_]{2,63}$/u.test(body.error.code)
+      ) {
+        errorCode = body.error.code;
+      }
+    } catch {
+      // Failure diagnostics stay useful even when an upstream response is not JSON.
+    }
+    failureDetail = {
+      ...(errorCode === undefined ? {} : { errorCode }),
+      ...(typeof requestId === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(requestId)
+        ? { requestId }
+        : {}),
+      status: response.status(),
+    };
     if (failureStage) currentStage = httpFailureStage(failureStage, response.status());
     throw new BrowserCheckError();
   }
@@ -757,7 +778,7 @@ try {
   process.stdout.write('{"event":"authentik_browser_checks_passed"}\n');
 } catch {
   process.stderr.write(
-    `${JSON.stringify({ event: "authentik_browser_checks_failed", stage: currentStage })}\n`,
+    `${JSON.stringify({ event: "authentik_browser_checks_failed", stage: currentStage, ...failureDetail })}\n`,
   );
   process.exitCode = 1;
 }

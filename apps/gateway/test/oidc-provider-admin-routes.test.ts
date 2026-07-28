@@ -827,6 +827,73 @@ describe("OIDC provider administration routes", () => {
     }
   });
 
+  it("enables a validated confidential provider while retaining its encrypted secret", async () => {
+    const { app, config, session } = await harness();
+    try {
+      const createdResponse = await app.inject({
+        body: { ...providerRequest, enabled: false },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+      const created = oidcProviderAdminSchema.parse(createdResponse.json());
+
+      const validatedResponse = await app.inject({
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${created.id}/validate`,
+      });
+      expect(validatedResponse.statusCode, validatedResponse.body).toBe(200);
+
+      const mappingResponse = await app.inject({
+        body: {
+          claimPath: ["groups"],
+          enabled: true,
+          operator: "contains_any",
+          priority: 1_000,
+          role: "admin",
+          values: ["authentik Admins"],
+        },
+        headers: authenticatedHeaders(session),
+        method: "POST",
+        url: `/v1/admin/auth/oidc/providers/${created.id}/role-mappings`,
+      });
+      expect(mappingResponse.statusCode, mappingResponse.body).toBe(201);
+
+      const enabledResponse = await app.inject({
+        body: { ...providerConfiguration, clientSecret: undefined },
+        headers: authenticatedHeaders(session),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${created.id}`,
+      });
+      expect(enabledResponse.statusCode, enabledResponse.body).toBe(200);
+      expect(oidcProviderMutationResponseSchema.parse(enabledResponse.json())).toMatchObject({
+        provider: {
+          clientSecretConfigured: true,
+          discoveryState: "ready",
+          enabled: true,
+          id: created.id,
+        },
+        revokedSessions: 0,
+      });
+
+      const stored = app.database.sqlite
+        .prepare(
+          `select encrypted_client_secret as encryptedClientSecret
+           from oidc_providers where id = ?`,
+        )
+        .get(created.id) as { encryptedClientSecret: string };
+      expect(
+        new EnvelopeCipher(config.encryptionKey).decrypt(
+          stored.encryptedClientSecret,
+          oidcClientSecretEncryptionContext(created.id),
+        ),
+      ).toBe(providerRequest.clientSecret);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("audits sanitized validation failures and enforces CSRF plus retry backoff", async () => {
     const registryDependencies = providerRegistryDependencies(
       validationMetadata({ code_challenge_methods_supported: ["plain"] }),
