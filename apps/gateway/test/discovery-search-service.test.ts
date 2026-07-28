@@ -4,7 +4,10 @@ import {
   sessionPrincipalSchema,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
-import type { DiscoverySearchResponse } from "@omnifin/contracts/discovery";
+import type {
+  DiscoveryMediaDetailResponse,
+  DiscoverySearchResponse,
+} from "@omnifin/contracts/discovery";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -105,6 +108,29 @@ const normalizedResponse: DiscoverySearchResponse = {
   totalResults: 1,
 };
 
+const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
+  generatedAt: now.toISOString(),
+  item: {
+    availability: "available",
+    cast: [{ character: "Neo", name: "Keanu Reeves" }],
+    crew: [{ name: "Lana Wachowski", role: "Director" }],
+    genres: ["Action", "Science Fiction"],
+    id: "movie:603",
+    kind: "movie",
+    originalTitle: "The Matrix",
+    overview: "A hacker discovers the nature of reality.",
+    productionStatus: "Released",
+    runtimeMinutes: 136,
+    source: "seerr",
+    tagline: "Free your mind.",
+    title: "The Matrix",
+    tmdbId: 603,
+    voteAverage: 8.2,
+    voteCount: 27_000,
+    year: 1999,
+  },
+};
+
 function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-main") {
   database.db
     .insert(connectorConfigs)
@@ -135,15 +161,37 @@ function harness(options: { withConnector?: boolean } = {}) {
   database.migrate();
   if (options.withConnector !== false) insertSeerr(database, config);
   const search = vi.fn(async () => normalizedResponse);
-  const createAdapter = vi.fn(() => ({ search }));
+  const detail = vi.fn(async () => normalizedDetailResponse);
+  const createAdapter = vi.fn(() => ({ detail, search }));
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
   });
-  return { config, createAdapter, database, search, service };
+  return { config, createAdapter, database, detail, search, service };
 }
 
 describe("discovery search service", () => {
+  it("authorizes and returns only normalized media details", async () => {
+    const { database, detail, service } = harness();
+    try {
+      await expect(
+        service.detail(
+          { kind: "movie", tmdbId: 603 },
+          { language: "en-CA" },
+          { principal: principal() },
+        ),
+      ).resolves.toEqual(normalizedDetailResponse);
+      expect(detail).toHaveBeenCalledWith(
+        { kind: "movie", tmdbId: 603 },
+        { language: "en-CA" },
+        undefined,
+      );
+      expect(JSON.stringify(normalizedDetailResponse)).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
   it("decrypts one enabled Seerr connector and returns only normalized results", async () => {
     const { createAdapter, database, search, service } = harness();
     try {

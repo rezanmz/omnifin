@@ -45,10 +45,54 @@ export const discoverySearchFixture = {
   totalResults: 3,
 } as const;
 
+export const discoveryMovieDetailFixture = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    availability: "unavailable",
+    cast: [
+      { character: "Neo", name: "Keanu Reeves" },
+      { character: "Morpheus", name: "Laurence Fishburne" },
+      { character: "Trinity", name: "Carrie-Anne Moss" },
+      { character: "Agent Smith", name: "Hugo Weaving" },
+    ],
+    crew: [
+      { name: "Lana Wachowski", role: "Director" },
+      { name: "Lilly Wachowski", role: "Writer" },
+      { name: "Bill Pope", role: "Director of Photography" },
+      { name: "Don Davis", role: "Original Music Composer" },
+    ],
+    genres: ["Action", "Science Fiction"],
+    id: "movie:603",
+    kind: "movie",
+    originalTitle: "The Matrix",
+    overview:
+      "A hacker discovers that the world he knows is a constructed reality and joins a rebellion fighting to free humanity from its hidden machinery.",
+    productionStatus: "Released",
+    runtimeMinutes: 136,
+    source: "seerr",
+    tagline: "Free your mind.",
+    title: "The Matrix",
+    tmdbId: 603,
+    voteAverage: 8.2,
+    voteCount: 27_000,
+    year: 1999,
+  },
+} as const;
+
 export async function mockDiscoverySearch(page: Page) {
   await page.route("**/api/discovery/search?**", async (route) => {
     await route.fulfill({
       body: JSON.stringify(discoverySearchFixture),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
+
+export async function mockDiscoveryDetails(page: Page) {
+  await page.route("**/api/discovery/details/movie/603?**", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(discoveryMovieDetailFixture),
       contentType: "application/json",
       status: 200,
     });

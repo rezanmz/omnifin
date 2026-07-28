@@ -1,18 +1,20 @@
 # Discovery
 
-Omnifin's first media workflow is a read-only global search backed by one enabled Seerr
-connector. The gateway owns upstream credentials and response normalization; the browser
-never receives a Seerr API key or an unvalidated upstream payload.
+Omnifin's discovery workflow combines global search with normalized movie and series
+details backed by one enabled Seerr connector. The gateway owns upstream credentials and
+response normalization; the browser never receives a Seerr API key or an unvalidated
+upstream payload.
 
 This is a pre-release development surface, not a public Seerr compatibility claim. The
 [compatibility matrix](compatibility.md) remains authoritative for supported versions.
 
 ## Request path and authorization
 
-The browser calls the same-origin `GET /api/discovery/search` route. The web process
-forwards the request to `GET /v1/discovery/search` on the private gateway and forwards
-only the opaque session cookie. The gateway requires an active principal with
-`media.view` before it reads connector configuration or contacts Seerr.
+The browser calls the same-origin `GET /api/discovery/search` and
+`GET /api/discovery/details/{kind}/{tmdbId}` routes. The web process forwards those reads
+to the matching `/v1/discovery/*` routes on the private gateway and forwards only the
+opaque session cookie. The gateway requires an active principal with `media.view` before
+it reads connector configuration or contacts Seerr.
 
 The query contract is deliberately bounded:
 
@@ -21,6 +23,10 @@ The query contract is deliberately bounded:
 | `query`    | Trimmed text between 2 and 200 characters             |
 | `language` | BCP 47-style two-letter language with optional region |
 | `page`     | Integer from 1 through 500                            |
+
+Detail reads accept `movie` or `series` as the media kind, a positive 32-bit TMDB
+identifier, and the same optional language format. The kind and identifier must match the
+normalized upstream result exactly.
 
 Exactly one enabled Seerr connector must exist. Zero enabled connectors returns a safe
 configuration error; multiple enabled connectors fail closed because silently choosing a
@@ -45,6 +51,17 @@ Person results may include a bounded `knownFor` summary. Poster paths, backdrop 
 internal media identifiers, request objects, raw service errors, credentials, and unknown
 upstream fields are rejected or discarded before the response crosses the gateway boundary.
 
+## Normalized media details
+
+Movie and series detail responses add a bounded synopsis, tagline, genres, production
+status, runtime, vote summary, availability, and principal cast and crew. Series may also
+include bounded season and episode-count summaries. Cast and crew are deduplicated and
+limited to 12 entries each; season lists are capped at 100 entries.
+
+The response deliberately excludes artwork paths, Seerr media records, request objects,
+service URLs, and raw TMDB or Seerr payloads. This keeps the browser contract stable and
+prevents upstream implementation details from becoming identifiers elsewhere in Omnifin.
+
 ## Failure model
 
 The public API uses the common structured error envelope with a safe code, message, and
@@ -60,8 +77,8 @@ request correlation identifier. The browser maps those responses into deliberate
 | Invalid normalized response            | Fail-closed rejection; raw data is hidden |
 
 Search requests debounce by default for 240 milliseconds. Revising the query, closing the
-console, or unmounting the component aborts obsolete work. The gateway forwards cancellation
-to the connector transport where possible.
+console, changing the selected title, or unmounting the component aborts obsolete work.
+The gateway forwards cancellation to the connector transport where possible.
 
 ## Interaction and quality contract
 
@@ -71,7 +88,14 @@ a stable preview pane; mobile presents a compact result-only surface so the unde
 dashboard and fixed navigation remain usable. Pointer and keyboard selection update the
 same preview state without changing row geometry.
 
-Reusable stories cover prompt, loading, results, empty, not-configured, rate-limited, and
-signed-out states. Route-level tests cover the normalized network boundary, keyboard flow,
-automated accessibility checks, reduced motion, and deterministic desktop and mobile visual
-baselines.
+Movies and series open in a lazy-loaded Liquid Glass detail drawer. The drawer traps focus,
+supports Escape and explicit close controls, keeps its header available while content
+scrolls, and hands an eligible title to the guarded request composer without exposing an
+upstream mutation. Its mobile material increases opacity over high-contrast artwork while
+retaining translucency and uses the full viewport without horizontal overflow.
+
+Reusable stories cover prompt, loading, results, empty, not-configured, rate-limited,
+signed-out, detail-loading, detail-offline, movie-detail, and series-detail states.
+Route-level tests cover the normalized network boundary, keyboard flow, lower-action
+reachability, automated accessibility checks, reduced motion, and deterministic dark and
+light desktop and mobile visual baselines.

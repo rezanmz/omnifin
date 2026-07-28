@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import { mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -126,6 +126,36 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   await search.fill("matrix");
   await page.getByRole("option", { name: /The Matrix/i }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
+});
+
+async function openMediaDetails(page: Page) {
+  await mockDiscoverySearch(page);
+  await mockDiscoveryDetails(page);
+  await page.goto("/");
+  const search = page.getByRole("combobox");
+  await search.fill("matrix");
+  await page.getByRole("button", { name: "View details for The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
+}
+
+test("media detail drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Media details cover representative desktop and phone geometry",
+  );
+  await openMediaDetails(page);
+  await expect(page).toHaveScreenshot("dashboard-media-details.png");
+});
+
+test("light media detail drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light media details cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await openMediaDetails(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-media-details-light.png");
 });
 
 async function openRequestComposer(page: Page) {

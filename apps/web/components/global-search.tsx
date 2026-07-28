@@ -5,6 +5,7 @@ import {
   Command,
   Film,
   LoaderCircle,
+  PanelRightOpen,
   Search,
   Sparkles,
   Tv,
@@ -23,10 +24,16 @@ import {
   type DiscoverySearchClientErrorKind,
 } from "../lib/discovery-search";
 import type { MediaRequestClient } from "../lib/media-requests";
+import type { DiscoveryMediaDetailClient } from "../lib/media-details";
+import type { DetailMedia } from "./media-detail-drawer";
 import type { RequestableMedia } from "./request-composer";
 
 const RequestComposer = dynamic(
   () => import("./request-composer").then((module) => module.RequestComposer),
+  { ssr: false },
+);
+const MediaDetailDrawer = dynamic(
+  () => import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
   { ssr: false },
 );
 
@@ -47,6 +54,7 @@ type SearchState =
 export interface GlobalSearchProperties {
   client?: DiscoverySearchClient;
   debounceMs?: number;
+  detailClient?: DiscoveryMediaDetailClient;
   initialFocus?: boolean;
   initialOpen?: boolean;
   initialQuery?: string;
@@ -227,6 +235,7 @@ function SearchError({
 export function GlobalSearch({
   client = discoverySearchClient,
   debounceMs = 240,
+  detailClient,
   initialFocus = false,
   initialOpen = false,
   initialQuery = "",
@@ -238,6 +247,8 @@ export function GlobalSearch({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composerMedia, setComposerMedia] = useState<RequestableMedia | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [detailMedia, setDetailMedia] = useState<DetailMedia | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [requestedIds, setRequestedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<SearchState>({ kind: "idle" });
   const rootReference = useRef<HTMLDivElement>(null);
@@ -496,20 +507,37 @@ export function GlobalSearch({
                   <p>{previewCopy(selectedResult)}</p>
                   <div className="search-preview__footer">
                     <span>Seerr match</span>
-                    {selectedRequestable ? (
-                      <button
-                        aria-label={`Request ${selectedResult.title}`}
-                        data-directional-item
-                        onClick={() => {
-                          setComposerMedia(selectedResult);
-                          setComposerOpen(true);
-                        }}
-                        type="button"
-                      >
-                        Request <Sparkles aria-hidden="true" />
-                      </button>
+                    {selectedResult.kind === "person" ? (
+                      <span>Profile match</span>
                     ) : (
-                      <span>{availabilityLabel(selectedResult, selectedLocallyRequested)}</span>
+                      <div className="search-preview__actions">
+                        <button
+                          aria-label={`View details for ${selectedResult.title}`}
+                          className="search-preview__detail-action"
+                          data-directional-item
+                          onClick={() => {
+                            setDetailMedia(selectedResult);
+                            setDetailOpen(true);
+                            setOpen(false);
+                          }}
+                          type="button"
+                        >
+                          Details <PanelRightOpen aria-hidden="true" />
+                        </button>
+                        {selectedRequestable ? (
+                          <button
+                            aria-label={`Request ${selectedResult.title}`}
+                            data-directional-item
+                            onClick={() => {
+                              setComposerMedia(selectedResult);
+                              setComposerOpen(true);
+                            }}
+                            type="button"
+                          >
+                            Request <Sparkles aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 </aside>
@@ -518,6 +546,22 @@ export function GlobalSearch({
           )}
         </section>
       ) : null}
+      <MediaDetailDrawer
+        {...(detailClient ? { client: detailClient } : {})}
+        key={detailMedia?.id ?? "media-detail"}
+        media={detailMedia}
+        onOpenChange={(nextOpen) => {
+          setDetailOpen(nextOpen);
+          if (!nextOpen) setDetailMedia(null);
+        }}
+        onRequest={(media) => {
+          setDetailOpen(false);
+          setDetailMedia(null);
+          setComposerMedia(media);
+          setComposerOpen(true);
+        }}
+        open={detailOpen}
+      />
       <RequestComposer
         {...(requestClient ? { client: requestClient } : {})}
         key={composerMedia?.id ?? "request-composer"}

@@ -60,8 +60,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 **Status: In development**
 
-- Seerr and metadata discovery, global search, granular requests, and operator
-  approvals (implemented; protected live evidence pending)
+- Seerr and metadata discovery, global search, normalized movie and series details,
+  granular requests, and operator approvals (implemented; protected live evidence pending)
 - Radarr and Sonarr read-only calendar (implemented; protected live evidence pending), queue,
   monitoring, searches, and manual releases
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
