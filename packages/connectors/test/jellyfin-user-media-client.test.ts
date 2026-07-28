@@ -157,4 +157,51 @@ describe("JellyfinUserMediaClient", () => {
         }),
     ).toThrow(/access token/i);
   });
+
+  it("reads bounded artwork bytes from the authenticated item image endpoint", async () => {
+    const image = new Uint8Array([255, 216, 255, 224, 1, 2, 3]);
+    const { client, requests } = clientWithResponses([
+      new Response(image, { headers: { "content-type": "image/jpeg; charset=binary" } }),
+    ]);
+
+    await expect(
+      client.readImage({ itemId: "series-upstream-1", maxWidth: 1_600, type: "Backdrop" }),
+    ).resolves.toEqual({ body: image, contentType: "image/jpeg" });
+    expect(requests[0]?.url.pathname).toBe("/base/Items/series-upstream-1/Images/Backdrop");
+    expect(requests[0]?.url.searchParams.get("maxWidth")).toBe("1600");
+    expect(requests[0]?.url.searchParams.get("quality")).toBe("90");
+    expect(requests[0]?.init.headers.get("accept")).toContain("image/avif");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("rejects unsafe artwork identifiers, dimensions, media types, and empty bodies", async () => {
+    const invalidType = clientWithResponses([
+      new Response("private-upstream-body", { headers: { "content-type": "text/html" } }),
+    ]);
+    await expect(
+      invalidType.client.readImage({ itemId: "movie-1", maxWidth: 600, type: "Primary" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.image" });
+
+    const empty = clientWithResponses([
+      new Response(new Uint8Array(), { headers: { "content-type": "image/webp" } }),
+    ]);
+    await expect(
+      empty.client.readImage({ itemId: "movie-1", maxWidth: 600, type: "Primary" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.image" });
+
+    const noRequest = clientWithResponses([]);
+    await expect(
+      noRequest.client.readImage({
+        itemId: "unsafe/item",
+        maxWidth: 600,
+        type: "Primary",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.image" });
+    await expect(
+      noRequest.client.readImage({ itemId: "movie-1", maxWidth: 50_000, type: "Primary" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.image" });
+    expect(noRequest.requests).toHaveLength(0);
+  });
 });

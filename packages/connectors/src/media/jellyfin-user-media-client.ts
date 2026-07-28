@@ -70,6 +70,11 @@ export interface JellyfinContinueWatchingResult {
   truncated: boolean;
 }
 
+export interface JellyfinImageResult {
+  body: Uint8Array;
+  contentType: "image/avif" | "image/jpeg" | "image/png" | "image/webp";
+}
+
 export interface JellyfinUserMediaClientOptions {
   accessToken: string;
   deviceId: string;
@@ -199,5 +204,43 @@ export class JellyfinUserMediaClient {
         response.Items.length > JELLYFIN_CONTINUE_WATCHING_LIMIT ||
         (response.TotalRecordCount ?? 0) > JELLYFIN_CONTINUE_WATCHING_LIMIT,
     };
+  }
+
+  public async readImage(input: {
+    itemId: string;
+    maxWidth: number;
+    signal?: AbortSignal;
+    type: "Backdrop" | "Primary";
+  }): Promise<JellyfinImageResult> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(input.itemId)) {
+      throw this.#client.invalidResponse("media.image");
+    }
+    if (!Number.isInteger(input.maxWidth) || input.maxWidth < 64 || input.maxWidth > 3_840) {
+      throw this.#client.invalidResponse("media.image");
+    }
+    const response = await this.#client.requestBytes(`Items/${input.itemId}/Images/${input.type}`, {
+      headers: {
+        accept: "image/avif,image/webp,image/jpeg,image/png",
+        authorization: this.#authorization,
+      },
+      operation: "media.image",
+      query: { maxWidth: String(input.maxWidth), quality: "90" },
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    const contentType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    if (
+      contentType !== "image/avif" &&
+      contentType !== "image/jpeg" &&
+      contentType !== "image/png" &&
+      contentType !== "image/webp"
+    ) {
+      throw this.#client.invalidResponse("media.image");
+    }
+    if (response.body.byteLength === 0) throw this.#client.invalidResponse("media.image");
+    return { body: response.body, contentType };
   }
 }
