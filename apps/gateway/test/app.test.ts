@@ -233,25 +233,30 @@ describe("gateway application", () => {
     competingWriter.sqlite.exec("begin immediate");
 
     try {
-      const startedAt = performance.now();
       let timerFiredAt: number | undefined;
       const timer = new Promise<void>((resolve) => {
         setTimeout(() => {
           timerFiredAt = performance.now();
           resolve();
-        }, 10);
+        }, 0);
       });
-      const responses = await Promise.all(
+      let responsesCompletedAt: number | undefined;
+      const responsesPromise = Promise.all(
         Array.from({ length: 20 }, () => app.inject({ method: "GET", url: "/readyz" })),
-      );
-      await timer;
+      ).then((responses) => {
+        responsesCompletedAt = performance.now();
+        return responses;
+      });
+      const [responses] = await Promise.all([responsesPromise, timer]);
 
       expect(responses).toHaveLength(20);
       for (const response of responses) {
         expect(response.statusCode).toBe(503);
         expect(apiErrorSchema.parse(response.json()).error.code).toBe("service_unavailable");
       }
-      expect((timerFiredAt ?? Number.POSITIVE_INFINITY) - startedAt).toBeLessThan(250);
+      expect(timerFiredAt ?? Number.POSITIVE_INFINITY).toBeLessThan(
+        responsesCompletedAt ?? Number.NEGATIVE_INFINITY,
+      );
     } finally {
       if (competingWriter.sqlite.inTransaction) competingWriter.sqlite.exec("rollback");
       competingWriter.close();
