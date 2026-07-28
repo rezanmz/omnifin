@@ -181,6 +181,9 @@ released schema, fresh-install test, backup/restore consideration, and an explic
 rollback note. Never edit an already released migration. Test data must not contain
 real tokens, hostnames, users, viewing history, or media paths.
 
+The protected loopback performance profile and the separate deployment-specific
+rehearsal are documented in the [load-testing runbook](operations/load-testing.md).
+
 ## Security expectations
 
 Read the [security model](security-model.md) before changing authentication, sessions,
