@@ -2523,6 +2523,7 @@
 .manual-workbench__glass {
   --glass-pointer-x: 24%;
   --glass-pointer-y: 0%;
+  --manual-glass-base: var(--glass-popover);
   -webkit-backdrop-filter: blur(62px) saturate(215%) contrast(1.04);
   backdrop-filter: blur(62px) saturate(215%) contrast(1.04);
   background:
@@ -2536,7 +2537,7 @@
       color-mix(in srgb, var(--ambient-accent, var(--acid)) 12%, transparent),
       transparent 31%
     ),
-    linear-gradient(145deg, var(--glass-highlight), transparent 30%), var(--glass-popover);
+    linear-gradient(145deg, var(--glass-highlight), transparent 30%), var(--manual-glass-base);
   border: 1px solid var(--glass-edge);
   border-radius: 38px;
   box-shadow:
@@ -3590,7 +3591,7 @@
 
 @media (max-width: 760px) {
   .manual-workbench {
-    height: min(92dvh, 900px);
+    height: calc(100dvh - 16px);
     inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px;
     width: auto;
   }
@@ -3600,6 +3601,11 @@
   }
 
   .manual-workbench__glass {
+    --manual-glass-base: color-mix(
+      in srgb,
+      var(--glass-popover) 20%,
+      var(--surface-card-solid)
+    );
     border-radius: 30px;
   }
 
@@ -3620,6 +3626,7 @@
 
   .manual-workbench__body,
   .manual-workbench__skeleton {
+    background: color-mix(in srgb, var(--surface-card-solid) 76%, transparent);
     display: block;
     overflow: auto;
   }
@@ -8065,7 +8072,12 @@ html:has([data-display-profile="ten-foot"]) {
   .search-result,
   .search-console__retry,
   .search-preview__footer button,
-  .request-composer__season-chips button {
+  .request-composer__season-chips button,
+  .manual-workbench__header-actions button,
+  .manual-inspector__review,
+  .manual-confirmation__actions button,
+  .manual-workbench__error button,
+  .manual-workbench__error a {
     min-height: 48px;
   }
 }
@@ -8076,6 +8088,7 @@ html:has([data-display-profile="ten-foot"]) {
   .search-console,
   .request-composer__glass,
   .acquisition-timeline__glass,
+  .manual-workbench__glass,
   .profile-popover,
   .top-command-bar__actions,
   .operations-dock,
@@ -8098,6 +8111,8 @@ html:has([data-display-profile="ten-foot"]) {
   .top-command-bar__actions::after,
   .operations-dock::before,
   .operations-dock::after,
+  .manual-workbench__glass::before,
+  .manual-workbench__glass::after,
   .mobile-navigation::before,
   .mobile-navigation::after {
     display: none;
@@ -8110,6 +8125,7 @@ html:has([data-display-profile="ten-foot"]) {
   .search-console,
   .request-composer__glass,
   .acquisition-timeline__glass,
+  .manual-workbench__glass,
   .profile-popover,
   .top-command-bar__actions,
   .operations-dock,
@@ -8129,6 +8145,8 @@ html:has([data-display-profile="ten-foot"]) {
   .top-command-bar__actions::after,
   .operations-dock::before,
   .operations-dock::after,
+  .manual-workbench__glass::before,
+  .manual-workbench__glass::after,
   .mobile-navigation::before,
   .mobile-navigation::after {
     display: none;
@@ -8151,6 +8169,7 @@ html:has([data-display-profile="ten-foot"]) {
   .search-console,
   .request-composer__glass,
   .acquisition-timeline__glass,
+  .manual-workbench__glass,
   .profile-popover,
   .top-command-bar__actions,
   .operations-dock,
@@ -8173,6 +8192,8 @@ html:has([data-display-profile="ten-foot"]) {
   .top-command-bar__actions::after,
   .operations-dock::before,
   .operations-dock::after,
+  .manual-workbench__glass::before,
+  .manual-workbench__glass::after,
   .mobile-navigation::before,
   .mobile-navigation::after {
     display: none;
@@ -8194,6 +8215,7 @@ html:has([data-display-profile="ten-foot"]) {
   .search-console,
   .request-composer__glass,
   .acquisition-timeline__glass,
+  .manual-workbench__glass,
   .profile-popover,
   .top-command-bar__actions,
   .operations-dock,
@@ -8218,6 +8240,8 @@ html:has([data-display-profile="ten-foot"]) {
   .top-command-bar__actions::after,
   .operations-dock::before,
   .operations-dock::after,
+  .manual-workbench__glass::before,
+  .manual-workbench__glass::after,
   .mobile-navigation::before,
   .mobile-navigation::after {
     display: none;
@@ -8230,10 +8254,17 @@ html:has([data-display-profile="ten-foot"]) {
 
   .appearance-selector__option[data-selected],
   .navigation-rail__item[data-current],
-  .mobile-navigation__item[data-current] {
+  .mobile-navigation__item[data-current],
+  .manual-release-row[data-selected] {
     forced-color-adjust: none;
     background: Highlight;
     color: HighlightText;
+  }
+
+  .manual-release-row[data-selected] .manual-release-row__selector > i::after,
+  .manual-confirmation__override:has(input:checked) > span {
+    background: HighlightText;
+    color: Highlight;
   }
 }
 

@@ -47,6 +47,36 @@ describe("manual release client", () => {
     await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "signed_out" });
   });
 
+  it("fails closed for malformed, inactive, missing, and unavailable session state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ csrfToken: "malformed" }))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            csrfToken,
+            principal: {
+              ...manualReleaseOperator,
+              accountState: "pending_link",
+              linkedServices: [],
+              permissions: ["identities.self.manage", "sessions.self.revoke"],
+              role: "viewer",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse({ csrfToken: null, principal: null }))
+        .mockResolvedValueOnce(jsonResponse({}, 503))
+        .mockRejectedValueOnce(new Error("private transport detail")),
+    );
+
+    await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "unavailable" });
+    await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "forbidden" });
+    await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "signed_out" });
+    await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "unavailable" });
+    await expect(manualReleaseClient.loadEligibility()).resolves.toEqual({ status: "unavailable" });
+  });
+
   it("searches one validated target and accepts only the normalized contract", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(manualReleaseSearch));
     vi.stubGlobal("fetch", fetchMock);
@@ -58,6 +88,45 @@ describe("manual release client", () => {
       "/api/acquisitions/releases?mediaId=42&service=radarr",
       expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
     );
+  });
+
+  it("encodes mutually exclusive Sonarr episode and season targets", async () => {
+    const episodeResponse = {
+      ...manualReleaseSearch,
+      target: {
+        episodeId: 904,
+        kind: "episode" as const,
+        mediaId: 77,
+        seasonNumber: null,
+        service: "sonarr" as const,
+      },
+    };
+    const seasonResponse = {
+      ...manualReleaseSearch,
+      target: {
+        episodeId: null,
+        kind: "season" as const,
+        mediaId: 77,
+        seasonNumber: 2,
+        service: "sonarr" as const,
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(episodeResponse))
+      .mockResolvedValueOnce(jsonResponse(seasonResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      manualReleaseClient.search({ episodeId: 904, mediaId: 77, service: "sonarr" }),
+    ).resolves.toEqual(episodeResponse);
+    await expect(
+      manualReleaseClient.search({ mediaId: 77, seasonNumber: 2, service: "sonarr" }),
+    ).resolves.toEqual(seasonResponse);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/acquisitions/releases?mediaId=77&service=sonarr&episodeId=904",
+      "/api/acquisitions/releases?mediaId=77&service=sonarr&seasonNumber=2",
+    ]);
   });
 
   it("sends one opaque release reference with CSRF and idempotency protection", async () => {
@@ -151,10 +220,34 @@ describe("manual release client", () => {
     expect(JSON.stringify(failure)).not.toContain("private network detail");
   });
 
+  it("rejects unreadable success envelopes and preserves explicit cancellation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not-json", { status: 200 })),
+    );
+    await expect(
+      manualReleaseClient.search({ mediaId: 42, service: "radarr" }),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+
+    const abort = new DOMException("Cancelled", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abort));
+    await expect(manualReleaseClient.search({ mediaId: 42, service: "radarr" })).rejects.toBe(
+      abort,
+    );
+    await expect(manualReleaseClient.loadEligibility()).rejects.toBe(abort);
+  });
+
   it("creates a cryptographically random bounded grab key", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "01234567-89ab-cdef-0123-456789abcdef" });
     expect(createManualReleaseGrabIdempotencyKey()).toBe(
       "manual-grab-01234567-89ab-cdef-0123-456789abcdef",
+    );
+  });
+
+  it("fails safely without browser secure randomness", () => {
+    vi.stubGlobal("crypto", {});
+    expect(() => createManualReleaseGrabIdempotencyKey()).toThrow(
+      expect.objectContaining({ code: "secure_random_unavailable", kind: "unavailable" }),
     );
   });
 });

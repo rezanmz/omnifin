@@ -2,6 +2,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { mockDiscoverySearch } from "../fixtures/discovery";
 import { mockMediaRequestSession } from "../fixtures/media-request";
+import {
+  mockManualReleaseSearch,
+  mockManualReleaseSession,
+  openManualReleaseWorkbench,
+} from "../fixtures/manual-release";
 
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
@@ -143,6 +148,24 @@ test("acquisition timeline has no automatically detectable accessibility violati
   await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
   await page.getByRole("button", { name: "Review search" }).click();
   await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("manual release review has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockManualReleaseSession(page);
+  await mockManualReleaseSearch(page);
+  const workbench = await openManualReleaseWorkbench(page);
+  await workbench.getByRole("radio", { name: /1080p\.WEB-DL/u }).click();
+  await workbench.getByRole("button", { name: "Review grab" }).click();
+  await expect(workbench.getByRole("button", { name: "Send release" })).toBeDisabled();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

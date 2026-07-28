@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockDiscoverySearch } from "../fixtures/discovery";
 import { mockMediaRequestSession } from "../fixtures/media-request";
+import {
+  mockManualReleaseSearch,
+  mockManualReleaseSession,
+  openManualReleaseWorkbench,
+} from "../fixtures/manual-release";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
@@ -523,6 +528,46 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot("acquisition-recovery-confirmation.png");
+});
+
+async function prepareManualReleaseWorkbench(page: Page) {
+  await mockManualReleaseSession(page);
+  await mockManualReleaseSearch(page);
+  const workbench = await openManualReleaseWorkbench(page);
+  await page.evaluate(() => document.fonts.ready);
+  return workbench;
+}
+
+test("manual release workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Manual release comparison covers representative desktop and phone geometry",
+  );
+  await prepareManualReleaseWorkbench(page);
+  await expect(page).toHaveScreenshot("manual-release-workbench.png");
+});
+
+test("light manual release workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light manual release comparison covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await prepareManualReleaseWorkbench(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("manual-release-workbench-light.png");
+});
+
+test("manual release override visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Manual release confirmation covers representative desktop and phone geometry",
+  );
+  const workbench = await prepareManualReleaseWorkbench(page);
+  await workbench.getByRole("radio", { name: /1080p\.WEB-DL/u }).click();
+  await workbench.getByRole("button", { name: "Review grab" }).click();
+  await expect(workbench.getByRole("button", { name: "Send release" })).toBeDisabled();
+  await expect(page).toHaveScreenshot("manual-release-override.png");
 });
 
 test("focus-visible visual baseline", async ({ page }, testInfo) => {
