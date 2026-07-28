@@ -16,6 +16,10 @@ function workflowDocument(name) {
   return parse(workflow(name));
 }
 
+function repositoryJson(name) {
+  return JSON.parse(repositoryFile(name));
+}
+
 function namedStep(steps, name) {
   const step = steps.find((candidate) => candidate.name === name);
   assert.ok(step, `Expected workflow step: ${name}`);
@@ -26,6 +30,26 @@ test("CI reruns pull request title policy after title edits", () => {
   const source = workflow("ci.yml");
   const pullRequest = source.slice(source.indexOf("  pull_request:"), source.indexOf("  push:"));
   assert.match(pullRequest, /\n\s+types:\n(?:\s+- .+\n)*\s+- edited\n/u);
+});
+
+test("release automation remains in the reviewed pre-1.0 channel", () => {
+  const config = repositoryJson("release-please-config.json");
+  const manifest = repositoryJson(".release-please-manifest.json");
+  const packageDocument = repositoryJson("package.json");
+
+  assert.equal(config["initial-version"], "0.1.0");
+  assert.equal(config["bump-minor-pre-major"], true);
+  assert.equal(config["pull-request-title-pattern"], "chore(release): prepare ${version}");
+  assert.equal(
+    config["pull-request-header"],
+    "This pull request prepares the next reviewed Omnifin release.",
+  );
+  assert.equal(
+    config["pull-request-footer"],
+    "Merge only after the selected release profile and all protected checks are green.",
+  );
+  assert.equal(manifest["."], "0.0.0");
+  assert.equal(packageDocument.version, "0.0.0");
 });
 
 test("CI installs actionlint from a checksum-pinned release", () => {
