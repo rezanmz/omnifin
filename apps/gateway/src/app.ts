@@ -78,6 +78,10 @@ import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
 } from "./requests/media-request-routes.js";
+import {
+  requestReviewRoutes,
+  type RequestReviewRoutesOptions,
+} from "./requests/request-review-routes.js";
 import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
@@ -117,6 +121,7 @@ export interface CreateAppOptions {
   subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
   libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
+  requestReviewDependencies?: RequestReviewRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
@@ -453,6 +458,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.mediaRequestDependencies === undefined
         ? {}
         : { dependencies: options.mediaRequestDependencies }),
+    });
+    await app.register(requestReviewRoutes, {
+      ...(options.requestReviewDependencies === undefined
+        ? {}
+        : { dependencies: options.requestReviewDependencies }),
     });
     await app.register(acquisitionProvenanceRoutes, {
       ...(options.acquisitionProvenanceDependencies === undefined
