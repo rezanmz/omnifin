@@ -80,6 +80,7 @@ const probeCases: ProbeCase[] = [
       "connector.version",
       "acquisition.history",
       "acquisition.search",
+      "acquisition.grab",
     ],
     create: (config) => new RadarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {
@@ -96,6 +97,7 @@ const probeCases: ProbeCase[] = [
       "connector.version",
       "acquisition.history",
       "acquisition.search",
+      "acquisition.grab",
     ],
     create: (config) => new SonarrAdapter({ ...config, apiKey: TEST_API_KEY }),
     assertRequest: (request) => {

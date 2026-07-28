@@ -4,6 +4,7 @@ import { partialFailureSchema } from "./connectors.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const ACQUISITION_MAX_EVENTS = 250;
+export const MANUAL_RELEASE_MAX_RESULTS = 250;
 
 const upstreamIdentifierSchema = z.int().positive().max(2_147_483_647);
 const seasonNumberSchema = z.int().nonnegative().max(10_000);
@@ -175,6 +176,151 @@ export const acquisitionSearchResponseSchema = z.strictObject({
 });
 export type AcquisitionSearchResponse = z.infer<typeof acquisitionSearchResponseSchema>;
 
+export const manualReleaseTargetInputSchema = z
+  .strictObject({
+    episodeId: z.coerce.number().int().positive().max(2_147_483_647).optional(),
+    mediaId: z.coerce.number().int().positive().max(2_147_483_647),
+    seasonNumber: z.coerce.number().int().nonnegative().max(10_000).optional(),
+    service: acquisitionServiceSchema,
+  })
+  .superRefine((target, context) => {
+    if (target.service === "radarr") {
+      if (target.episodeId !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Movie release targets cannot include an episode.",
+          path: ["episodeId"],
+        });
+      }
+      if (target.seasonNumber !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Movie release targets cannot include a season.",
+          path: ["seasonNumber"],
+        });
+      }
+      return;
+    }
+    if ((target.episodeId === undefined) === (target.seasonNumber === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Series release targets require exactly one episode or season.",
+        path: ["episodeId"],
+      });
+    }
+  });
+export type ManualReleaseTargetInput = z.infer<typeof manualReleaseTargetInputSchema>;
+
+export const manualReleaseTargetSchema = z
+  .strictObject({
+    episodeId: upstreamIdentifierSchema.nullable(),
+    kind: z.enum(["movie", "episode", "season"]),
+    mediaId: upstreamIdentifierSchema,
+    seasonNumber: seasonNumberSchema.nullable(),
+    service: acquisitionServiceSchema,
+  })
+  .superRefine((target, context) => {
+    const validMovie =
+      target.service === "radarr" &&
+      target.kind === "movie" &&
+      target.episodeId === null &&
+      target.seasonNumber === null;
+    const validEpisode =
+      target.service === "sonarr" &&
+      target.kind === "episode" &&
+      target.episodeId !== null &&
+      target.seasonNumber === null;
+    const validSeason =
+      target.service === "sonarr" &&
+      target.kind === "season" &&
+      target.episodeId === null &&
+      target.seasonNumber !== null;
+    if (!validMovie && !validEpisode && !validSeason) {
+      context.addIssue({
+        code: "custom",
+        message: "The manual release target shape must match its service and kind.",
+        path: ["kind"],
+      });
+    }
+  });
+export type ManualReleaseTarget = z.infer<typeof manualReleaseTargetSchema>;
+
+export const manualReleaseDecisionSchema = z.enum(["approved", "temporarily_rejected", "rejected"]);
+export type ManualReleaseDecision = z.infer<typeof manualReleaseDecisionSchema>;
+
+export const manualReleaseCandidateSchema = z
+  .strictObject({
+    ageMinutes: z.int().nonnegative().max(5_256_000),
+    customFormats: z.array(safeLabelSchema).max(32),
+    customFormatScore: z.int().min(-1_000_000).max(1_000_000),
+    decision: manualReleaseDecisionSchema,
+    downloadAllowed: z.boolean(),
+    episodeNumbers: z.array(z.int().positive().max(100_000)).max(100),
+    fullSeason: z.boolean(),
+    id: z
+      .string()
+      .length(40)
+      .regex(/^release_[A-Za-z0-9_-]{32}$/u),
+    indexer: safeLabelSchema,
+    languages: z.array(safeLabelSchema).max(16),
+    leechers: z.int().nonnegative().max(2_147_483_647).nullable(),
+    protocol: z.enum(["torrent", "usenet", "unknown"]),
+    publishedAt: z.iso.datetime({ offset: true }),
+    quality: safeLabelSchema,
+    rejectionReasons: z.array(z.string().trim().min(1).max(240)).max(32),
+    releaseGroup: safeLabelSchema.nullable(),
+    requiresOverride: z.boolean(),
+    seeders: z.int().nonnegative().max(2_147_483_647).nullable(),
+    sizeBytes: z.int().nonnegative().max(9_007_199_254_740_991),
+    title: releaseTitleSchema,
+  })
+  .superRefine((candidate, context) => {
+    if ((candidate.decision !== "approved") !== candidate.requiresOverride) {
+      context.addIssue({
+        code: "custom",
+        message: "Rejected releases must require explicit override confirmation.",
+        path: ["requiresOverride"],
+      });
+    }
+    if (candidate.decision === "approved" && candidate.rejectionReasons.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Approved releases cannot include rejection reasons.",
+        path: ["rejectionReasons"],
+      });
+    }
+  });
+export type ManualReleaseCandidate = z.infer<typeof manualReleaseCandidateSchema>;
+
+export const manualReleaseSearchResponseSchema = z.strictObject({
+  expiresAt: z.iso.datetime({ offset: true }),
+  generatedAt: z.iso.datetime({ offset: true }),
+  releases: z.array(manualReleaseCandidateSchema).max(MANUAL_RELEASE_MAX_RESULTS),
+  target: manualReleaseTargetSchema,
+});
+export type ManualReleaseSearchResponse = z.infer<typeof manualReleaseSearchResponseSchema>;
+
+export const manualReleaseGrabInputSchema = z.strictObject({
+  overrideRejections: z.boolean(),
+  releaseId: manualReleaseCandidateSchema.shape.id,
+});
+export type ManualReleaseGrabInput = z.infer<typeof manualReleaseGrabInputSchema>;
+
+export const manualReleaseGrabIdempotencyKeySchema = idempotencyKeySchema;
+export type ManualReleaseGrabIdempotencyKey = z.infer<typeof manualReleaseGrabIdempotencyKeySchema>;
+
+export const manualReleaseGrabResponseSchema = z.strictObject({
+  acceptedAt: z.iso.datetime({ offset: true }),
+  operationId: z
+    .string()
+    .length(45)
+    .regex(/^release_grab_[A-Za-z0-9_-]{32}$/u),
+  releaseId: manualReleaseCandidateSchema.shape.id,
+  service: acquisitionServiceSchema,
+  state: z.literal("accepted"),
+});
+export type ManualReleaseGrabResponse = z.infer<typeof manualReleaseGrabResponseSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -188,4 +334,14 @@ export const acquisitionProvenanceResponseJsonSchema = withoutSchemaDialect(
 export const acquisitionSearchInputJsonSchema = withoutSchemaDialect(acquisitionSearchInputSchema);
 export const acquisitionSearchResponseJsonSchema = withoutSchemaDialect(
   acquisitionSearchResponseSchema,
+);
+export const manualReleaseTargetInputJsonSchema = withoutSchemaDialect(
+  manualReleaseTargetInputSchema,
+);
+export const manualReleaseSearchResponseJsonSchema = withoutSchemaDialect(
+  manualReleaseSearchResponseSchema,
+);
+export const manualReleaseGrabInputJsonSchema = withoutSchemaDialect(manualReleaseGrabInputSchema);
+export const manualReleaseGrabResponseJsonSchema = withoutSchemaDialect(
+  manualReleaseGrabResponseSchema,
 );

@@ -10,6 +10,14 @@ import {
   mockMediaRequestCreation,
   mockMediaRequestSession,
 } from "../fixtures/media-request";
+import {
+  manualReleaseCandidates,
+  manualReleaseCsrfToken,
+  mockManualReleaseGrab,
+  mockManualReleaseSearch,
+  mockManualReleaseSession,
+  openManualReleaseWorkbench,
+} from "../fixtures/manual-release";
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
   await page.goto("/");
@@ -73,6 +81,34 @@ test("operators can queue one exact-target acquisition search", async ({ page })
   expect(capture.body).toEqual({ mediaId: 42, service: "radarr" });
   expect(capture.csrfToken).toBe(acquisitionRecoveryCsrfToken);
   expect(capture.idempotencyKey).toMatch(/^acquisition-[0-9a-f-]{36}$/u);
+});
+
+test("operators can compare and explicitly override one exact manual release", async ({ page }) => {
+  await mockManualReleaseSession(page);
+  await mockManualReleaseSearch(page);
+  const capture = await mockManualReleaseGrab(page);
+  const workbench = await openManualReleaseWorkbench(page);
+
+  await expect(page.getByRole("dialog", { name: "Signal history" })).not.toBeVisible();
+  await expect(workbench.getByText("2 candidates")).toBeVisible();
+  await workbench.getByRole("radio", { name: /1080p\.WEB-DL/u }).click();
+  await expect(workbench.getByText("Quality profile does not allow WEB-1080p")).toBeVisible();
+  await workbench.getByRole("button", { name: "Review grab" }).click();
+
+  const submit = workbench.getByRole("button", { name: "Send release" });
+  await expect(submit).toBeDisabled();
+  await workbench.getByRole("checkbox", { name: /reviewed the rejection evidence/u }).check();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+
+  await expect(workbench.getByText("Release accepted")).toBeVisible();
+  expect(capture.requests).toBe(1);
+  expect(capture.body).toEqual({
+    overrideRejections: true,
+    releaseId: manualReleaseCandidates.rejected.id,
+  });
+  expect(capture.csrfToken).toBe(manualReleaseCsrfToken);
+  expect(capture.idempotencyKey).toMatch(/^manual-grab-[0-9a-f-]{36}$/u);
 });
 
 test("global search discloses live discovery with keyboard and touch-safe controls", async ({

@@ -12,6 +12,11 @@ const AcquisitionTimeline = dynamic(
   { ssr: false },
 );
 
+const ManualReleaseWorkbench = dynamic(
+  () => import("./manual-release-workbench").then((module) => module.ManualReleaseWorkbench),
+  { ssr: false },
+);
+
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
   const expanded = useInterfaceStore((state) => state.operationsExpanded);
   const setExpanded = useInterfaceStore((state) => state.setOperationsExpanded);
@@ -22,6 +27,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
   const averagePercent = Math.round(average * 100);
   const [selectedOperation, setSelectedOperation] = useState<OperationModel | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
 
   if (operations.length === 0) {
     return (
@@ -134,8 +140,17 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         </div>
       </div>
       <AcquisitionTimeline
+        onManualSearch={() => {
+          setTimelineOpen(false);
+          setWorkbenchOpen(true);
+        }}
         onOpenChange={setTimelineOpen}
         open={timelineOpen}
+        operation={selectedOperation}
+      />
+      <ManualReleaseWorkbench
+        onOpenChange={setWorkbenchOpen}
+        open={workbenchOpen}
         operation={selectedOperation}
       />
     </section>

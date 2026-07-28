@@ -51,6 +51,7 @@ type TimelineState =
 
 export interface AcquisitionTimelineProperties {
   client?: AcquisitionProvenanceClient;
+  onManualSearch?: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
   operation: OperationModel | null;
@@ -268,12 +269,14 @@ function TimelineReady({
 
 function RecoveryPanel({
   onConfirm,
+  onManualSearch,
   onNewAttempt,
   onStart,
   state,
   targetLabel,
 }: {
   onConfirm: () => void;
+  onManualSearch?: () => void;
   onNewAttempt: () => void;
   onStart: () => void;
   state: RecoveryState;
@@ -290,9 +293,20 @@ function RecoveryPanel({
           <strong>Search this target again</strong>
           <p>Queue a new automatic search without changing files or monitoring settings.</p>
         </div>
-        <button onClick={onStart} type="button">
-          Review search
-        </button>
+        <span className="acquisition-recovery__actions">
+          {onManualSearch ? (
+            <button
+              className="acquisition-recovery__secondary"
+              onClick={onManualSearch}
+              type="button"
+            >
+              Browse releases
+            </button>
+          ) : null}
+          <button onClick={onStart} type="button">
+            Review search
+          </button>
+        </span>
       </section>
     );
   }
@@ -387,6 +401,7 @@ function RecoveryPanel({
 
 export function AcquisitionTimeline({
   client = acquisitionProvenanceClient,
+  onManualSearch,
   onOpenChange,
   open,
   operation,
@@ -582,6 +597,7 @@ export function AcquisitionTimeline({
                       }
                     })();
                   }}
+                  {...(onManualSearch ? { onManualSearch } : {})}
                   onNewAttempt={() => {
                     idempotencyKeyReference.current = null;
                     setRecoveryState({ kind: "idle" });
