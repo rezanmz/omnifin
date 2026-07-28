@@ -130,6 +130,18 @@ function assertDatabaseReady(database: DatabaseHandle) {
 }
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
+  let pendingReadinessCheck: Promise<void> | undefined;
+  const checkDatabaseReadiness = () => {
+    pendingReadinessCheck ??= new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    })
+      .then(() => assertDatabaseReady(app.database))
+      .finally(() => {
+        pendingReadinessCheck = undefined;
+      });
+    return pendingReadinessCheck;
+  };
+
   app.get(
     "/healthz",
     {
@@ -174,7 +186,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     },
     async (_request, reply) => {
       try {
-        assertDatabaseReady(app.database);
+        await checkDatabaseReadiness();
         return { checks: { database: "ok" as const }, status: "ready" as const };
       } catch (error) {
         app.log.error({ err: error, operation: "readiness.database" }, "Readiness check failed");

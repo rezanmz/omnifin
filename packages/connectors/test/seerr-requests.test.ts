@@ -192,4 +192,159 @@ describe("Seerr media requests", () => {
     expect(failure).toMatchObject({ code: "response_invalid" });
     expect(JSON.stringify(failure)).not.toContain(privateValue);
   });
+
+  it("lists bounded review records with normalized requestors and title metadata", async () => {
+    const list = {
+      pageInfo: { page: 1, pageSize: 2, pages: 2, results: 3 },
+      results: [
+        {
+          createdAt: "2026-07-28T16:30:00.000Z",
+          id: 101,
+          is4k: false,
+          media: { mediaType: "movie", tmdbId: 550 },
+          requestedBy: {
+            email: "not-forwarded@example.test",
+            jellyfinUsername: "alex",
+          },
+          seasons: [],
+          status: 1,
+          updatedAt: "2026-07-28T16:35:00.000Z",
+        },
+        {
+          createdAt: "2026-07-28T15:30:00.000Z",
+          id: 100,
+          is4k: true,
+          media: { mediaType: "tv", tmdbId: 1399 },
+          requestedBy: { email: "not-forwarded@example.test", username: "sam" },
+          seasons: [{ seasonNumber: 3 }, { seasonNumber: 1 }],
+          status: 2,
+          updatedAt: "2026-07-28T15:35:00.000Z",
+        },
+      ],
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse(list),
+      jsonResponse({ releaseDate: "2026-07-01", title: "The Long Meridian" }),
+      jsonResponse({ firstAirDate: "2025-04-02", name: "Northern Lights" }),
+    ]);
+
+    const result = await adapter.listMediaRequests({
+      cursor: null,
+      limit: 2,
+      status: "pending",
+    });
+
+    expect(result).toEqual({
+      generatedAt: "2026-07-25T12:00:00.000Z",
+      items: [
+        {
+          createdAt: "2026-07-28T16:30:00.000Z",
+          id: "request:101",
+          is4k: false,
+          kind: "movie",
+          requestedBy: "alex",
+          seasons: null,
+          source: "seerr",
+          status: "pending",
+          title: "The Long Meridian",
+          tmdbId: 550,
+          updatedAt: "2026-07-28T16:35:00.000Z",
+          year: 2026,
+        },
+        {
+          createdAt: "2026-07-28T15:30:00.000Z",
+          id: "request:100",
+          is4k: true,
+          kind: "series",
+          requestedBy: "sam",
+          seasons: [1, 3],
+          source: "seerr",
+          status: "approved",
+          title: "Northern Lights",
+          tmdbId: 1399,
+          updatedAt: "2026-07-28T15:35:00.000Z",
+          year: 2025,
+        },
+      ],
+      nextCursor: "requests:2",
+      status: "pending",
+    });
+    expect(requests.map((request) => request.url.pathname)).toEqual([
+      "/api/v1/request",
+      "/api/v1/movie/550",
+      "/api/v1/tv/1399",
+    ]);
+    expect(requests[0]?.url.searchParams.get("filter")).toBe("pending");
+    expect(requests[0]?.url.searchParams.get("take")).toBe("2");
+    expect(requests[0]?.url.searchParams.get("skip")).toBe("0");
+    expect(JSON.stringify(result)).not.toContain("not-forwarded@example.test");
+  });
+
+  it("approves an opaque request target and verifies the returned decision", async () => {
+    const reviewed = {
+      createdAt: "2026-07-28T16:30:00.000Z",
+      id: 101,
+      is4k: false,
+      media: { mediaType: "movie", tmdbId: 550 },
+      requestedBy: { jellyfinUsername: "alex" },
+      seasons: [],
+      status: 2,
+      updatedAt: "2026-07-28T16:40:00.000Z",
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse(reviewed),
+      jsonResponse({ releaseDate: "2026-07-01", title: "The Long Meridian" }),
+    ]);
+
+    const result = await adapter.reviewMediaRequest("request:101", { decision: "approve" });
+
+    expect(result).toMatchObject({ id: "request:101", status: "approved" });
+    expect(requests[0]?.url.pathname).toBe("/api/v1/request/101/approve");
+    expect(requests[0]?.init.method).toBe("POST");
+    expect(requests[0]?.init.headers.get("x-api-key")).toBe("fixture-api-key");
+    expect(requests[0]?.init.headers.get("x-api-user")).toBeNull();
+  });
+
+  it("fails closed on malformed review targets and contradictory upstream outcomes", async () => {
+    const noRequests = adapterWithResponses([]).adapter;
+    await expect(
+      noRequests.reviewMediaRequest("request:../../private", { decision: "decline" }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+
+    const contradictory = adapterWithResponses([
+      jsonResponse({
+        createdAt: "2026-07-28T16:30:00.000Z",
+        id: 101,
+        media: { mediaType: "movie", tmdbId: 550 },
+        requestedBy: { jellyfinUsername: "alex" },
+        status: 1,
+        updatedAt: "2026-07-28T16:40:00.000Z",
+      }),
+    ]).adapter;
+    await expect(
+      contradictory.reviewMediaRequest("request:101", { decision: "approve" }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+  });
+
+  it.each([
+    { reason: "request_denied", status: 403 },
+    { reason: "request_not_found", status: 404 },
+    { reason: "request_conflict", status: 409 },
+  ] as const)(
+    "maps review status $status to $reason without exposing its body",
+    async (fixture) => {
+      const privateMessage = "private review response";
+      const adapter = adapterWithResponses([
+        jsonResponse({ message: privateMessage }, { status: fixture.status }),
+      ]).adapter;
+      let failure: unknown;
+      try {
+        await adapter.reviewMediaRequest("request:101", { decision: "approve" });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject<Partial<SeerrRequestError>>({ reason: fixture.reason });
+      expect(JSON.stringify(failure)).not.toContain(privateMessage);
+    },
+  );
 });

@@ -362,6 +362,12 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
   const geometry = await page.evaluate(() => {
     const navigation = document.querySelector<HTMLElement>(".mobile-navigation")!;
     const navigationBox = navigation.getBoundingClientRect();
+    const navigationItems = Array.from(
+      navigation.querySelectorAll<HTMLElement>(".mobile-navigation__item"),
+    ).map((item) => {
+      const box = item.getBoundingClientRect();
+      return { height: box.height, top: Math.round(box.top), width: box.width };
+    });
     const firstRailHeading = document
       .querySelector<HTMLElement>(".media-rail .section-heading")!
       .getBoundingClientRect();
@@ -383,11 +389,18 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
       firstRailHeadingTop: firstRailHeading.top,
       heroBottom: heroBox.bottom,
       navigationBottom: navigationBox.bottom,
+      navigationItems,
       navigationTop: navigationBox.top,
     };
   });
 
   expect(geometry.actions).toHaveLength(2);
+  expect(geometry.navigationItems).toHaveLength(6);
+  expect(new Set(geometry.navigationItems.map((item) => item.top)).size).toBe(1);
+  for (const item of geometry.navigationItems) {
+    expect(item.height).toBeGreaterThanOrEqual(44);
+    expect(item.width).toBeGreaterThanOrEqual(44);
+  }
   expect(geometry.heroBottom + 8).toBeLessThanOrEqual(geometry.navigationTop);
   expect(
     geometry.firstRailHeadingBottom <= geometry.navigationTop - 8 ||

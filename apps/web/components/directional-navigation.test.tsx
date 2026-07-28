@@ -25,6 +25,10 @@ describe("directional navigation", () => {
       "href",
       "/operations/downloads",
     );
+    expect(screen.getByRole("link", { name: "Requests" })).toHaveAttribute(
+      "href",
+      "/operations/requests",
+    );
   });
 
   it("moves between hero actions horizontally", async () => {
