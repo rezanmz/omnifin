@@ -11,6 +11,7 @@ import {
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
   { label: "configured dashboard", path: "/" },
+  { label: "signed-out live dashboard", path: "/?test-view=continue-watching-live" },
   { label: "first-run dashboard", path: "/?test-view=onboarding" },
   { label: "configured login", path: "/login" },
   { label: "unconfigured login", path: "/login?test-view=unconfigured" },

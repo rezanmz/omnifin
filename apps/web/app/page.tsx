@@ -1,9 +1,8 @@
 import { DashboardScreen, DashboardStateScreen } from "../components/dashboard-screen";
 import type { DashboardStateKind } from "../components/dashboard-state";
 import { ThemeProvider } from "../components/theme-provider";
-import { demoDashboard } from "../lib/dashboard-data";
+import { connectedDashboard, demoDashboard } from "../lib/dashboard-data";
 import { readThemePreference } from "../lib/theme-server";
-import { redirect } from "next/navigation";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -31,8 +30,11 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
     testParameters["test-profile"] === "ten-foot"
       ? "ten-foot"
       : "standard";
+  const showLiveDashboard = requestedTestView === "continue-watching-live";
   const showDemoDashboard =
-    requestedTestView === "onboarding" ? false : process.env.OMNIFIN_DEMO_MODE === "true";
+    requestedTestView === "onboarding" || showLiveDashboard
+      ? false
+      : process.env.OMNIFIN_DEMO_MODE === "true";
 
   if (requestedTestView && dashboardStateKinds.has(requestedTestView as DashboardStateKind)) {
     const preference = await readThemePreference();
@@ -64,18 +66,14 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
     );
   }
 
-  if (!showDemoDashboard) {
-    redirect(
-      testParameters["test-profile"] === "ten-foot"
-        ? "/onboarding?test-profile=ten-foot"
-        : "/onboarding",
-    );
-  }
-
   const preference = await readThemePreference();
   return (
     <ThemeProvider initialPreference={preference}>
-      <DashboardScreen data={demoDashboard} displayProfile={displayProfile} />
+      <DashboardScreen
+        data={showDemoDashboard ? demoDashboard : connectedDashboard}
+        displayProfile={displayProfile}
+        liveContinueWatching={showLiveDashboard || !showDemoDashboard}
+      />
     </ThemeProvider>
   );
 }

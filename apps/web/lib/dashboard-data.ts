@@ -5,6 +5,7 @@ export type MediaArtwork = "aperture" | "archive" | "bloom" | "contour" | "monol
 export interface MediaCardModel {
   accent: string;
   artwork?: MediaArtwork;
+  artworkPath?: string;
   eyebrow: string;
   id: string;
   progress?: number;
@@ -35,6 +36,7 @@ export interface DashboardModel {
   continueWatching: MediaCardModel[];
   discovery: MediaCardModel[];
   hero: {
+    actions?: "media" | "none";
     accent: string;
     description: string;
     eyebrow: string;
@@ -44,6 +46,23 @@ export interface DashboardModel {
   operations: OperationModel[];
   services: { label: string; status: ServiceStatus }[];
 }
+
+export const connectedDashboard: DashboardModel = {
+  calendar: [],
+  continueWatching: [],
+  discovery: [],
+  hero: {
+    accent: "#8de9d5",
+    actions: "none",
+    description:
+      "Your private Jellyfin watch state is ready here. Pick up a title on any screen and Omnifin will keep this view in step without exposing your media token to the browser.",
+    eyebrow: "Your library, in focus",
+    facts: ["Jellyfin linked", "Private by design", "No telemetry"],
+    title: "Ready when you are",
+  },
+  operations: [],
+  services: [{ label: "Jellyfin", status: "attention" }],
+};
 
 export const demoDashboard: DashboardModel = {
   calendar: [

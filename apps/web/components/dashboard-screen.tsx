@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
+import { ContinueWatchingRail } from "./continue-watching-rail";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
@@ -22,9 +23,11 @@ type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 export function DashboardScreen({
   data,
   displayProfile = "standard",
+  liveContinueWatching = false,
 }: {
   data: DashboardModel;
   displayProfile?: DisplayProfile;
+  liveContinueWatching?: boolean;
 }) {
   return (
     <div
@@ -39,7 +42,11 @@ export function DashboardScreen({
         <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           <HeroSpotlight hero={data.hero} />
-          <MediaRail items={data.continueWatching} title="Continue watching" />
+          {liveContinueWatching ? (
+            <ContinueWatchingRail />
+          ) : (
+            <MediaRail items={data.continueWatching} title="Continue watching" />
+          )}
           <MediaRail items={data.discovery} title="Made for tonight" />
           <CalendarStrip items={data.calendar} />
           <OperationsDock operations={data.operations} />

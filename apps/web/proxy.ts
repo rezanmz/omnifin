@@ -8,7 +8,7 @@ export function onboardingRewriteTarget(request: NextRequest) {
   const requestedByTestProfile =
     process.env.OMNIFIN_TEST_MODE === "true" &&
     request.nextUrl.searchParams.get("test-view") === "onboarding";
-  if (process.env.OMNIFIN_DEMO_MODE === "true" && !requestedByTestProfile) return undefined;
+  if (!requestedByTestProfile) return undefined;
 
   const target = request.nextUrl.clone();
   const testProfile = request.nextUrl.searchParams.get("test-profile");
