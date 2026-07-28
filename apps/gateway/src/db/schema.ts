@@ -463,6 +463,64 @@ export const mediaReferences = sqliteTable(
   ],
 );
 
+export const playbackSessions = sqliteTable(
+  "playback_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    state: text("state", { enum: ["negotiated", "playing", "paused", "stopped"] }).notNull(),
+    positionSeconds: integer("position_seconds").notNull(),
+    revision: integer("revision").notNull().default(0),
+    lastReportedAt: integer("last_reported_at", { mode: "timestamp_ms" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("playback_sessions_user_updated_idx").on(table.userId, table.updatedAt),
+    index("playback_sessions_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "playback_sessions_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "playback_sessions_id_check",
+      sql`length(${table.id}) = 31
+        and substr(${table.id}, 1, 9) = 'playback_'
+        and substr(${table.id}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "playback_sessions_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 65536`,
+    ),
+    check(
+      "playback_sessions_state_check",
+      sql`${table.state} in ('negotiated', 'playing', 'paused', 'stopped')`,
+    ),
+    check("playback_sessions_position_check", sql`${table.positionSeconds} between 0 and 10000000`),
+    check(
+      "playback_sessions_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check("playback_sessions_revision_check", sql`${table.revision} between 0 and 2147483647`),
+    check(
+      "playback_sessions_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}
+        and (${table.lastReportedAt} is null or ${table.lastReportedAt} between ${table.createdAt} and ${table.updatedAt})`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {
