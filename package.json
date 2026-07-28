@@ -17,6 +17,7 @@
     "docs:check": "node scripts/check-doc-links.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "fixture:media": "node scripts/media/playback-fixture.mjs",
     "license:check": "node scripts/check-licenses.mjs",
     "lighthouse": "pnpm --filter @omnifin/web lighthouse",
     "lint": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run lint && pnpm lint:root",

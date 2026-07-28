@@ -46,6 +46,11 @@ isolated Authentik fixtures are ready and enforced. Authentik readiness combines
 the strict harness contract selected by the matrix with the dedicated browser flow
 that starts the pinned upstream provider in the same pull-request workflow.
 
+The same protected aggregate also generates the copyright-free
+[playback fixture](../../docs/operations/playback-fixtures.md) with the FFmpeg build
+from an immutable official Jellyfin image. It verifies seeking, alternate audio,
+embedded captions, and HLS transcoding without claiming live Jellyfin API coverage.
+
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter
 the protected `integration` environment, and activate only after the repository

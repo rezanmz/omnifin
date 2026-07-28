@@ -112,6 +112,7 @@ test("the Docker build context excludes local and sensitive output", () => {
     "**/.env.*",
     ".git",
     ".turbo",
+    "artifacts",
     "**/data",
     "**/*.db",
     "**/*.db-shm",
@@ -164,4 +165,9 @@ test("SQLite sidecars stay outside Git and nested Docker build contexts", () => 
       `Expected the Docker context to ignore the SQLite sidecar sentinel ${sentinel}`,
     );
   }
+});
+
+test("generated integration artifacts stay outside Git and Docker build contexts", () => {
+  assert.ok(ignoreEntries(".gitignore").has("artifacts/"));
+  assert.ok(ignoreEntries(".dockerignore").has("artifacts"));
 });
