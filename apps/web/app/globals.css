@@ -3601,11 +3601,7 @@
   }
 
   .manual-workbench__glass {
-    --manual-glass-base: color-mix(
-      in srgb,
-      var(--glass-popover) 20%,
-      var(--surface-card-solid)
-    );
+    --manual-glass-base: color-mix(in srgb, var(--glass-popover) 20%, var(--surface-card-solid));
     border-radius: 30px;
   }
 

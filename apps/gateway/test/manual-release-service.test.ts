@@ -258,16 +258,8 @@ describe("manual release service", () => {
     const key = "manual-grab-01234567-89ab-cdef-0123-456789abcdef";
     try {
       await search(service);
-      const first = await service.grab(
-        { overrideRejections: false, releaseId },
-        key,
-        context,
-      );
-      const replay = await service.grab(
-        { overrideRejections: false, releaseId },
-        key,
-        context,
-      );
+      const first = await service.grab({ overrideRejections: false, releaseId }, key, context);
+      const replay = await service.grab({ overrideRejections: false, releaseId }, key, context);
 
       expect(first).toEqual({
         grab: {
@@ -398,18 +390,14 @@ describe("manual release service", () => {
       );
       const key = "manual-grab-timeout-0123456789abcdef";
       await expect(
-        fixture.service.grab(
-          { overrideRejections: false, releaseId },
-          key,
-          { principal: principal("operator", "operator-user") },
-        ),
+        fixture.service.grab({ overrideRejections: false, releaseId }, key, {
+          principal: principal("operator", "operator-user"),
+        }),
       ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
       await expect(
-        fixture.service.grab(
-          { overrideRejections: false, releaseId },
-          key,
-          { principal: principal("operator", "operator-user") },
-        ),
+        fixture.service.grab({ overrideRejections: false, releaseId }, key, {
+          principal: principal("operator", "operator-user"),
+        }),
       ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
       expect(fixture.grabManualRelease).toHaveBeenCalledTimes(1);
       expect(

@@ -45,7 +45,10 @@ function release(overrides: Record<string, unknown> = {}) {
   return {
     ageMinutes: 84.3,
     approved: true,
-    customFormats: [{ id: 1, name: "HDR10" }, { id: 2, name: "Surround" }],
+    customFormats: [
+      { id: 1, name: "HDR10" },
+      { id: 2, name: "Surround" },
+    ],
     customFormatScore: 1350,
     downloadAllowed: true,
     downloadUrl: "https://private-indexer.example.test/download/secret",

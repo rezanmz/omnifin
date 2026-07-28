@@ -365,15 +365,7 @@ export class ManualReleaseService {
       await adapter.grabManualRelease(cached.reference, signal);
     } catch (error) {
       const failureCode = knownGrabFailure(error);
-      this.#complete(
-        reservation.operationId,
-        "failure",
-        null,
-        failureCode,
-        cached,
-        input,
-        context,
-      );
+      this.#complete(reservation.operationId, "failure", null, failureCode, cached, input, context);
       throw new ManualReleaseError(failureCode, { cause: error });
     }
     const response = manualReleaseGrabResponseSchema.parse({

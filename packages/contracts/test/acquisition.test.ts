@@ -162,16 +162,19 @@ describe("manual release contracts", () => {
   };
 
   it("requires exact movie, season, or episode targets and rejects broad Sonarr RSS searches", () => {
-    expect(
-      manualReleaseTargetInputSchema.parse({ mediaId: "42", service: "radarr" }),
-    ).toEqual({ mediaId: 42, service: "radarr" });
+    expect(manualReleaseTargetInputSchema.parse({ mediaId: "42", service: "radarr" })).toEqual({
+      mediaId: 42,
+      service: "radarr",
+    });
     expect(
       manualReleaseTargetInputSchema.parse({ mediaId: 77, seasonNumber: "2", service: "sonarr" }),
     ).toEqual({ mediaId: 77, seasonNumber: 2, service: "sonarr" });
     expect(
       manualReleaseTargetInputSchema.parse({ episodeId: "91", mediaId: 77, service: "sonarr" }),
     ).toEqual({ episodeId: 91, mediaId: 77, service: "sonarr" });
-    expect(() => manualReleaseTargetInputSchema.parse({ mediaId: 77, service: "sonarr" })).toThrow();
+    expect(() =>
+      manualReleaseTargetInputSchema.parse({ mediaId: 77, service: "sonarr" }),
+    ).toThrow();
     expect(() =>
       manualReleaseTargetInputSchema.parse({
         episodeId: 91,

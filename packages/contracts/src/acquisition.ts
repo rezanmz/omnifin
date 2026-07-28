@@ -245,11 +245,7 @@ export const manualReleaseTargetSchema = z
   });
 export type ManualReleaseTarget = z.infer<typeof manualReleaseTargetSchema>;
 
-export const manualReleaseDecisionSchema = z.enum([
-  "approved",
-  "temporarily_rejected",
-  "rejected",
-]);
+export const manualReleaseDecisionSchema = z.enum(["approved", "temporarily_rejected", "rejected"]);
 export type ManualReleaseDecision = z.infer<typeof manualReleaseDecisionSchema>;
 
 export const manualReleaseCandidateSchema = z
@@ -311,9 +307,7 @@ export const manualReleaseGrabInputSchema = z.strictObject({
 export type ManualReleaseGrabInput = z.infer<typeof manualReleaseGrabInputSchema>;
 
 export const manualReleaseGrabIdempotencyKeySchema = idempotencyKeySchema;
-export type ManualReleaseGrabIdempotencyKey = z.infer<
-  typeof manualReleaseGrabIdempotencyKeySchema
->;
+export type ManualReleaseGrabIdempotencyKey = z.infer<typeof manualReleaseGrabIdempotencyKeySchema>;
 
 export const manualReleaseGrabResponseSchema = z.strictObject({
   acceptedAt: z.iso.datetime({ offset: true }),

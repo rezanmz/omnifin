@@ -128,7 +128,10 @@ const manualReleaseSchema = z.object({
   guid: internalReleaseReferenceSchema.shape.guid,
   indexer: safeLabelSchema,
   indexerId: internalReleaseReferenceSchema.shape.indexerId,
-  languages: z.array(z.object({ name: safeLabelSchema })).max(32).nullish(),
+  languages: z
+    .array(z.object({ name: safeLabelSchema }))
+    .max(32)
+    .nullish(),
   leechers: z.int().nonnegative().max(MAX_UPSTREAM_IDENTIFIER).nullish(),
   mappedEpisodeNumbers: z.array(z.int().positive().max(100_000)).max(100).nullish(),
   protocol: z.string().trim().min(1).max(32),
@@ -453,16 +456,12 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
       query.set("seriesId", String(target.mediaId));
       query.set("seasonNumber", String(target.seasonNumber));
     }
-    const releases = await this.client.requestJson(
-      "api/v3/release",
-      manualReleaseResponseSchema,
-      {
-        headers: { "X-Api-Key": this.apiKey },
-        operation: "acquisition.release.search",
-        query,
-        ...(signal ? { signal } : {}),
-      },
-    );
+    const releases = await this.client.requestJson("api/v3/release", manualReleaseResponseSchema, {
+      headers: { "X-Api-Key": this.apiKey },
+      operation: "acquisition.release.search",
+      query,
+      ...(signal ? { signal } : {}),
+    });
     return {
       candidates: releases.slice(0, MANUAL_RELEASE_MAX_RESULTS).map((release) => ({
         details: manualReleaseDetails(release),
