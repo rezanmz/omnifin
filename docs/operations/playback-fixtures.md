@@ -35,7 +35,17 @@ sizes, SHA-256 digests, normalized stream metadata, and segment count. It contai
 host path, media path from an installation, account identity, token, cookie, or upstream
 response.
 
-This fixture proves deterministic media construction, stream selection, seeking, HLS
-segmentation, and software transcoding. The isolated live Jellyfin matrix remains a
-separate release gate for Jellyfin API negotiation, direct play, progress updates,
-reconnect behavior, and browser playback against a running server.
+The protected gate then starts that same Jellyfin image with fresh private configuration
+and cache directories. It completes the first-run flow with ephemeral credentials,
+imports the fixture, and calls Omnifin's production playback connector. The gate requires
+successful direct-play negotiation, an authenticated 4 KiB range response, French audio
+and English subtitle selection, a seeked HLS transcode and real media segment, exact
+progress persistence, and successful playback renegotiation after restarting Jellyfin.
+The second uploaded report contains only normalized pass evidence and versions; it omits
+server, user, session, media, device, path, port, and credential identifiers.
+
+This isolated gate proves deterministic media construction and Omnifin-to-Jellyfin
+playback behavior without depending on copyrighted media or a maintainer's server. The
+protected live compatibility matrix remains a separate release gate for installations
+outside the CI network, and the Playwright browser matrix separately verifies player
+interaction and browser behavior.

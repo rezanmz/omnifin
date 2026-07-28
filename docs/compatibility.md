@@ -10,7 +10,7 @@ combination is described as supported.
 
 | Service                           | Intended use                                                   | Current status                                         |
 | --------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
-| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Target; verification pending                           |
+| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata    | Identity/playback isolated gates ready; live pending   |
 | Authentik                         | OIDC sign-in, group claims, front/back-channel logout          | Isolated gate ready; live baseline pending             |
 | Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised | Target; verification pending                           |
 | Seerr                             | Discovery, requests, approvals, issues, user context           | Search/request fixtures ready; live baseline pending   |
@@ -51,6 +51,13 @@ All deterministic fixture suites are marked ready. OIDC is covered by protocol a
 gateway contract fixtures; Authentik additionally runs a pinned, isolated upstream
 authorization-code browser harness. Fixture readiness is development evidence and
 does not establish a public live-support baseline.
+
+The protected connector aggregate also creates a deterministic, copyright-free media fixture and
+imports it into a fresh digest-pinned Jellyfin instance. Omnifin's production connector must then
+complete direct range playback, a seeked HLS transcode, alternate audio and subtitle selection,
+progress persistence, and playback renegotiation after a server restart. The sanitized evidence
+records the exact Jellyfin image and version without retaining service, account, media, path, or
+credential identifiers.
 
 Scheduled and manual probes run in `.github/workflows/integration-live.yml` only from
 `main` and only through the protected `integration` environment. Until the repository
