@@ -34,6 +34,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
       <section
         className="operations-dock operations-dock--empty"
         aria-labelledby="operations-heading"
+        data-liquid-glass
       >
         <div className="operations-dock__summary" role="status">
           <span className="operations-dock__beacon" aria-hidden="true">
@@ -53,6 +54,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
     <section
       className="operations-dock"
       data-expanded={expanded || undefined}
+      data-liquid-glass
       aria-labelledby="operations-heading"
       onKeyDown={(event) => handleDirectionalFocus(event, { axis: "vertical" })}
     >

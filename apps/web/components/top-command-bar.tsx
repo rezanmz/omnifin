@@ -13,7 +13,7 @@ export function TopCommandBar({ connectionStatus }: { connectionStatus: ServiceS
       onKeyDown={(event) => handleDirectionalFocus(event, { axis: "horizontal" })}
     >
       <GlobalSearchLoader />
-      <div className="top-command-bar__actions">
+      <div className="top-command-bar__actions" data-liquid-glass>
         <ConnectionPulse status={connectionStatus} />
         <ProfileMenu />
       </div>

@@ -363,7 +363,12 @@ test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo
   await page.goto("/");
 
   const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
-  await firstPoster.hover();
+  await firstPoster
+    .locator("xpath=ancestor::*[contains(@class, 'media-rail__scroller')]")
+    .evaluate((scroller) => {
+      (scroller as HTMLElement).style.gridAutoColumns = "1000px";
+    });
+  await firstPoster.hover({ position: { x: 120, y: 120 } });
 
   await expect
     .poll(() =>
@@ -377,6 +382,18 @@ test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo
     )
     .toBeGreaterThanOrEqual(1);
 
+  await expect
+    .poll(() =>
+      firstPoster.evaluate((poster) => {
+        const cardBox = poster.getBoundingClientRect();
+        const scrollerBox = poster
+          .closest<HTMLElement>(".media-rail__scroller")!
+          .getBoundingClientRect();
+        return cardBox.left - scrollerBox.left;
+      }),
+    )
+    .toBeGreaterThanOrEqual(1);
+
   const railBackgrounds = await page
     .locator(".media-rail")
     .first()
@@ -385,6 +402,35 @@ test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo
       return [getComputedStyle(rail).backgroundColor, getComputedStyle(scroller).backgroundColor];
     });
   expect(railBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+});
+
+test("liquid glass chrome responds optically to pointer position", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "One desktop engine verifies the progressive pointer-light enhancement.",
+  );
+  await page.goto("/");
+
+  const search = page.locator(".global-search");
+  const bounds = await search.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x + bounds!.width * 0.72, bounds!.y + bounds!.height * 0.45);
+
+  await expect(search).toHaveAttribute("data-glass-active", "");
+  const optics = await search.evaluate((surface) => {
+    const style = getComputedStyle(surface);
+    return {
+      backdrop: style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter"),
+      pointerX: (surface as HTMLElement).style.getPropertyValue("--glass-pointer-x"),
+      pointerY: (surface as HTMLElement).style.getPropertyValue("--glass-pointer-y"),
+    };
+  });
+  expect(optics.backdrop).toContain("blur");
+  expect(Number.parseFloat(optics.pointerX)).toBeCloseTo(72, 0);
+  expect(Number.parseFloat(optics.pointerY)).toBeCloseTo(45, 0);
+
+  await page.mouse.move(700, 650);
+  await expect(search).not.toHaveAttribute("data-glass-active", "");
 });
 
 test("touch users can disclose operations and navigate to settings", async ({ page }, testInfo) => {
@@ -430,6 +476,12 @@ test("reduced motion removes nonessential transition travel", async ({ page }, t
   expect(motion.reduced).toBe(true);
   expect(motion.maxTransitionMilliseconds).toBeLessThanOrEqual(0.01);
   expect(motion.scrollBehavior).toBe("auto");
+
+  const search = page.locator(".global-search");
+  const bounds = await search.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  await expect(search).not.toHaveAttribute("data-glass-active", "");
 });
 
 test("skip link reaches the main dashboard", async ({ browserName, page }, testInfo) => {

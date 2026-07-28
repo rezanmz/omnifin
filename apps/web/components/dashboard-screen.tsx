@@ -5,6 +5,7 @@ import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
 import { HeroSpotlight } from "./hero-spotlight";
+import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MediaRail } from "./media-rail";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
 import { OperationsDock } from "./operations-dock";
@@ -31,6 +32,7 @@ export function DashboardScreen({
       data-display-profile={displayProfile}
       style={{ "--ambient-accent": data.hero.accent } as AmbientStyle}
     >
+      <LiquidGlassEnvironment />
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">
@@ -58,6 +60,7 @@ export function DashboardStateScreen({
   const connectionStatus: ServiceStatus = kind === "offline" ? "offline" : "attention";
   return (
     <div className="application-frame" data-display-profile={displayProfile}>
+      <LiquidGlassEnvironment />
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">

@@ -17,6 +17,7 @@ export function NavigationRail() {
     <aside
       className="navigation-rail"
       aria-label="Primary navigation"
+      data-liquid-glass
       onKeyDown={(event) => handleDirectionalFocus(event, { axis: "vertical" })}
     >
       <Link className="navigation-rail__brand" href="/" aria-label="Omnifin home" prefetch={false}>
@@ -57,6 +58,7 @@ export function MobileNavigation() {
     <nav
       className="mobile-navigation"
       aria-label="Primary navigation"
+      data-liquid-glass
       onKeyDown={(event) => handleDirectionalFocus(event, { axis: "horizontal" })}
     >
       {destinations.map(({ current, href, icon: Icon, label }) => (

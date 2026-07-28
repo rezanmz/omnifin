@@ -43,6 +43,18 @@ feel cut from one shape. A glass surface is not nested inside another glass surf
 content inside an overlay returns to standard fills. Accent tint is reserved for
 selection, status, or the primary action.
 
+On pointer-capable devices, one passive document listener updates only the active
+glass surface once per animation frame. Its specular highlight and rim illumination
+follow the local pointer position, providing a restrained approximation of the
+environment-responsive light play of a physical lens. Touch does not need this hover
+feedback, and reduced motion suppresses it. The effect never changes hit geometry or
+becomes necessary to understand state.
+
+Poster rails remain part of the continuous content canvas. They have no container
+fill of their own, and their scrollport reserves enough transparent optical space for
+the fixed lift and scale of a focused card—including unusually wide cards at browser
+zoom—so neither the transformed edge nor its shadow is clipped.
+
 Motion may make a liquid control scale, blur, or morph to explain where an overlay
 came from. It may not distort content, delay input, or continuously shimmer. Where
 `backdrop-filter` is unavailable, the same components fall back to an opaque semantic
