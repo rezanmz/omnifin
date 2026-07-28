@@ -63,7 +63,7 @@ const response = {
   ],
   startAt: "2026-07-27T04:00:00.000Z",
   state: "degraded" as const,
-  summary: { available: 0, episodes: 0, missing: 1, movies: 1, total: 1 },
+  summary: { available: 0, episodes: 0, missing: 1, movies: 1, queued: 0, total: 1 },
 };
 
 describe("acquisition calendar contracts", () => {
@@ -99,7 +99,7 @@ describe("acquisition calendar contracts", () => {
         nextCursor: null,
         sources: [],
         state: "unconfigured",
-        summary: { available: 0, episodes: 0, missing: 0, movies: 0, total: 0 },
+        summary: { available: 0, episodes: 0, missing: 0, movies: 0, queued: 0, total: 0 },
       }).state,
     ).toBe("unconfigured");
   });

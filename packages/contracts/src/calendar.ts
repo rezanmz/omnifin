@@ -66,6 +66,7 @@ export const acquisitionCalendarAvailabilitySchema = z.enum([
   "available",
   "missing",
   "monitored",
+  "queued",
   "unknown",
 ]);
 export type AcquisitionCalendarAvailability = z.infer<typeof acquisitionCalendarAvailabilitySchema>;
@@ -158,6 +159,7 @@ export const acquisitionCalendarSummarySchema = z.strictObject({
   episodes: z.int().nonnegative().max(ACQUISITION_CALENDAR_MAX_EVENTS),
   missing: z.int().nonnegative().max(ACQUISITION_CALENDAR_MAX_EVENTS),
   movies: z.int().nonnegative().max(ACQUISITION_CALENDAR_MAX_EVENTS),
+  queued: z.int().nonnegative().max(ACQUISITION_CALENDAR_MAX_EVENTS),
   total: z.int().nonnegative().max(ACQUISITION_CALENDAR_MAX_EVENTS),
 });
 export type AcquisitionCalendarSummary = z.infer<typeof acquisitionCalendarSummarySchema>;
@@ -298,6 +300,7 @@ export const acquisitionCalendarResponseSchema = z
       episodes: response.events.filter((event) => event.kind === "episode").length,
       missing: response.events.filter((event) => event.availability === "missing").length,
       movies: response.events.filter((event) => event.kind === "movie").length,
+      queued: response.events.filter((event) => event.availability === "queued").length,
       total: response.events.length,
     };
     for (const key of Object.keys(expectedSummary) as (keyof typeof expectedSummary)[]) {
