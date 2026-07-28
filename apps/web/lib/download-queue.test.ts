@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoDownloadQueue } from "./download-queue-demo";
-import { DownloadQueueClientError, downloadQueueClient } from "./download-queue";
+import { DownloadQueueClientError, downloadQueueClient, outcomeFromError } from "./download-queue";
 
 function json(value: unknown, status = 200) {
   return Promise.resolve(
@@ -80,5 +80,51 @@ describe("download queue client", () => {
     const error = await downloadQueueClient.load().catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "service_unavailable", kind: "unavailable" });
     expect(JSON.stringify(error)).not.toContain("private network details");
+  });
+
+  it("preserves request cancellation and forwards the caller signal", async () => {
+    const abort = new DOMException("cancelled", "AbortError");
+    const fetchMock = vi.fn(() => Promise.reject(abort));
+    const controller = new AbortController();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(downloadQueueClient.load(controller.signal)).rejects.toBe(abort);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("uses safe fallback errors for non-server failures and unreadable responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => json({ unrelated: true }, 422)),
+    );
+    await expect(downloadQueueClient.load()).rejects.toMatchObject({
+      code: "request_failed",
+      kind: "invalid_response",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("not json", { status: 500 }))),
+    );
+    await expect(downloadQueueClient.load()).rejects.toMatchObject({
+      code: "invalid_response",
+      kind: "invalid_response",
+    });
+  });
+
+  it("maps only authorization client errors to entry boundaries", () => {
+    expect(outcomeFromError(new DownloadQueueClientError("forbidden", "denied", "Denied"))).toBe(
+      "forbidden",
+    );
+    expect(outcomeFromError(new DownloadQueueClientError("signed_out", "expired", "Expired"))).toBe(
+      "signed_out",
+    );
+    expect(
+      outcomeFromError(new DownloadQueueClientError("invalid_response", "invalid", "Invalid")),
+    ).toBe("unavailable");
+    expect(outcomeFromError(new Error("private failure"))).toBe("unavailable");
   });
 });

@@ -29,7 +29,7 @@ describe("directional navigation", () => {
     );
     expect(screen.getByRole("link", { name: "Operations" })).toHaveAttribute(
       "href",
-      "/operations/indexers",
+      "/operations/downloads",
     );
   });
 
