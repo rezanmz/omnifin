@@ -7,7 +7,7 @@ import { BrandMark } from "./brand-mark";
 
 const destinations = [
   { current: true, href: "/", icon: Compass, label: "Discover" },
-  { current: false, href: "/#rail-continue-watching", icon: Library, label: "Library" },
+  { current: false, href: "/library", icon: Library, label: "Library" },
   { current: false, href: "/calendar", icon: CalendarDays, label: "Calendar" },
   { current: false, href: "/operations/downloads", icon: Gauge, label: "Operations" },
 ] as const;
