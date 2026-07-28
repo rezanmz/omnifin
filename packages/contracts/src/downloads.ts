@@ -8,14 +8,20 @@ import {
 
 export const DOWNLOAD_QUEUE_MAX_ITEMS = 200;
 export const DOWNLOAD_QUEUE_MAX_CLIENTS = 20;
+export const DOWNLOAD_QUEUE_MAX_ITEM_BYTES = Math.floor(
+  Number.MAX_SAFE_INTEGER / DOWNLOAD_QUEUE_MAX_ITEMS,
+);
 
 const safeIntegerSchema = z.int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const safeTextSchema = z
+const itemMetricSchema = safeIntegerSchema.max(DOWNLOAD_QUEUE_MAX_ITEM_BYTES);
+const safeDisplayTextSchema = z
   .string()
   .trim()
   .min(1)
   .max(300)
-  .regex(/^[^\p{Cc}\p{Cf}\\/]+$/u);
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u);
+
+const safeQueueTextSchema = safeDisplayTextSchema.regex(/^[^\\/]+$/u);
 
 export const downloadClientServiceSchema = z.enum(["qbittorrent", "sabnzbd"]);
 export type DownloadClientService = z.infer<typeof downloadClientServiceSchema>;
@@ -40,21 +46,21 @@ export const downloadQueueItemIdSchema = z.string().regex(/^download_[A-Za-z0-9_
 export const downloadQueueItemSchema = z
   .strictObject({
     addedAt: z.iso.datetime({ offset: true }).nullable(),
-    category: safeTextSchema.max(80).nullable(),
+    category: safeQueueTextSchema.max(80).nullable(),
     client: downloadClientServiceSchema,
-    clientName: safeTextSchema.max(160),
+    clientName: safeDisplayTextSchema.max(160),
     connectorId: connectorIdentifierSchema,
     etaSeconds: z.int().nonnegative().max(31_536_000).nullable(),
     id: downloadQueueItemIdSchema,
     leechers: z.int().nonnegative().max(2_147_483_647).nullable(),
     progress: z.number().finite().min(0).max(1),
     protocol: downloadProtocolSchema,
-    rateBytesPerSecond: safeIntegerSchema,
-    remainingBytes: safeIntegerSchema,
+    rateBytesPerSecond: itemMetricSchema,
+    remainingBytes: itemMetricSchema,
     seeders: z.int().nonnegative().max(2_147_483_647).nullable(),
-    sizeBytes: safeIntegerSchema,
+    sizeBytes: itemMetricSchema,
     state: downloadQueueItemStateSchema,
-    title: safeTextSchema,
+    title: safeQueueTextSchema,
   })
   .superRefine((item, context) => {
     if (item.remainingBytes > item.sizeBytes) {
@@ -91,7 +97,7 @@ export type DownloadQueueItem = z.infer<typeof downloadQueueItemSchema>;
 export const downloadQueueClientSchema = z
   .strictObject({
     connectorId: connectorIdentifierSchema,
-    displayName: safeTextSchema.max(160),
+    displayName: safeDisplayTextSchema.max(160),
     failure: partialFailureSchema.nullable(),
     itemCount: z.int().nonnegative().max(DOWNLOAD_QUEUE_MAX_ITEMS),
     rateBytesPerSecond: safeIntegerSchema,

@@ -52,6 +52,7 @@ import {
   discoverySearchRoutes,
   type DiscoverySearchRoutesOptions,
 } from "./discovery/search-routes.js";
+import { downloadQueueRoutes, type DownloadQueueRoutesOptions } from "./downloads/queue-routes.js";
 import { healthRoutes } from "./health.js";
 import { isSafeHttpError, SafeHttpError } from "./http-error.js";
 import {
@@ -91,6 +92,7 @@ export interface CreateAppOptions {
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
+  downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
@@ -387,6 +389,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.discoverySearchDependencies === undefined
         ? {}
         : { dependencies: options.discoverySearchDependencies }),
+    });
+    await app.register(downloadQueueRoutes, {
+      ...(options.downloadQueueDependencies === undefined
+        ? {}
+        : { dependencies: options.downloadQueueDependencies }),
     });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined

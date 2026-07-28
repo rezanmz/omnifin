@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { downloadQueueResponseJsonSchema, downloadQueueResponseSchema } from "../src/downloads.js";
+import {
+  DOWNLOAD_QUEUE_MAX_ITEM_BYTES,
+  downloadQueueResponseJsonSchema,
+  downloadQueueResponseSchema,
+} from "../src/downloads.js";
 
 const failure = {
   code: "timeout" as const,
@@ -72,6 +76,17 @@ describe("download queue contracts", () => {
     expect(downloadQueueResponseSchema.parse(response)).toEqual(response);
   });
 
+  it("preserves intentional punctuation in administrator-defined client names", () => {
+    const renamed = {
+      ...response,
+      clients: response.clients.map((client, index) =>
+        index === 0 ? { ...client, displayName: "Downloads / Main" } : client,
+      ),
+      items: [{ ...torrent, clientName: "Downloads / Main" }],
+    };
+    expect(downloadQueueResponseSchema.parse(renamed)).toEqual(renamed);
+  });
+
   it("accepts an honest unconfigured queue", () => {
     expect(
       downloadQueueResponseSchema.parse({
@@ -99,6 +114,15 @@ describe("download queue contracts", () => {
     { items: [{ ...torrent, title: "/private/media/The.Far.Meridian" }] },
     { items: [{ ...torrent, protocol: "usenet" }] },
     { items: [{ ...torrent, remainingBytes: torrent.sizeBytes + 1 }] },
+    {
+      items: [
+        {
+          ...torrent,
+          remainingBytes: DOWNLOAD_QUEUE_MAX_ITEM_BYTES + 1,
+          sizeBytes: DOWNLOAD_QUEUE_MAX_ITEM_BYTES + 1,
+        },
+      ],
+    },
     { summary: { ...response.summary, totalRateBytesPerSecond: 1 } },
     { state: "complete" },
   ])("rejects inconsistent or upstream-revealing queue data", (change) => {

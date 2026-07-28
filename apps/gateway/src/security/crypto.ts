@@ -17,6 +17,7 @@ const ENVELOPE_KEY_PURPOSE = "omnifin:v1:envelope:aes-256-gcm";
 const PRIVACY_HASH_KEY_PURPOSE = "omnifin:v1:privacy-hash:hmac-sha256";
 
 export type PrivacyHashDomain =
+  | "download_queue_item"
   | "ip_address"
   | "oidc_failure_audit_bucket"
   | "oidc_failure_audit_ip_address"
