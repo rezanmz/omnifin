@@ -129,6 +129,9 @@ function PageFrame({ children }: { children: React.ReactNode }) {
         <header className={styles.topbar} data-liquid-glass>
           <BrandMark />
           <div className={styles.topbarActions}>
+            <Link className={styles.back} href="/operations/issues" prefetch={false}>
+              <CircleAlert aria-hidden="true" size={17} /> Issues
+            </Link>
             <Link className={styles.back} href="/">
               <ArrowLeft aria-hidden="true" size={17} /> Discover
             </Link>

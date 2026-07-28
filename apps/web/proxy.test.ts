@@ -8,6 +8,23 @@ afterEach(() => {
 });
 
 describe("first-run route selection", () => {
+  it("keeps strict dynamic script trust in production and a same-origin Turbopack policy in development", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const productionPolicy = proxy(new NextRequest("https://omnifin.example.test/")).headers.get(
+      "content-security-policy",
+    );
+    expect(productionPolicy).toContain("'strict-dynamic'");
+    expect(productionPolicy).not.toContain("'unsafe-eval'");
+
+    vi.stubEnv("NODE_ENV", "development");
+    const developmentPolicy = proxy(new NextRequest("http://127.0.0.1:3000/")).headers.get(
+      "content-security-policy",
+    );
+    expect(developmentPolicy).toContain("script-src 'self' 'nonce-");
+    expect(developmentPolicy).toContain("'unsafe-eval'");
+    expect(developmentPolicy).not.toContain("'strict-dynamic'");
+  });
+
   it("keeps the live dashboard at root without dropping security headers", () => {
     vi.stubEnv("OMNIFIN_DEMO_MODE", "false");
     const request = new NextRequest("https://omnifin.example.test/");
