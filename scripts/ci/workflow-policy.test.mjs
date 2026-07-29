@@ -48,8 +48,8 @@ test("release automation remains in the reviewed pre-1.0 channel", () => {
     config["pull-request-footer"],
     "Merge only after the selected release profile and all protected checks are green.",
   );
-  assert.equal(manifest["."], "0.0.0");
-  assert.equal(packageDocument.version, "0.0.0");
+  assert.equal(manifest["."], packageDocument.version);
+  assert.match(packageDocument.version, /^0\.\d+\.\d+$/u);
 });
 
 test("CI installs actionlint from a checksum-pinned release", () => {
