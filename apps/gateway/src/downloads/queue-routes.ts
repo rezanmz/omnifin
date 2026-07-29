@@ -4,6 +4,10 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseJsonSchema,
   downloadQueueActionResponseSchema,
+  downloadQueuePromotionInputJsonSchema,
+  downloadQueuePromotionInputSchema,
+  downloadQueuePromotionResponseJsonSchema,
+  downloadQueuePromotionResponseSchema,
   downloadQueueRemovalInputJsonSchema,
   downloadQueueRemovalInputSchema,
   downloadQueueRemovalResponseJsonSchema,
@@ -80,6 +84,13 @@ function serviceError(error: DownloadQueueError) {
         code: "download_queue_removal_limit_reached",
         message: "Too many queue removal records are retained for this account.",
         statusCode: 429,
+      });
+    case "queue_order_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_order_unavailable",
+        message: "That download client is not exposing a verifiable queue order.",
+        statusCode: 409,
       });
     case "response_invalid":
       return new SafeHttpError({
@@ -245,6 +256,46 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
         );
         reply.header("idempotency-replayed", String(result.replayed));
         return result;
+      } catch (error) {
+        if (error instanceof DownloadQueueError) throw serviceError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/downloads/queue/promotions",
+    {
+      bodyLimit: 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 12, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: downloadQueuePromotionInputJsonSchema,
+        response: { 200: downloadQueuePromotionResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "downloads.manage",
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return downloadQueuePromotionResponseSchema.parse(
+          await queue.promote(
+            downloadQueuePromotionInputSchema.parse(request.body),
+            { ipAddress: request.ip, principal, requestId: request.id },
+            controller.signal,
+          ),
+        );
       } catch (error) {
         if (error instanceof DownloadQueueError) throw serviceError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);

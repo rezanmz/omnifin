@@ -141,6 +141,32 @@ export const downloadQueueRemovalResponseSchema = z.strictObject({
 });
 export type DownloadQueueRemovalResponse = z.infer<typeof downloadQueueRemovalResponseSchema>;
 
+export const downloadQueuePromotionInputSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueueItemStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+export type DownloadQueuePromotionInput = z.infer<typeof downloadQueuePromotionInputSchema>;
+
+export const downloadQueuePromotionResponseSchema = z
+  .strictObject({
+    item: downloadQueueItemSchema,
+    position: z.literal(0),
+    previousPosition: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    promotedAt: z.iso.datetime({ offset: true }),
+    replayed: z.boolean(),
+  })
+  .superRefine((response, context) => {
+    if ((response.previousPosition === 0) !== response.replayed) {
+      context.addIssue({
+        code: "custom",
+        message: "Only an already-first queue item can replay a promotion.",
+        path: ["replayed"],
+      });
+    }
+  });
+export type DownloadQueuePromotionResponse = z.infer<typeof downloadQueuePromotionResponseSchema>;
+
 export const downloadQueueClientSchema = z
   .strictObject({
     connectorId: connectorIdentifierSchema,
@@ -388,4 +414,10 @@ export const downloadQueueRemovalInputJsonSchema = withoutSchemaDialect(
 );
 export const downloadQueueRemovalResponseJsonSchema = withoutSchemaDialect(
   downloadQueueRemovalResponseSchema,
+);
+export const downloadQueuePromotionInputJsonSchema = withoutSchemaDialect(
+  downloadQueuePromotionInputSchema,
+);
+export const downloadQueuePromotionResponseJsonSchema = withoutSchemaDialect(
+  downloadQueuePromotionResponseSchema,
 );

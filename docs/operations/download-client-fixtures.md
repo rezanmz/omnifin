@@ -21,25 +21,29 @@ pnpm fixture:download-client --service sabnzbd --output artifacts/integration/do
 ```
 
 The qBittorrent runner pre-seeds a randomly generated credential using qBittorrent's current
-PBKDF2-SHA-512 configuration format, then creates a small deterministic torrent whose tracker is
-loopback-only. The plaintext credential is never written to logs or evidence and disappears with the
-private fixture directory. The SABnzbd runner uploads a repository-generated NZB with a synthetic
-message identifier to an instance that has no news servers. The internal network has no route to the
-public internet, so neither fixture can retrieve third-party content.
+PBKDF2-SHA-512 configuration format, enables queue ordering, then creates two small deterministic
+torrents whose trackers are loopback-only. The plaintext credential is never written to logs or
+evidence and disappears with the private fixture directory. The SABnzbd runner uploads two
+repository-generated NZBs with synthetic message identifiers to an instance that has no news
+servers. The internal network has no route to the public internet, so neither fixture can retrieve
+third-party content.
 
 Each runner calls Omnifin's production adapter over the host's private interface and requires:
 
 - successful authentication and exact version discovery;
 - rejection of an invalid credential;
-- a normalized read containing the one seeded queue item;
+- a normalized read containing the seeded queue items in a known non-leading order;
+- exact-item promotion followed by the target observed at queue position zero;
 - exact-item resume followed by an observed non-paused state;
 - exact-item pause followed by an observed paused state;
 - exact-item removal followed by observed absence; and
 - preservation of a byte-for-byte fixture file after removal.
 
-qBittorrent receives one validated info hash and `deleteFiles=false`. SABnzbd receives one validated
-`nzo_id` and no `del_files` parameter, matching SABnzbd's documented preserve-files default. The
-test never performs a bulk operation.
+Promotion sends qBittorrent one validated info hash through `topPrio`; SABnzbd receives one
+validated `nzo_id` through `mode=switch` and position zero. Removal sends qBittorrent one validated
+info hash and `deleteFiles=false`; SABnzbd receives one validated `nzo_id` and no `del_files`
+parameter, matching SABnzbd's documented preserve-files default. The test never performs a bulk
+operation.
 
 The uploaded report is validated against a closed allowlist. It contains only the service name,
 normalized server version, immutable image reference, fixed check names, and pass status. Native

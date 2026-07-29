@@ -242,6 +242,79 @@ describe("download queue client", () => {
     );
   });
 
+  it("sends one exact front-of-queue promotion and verifies the position receipt", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      item,
+      position: 0 as const,
+      previousPosition: 1,
+      promotedAt: demoDownloadQueue.generatedAt,
+      replayed: false,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/promotions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-omnifin-csrf": "fixture-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "item",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        id: demoDownloadQueue.items[1]!.id,
+      }),
+    ],
+    [
+      "connector",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        connectorId: demoDownloadQueue.items[1]!.connectorId,
+      }),
+    ],
+  ] as const)("rejects a promotion receipt rebound to a different %s", async (_label, rebind) => {
+    const item = demoDownloadQueue.items[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({
+          item: rebind(item),
+          position: 0,
+          previousPosition: 1,
+          promotedAt: demoDownloadQueue.generatedAt,
+          replayed: false,
+        }),
+      ),
+    );
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+  });
+
   it.each([
     ["a different action", { action: "resume" }],
     ["a different prior state", { previousState: "queued" }],
@@ -275,6 +348,8 @@ describe("download queue client", () => {
   });
 
   it.each([
+    [401, "authentication_required", "signed_out"],
+    [403, "permission_denied", "forbidden"],
     [409, "download_queue_state_changed", "stale"],
     [429, "download_queue_action_rate_limited", "rate_limited"],
     [503, "download_queue_configuration_unavailable", "configuration"],

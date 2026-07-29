@@ -7,6 +7,7 @@ export interface ConnectorDownloadQueueItem {
   externalId: string;
   leechers: number | null;
   progress: number;
+  queuePosition?: number | null;
   rateBytesPerSecond: number;
   remainingBytes: number;
   seeders: number | null;
@@ -34,7 +35,12 @@ export interface DownloadQueueRemoval {
   externalId: string;
 }
 
+export interface DownloadQueuePromotion {
+  externalId: string;
+}
+
 export interface DownloadQueueController extends DownloadQueueReader {
+  promoteDownloadQueueItem(input: DownloadQueuePromotion, signal?: AbortSignal): Promise<void>;
   removeDownloadQueueItem(input: DownloadQueueRemoval, signal?: AbortSignal): Promise<void>;
   updateDownloadQueueItem(input: DownloadQueueMutation, signal?: AbortSignal): Promise<void>;
 }

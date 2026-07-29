@@ -13,6 +13,9 @@ const staticClient: DownloadQueueClient = {
   },
   load: async () => demoDownloadQueue,
   loadEligibility: async () => ({ status: "unavailable" }),
+  promote: async () => {
+    throw new Error("Story promotions stop at the eligibility boundary.");
+  },
   remove: async () => {
     throw new Error("Story removals stop at confirmation.");
   },
@@ -72,6 +75,19 @@ export const RemoveConfirmation: Story = {
     await expect(canvas.getByRole("button", { name: "Cancel removal" })).toHaveFocus();
     await expect(canvas.getByText("Remove this transfer?")).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Remove transfer" })).toBeDisabled();
+  },
+};
+export const PromotionEligibilityFailure: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", {
+        name: "Move The.Far.Meridian.2026.2160p.WEB-DL to front of queue",
+      }),
+    );
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "The session could not be verified. The queue order was not changed.",
+    );
   },
 };
 export const Empty: Story = {

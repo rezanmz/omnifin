@@ -330,6 +330,12 @@ test("system health links every operational workspace and switches appearance", 
 test("download queue supports focused search and attention filtering", async ({ page }) => {
   await page.goto("/operations/downloads?test-view=ready");
   await expect(page.getByRole("heading", { name: "Every byte, in motion." })).toBeVisible();
+  const promotions = page.getByRole("button", { name: /^Move .+ to front of queue$/u });
+  await expect(promotions).toHaveCount(3);
+  const promotionTarget = await promotions.first().boundingBox();
+  expect(promotionTarget).not.toBeNull();
+  expect(promotionTarget!.height).toBeGreaterThanOrEqual(44);
+  expect(promotionTarget!.width).toBeGreaterThanOrEqual(44);
 
   await page.getByRole("button", { name: "Attention" }).click();
   await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toBeVisible();

@@ -65,9 +65,10 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 - Radarr and Sonarr read-only calendar, exact whole-title monitoring, searches, and manual releases
   (implemented; protected live evidence pending), plus broader queue mutations
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
-- qBittorrent and SABnzbd live queues with exact-item pause/resume and downloaded-file-preserving
-  removal (implemented with deterministic contracts and isolated digest-pinned upstream gates;
-  protected live evidence and broader queue mutations pending)
+- qBittorrent and SABnzbd live queues with exact-item pause/resume, verified front-of-queue
+  promotion, and downloaded-file-preserving removal (implemented with deterministic contracts and
+  isolated digest-pinned upstream gates; protected live evidence and broader queue mutations
+  pending)
 - Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry
   (implemented; protected live evidence pending)
 - Title-level Acquisition Provenance and exact-target automatic-search recovery

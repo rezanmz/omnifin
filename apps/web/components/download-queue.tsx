@@ -10,6 +10,7 @@ import type {
 import {
   Activity,
   ArrowLeft,
+  ArrowUpToLine,
   Cable,
   Check,
   CircleAlert,
@@ -107,6 +108,12 @@ interface QueueRemovalState {
   status: QueueActionStatus;
 }
 
+interface QueuePromotionState {
+  itemId: string;
+  message: string;
+  status: "error" | "submitting";
+}
+
 export interface DownloadQueueProperties {
   client?: DownloadQueueClient;
   initialOutcome?: DownloadQueueLoadOutcome;
@@ -186,6 +193,21 @@ function queueWithItems(
       ),
     },
   };
+}
+
+function itemsAfterPromotion(
+  items: readonly DownloadQueueItem[],
+  promoted: DownloadQueueItem,
+): DownloadQueueItem[] {
+  const currentIndex = items.findIndex((candidate) => candidate.id === promoted.id);
+  if (currentIndex < 0) return [...items];
+  const remaining = items.filter((candidate) => candidate.id !== promoted.id);
+  const firstClientIndex = remaining.findIndex(
+    (candidate) => candidate.connectorId === promoted.connectorId,
+  );
+  const insertionIndex =
+    firstClientIndex < 0 ? Math.min(currentIndex, remaining.length) : firstClientIndex;
+  return [...remaining.slice(0, insertionIndex), promoted, ...remaining.slice(insertionIndex)];
 }
 
 function ThemeControl() {
@@ -379,6 +401,9 @@ function QueueItem({
   onChangeRemovalConfirmation,
   onConfirmAction,
   onConfirmRemoval,
+  onPromote,
+  promotionAvailable,
+  promotionState,
   removalAvailable,
   removalState,
 }: {
@@ -393,6 +418,9 @@ function QueueItem({
   onChangeRemovalConfirmation: (value: string) => void;
   onConfirmAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
   onConfirmRemoval: (item: DownloadQueueItem) => void;
+  onPromote: (item: DownloadQueueItem) => void;
+  promotionAvailable: boolean;
+  promotionState: QueuePromotionState | null;
   removalAvailable: boolean;
   removalState: QueueRemovalState | null;
 }) {
@@ -402,11 +430,12 @@ function QueueItem({
     item.state === "paused" ? "resume" : PAUSABLE_STATES.has(item.state) ? "pause" : null;
   const ActionIcon = action === "resume" ? Play : Pause;
   const activeAction = actionState?.itemId === item.id ? actionState : null;
+  const activePromotion = promotionState?.itemId === item.id ? promotionState : null;
   const activeRemoval = removalState?.itemId === item.id ? removalState : null;
   return (
     <article
       className={styles.queueItem}
-      data-action={activeAction?.status}
+      data-action={activeAction?.status ?? activePromotion?.status}
       data-state={item.state}
     >
       <div className={styles.queueItemLead}>
@@ -424,6 +453,25 @@ function QueueItem({
           <span className={styles.status} data-state={item.state}>
             <i aria-hidden="true" /> {STATE_LABELS[item.state]}
           </span>
+          {promotionAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
+            <button
+              aria-label={`Move ${item.title} to front of queue`}
+              className={styles.itemAction}
+              data-item-promotion={item.id}
+              disabled={actionLocked}
+              onClick={() => onPromote(item)}
+              type="button"
+            >
+              {activePromotion?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <ArrowUpToLine aria-hidden="true" size={15} />
+              )}
+              <span>First</span>
+            </button>
+          ) : null}
           {action &&
           actionAvailable &&
           activeAction?.status !== "confirming" &&
@@ -577,6 +625,12 @@ function QueueItem({
           <span>{activeRemoval.message}</span>
         </div>
       ) : null}
+      {activePromotion?.status === "error" ? (
+        <div className={styles.actionFeedback} data-status="error" role="alert">
+          <TriangleAlert aria-hidden="true" size={16} />
+          <span>{activePromotion.message}</span>
+        </div>
+      ) : null}
       {activeAction?.status === "error" || activeAction?.status === "success" ? (
         <div
           className={styles.actionFeedback}
@@ -693,6 +747,7 @@ function ReadyQueue({
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [query, setQuery] = useState("");
   const [actionState, setActionState] = useState<QueueActionState | null>(null);
+  const [promotionState, setPromotionState] = useState<QueuePromotionState | null>(null);
   const [removalState, setRemovalState] = useState<QueueRemovalState | null>(null);
   const [operationAnnouncement, setOperationAnnouncement] = useState("");
   const visibleItems = useMemo(() => {
@@ -713,9 +768,12 @@ function ReadyQueue({
   }, [filter, query, queue.items]);
   const filtered = filter !== "all" || query.trim().length > 0;
   const actionAvailable = Boolean(client.act && client.loadEligibility);
+  const promotionAvailable = Boolean(client.promote && client.loadEligibility);
   const removalAvailable = Boolean(client.remove && client.loadEligibility);
   const actionLocked =
-    actionState?.status === "submitting" || removalState?.status === "submitting";
+    actionState?.status === "submitting" ||
+    promotionState?.status === "submitting" ||
+    removalState?.status === "submitting";
 
   const cancelAction = (item: DownloadQueueItem) => {
     setActionState(null);
@@ -726,6 +784,7 @@ function ReadyQueue({
 
   const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
     if (actionLocked) return;
+    setPromotionState(null);
     setRemovalState(null);
     setActionState({ action, itemId: item.id, message: "", status: "confirming" });
   };
@@ -740,6 +799,7 @@ function ReadyQueue({
   const beginRemoval = (item: DownloadQueueItem) => {
     if (actionLocked) return;
     setActionState(null);
+    setPromotionState(null);
     setOperationAnnouncement("");
     setRemovalState({
       confirmation: "",
@@ -855,6 +915,55 @@ function ReadyQueue({
           ? error.message
           : "The removal could not be verified. Refresh before trying again.";
       setRemovalState({ ...removalState, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
+
+  const promoteItem = async (item: DownloadQueueItem) => {
+    if (!client.promote || !client.loadEligibility || actionLocked) return;
+    setActionState(null);
+    setRemovalState(null);
+    setOperationAnnouncement("");
+    setPromotionState({ itemId: item.id, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before prioritizing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to prioritize this transfer."
+              : "The session could not be verified. The queue order was not changed.";
+        setPromotionState({ itemId: item.id, message, status: "error" });
+        return;
+      }
+      const result = await client.promote(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: eligibility.snapshot.csrfToken },
+      );
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        const items = itemsAfterPromotion(current.items, result.item);
+        return queueWithItems(current, items, result.promotedAt);
+      });
+      setPromotionState(null);
+      setOperationAnnouncement(
+        result.replayed
+          ? `${item.title} was already first in ${item.clientName}.`
+          : `${item.title} moved to the front of ${item.clientName}.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The queue promotion could not be verified. No further change was attempted.";
+      setPromotionState({ itemId: item.id, message, status: "error" });
       if (error instanceof DownloadQueueClientError && error.kind === "stale") {
         void onRefresh();
       }
@@ -1032,6 +1141,9 @@ function ReadyQueue({
                       }
                       onConfirmAction={(target, action) => void confirmAction(target, action)}
                       onConfirmRemoval={(target) => void confirmRemoval(target)}
+                      onPromote={(target) => void promoteItem(target)}
+                      promotionAvailable={promotionAvailable}
+                      promotionState={promotionState}
                       removalAvailable={removalAvailable}
                       removalState={removalState}
                     />
