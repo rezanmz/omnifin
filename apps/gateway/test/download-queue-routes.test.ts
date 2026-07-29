@@ -6,6 +6,7 @@ import {
   downloadQueuePromotionResponseSchema,
   downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
+  downloadQueueSnapshotEventSchema,
 } from "@omnifin/contracts/downloads";
 import { describe, expect, it, vi } from "vitest";
 
@@ -73,7 +74,20 @@ function capabilitySnapshot(capable: boolean) {
   });
 }
 
-async function harness(options: { capable?: boolean } = {}) {
+async function harness(
+  options: {
+    capable?: boolean;
+    eventDependencies?: {
+      connectionLifetimeMs?: number;
+      createCursor?: () => string;
+      heartbeatIntervalMs?: number;
+      maxConnections?: number;
+      maxConnectionsPerSession?: number;
+      pollIntervalMs?: number;
+      reconnectDelayMs?: number;
+    };
+  } = {},
+) {
   const config = testConfig();
   const readDownloadQueue = vi.fn<DownloadQueueReader["readDownloadQueue"]>(async () => ({
     generatedAt: now.toISOString(),
@@ -110,6 +124,9 @@ async function harness(options: { capable?: boolean } = {}) {
         updateDownloadQueueItem,
       }),
     },
+    ...(options.eventDependencies === undefined
+      ? {}
+      : { downloadQueueEventDependencies: options.eventDependencies }),
     sessionDependencies: sessionDependencies(),
   });
   app.database.db
@@ -272,6 +289,124 @@ describe("download queue routes", () => {
       expect(response.statusCode).toBe(401);
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readDownloadQueue).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("streams a strict private queue snapshot with resumable SSE headers", async () => {
+    const { app, operator, readDownloadQueue } = await harness({
+      eventDependencies: {
+        connectionLifetimeMs: 30,
+        createCursor: () => "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+        heartbeatIntervalMs: 10,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe("no-store, no-transform");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.headers["x-accel-buffering"]).toBe("no");
+      expect(response.body).toContain("retry: 3000\n\n");
+      expect(response.body).toContain("id: download_event_ABCDEFGHIJKLMNOPQRSTUV\n");
+      const dataLine = response.body.split("\n").find((line) => line.startsWith("data: "));
+      expect(dataLine).toBeDefined();
+      const event = downloadQueueSnapshotEventSchema.parse(
+        JSON.parse(dataLine!.slice("data: ".length)),
+      );
+      expect(event).toMatchObject({
+        cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        queue: { state: "complete", summary: { total: 1 } },
+      });
+      expect(response.body).not.toContain(privatePassword);
+      expect(response.body).not.toContain(privateUpstreamId);
+      expect(readDownloadQueue).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects invalid resume cursors before contacting a download client", async () => {
+    const { app, operator, readDownloadQueue } = await harness();
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "last-event-id": "private-upstream-cursor",
+        },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "download_queue_event_cursor_invalid",
+      );
+      expect(readDownloadQueue).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies viewers from opening a live download stream", async () => {
+    const { app, readDownloadQueue, viewer } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("permission_denied");
+      expect(readDownloadQueue).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a bounded retry response before opening an excess session stream", async () => {
+    const { app, operator, readDownloadQueue } = await harness({
+      eventDependencies: {
+        connectionLifetimeMs: 40,
+        createCursor: () => "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+        heartbeatIntervalMs: 20,
+        maxConnectionsPerSession: 1,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    try {
+      const openStream = app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+      await vi.waitFor(() => expect(readDownloadQueue).toHaveBeenCalledOnce());
+      const limited = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers["retry-after"]).toBe("3");
+      expect(limited.headers["cache-control"]).toBe("no-store");
+      expect(apiErrorSchema.parse(limited.json()).error.code).toBe(
+        "download_queue_event_capacity_reached",
+      );
+      await openStream;
     } finally {
       await app.close();
     }

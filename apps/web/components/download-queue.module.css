@@ -387,6 +387,53 @@
   min-width: 44px;
 }
 
+.liveState {
+  align-items: center;
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 15px;
+  color: var(--paper-2);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 96px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.liveState i {
+  background: currentcolor;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentcolor 10%, transparent);
+  height: 6px;
+  width: 6px;
+}
+
+.liveState[data-state="live"] {
+  border-color: color-mix(in srgb, var(--success) 24%, var(--line-soft));
+  color: var(--success);
+}
+
+.liveState[data-state="connecting"] i {
+  animation: live-state-pulse 1.35s ease-in-out infinite;
+  color: var(--info);
+}
+
+.liveState[data-state="fallback"] {
+  color: var(--info);
+}
+
+@keyframes live-state-pulse {
+  50% {
+    opacity: 0.38;
+    transform: scale(0.72);
+  }
+}
+
 .refresh:hover:not(:disabled) {
   background: var(--fill-hover);
   color: var(--paper-0);
@@ -1333,18 +1380,23 @@
 
   .commandGlass {
     align-items: stretch;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     top: 78px;
   }
 
-  .searchControl {
-    flex-basis: 100%;
+  .searchControl,
+  .filters {
+    grid-column: 1 / -1;
   }
 
   .filters {
     display: grid;
-    flex: 1 1 auto;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .liveState {
+    justify-self: stretch;
   }
 
   .filters button {
@@ -1506,6 +1558,10 @@
   .loadingWorkspace i {
     animation: none;
   }
+
+  .liveState[data-state="connecting"] i {
+    animation: none;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
@@ -1555,7 +1611,8 @@
   .actionConfirm,
   .actionFeedback,
   .operationNotice,
-  .removalPhrase input {
+  .removalPhrase input,
+  .liveState {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: Canvas;

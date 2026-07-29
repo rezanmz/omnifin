@@ -65,22 +65,65 @@ complete view.
 
 ## Browser behavior
 
-The route is non-cacheable and rate-limited. The workspace polls every 12 seconds while live,
-supports an explicit refresh, and preserves the last verified queue if a later refresh fails. A
-visible stale notice distinguishes retained evidence from current telemetry. Search and state
-filters operate only on normalized in-memory data. Pause and resume first open an inline
-confirmation with the safe cancel action focused. Promotion is a reversible, non-blocking action
-with a direct **First** control. Before any write, the browser revalidates the active session,
-permission, and CSRF token, then sends one opaque item identifier, its connector, and its observed
-state. Removal also requires the operator to type `REMOVE`, explains the client-specific
+The read route is non-cacheable and rate-limited. While the workspace is active, it opens the
+same-origin authenticated event stream described below. Strict snapshots replace the existing
+TanStack Query value in place, so progress changes do not rebuild the page or alter its geometry.
+An explicit state indicator distinguishes live, reconnecting, 12-second polling fallback, and
+fixed snapshot modes. If the stream is unavailable, interrupted, or invalid, the last verified
+queue remains visible and foreground polling resumes every 12 seconds. An explicit refresh remains
+available. A later read failure produces a visible stale notice rather than presenting retained
+evidence as current telemetry.
+
+Search and state filters operate only on normalized in-memory data. Pause and resume first open an
+inline confirmation with the safe cancel action focused. Promotion is a reversible, non-blocking
+action with a direct **First** control. Before any write, the browser revalidates the active
+session, permission, and CSRF token, then sends one opaque item identifier, its connector, and its
+observed state. Removal also requires the operator to type `REMOVE`, explains the client-specific
 consequence, and uses a fresh cryptographic idempotency key for each confirmation. Successful
-mutations update the local queue without waiting for the next poll and leave persistent
-screen-reader status announcements.
+mutations update the local queue without waiting for the next live event or poll and leave
+persistent screen-reader status announcements.
 
 Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
 component coverage. Dark and light desktop/mobile baselines are committed, and representative
 routes are checked for automatic accessibility violations, keyboard filtering, responsive
 overflow, Content Security Policy, and production rendering.
+
+## Authenticated live snapshot stream
+
+`GET /v1/downloads/queue/events` is a versioned `text/event-stream` endpoint for the same bounded
+queue representation returned by `GET /v1/downloads/queue`. It requires a current server-side
+session and `downloads.manage`; unauthenticated, unauthorized, malformed-cursor, rate-limit, and
+capacity failures use the canonical JSON error contract before streaming begins. The safe GET does
+not require a CSRF header. It accepts no query parameters or caller-selected destination.
+
+Each message uses the default SSE event type and contains:
+
+```text
+id: download_event_<opaque 22-character value>
+data: {"cursor":"download_event_<same value>","kind":"snapshot","queue":{...}}
+```
+
+The strict data contract rejects extra fields. In particular, it cannot represent connector
+credentials, native queue identifiers, media paths, cookies, or arbitrary upstream values. The
+browser accepts a message only when the SSE `lastEventId` exactly matches the validated cursor in
+its JSON data. The queue is bounded to 200 items, so each message is a complete normalized snapshot
+and this endpoint deliberately has no pagination or partial-delta semantics.
+
+The gateway sends `retry: 3000`, emits comment heartbeats every 15 seconds, and ends each stream
+after about 45 seconds. Native `EventSource` reconnection then re-enters session rotation,
+expiration, and authorization checks. A reconnect may send `Last-Event-ID`; only the newest
+snapshot retained inside a 30-second recovery window can be replayed, and an exact cursor is never
+duplicated. Invalid cursors fail with `download_queue_event_cursor_invalid`. The response uses
+`Cache-Control: no-store, no-transform`, `Pragma: no-cache`, `Vary: Cookie`, and
+`X-Accel-Buffering: no` so intermediaries do not cache, transform, or batch events.
+
+One process-wide broker performs a single upstream refresh for all connected operators instead of
+polling administrative clients once per browser. It admits at most 64 streams globally and two per
+session. Excess connections fail before streaming with `429`, `Retry-After`, and
+`download_queue_event_capacity_reached`. When the final subscriber leaves, the shared read is
+aborted. If a shared refresh fails after headers are committed, streams close without exposing the
+private failure; browsers retain the last verified value and use the polling fallback while native
+reconnection continues.
 
 ## Exact-item pause and resume
 

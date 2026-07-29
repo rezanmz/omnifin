@@ -21,6 +21,22 @@ const staticClient: DownloadQueueClient = {
   },
 };
 
+const liveClient: DownloadQueueClient = {
+  ...staticClient,
+  watch: (callbacks) => {
+    callbacks.onStatus("live");
+    return () => undefined;
+  },
+};
+
+const fallbackClient: DownloadQueueClient = {
+  ...staticClient,
+  watch: (callbacks) => {
+    callbacks.onStatus("fallback");
+    return () => undefined;
+  },
+};
+
 const meta = {
   args: { client: staticClient, initialOutcome: ready, live: false },
   argTypes: {
@@ -38,6 +54,8 @@ type Story = StoryObj<typeof meta>;
 
 export const Ready: Story = {};
 export const ReadyLight: Story = { globals: { theme: "light" } };
+export const LiveUpdates: Story = { args: { client: liveClient, live: true } };
+export const PollingFallback: Story = { args: { client: fallbackClient, live: true } };
 export const AttentionFilter: Story = {
   play: async ({ canvasElement, userEvent }) => {
     const canvas = within(canvasElement);

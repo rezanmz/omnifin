@@ -39,13 +39,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   downloadQueueClient,
   DownloadQueueClientError,
   outcomeFromError,
   type DownloadQueueClient,
+  type DownloadQueueLiveStatus,
   type DownloadQueueLoadOutcome,
 } from "../lib/download-queue";
 import type { ThemePreference } from "../lib/theme";
@@ -731,6 +732,7 @@ function UnconfiguredQueue() {
 function ReadyQueue({
   client,
   isFetching,
+  liveStatus,
   onRefresh,
   queue,
   refreshAvailable,
@@ -738,6 +740,7 @@ function ReadyQueue({
 }: {
   client: DownloadQueueClient;
   isFetching: boolean;
+  liveStatus: DownloadQueueLiveStatus | "snapshot";
   onRefresh: () => void;
   queue: DownloadQueueResponse;
   refreshAvailable: boolean;
@@ -1031,6 +1034,18 @@ function ReadyQueue({
                 </button>
               ))}
             </div>
+            <div aria-live="polite" className={styles.liveState} data-state={liveStatus}>
+              <i aria-hidden="true" />
+              <span>
+                {liveStatus === "live"
+                  ? "Live"
+                  : liveStatus === "connecting"
+                    ? "Connecting"
+                    : liveStatus === "fallback"
+                      ? "12s fallback"
+                      : "Snapshot"}
+              </span>
+            </div>
             <button
               aria-label="Refresh download queue"
               className={styles.refresh}
@@ -1173,16 +1188,34 @@ function DownloadQueueContent({
   Pick<DownloadQueueProperties, "initialOutcome" | "live">) {
   const refreshAvailable = live ?? initialOutcome === undefined;
   const initialQueue = initialOutcome?.status === "ready" ? initialOutcome.queue : undefined;
+  const queryClient = useQueryClient();
+  const [streamStatus, setStreamStatus] = useState<DownloadQueueLiveStatus>("connecting");
+  const liveStatus: DownloadQueueLiveStatus | "snapshot" = !refreshAvailable
+    ? "snapshot"
+    : client.watch
+      ? streamStatus
+      : "fallback";
   const query = useQuery({
     enabled: refreshAvailable,
     initialData: initialQueue,
     queryFn: ({ signal }) => client.load(signal),
     queryKey: ["download-queue"],
-    refetchInterval: refreshAvailable ? 12_000 : false,
+    refetchInterval: refreshAvailable && liveStatus !== "live" ? 12_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
     staleTime: 8_000,
   });
+
+  useEffect(() => {
+    if (!refreshAvailable || !client.watch) return;
+    return client.watch({
+      onSnapshot: (event) => {
+        queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], event.queue);
+        setStreamStatus("live");
+      },
+      onStatus: setStreamStatus,
+    });
+  }, [client, queryClient, refreshAvailable]);
 
   if (!refreshAvailable && initialOutcome) {
     if (
@@ -1199,6 +1232,7 @@ function DownloadQueueContent({
     <ReadyQueue
       client={client}
       isFetching={query.isFetching}
+      liveStatus={liveStatus}
       onRefresh={() => void query.refetch()}
       queue={query.data}
       refreshAvailable={refreshAvailable}
