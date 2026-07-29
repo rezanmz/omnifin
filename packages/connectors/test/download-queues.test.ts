@@ -31,7 +31,10 @@ function target(
 describe("qBittorrent download queue", () => {
   it("authenticates and normalizes active downloads without returning upstream hashes", async () => {
     const mock = createMockTransport([
-      new Response("Ok.", { headers: { "set-cookie": "SID=fixture-session; Path=/; HttpOnly" } }),
+      new Response(null, {
+        status: 204,
+        headers: { "set-cookie": "QBT_SID_8080=fixture+session/value; Path=/; HttpOnly" },
+      }),
       jsonResponse([
         {
           added_on: 1_774_648_200,
@@ -89,10 +92,10 @@ describe("qBittorrent download queue", () => {
       "/api/v2/torrents/info",
     ]);
     expect(mock.requests[1]?.url.searchParams.get("limit")).toBe("201");
-    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("SID=fixture-session");
+    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("QBT_SID_8080=fixture+session/value");
     expect(mock.requests[1]?.init.headers.get("origin")).toBe("https://qbittorrent.example.test");
     expect(JSON.stringify(result)).not.toContain(PASSWORD);
-    expect(JSON.stringify(result)).not.toContain("fixture-session");
+    expect(JSON.stringify(result)).not.toContain("fixture+session/value");
   });
 
   it("maps qBittorrent's operational states and unknown ETA sentinel", async () => {
@@ -266,6 +269,22 @@ describe("SABnzbd download queue", () => {
     } satisfies Partial<SafeConnectorError>);
     expect(adapter.capabilities).not.toContain("download.queue.read");
     expect(mock.requests).toHaveLength(0);
+  });
+
+  it("normalizes SABnzbd's bounded invalid API-key response", async () => {
+    const mock = createMockTransport([jsonResponse({ error: "API Key Incorrect", status: false })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    const error = await adapter.readDownloadQueue().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "invalid_credentials",
+      operation: "download.queue",
+    } satisfies Partial<SafeConnectorError>);
+    expect(JSON.stringify(error)).not.toContain(API_KEY);
   });
 
   it("rejects schema drift without reflecting an upstream payload", async () => {

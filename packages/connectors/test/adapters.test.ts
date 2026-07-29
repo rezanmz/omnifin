@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import { BazarrAdapter } from "../src/adapters/bazarr.js";
 import { JellyfinAdapter } from "../src/adapters/jellyfin.js";
 import { ProwlarrAdapter } from "../src/adapters/prowlarr.js";
-import { QBittorrentAdapter } from "../src/adapters/qbittorrent.js";
+import {
+  QBittorrentAdapter,
+  isQBittorrentLoginResponseAccepted,
+  readQBittorrentSessionCookie,
+} from "../src/adapters/qbittorrent.js";
 import { RadarrAdapter } from "../src/adapters/radarr.js";
 import { SabnzbdAdapter } from "../src/adapters/sabnzbd.js";
 import { SeerrAdapter } from "../src/adapters/seerr.js";
@@ -263,10 +267,32 @@ describe.each(credentialReflectionCases)("$name credential reflection", (probeCa
 });
 
 describe("qBittorrent adapter", () => {
+  it("accepts only the legacy 200 and current empty 204 login responses", () => {
+    expect(isQBittorrentLoginResponseAccepted(200, "Ok.")).toBe(true);
+    expect(isQBittorrentLoginResponseAccepted(204, "")).toBe(true);
+    expect(isQBittorrentLoginResponseAccepted(200, "Fails.")).toBe(false);
+    expect(isQBittorrentLoginResponseAccepted(204, "Ok.")).toBe(false);
+    expect(isQBittorrentLoginResponseAccepted(201, "")).toBe(false);
+  });
+
+  it("accepts only legacy or port-scoped qBittorrent session cookies", () => {
+    expect(readQBittorrentSessionCookie("SID=legacy_session; Path=/")).toBe("SID=legacy_session");
+    expect(readQBittorrentSessionCookie("QBT_SID_8080=fixture+session/value; Path=/")).toBe(
+      "QBT_SID_8080=fixture+session/value",
+    );
+    expect(readQBittorrentSessionCookie("QBT_SID_0=session; Path=/")).toBeNull();
+    expect(readQBittorrentSessionCookie("QBT_SID_65536=session; Path=/")).toBeNull();
+    expect(readQBittorrentSessionCookie("OTHER_SID_8080=session; Path=/")).toBeNull();
+    expect(readQBittorrentSessionCookie("QBT_SID_8080=bad value; Path=/")).toBeNull();
+  });
+
   it("authenticates, keeps the SID internal, and reads the application version", async () => {
     const mock = createMockTransport([
-      new Response("Ok.", { headers: { "set-cookie": "SID=fixture-session; Path=/; HttpOnly" } }),
-      new Response("v5.1.2"),
+      new Response(null, {
+        status: 204,
+        headers: { "set-cookie": "QBT_SID_8080=fixture+session/value; Path=/; HttpOnly" },
+      }),
+      new Response("v5.2.0"),
     ]);
     const adapter = new QBittorrentAdapter({
       ...target("qbittorrent", mock.transport),
@@ -276,13 +302,13 @@ describe("qBittorrent adapter", () => {
 
     const health = await adapter.probe();
 
-    expect(health).toMatchObject({ status: "healthy", version: "v5.1.2", failure: null });
+    expect(health).toMatchObject({ status: "healthy", version: "v5.2.0", failure: null });
     expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
       "/api/v2/auth/login",
       "/api/v2/app/version",
     ]);
-    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("SID=fixture-session");
-    expect(JSON.stringify(health)).not.toContain("fixture-session");
+    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("QBT_SID_8080=fixture+session/value");
+    expect(JSON.stringify(health)).not.toContain("fixture+session/value");
     expect(JSON.stringify(health)).not.toContain("fixture-password");
   });
 

@@ -10,6 +10,12 @@ This is pre-release fixture-backed development evidence. It is not a public comp
 the compatibility matrix remains authoritative until protected live checks record exact upstream
 versions and dates.
 
+The protected pull-request aggregate also exercises the production adapters against fresh,
+digest-pinned qBittorrent and SABnzbd containers. Its synthetic queue items must complete observed
+exact-item pause, resume, and preserve-files removal without retaining credentials, native IDs, or
+paths in the report. The complete isolation and evidence contract is documented in the
+[download-client fixture runbook](operations/download-client-fixtures.md).
+
 ## Authorization and connector selection
 
 `GET /v1/downloads/queue` requires an active session with `downloads.manage`. The route and service
@@ -24,9 +30,11 @@ parallel under the request abort signal so one slow client does not serialize ev
 ## Normalization and secret boundary
 
 The qBittorrent adapter establishes a short-lived authenticated session and reads the bounded
-torrent information endpoint. The SABnzbd adapter sends its API key only to the approved connector
-destination and reads the bounded queue response. In both cases the adapter validates the upstream
-payload before it returns typed internal data.
+torrent information endpoint. It accepts only qBittorrent's legacy `200`/`Ok.` login response or the
+current empty `204` response and requires the corresponding legacy or port-scoped session cookie.
+The SABnzbd adapter sends its API key only to the approved connector destination and reads the
+bounded queue response. In both cases the adapter validates the upstream payload before it returns
+typed internal data.
 
 The gateway then:
 

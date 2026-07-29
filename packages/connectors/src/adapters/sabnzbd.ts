@@ -49,11 +49,34 @@ const sabnzbdQueueSchema = z.object({
   }),
 });
 
+const sabnzbdAuthenticationErrorSchema = z.object({
+  error: z.enum(["API Key Incorrect", "API Key Required"]),
+  status: z.literal(false).optional(),
+});
+const sabnzbdQueueResponseSchema = z.union([sabnzbdQueueSchema, sabnzbdAuthenticationErrorSchema]);
+
 const sabnzbdQueueActionSchema = z.object({
   nzo_ids: z.array(z.string().trim().min(1).max(512)).max(1).optional(),
   status: z.boolean(),
 });
+const sabnzbdQueueActionResponseSchema = z.union([
+  sabnzbdQueueActionSchema,
+  sabnzbdAuthenticationErrorSchema,
+]);
 const sabnzbdQueueIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,512}$/u);
+
+function rejectAuthenticationError(
+  response: z.infer<typeof sabnzbdAuthenticationErrorSchema>,
+  operation: string,
+): never {
+  throw new SafeConnectorError({
+    service: "sabnzbd",
+    operation,
+    code: "invalid_credentials",
+    message: "SABnzbd rejected the configured API key.",
+    retryable: false,
+  });
+}
 
 function cleanText(value: string, maximum: number) {
   const segment = value.split(/[\\/]/u).at(-1) ?? value;
@@ -131,7 +154,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
         retryable: false,
       });
     }
-    const response = await this.client.requestJson("api", sabnzbdQueueSchema, {
+    const response = await this.client.requestJson("api", sabnzbdQueueResponseSchema, {
       operation: "download.queue",
       query: {
         apikey: this.#apiKey,
@@ -142,6 +165,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       },
       ...(signal ? { signal } : {}),
     });
+    if ("error" in response) rejectAuthenticationError(response, "download.queue");
     const selected = response.queue.slots.slice(0, DOWNLOAD_QUEUE_MAX_ITEMS);
     const globalRate = Math.round((response.queue.kbpersec ?? 0) * 1_024);
     const activeIndexes = selected
@@ -188,7 +212,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       });
     }
     const externalId = sabnzbdQueueIdSchema.parse(input.externalId);
-    const response = await this.client.requestJson("api", sabnzbdQueueActionSchema, {
+    const response = await this.client.requestJson("api", sabnzbdQueueActionResponseSchema, {
       operation: "download.queue.action",
       query: {
         apikey: this.#apiKey,
@@ -199,6 +223,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       },
       ...(signal ? { signal } : {}),
     });
+    if ("error" in response) rejectAuthenticationError(response, "download.queue.action");
     if (!response.status || (response.nzo_ids && response.nzo_ids[0] !== externalId)) {
       throw new SafeConnectorError({
         service: this.service,
@@ -221,7 +246,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       });
     }
     const externalId = sabnzbdQueueIdSchema.parse(input.externalId);
-    const response = await this.client.requestJson("api", sabnzbdQueueActionSchema, {
+    const response = await this.client.requestJson("api", sabnzbdQueueActionResponseSchema, {
       operation: "download.queue.remove",
       query: {
         apikey: this.#apiKey,
@@ -232,6 +257,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       },
       ...(signal ? { signal } : {}),
     });
+    if ("error" in response) rejectAuthenticationError(response, "download.queue.remove");
     if (!response.status || response.nzo_ids?.length !== 1 || response.nzo_ids[0] !== externalId) {
       throw new SafeConnectorError({
         service: this.service,
