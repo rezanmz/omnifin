@@ -14,6 +14,7 @@ import {
   parseContainerState,
   readSabnzbdApiKey,
   serviceEnvironmentArguments,
+  validateQBittorrentAddResponse,
   validateSanitizedFailureReport,
   validateSanitizedReport,
 } from "../integration/download-clients.mjs";
@@ -86,6 +87,38 @@ test("creates one deterministic, tracker-isolated torrent fixture", () => {
   assert.equal(first.torrent.subarray(0, 1).toString("utf8"), "d");
   assert.equal(first.torrent.includes(Buffer.from("http://127.0.0.1:1/announce")), true);
   assert.equal(first.torrent.includes(Buffer.from(first.fileName)), true);
+});
+
+test("accepts only qBittorrent's legacy or exact current add response", () => {
+  const hash = "0123456789abcdef0123456789abcdef01234567";
+  assert.equal(validateQBittorrentAddResponse(200, "Ok.", hash), true);
+  assert.equal(
+    validateQBittorrentAddResponse(
+      200,
+      JSON.stringify({
+        added_torrent_ids: [hash],
+        failure_count: 0,
+        pending_count: 0,
+        success_count: 1,
+      }),
+      hash,
+    ),
+    true,
+  );
+  assert.equal(
+    validateQBittorrentAddResponse(
+      200,
+      JSON.stringify({
+        added_torrent_ids: ["f".repeat(40)],
+        failure_count: 0,
+        pending_count: 0,
+        success_count: 1,
+      }),
+      hash,
+    ),
+    false,
+  );
+  assert.equal(validateQBittorrentAddResponse(204, "", hash), false);
 });
 
 test("creates a qBittorrent credential using its exact bounded PBKDF2 format", () => {

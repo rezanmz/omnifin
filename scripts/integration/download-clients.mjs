@@ -188,6 +188,37 @@ export function createQBittorrentAuthenticationFixture(
   };
 }
 
+export function validateQBittorrentAddResponse(status, body, expectedInfoHash) {
+  if (
+    !/^[a-f0-9]{40}$/u.test(expectedInfoHash) ||
+    typeof body !== "string" ||
+    body.length > 4_096
+  ) {
+    return false;
+  }
+  if (status === 200 && body.trim() === "Ok.") return true;
+  if (status !== 200) return false;
+  let response;
+  try {
+    response = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  return (
+    response !== null &&
+    typeof response === "object" &&
+    !Array.isArray(response) &&
+    sortedKeys(response).join(",") ===
+      "added_torrent_ids,failure_count,pending_count,success_count" &&
+    response.failure_count === 0 &&
+    response.pending_count === 0 &&
+    response.success_count === 1 &&
+    Array.isArray(response.added_torrent_ids) &&
+    response.added_torrent_ids.length === 1 &&
+    response.added_torrent_ids[0] === expectedInfoHash
+  );
+}
+
 export function readSabnzbdApiKey(configuration) {
   if (typeof configuration !== "string" || configuration.length > 2 * 1_024 * 1_024) {
     throw new DownloadFixtureFailure("credential_config_invalid");
@@ -557,7 +588,9 @@ async function seedQBittorrent(baseUrl, cookie, fixture) {
     },
     method: "POST",
   });
-  if (response.body.trim() !== "Ok.") throw new DownloadFixtureFailure("queue_seed_invalid");
+  if (!validateQBittorrentAddResponse(response.status, response.body, fixture.infoHash)) {
+    throw new DownloadFixtureFailure("queue_seed_invalid");
+  }
 }
 
 function qbittorrentAdapter(server, credentials) {
