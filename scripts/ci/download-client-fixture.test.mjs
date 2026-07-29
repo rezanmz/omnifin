@@ -12,6 +12,7 @@ import {
   parseContainerState,
   readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
+  serviceEnvironmentArguments,
   validateSanitizedReport,
 } from "../integration/download-clients.mjs";
 
@@ -59,6 +60,17 @@ test("accepts only a running disposable container state", () => {
   assert.equal(parseContainerState("true:0\n"), true);
   assert.throws(() => parseContainerState("false:1\n"), /container_exited/u);
   assert.throws(() => parseContainerState("private diagnostics\n"), /container_state_invalid/u);
+});
+
+test("passes qBittorrent's documented internal service ports explicitly", () => {
+  assert.deepEqual(serviceEnvironmentArguments("qbittorrent"), [
+    "--env",
+    "WEBUI_PORT=8080",
+    "--env",
+    "TORRENTING_PORT=6881",
+  ]);
+  assert.deepEqual(serviceEnvironmentArguments("sabnzbd"), []);
+  assert.throws(() => serviceEnvironmentArguments("other"), /service_invalid/u);
 });
 
 test("creates one deterministic, tracker-isolated torrent fixture", () => {

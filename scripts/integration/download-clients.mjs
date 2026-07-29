@@ -277,7 +277,11 @@ async function directJson(baseUrl, path, options) {
   }
 }
 
-async function waitForResult(operation, timeoutMs = SERVER_READY_TIMEOUT_MS) {
+async function waitForResult(
+  operation,
+  timeoutMs = SERVER_READY_TIMEOUT_MS,
+  timeoutCode = "server_start_timeout",
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -288,7 +292,7 @@ async function waitForResult(operation, timeoutMs = SERVER_READY_TIMEOUT_MS) {
     }
     await sleep(500);
   }
-  throw new DownloadFixtureFailure("server_start_timeout");
+  throw new DownloadFixtureFailure(timeoutCode);
 }
 
 export function containerIsolationArguments(uid, gid) {
@@ -303,6 +307,13 @@ export function containerIsolationArguments(uid, gid) {
     "--tmpfs",
     `/run:uid=${uid},gid=${gid},exec`,
   ];
+}
+
+export function serviceEnvironmentArguments(service) {
+  if (!SERVICES.includes(service)) throw new DownloadFixtureFailure("service_invalid");
+  return service === "qbittorrent"
+    ? ["--env", "WEBUI_PORT=8080", "--env", "TORRENTING_PORT=6881"]
+    : [];
 }
 
 function commonContainerArguments(context, image) {
@@ -328,6 +339,7 @@ function commonContainerArguments(context, image) {
     "UMASK=077",
     "--env",
     "DOCKER_MODS=",
+    ...serviceEnvironmentArguments(context.service),
     "--mount",
     `type=bind,src=${context.configDirectory},dst=/config`,
     ...context.mounts,
@@ -440,11 +452,15 @@ function assertHealthy(health) {
 }
 
 async function waitForQueueItem(adapter, externalId, predicate) {
-  return waitForResult(async () => {
-    const queue = await connectorOperation("queue_read", () => adapter.readDownloadQueue());
-    const item = queue.items.find((candidate) => candidate.externalId === externalId);
-    return predicate(item) ? { item, queue } : null;
-  }, MUTATION_TIMEOUT_MS);
+  return waitForResult(
+    async () => {
+      const queue = await connectorOperation("queue_read", () => adapter.readDownloadQueue());
+      const item = queue.items.find((candidate) => candidate.externalId === externalId);
+      return predicate(item) ? { item, queue } : null;
+    },
+    MUTATION_TIMEOUT_MS,
+    "queue_state_timeout",
+  );
 }
 
 async function qbittorrentLogin(baseUrl, password) {
@@ -506,12 +522,19 @@ function qbittorrentAdapter(server, password) {
 }
 
 async function runQBittorrent(context, server) {
-  const password = await waitForResult(async () =>
-    readQBittorrentTemporaryPassword(
-      runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
-    ),
+  const password = await waitForResult(
+    async () =>
+      readQBittorrentTemporaryPassword(
+        runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
+      ),
+    SERVER_READY_TIMEOUT_MS,
+    "credential_log_timeout",
   );
-  const cookie = await waitForResult(() => qbittorrentLogin(server.directUrl, password));
+  const cookie = await waitForResult(
+    () => qbittorrentLogin(server.directUrl, password),
+    SERVER_READY_TIMEOUT_MS,
+    "authentication_start_timeout",
+  );
   const fixture = createQBittorrentFixture();
   const preservedBytes = Buffer.alloc(fixture.payload.byteLength, 0x5a);
   const preservedPath = resolve(context.downloadDirectory, fixture.fileName);
@@ -601,12 +624,19 @@ function sabnzbdAdapter(server, apiKey) {
 }
 
 async function runSabnzbd(context, server) {
-  await waitForResult(async () => {
-    const version = await directJson(server.directUrl, "api?mode=version&output=json");
-    return typeof version?.version === "string" ? version.version : null;
-  });
-  const apiKey = await waitForResult(async () =>
-    readSabnzbdApiKey(await readFile(resolve(context.configDirectory, "sabnzbd.ini"), "utf8")),
+  await waitForResult(
+    async () => {
+      const version = await directJson(server.directUrl, "api?mode=version&output=json");
+      return typeof version?.version === "string" ? version.version : null;
+    },
+    SERVER_READY_TIMEOUT_MS,
+    "service_start_timeout",
+  );
+  const apiKey = await waitForResult(
+    async () =>
+      readSabnzbdApiKey(await readFile(resolve(context.configDirectory, "sabnzbd.ini"), "utf8")),
+    SERVER_READY_TIMEOUT_MS,
+    "credential_config_timeout",
   );
   const externalId = await seedSabnzbd(server.directUrl, apiKey);
   const adapter = sabnzbdAdapter(server, apiKey);
