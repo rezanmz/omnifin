@@ -7,7 +7,9 @@ import { parse } from "yaml";
 import {
   DOWNLOAD_CLIENT_IMAGES,
   containerIsolationArguments,
+  containerPortArguments,
   createQBittorrentFixture,
+  parseContainerState,
   parsePublishedPort,
   readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
@@ -42,6 +44,18 @@ test("runs LinuxServer fixtures as the host user with a private writable runtime
     arguments_.some((argument) => argument.startsWith("PGID=")),
     false,
   );
+});
+
+test("asks Docker to allocate an ephemeral host port for the Web UI", () => {
+  assert.deepEqual(containerPortArguments(8080), ["--publish", "8080/tcp"]);
+  assert.throws(() => containerPortArguments(0), /container_port_invalid/u);
+  assert.throws(() => containerPortArguments(65_536), /container_port_invalid/u);
+});
+
+test("accepts only a running disposable container state", () => {
+  assert.equal(parseContainerState("true:0\n"), true);
+  assert.throws(() => parseContainerState("false:1\n"), /container_exited/u);
+  assert.throws(() => parseContainerState("private diagnostics\n"), /container_state_invalid/u);
 });
 
 test("creates one deterministic, tracker-isolated torrent fixture", () => {

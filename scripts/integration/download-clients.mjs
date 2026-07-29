@@ -181,6 +181,15 @@ export function parsePublishedPort(output) {
   return port;
 }
 
+export function parseContainerState(output) {
+  const state = typeof output === "string" ? output.trim() : "";
+  if (state === "true:0") return true;
+  if (/^false:\d{1,3}$/u.test(state)) {
+    throw new DownloadFixtureFailure("container_exited");
+  }
+  throw new DownloadFixtureFailure("container_state_invalid");
+}
+
 export function selectConnectorAddress(interfaces = networkInterfaces()) {
   const candidates = Object.values(interfaces)
     .flat()
@@ -325,6 +334,13 @@ export function containerIsolationArguments(uid, gid) {
   ];
 }
 
+export function containerPortArguments(internalPort) {
+  if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65_535) {
+    throw new DownloadFixtureFailure("container_port_invalid");
+  }
+  return ["--publish", `${internalPort}/tcp`];
+}
+
 function commonContainerArguments(context, internalPort, image) {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
@@ -342,8 +358,7 @@ function commonContainerArguments(context, internalPort, image) {
     "1g",
     "--cpus",
     "2",
-    "--publish",
-    `0.0.0.0::${internalPort}`,
+    ...containerPortArguments(internalPort),
     "--env",
     "TZ=Etc/UTC",
     "--env",
@@ -369,6 +384,13 @@ function startContainer(context) {
     commonContainerArguments(context, internalPort, DOWNLOAD_CLIENT_IMAGES[context.service]),
     180_000,
     "container_start_failed",
+  );
+  parseContainerState(
+    runDocker(
+      ["inspect", "--format", "{{.State.Running}}:{{.State.ExitCode}}", context.containerName],
+      30_000,
+      "container_state_failed",
+    ),
   );
   const port = publishedPort(context.containerName, internalPort);
   return {

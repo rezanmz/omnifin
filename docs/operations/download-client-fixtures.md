@@ -3,8 +3,8 @@
 The protected connector workflow starts fresh qBittorrent and SABnzbd instances for every pull
 request. The instances use LinuxServer images pinned by release tag and multi-architecture index
 digest. They receive no repository or environment secrets, run on a unique internal Docker network,
-publish only one ephemeral Web UI port, have CPU, memory, and process limits, and are destroyed with
-their private configuration after the check.
+ask Docker to allocate only one ephemeral Web UI port, have CPU, memory, and process limits, and are
+destroyed with their private configuration after the check.
 
 Both images run as the host runner's unprivileged UID and GID. Their private `/run` tmpfs is owned by
 that identity so the s6 supervisor can initialize while Docker's `no-new-privileges` restriction
