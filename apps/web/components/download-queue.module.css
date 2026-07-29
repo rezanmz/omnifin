@@ -595,6 +595,62 @@
   gap: 12px;
 }
 
+.queueItemActions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.queueItemActions .status {
+  margin-left: 0;
+}
+
+.itemAction,
+.cancelAction,
+.confirmAction {
+  align-items: center;
+  border-radius: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 720;
+  gap: 7px;
+  justify-content: center;
+  min-height: 44px;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 170ms ease-out,
+    color 150ms ease-out,
+    transform 130ms ease-out;
+}
+
+.itemAction {
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  color: var(--paper-1);
+  padding: 0 12px;
+}
+
+.itemAction:hover:not(:disabled) {
+  background: var(--glass-highlight);
+  border-color: var(--accent-line);
+  color: var(--paper-0);
+}
+
+.itemAction:active:not(:disabled),
+.cancelAction:active,
+.confirmAction:active {
+  transform: scale(0.96);
+}
+
+.itemAction:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
 .protocolIcon {
   align-items: center;
   background: var(--accent-soft);
@@ -724,6 +780,93 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.actionConfirm,
+.actionFeedback {
+  align-items: center;
+  background: linear-gradient(145deg, var(--glass-highlight), transparent 46%), var(--surface-card);
+  border: 1px solid var(--line-strong);
+  border-radius: 17px;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 12px 12px 12px 15px;
+}
+
+.actionConfirm > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.actionConfirm strong {
+  font-size: 0.72rem;
+}
+
+.actionConfirm small {
+  color: var(--paper-2);
+  font-size: 0.64rem;
+  line-height: 1.45;
+}
+
+.actionConfirm > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.cancelAction,
+.confirmAction {
+  padding: 0 14px;
+}
+
+.cancelAction {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  color: var(--paper-1);
+}
+
+.cancelAction:hover {
+  background: var(--fill-hover);
+  color: var(--paper-0);
+}
+
+.confirmAction {
+  background: var(--acid);
+  border: 1px solid color-mix(in srgb, var(--acid) 72%, var(--glass-edge));
+  box-shadow: 0 8px 24px var(--accent-ring);
+  color: var(--acid-ink);
+}
+
+.confirmAction:hover {
+  box-shadow: 0 11px 29px color-mix(in srgb, var(--acid) 23%, transparent);
+}
+
+.actionFeedback {
+  color: var(--paper-1);
+  font-size: 0.68rem;
+  justify-content: flex-start;
+  line-height: 1.45;
+}
+
+.actionFeedback[data-status="success"] {
+  background: color-mix(in srgb, var(--success) 8%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--success) 26%, var(--line-soft));
+}
+
+.actionFeedback[data-status="success"] svg {
+  color: var(--success);
+}
+
+.actionFeedback[data-status="error"] {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--warning) 26%, var(--line-soft));
+}
+
+.actionFeedback[data-status="error"] svg {
+  color: var(--warning);
 }
 
 .clientList article {
@@ -1159,6 +1302,16 @@
     padding: 0 10px;
   }
 
+  .actionConfirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actionConfirm > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .itemTelemetry {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: 14px;
@@ -1212,6 +1365,15 @@
     flex-direction: row;
     min-height: 112px;
   }
+
+  .itemAction {
+    min-width: 44px;
+    padding: 0;
+  }
+
+  .itemAction span {
+    display: none;
+  }
 }
 
 @media (pointer: coarse) {
@@ -1220,6 +1382,9 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .itemAction,
+  .cancelAction,
+  .confirmAction,
   .primaryAction {
     min-height: 48px;
   }
@@ -1232,6 +1397,9 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .itemAction,
+  .cancelAction,
+  .confirmAction,
   .primaryAction,
   .topbar::after,
   .commandGlass::after,
@@ -1281,7 +1449,9 @@
   .queuePanel,
   .clientPanel,
   .unconfigured,
-  .queueItem {
+  .queueItem,
+  .actionConfirm,
+  .actionFeedback {
     border-color: currentcolor;
   }
 }
@@ -1294,7 +1464,9 @@
   .queuePanel,
   .clientPanel,
   .unconfigured,
-  .queueItem {
+  .queueItem,
+  .actionConfirm,
+  .actionFeedback {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: Canvas;

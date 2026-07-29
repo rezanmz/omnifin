@@ -7,7 +7,13 @@ import { demoDownloadQueue, demoDownloadQueueGeneratedAt } from "../lib/download
 
 const ready: DownloadQueueLoadOutcome = { queue: demoDownloadQueue, status: "ready" };
 
-const staticClient: DownloadQueueClient = { load: async () => demoDownloadQueue };
+const staticClient: DownloadQueueClient = {
+  act: async () => {
+    throw new Error("Story actions stop at confirmation.");
+  },
+  load: async () => demoDownloadQueue,
+  loadEligibility: async () => ({ status: "unavailable" }),
+};
 
 const meta = {
   args: { client: staticClient, initialOutcome: ready, live: false },
@@ -32,6 +38,26 @@ export const AttentionFilter: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Attention" }));
     await expect(canvas.getByText("Glass.Horizon.2025.1080p.BluRay")).toBeVisible();
     await expect(canvas.queryByText("Signal.S01E07.1080p.WEB-DL")).not.toBeInTheDocument();
+  },
+};
+export const PauseConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Pause The.Far.Meridian.2026.2160p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await expect(canvas.getByText("Pause this transfer?")).toBeVisible();
+  },
+};
+export const ResumeConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Resume Signal.S01E07.1080p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await expect(canvas.getByText("Resume this transfer?")).toBeVisible();
   },
 };
 export const Empty: Story = {

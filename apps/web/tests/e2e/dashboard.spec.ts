@@ -339,6 +339,14 @@ test("download queue supports focused search and attention filtering", async ({ 
   await page.getByRole("searchbox", { name: "Search downloads" }).fill("signal");
   await expect(page.getByText("Signal.S01E07.1080p.WEB-DL")).toBeVisible();
   await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toHaveCount(0);
+
+  await page.getByRole("searchbox", { name: "Search downloads" }).fill("");
+  const resume = page.getByRole("button", { name: "Resume Signal.S01E07.1080p.WEB-DL" });
+  await resume.click();
+  await expect(page.getByText("Resume this transfer?")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(resume).toBeFocused();
 });
 
 test("indexer intelligence hydrates without changing deterministic telemetry", async ({ page }) => {

@@ -17,6 +17,12 @@ contain only the selected movie or series identifier and the desired boolean;
 file, path, profile, tag, and queue fields are never sent. Live profiles remain
 read-only until disposable upstream environments are available.
 
+The qBittorrent and SABnzbd fixture profiles include bounded queue reads plus exact-item pause and
+resume shapes. qBittorrent fixtures cover both the version 5 `stop`/`start` and version 4
+`pause`/`resume` endpoints; SABnzbd fixtures bind `pause` or `resume` to one validated `nzo_id`.
+These writes use synthetic identifiers and mocked transports. Live profiles remain read-only until
+the protected environments can guarantee disposable jobs and teardown.
+
 Run one service or the full matrix:
 
 ```sh

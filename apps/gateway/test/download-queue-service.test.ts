@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs } from "../src/db/schema.js";
+import { connectorConfigs, users } from "../src/db/schema.js";
 import {
   DownloadQueueService,
   type DownloadQueueAdapterFactoryInput,
@@ -79,7 +79,7 @@ function capabilitySnapshot(id: string, service: "qbittorrent" | "sabnzbd", capa
       capabilities: [
         "connector.health",
         "connector.version",
-        ...(capable ? ["download.queue.read"] : []),
+        ...(capable ? ["download.queue.read", "download.queue.mutate"] : []),
       ],
       checkedAt: now.toISOString(),
       connectorId: id,
@@ -154,6 +154,18 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
+  database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Queue operator",
+      id: "operator-user",
+      role: "operator",
+      roleSource: "manual",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
   if (options.withConnectors !== false) {
     const connectorOptions = options.capable === undefined ? {} : { capable: options.capable };
     insertConnector(database, config, "qbittorrent", connectorOptions);
@@ -163,14 +175,23 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
     qbittorrent: vi.fn(async () => queueResult("qbittorrent")),
     sabnzbd: vi.fn(async () => queueResult("sabnzbd")),
   };
+  const actions = {
+    qbittorrent: vi.fn(async () => undefined),
+    sabnzbd: vi.fn(async () => undefined),
+  };
   const createAdapter = vi.fn((input: DownloadQueueAdapterFactoryInput) => ({
     readDownloadQueue: readers[input.service],
+    updateDownloadQueueItem: actions[input.service],
   }));
+  let identifier = 0;
+  const wait = vi.fn(async () => undefined);
   const service = new DownloadQueueService(database, config, {
     clock: () => now,
     createAdapter,
+    createId: () => `download-action-audit-${++identifier}`,
+    wait,
   });
-  return { config, createAdapter, database, readers, service };
+  return { actions, config, createAdapter, database, readers, service, wait };
 }
 
 describe("download queue service", () => {
@@ -333,6 +354,375 @@ describe("download queue service", () => {
       expect(response.clients[0]?.failure).toMatchObject({ code: "response_invalid" });
       expect(response.items).toHaveLength(1);
       expect(JSON.stringify(response)).not.toContain("/private/media/release");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("pauses one opaque queue target, verifies it, and records the request before mutation", async () => {
+    const { actions, database, readers, service } = harness();
+    try {
+      const queue = await service.read({ principal: principal() });
+      const item = queue.items.find(({ connectorId }) => connectorId === "qbittorrent-main")!;
+      readers.qbittorrent.mockResolvedValueOnce(queueResult("qbittorrent")).mockResolvedValueOnce({
+        ...queueResult("qbittorrent"),
+        items: [
+          {
+            ...queueResult("qbittorrent").items[0]!,
+            rateBytesPerSecond: 0,
+            state: "paused",
+          },
+        ],
+      });
+
+      const result = await service.update(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { ipAddress: "203.0.113.4", principal: principal(), requestId: "request-1" },
+      );
+
+      expect(result).toMatchObject({
+        action: "pause",
+        item: { id: item.id, state: "paused" },
+        previousState: "downloading",
+        replayed: false,
+      });
+      expect(actions.qbittorrent).toHaveBeenCalledWith(
+        { action: "pause", externalId: UPSTREAM_ID },
+        undefined,
+      );
+      const audit = database.sqlite
+        .prepare(
+          "select event_type as eventType, target_id as targetId, metadata_json as metadataJson from audit_events order by created_at asc, id asc",
+        )
+        .all() as { eventType: string; metadataJson: string; targetId: string }[];
+      expect(audit.map(({ eventType }) => eventType)).toEqual([
+        "download.queue.action.requested",
+        "download.queue.action.updated",
+      ]);
+      expect(audit.every(({ targetId }) => targetId === item.id)).toBe(true);
+      expect(JSON.stringify(audit)).not.toContain(UPSTREAM_ID);
+      expect(JSON.parse(audit[0]!.metadataJson)).toMatchObject({
+        action: "pause",
+        connectorId: "qbittorrent-main",
+        previousState: "downloading",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects stale state without contacting the upstream mutation endpoint", async () => {
+    const { actions, database, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      readers.qbittorrent.mockResolvedValueOnce({
+        ...queueResult("qbittorrent"),
+        items: [{ ...queueResult("qbittorrent").items[0]!, state: "queued" }],
+      });
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "stale_state" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+      const audit = database.sqlite
+        .prepare("select event_type as eventType, metadata_json as metadataJson from audit_events")
+        .get() as { eventType: string; metadataJson: string };
+      expect(audit.eventType).toBe("download.queue.action.failed");
+      expect(JSON.parse(audit.metadataJson)).toMatchObject({ failureCode: "stale_state" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("replays an already-achieved pause without mutating upstream", async () => {
+    const { actions, database, readers, service } = harness();
+    readers.qbittorrent.mockResolvedValue({
+      ...queueResult("qbittorrent"),
+      items: [
+        {
+          ...queueResult("qbittorrent").items[0]!,
+          rateBytesPerSecond: 0,
+          state: "paused",
+        },
+      ],
+    });
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const result = await service.update(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { principal: principal() },
+      );
+
+      expect(result).toMatchObject({ replayed: true, previousState: "paused" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+      expect(database.sqlite.prepare("select event_type from audit_events").pluck().get()).toBe(
+        "download.queue.action.replayed",
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed before mutation when the requested audit event cannot be stored", async () => {
+    const { actions, database, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      database.sqlite.exec("drop table audit_events");
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "storage_failure" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("resumes one paused item and accepts a verified active state", async () => {
+    const { actions, database, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items.find(
+        ({ connectorId }) => connectorId === "sabnzbd-main",
+      )!;
+      readers.sabnzbd.mockResolvedValueOnce(queueResult("sabnzbd")).mockResolvedValueOnce({
+        ...queueResult("sabnzbd"),
+        items: [
+          {
+            ...queueResult("sabnzbd").items[0]!,
+            etaSeconds: 300,
+            rateBytesPerSecond: 2_048,
+            state: "downloading",
+          },
+        ],
+      });
+
+      const result = await service.update(
+        {
+          action: "resume",
+          connectorId: item.connectorId,
+          expectedState: "paused",
+          itemId: item.id,
+        },
+        { principal: principal() },
+      );
+
+      expect(result.item.state).toBe("downloading");
+      expect(actions.sabnzbd).toHaveBeenCalledWith(
+        { action: "resume", externalId: UPSTREAM_ID },
+        undefined,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not let an opaque item identifier cross connector boundaries", async () => {
+    const { actions, database, service } = harness();
+    try {
+      const queue = await service.read({ principal: principal() });
+      const qBittorrentItem = queue.items.find(
+        ({ connectorId }) => connectorId === "qbittorrent-main",
+      )!;
+
+      await expect(
+        service.update(
+          {
+            action: "resume",
+            connectorId: "sabnzbd-main",
+            expectedState: "paused",
+            itemId: qBittorrentItem.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "target_not_found" });
+      expect(actions.sabnzbd).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("retries bounded verification and reports an unconfirmed upstream action safely", async () => {
+    const { actions, database, readers, service, wait } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      readers.qbittorrent.mockResolvedValue(queueResult("qbittorrent"));
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "response_invalid" });
+      expect(actions.qbittorrent).toHaveBeenCalledOnce();
+      expect(wait).toHaveBeenNthCalledWith(1, 150, undefined);
+      expect(wait).toHaveBeenNthCalledWith(2, 300, undefined);
+      const auditTypes = database.sqlite
+        .prepare("select event_type from audit_events order by id")
+        .pluck()
+        .all();
+      expect(auditTypes).toEqual([
+        "download.queue.action.requested",
+        "download.queue.action.failed",
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a connector without a healthy mutation capability before decryption", async () => {
+    const { actions, createAdapter, database, service } = harness();
+    try {
+      const queue = await service.read({ principal: principal() });
+      const item = queue.items[0]!;
+      database.sqlite
+        .prepare("update connector_configs set capability_snapshot_json = ? where id = ?")
+        .run(capabilitySnapshot("qbittorrent-main", "qbittorrent", false), "qbittorrent-main");
+      createAdapter.mockClear();
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "connector_unavailable" });
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("requires the selected connector to retain both read and mutation capabilities", async () => {
+    const { actions, createAdapter, database, service } = harness();
+    try {
+      const queue = await service.read({ principal: principal() });
+      const item = queue.items[0]!;
+      const snapshot = JSON.parse(capabilitySnapshot("qbittorrent-main", "qbittorrent")) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      snapshot.health!.capabilities = [
+        "connector.health",
+        "connector.version",
+        "download.queue.mutate",
+      ];
+      database.sqlite
+        .prepare("update connector_configs set capability_snapshot_json = ? where id = ?")
+        .run(JSON.stringify(snapshot), "qbittorrent-main");
+      createAdapter.mockClear();
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "connector_unavailable" });
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects duplicate upstream identifiers as an invalid exact-target response", async () => {
+    const { actions, database, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const upstreamItem = queueResult("qbittorrent").items[0]!;
+      readers.qbittorrent.mockResolvedValueOnce({
+        ...queueResult("qbittorrent"),
+        items: [upstreamItem, { ...upstreamItem, title: "Duplicate release" }],
+      });
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "response_invalid" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+      const audit = database.sqlite
+        .prepare("select metadata_json from audit_events")
+        .pluck()
+        .get() as string;
+      expect(JSON.parse(audit)).toMatchObject({ failureCode: "response_invalid" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("maps adapter-construction failure to a safe audited unavailable state", async () => {
+    const { actions, createAdapter, database, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      createAdapter.mockImplementationOnce(() => {
+        throw new Error("private adapter detail");
+      });
+
+      await expect(
+        service.update(
+          {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "connector_unavailable" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+      const audit = database.sqlite
+        .prepare("select metadata_json from audit_events")
+        .pluck()
+        .get() as string;
+      expect(JSON.stringify(audit)).not.toContain("private adapter detail");
+      expect(JSON.parse(audit)).toMatchObject({ failureCode: "connector_unavailable" });
     } finally {
       database.close();
     }

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { ProbeOnlyAdapter } from "./base.js";
 import { upstreamVersionSchema } from "./schemas.js";
-import type { ConnectorDownloadQueueResult } from "../downloads.js";
+import type { ConnectorDownloadQueueResult, DownloadQueueMutation } from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import type { OptionalApiKeyConnectorConfig } from "../types.js";
 
@@ -44,6 +44,12 @@ const sabnzbdQueueSchema = z.object({
     slots: z.array(sabnzbdSlotSchema).max(DOWNLOAD_QUEUE_MAX_ITEMS + 1),
   }),
 });
+
+const sabnzbdQueueActionSchema = z.object({
+  nzo_ids: z.array(z.string().trim().min(1).max(512)).max(1).optional(),
+  status: z.boolean(),
+});
+const sabnzbdQueueIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,512}$/u);
 
 function cleanText(value: string, maximum: number) {
   const segment = value.split(/[\\/]/u).at(-1) ?? value;
@@ -87,7 +93,12 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
     super(config, apiKey ? [apiKey] : []);
     this.#apiKey = apiKey;
     this.capabilities = apiKey
-      ? (["connector.health", "connector.version", "download.queue.read"] as const)
+      ? ([
+          "connector.health",
+          "connector.version",
+          "download.queue.read",
+          "download.queue.mutate",
+        ] as const)
       : (["connector.health", "connector.version"] as const);
   }
 
@@ -160,5 +171,38 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
       }),
       truncated: response.queue.slots.length > DOWNLOAD_QUEUE_MAX_ITEMS,
     };
+  }
+
+  async updateDownloadQueueItem(input: DownloadQueueMutation, signal?: AbortSignal): Promise<void> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "configuration_invalid",
+        message: "SABnzbd queue controls require a configured API key.",
+        retryable: false,
+      });
+    }
+    const externalId = sabnzbdQueueIdSchema.parse(input.externalId);
+    const response = await this.client.requestJson("api", sabnzbdQueueActionSchema, {
+      operation: "download.queue.action",
+      query: {
+        apikey: this.#apiKey,
+        mode: "queue",
+        name: input.action,
+        output: "json",
+        value: externalId,
+      },
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.status || (response.nzo_ids && response.nzo_ids[0] !== externalId)) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "response_invalid",
+        message: "SABnzbd did not confirm the exact queue item action.",
+        retryable: false,
+      });
+    }
   }
 }

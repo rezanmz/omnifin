@@ -163,7 +163,7 @@ application boundary; operators must still patch and isolate the host.
   non-cacheable. Enabling monitoring does not itself queue a search; pausing it does not change
   existing files, downloads, queues, profiles, or tags.
 
-## Download-queue read controls
+## Download-queue controls
 
 - Queue reads require `downloads.manage` at both the session route and service boundary.
   Unauthorized callers are rejected before connector selection or credential decryption.
@@ -176,9 +176,19 @@ application boundary; operators must still patch and isolate the host.
 - Every returned transfer receives a deployment-local opaque identifier derived from its
   connector and upstream identifier. Item counts, byte values, rates, text, client count, and
   aggregate response size are independently bounded and schema-validated.
-- `GET /v1/downloads/queue` is abort-aware, rate-limited, explicitly non-cacheable, and read-only.
-  The browser offers filtering and refresh but no pause, resume, removal, priority, or path
-  mutation in this slice.
+- `GET /v1/downloads/queue` is abort-aware, rate-limited, and explicitly non-cacheable. Filtering
+  and refresh remain browser-local reads.
+- Pause and resume use a separate strict action contract containing one connector, one opaque item,
+  its observed state, and one allowed action. The `POST` route requires an active user, session-bound
+  CSRF and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
+  `download.queue.mutate` on the selected healthy connector.
+- The gateway resolves the opaque ID against a fresh exact-connector queue read, rejects missing or
+  stale targets, writes a durable requested audit before mutation, and verifies the desired state
+  with bounded post-write reads. Safe replay avoids a duplicate write when the state is already
+  achieved. Public responses and audit metadata never contain the qBittorrent hash or SABnzbd
+  `nzo_id`.
+- The action contract cannot express removal, relocation, categories, priorities, arbitrary URLs,
+  bulk identifiers, or client-native command fields.
 
 ## Acquisition-calendar read controls
 

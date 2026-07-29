@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   DOWNLOAD_QUEUE_MAX_ITEM_BYTES,
+  downloadQueueActionInputJsonSchema,
+  downloadQueueActionInputSchema,
+  downloadQueueActionResponseJsonSchema,
+  downloadQueueActionResponseSchema,
   downloadQueueResponseJsonSchema,
   downloadQueueResponseSchema,
 } from "../src/downloads.js";
@@ -148,5 +152,76 @@ describe("download queue contracts", () => {
   it("exports Fastify-compatible JSON schema without a dialect field", () => {
     expect(downloadQueueResponseJsonSchema).not.toHaveProperty("$schema");
     expect(downloadQueueResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(downloadQueueActionInputJsonSchema).not.toHaveProperty("$schema");
+    expect(downloadQueueActionResponseJsonSchema).not.toHaveProperty("$schema");
+  });
+
+  it("binds pause and resume actions to an exact connector, item, and observed state", () => {
+    expect(
+      downloadQueueActionInputSchema.parse({
+        action: "pause",
+        connectorId: torrent.connectorId,
+        expectedState: "downloading",
+        itemId: torrent.id,
+      }),
+    ).toEqual({
+      action: "pause",
+      connectorId: torrent.connectorId,
+      expectedState: "downloading",
+      itemId: torrent.id,
+    });
+    expect(
+      downloadQueueActionInputSchema.safeParse({
+        action: "resume",
+        connectorId: torrent.connectorId,
+        expectedState: "downloading",
+        itemId: torrent.id,
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueActionInputSchema.safeParse({
+        action: "pause",
+        connectorId: torrent.connectorId,
+        expectedState: "failed",
+        itemId: torrent.id,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("only accepts action responses that verify the requested state", () => {
+    const paused = {
+      action: "pause" as const,
+      item: { ...torrent, rateBytesPerSecond: 0, state: "paused" as const },
+      previousState: "downloading" as const,
+      replayed: false,
+      verifiedAt: response.generatedAt,
+    };
+    expect(downloadQueueActionResponseSchema.parse(paused)).toEqual(paused);
+    expect(
+      downloadQueueActionResponseSchema.safeParse({
+        ...paused,
+        item: torrent,
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueActionResponseSchema.safeParse({
+        ...paused,
+        previousState: "downloading",
+        replayed: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueActionResponseSchema.safeParse({
+        ...paused,
+        previousState: "paused",
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueActionResponseSchema.safeParse({
+        ...paused,
+        action: "resume",
+        item: torrent,
+      }).success,
+    ).toBe(false);
   });
 });

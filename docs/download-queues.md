@@ -1,7 +1,8 @@
 # Download queues
 
-Omnifin exposes one normalized, read-only queue across validated qBittorrent and SABnzbd
-connectors. The workspace gives operators current progress and degraded-client context without
+Omnifin exposes one normalized queue across validated qBittorrent and SABnzbd connectors. The
+workspace gives operators current progress, degraded-client context, and narrow pause/resume
+controls without
 placing reusable download-client credentials, raw queue responses, download hashes, or media paths
 in the browser.
 
@@ -58,16 +59,36 @@ complete view.
 The route is non-cacheable and rate-limited. The workspace polls every 12 seconds while live,
 supports an explicit refresh, and preserves the last verified queue if a later refresh fails. A
 visible stale notice distinguishes retained evidence from current telemetry. Search and state
-filters operate only on normalized in-memory data and never change an upstream client.
+filters operate only on normalized in-memory data. Pause and resume first open an inline
+confirmation with the safe cancel action focused. The browser then revalidates the active session,
+permission, and CSRF token before sending one opaque item identifier, its connector, its observed
+state, and the requested action.
 
 Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
 component coverage. Dark and light desktop/mobile baselines are committed, and representative
 routes are checked for automatic accessibility violations, keyboard filtering, responsive
 overflow, Content Security Policy, and production rendering.
 
-## Intentionally absent mutations
+## Exact-item pause and resume
 
-This slice does not pause, resume, reprioritize, remove, relocate, or otherwise modify a transfer.
-Those operations require separate narrow contracts, local authorization, CSRF protection,
-idempotency where applicable, destructive-action confirmation, auditing, and isolated safe-write
-evidence before the interface can expose them.
+`POST /v1/downloads/queue/actions` requires an active user with `downloads.manage`, same-origin and
+CSRF validation, a 1 KiB body limit, mutation rate limiting, and an abort-aware request. The strict
+contract cannot express deletion, paths, categories, priorities, URLs, or multiple targets.
+
+The gateway selects the named healthy connector only when it advertises both queue read and mutate
+capabilities. It reads the queue, derives every deployment-local opaque identifier, and requires
+exactly one match. An already-achieved action returns as a verified replay; otherwise the observed
+state must match the submitted state before a write is allowed. A durable `requested` audit event
+is stored before the upstream call, so audit storage failure prevents mutation. The gateway then
+re-reads the exact item with bounded retries and returns only a schema-valid desired state. Updated,
+replayed, failed, stale, and missing-target outcomes retain only bounded public identifiers and
+metadata.
+
+qBittorrent uses a validated single torrent hash and selects `stop`/`start` for version 5 or newer
+and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly one validated
+`nzo_id`. Raw hashes, `nzo_id` values, credentials, cookies, and upstream responses never reach the
+browser or audit metadata.
+
+Removal, relocation, priority changes, category changes, blocklisting, and bulk mutations remain
+intentionally absent. They require separate destructive-action and recovery design plus disposable
+live-service evidence before the interface can expose them.

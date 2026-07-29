@@ -1,3 +1,4 @@
+import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoDownloadQueue } from "./download-queue-demo";
@@ -126,5 +127,142 @@ describe("download queue client", () => {
       outcomeFromError(new DownloadQueueClientError("invalid_response", "invalid", "Invalid")),
     ).toBe("unavailable");
     expect(outcomeFromError(new Error("private failure"))).toBe("unavailable");
+  });
+
+  it("loads CSRF-bound action eligibility without exposing a session to ineligible users", async () => {
+    const principal: SessionPrincipal = {
+      absoluteExpiresAt: "2026-07-29T03:00:00.000Z",
+      accountState: "active",
+      authenticationMethod: { kind: "jellyfin" },
+      displayName: "Operator",
+      externalIdentity: null,
+      inactivityExpiresAt: "2026-07-28T04:00:00.000Z",
+      issuedAt: "2026-07-28T03:00:00.000Z",
+      linkedServices: [
+        {
+          displayName: "Operator",
+          externalUserId: "jellyfin-operator",
+          health: "linked",
+          id: "jellyfin-link-operator",
+          lastVerifiedAt: "2026-07-28T03:00:00.000Z",
+          linkedAt: "2026-07-27T03:00:00.000Z",
+          service: "jellyfin",
+          username: "operator",
+        },
+      ],
+      permissions: [...ROLE_PERMISSIONS.operator],
+      role: "operator",
+      sessionId: "session-1",
+      userId: "operator-user",
+    };
+    const session = {
+      csrfToken: "download_queue_csrf_0123456789abcdefghijklmnopqrstuvwxyz",
+      principal,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => json(session)),
+    );
+
+    await expect(downloadQueueClient.loadEligibility!()).resolves.toMatchObject({
+      snapshot: { csrfToken: "download_queue_csrf_0123456789abcdefghijklmnopqrstuvwxyz" },
+      status: "ready",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => json({ csrfToken: null, principal: null })),
+    );
+    await expect(downloadQueueClient.loadEligibility!()).resolves.toEqual({ status: "signed_out" });
+  });
+
+  it("sends one strict action with CSRF and validates its exact opaque target", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      action: "pause" as const,
+      item: { ...item, etaSeconds: null, rateBytesPerSecond: 0, state: "paused" as const },
+      previousState: item.state,
+      replayed: false,
+      verifiedAt: demoDownloadQueue.generatedAt,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/actions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-omnifin-csrf": "fixture-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it.each([
+    ["a different action", { action: "resume" }],
+    ["a different prior state", { previousState: "queued" }],
+  ] as const)("rejects an otherwise valid response reporting %s", async (_label, override) => {
+    const item = demoDownloadQueue.items[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({
+          action: "pause",
+          item: { ...item, etaSeconds: null, rateBytesPerSecond: 0, state: "paused" },
+          previousState: item.state,
+          replayed: false,
+          verifiedAt: demoDownloadQueue.generatedAt,
+          ...override,
+        }),
+      ),
+    );
+
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it.each([
+    [409, "download_queue_state_changed", "stale"],
+    [429, "download_queue_action_rate_limited", "rate_limited"],
+    [503, "download_queue_configuration_unavailable", "configuration"],
+    [502, "download_queue_action_unconfirmed", "invalid_response"],
+  ] as const)("maps action HTTP %s to %s", async (status, code, kind) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({ error: { code, message: "Safe action message", requestId: "request-1" } }, status),
+      ),
+    );
+    const item = demoDownloadQueue.items[0]!;
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ code, kind });
   });
 });
