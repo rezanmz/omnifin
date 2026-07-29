@@ -10,6 +10,7 @@ import {
   createQBittorrentFixture,
   parseContainerAddress,
   parseContainerState,
+  readQBittorrentTemporaryCredentials,
   readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
   serviceEnvironmentArguments,
@@ -88,6 +89,7 @@ test("creates one deterministic, tracker-isolated torrent fixture", () => {
 });
 
 test("extracts one bounded temporary qBittorrent credential without accepting ambiguity", () => {
+  const usernameLine = "The WebUI administrator username is: fixture-admin";
   const line =
     "The WebUI administrator password was not set. A temporary password is provided for this session: A9_fixture-Password";
   assert.equal(
@@ -100,6 +102,15 @@ test("extracts one bounded temporary qBittorrent credential without accepting am
   );
   assert.throws(
     () => readQBittorrentTemporaryPassword("temporary password: private\n"),
+    /credential_log_invalid/u,
+  );
+  assert.deepEqual(readQBittorrentTemporaryCredentials(`${usernameLine}\n${line}\n`), {
+    password: "A9_fixture-Password",
+    username: "fixture-admin",
+  });
+  assert.throws(() => readQBittorrentTemporaryCredentials(`${line}\n`), /credential_log_invalid/u);
+  assert.throws(
+    () => readQBittorrentTemporaryCredentials(`${usernameLine}\n${usernameLine}\n${line}\n`),
     /credential_log_invalid/u,
   );
 });

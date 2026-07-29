@@ -181,6 +181,22 @@ export function readQBittorrentTemporaryPassword(logs) {
   return matches[0];
 }
 
+export function readQBittorrentTemporaryCredentials(logs) {
+  if (typeof logs !== "string" || logs.length > 2 * 1_024 * 1_024) {
+    throw new DownloadFixtureFailure("credential_log_invalid");
+  }
+  const usernames = [
+    ...logs.matchAll(/WebUI administrator username is:\s*([A-Za-z0-9._~-]{1,128})(?=\s|$)/giu),
+  ].map((match) => match[1]);
+  if (usernames.length !== 1 || !usernames[0]) {
+    throw new DownloadFixtureFailure("credential_log_invalid");
+  }
+  return {
+    password: readQBittorrentTemporaryPassword(logs),
+    username: usernames[0],
+  };
+}
+
 export function readSabnzbdApiKey(configuration) {
   if (typeof configuration !== "string" || configuration.length > 2 * 1_024 * 1_024) {
     throw new DownloadFixtureFailure("credential_config_invalid");
@@ -497,8 +513,8 @@ async function waitForQueueItem(adapter, externalId, predicate) {
   );
 }
 
-async function qbittorrentLogin(baseUrl, password) {
-  const form = new URLSearchParams({ password, username: "admin" });
+async function qbittorrentLogin(baseUrl, credentials) {
+  const form = new URLSearchParams(credentials);
   const response = await directRequest(baseUrl, "api/v2/auth/login", {
     body: form,
     headers: {
@@ -537,30 +553,30 @@ async function seedQBittorrent(baseUrl, cookie, fixture) {
   if (response.body.trim() !== "Ok.") throw new DownloadFixtureFailure("queue_seed_invalid");
 }
 
-function qbittorrentAdapter(server, password) {
+function qbittorrentAdapter(server, credentials) {
   return new QBittorrentAdapter({
     baseUrl: server.connectorUrl.href,
     connectorId: "qbittorrent-fixture",
     displayName: "qBittorrent fixture",
     insecureHttpApproved: true,
     maxResponseBytes: MAX_RESPONSE_BYTES,
-    password,
+    password: credentials.password,
     timeoutMs: REQUEST_TIMEOUT_MS,
-    username: "admin",
+    username: credentials.username,
   });
 }
 
 async function runQBittorrent(context, server) {
-  const password = await waitForResult(
+  const credentials = await waitForResult(
     async () =>
-      readQBittorrentTemporaryPassword(
+      readQBittorrentTemporaryCredentials(
         runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
       ),
     SERVER_READY_TIMEOUT_MS,
     "credential_log_timeout",
   );
   const cookie = await waitForResult(
-    () => qbittorrentLogin(server.directUrl, password),
+    () => qbittorrentLogin(server.directUrl, credentials),
     SERVER_READY_TIMEOUT_MS,
     "authentication_start_timeout",
     QBITTORRENT_AUTH_DIAGNOSTIC_CODES,
@@ -571,7 +587,7 @@ async function runQBittorrent(context, server) {
   await writeFile(preservedPath, preservedBytes, { flag: "wx", mode: 0o600 });
   await seedQBittorrent(server.directUrl, cookie, fixture);
 
-  const adapter = qbittorrentAdapter(server, password);
+  const adapter = qbittorrentAdapter(server, credentials);
   const health = await connectorOperation("authentication", () => adapter.probe());
   const version = assertHealthy(health);
   if (version !== DOWNLOAD_CLIENT_VERSIONS.qbittorrent) {
@@ -592,7 +608,10 @@ async function runQBittorrent(context, server) {
   );
   await waitForQueueItem(adapter, fixture.infoHash, (item) => item?.state === "paused");
 
-  const rejected = await qbittorrentAdapter(server, `${password}-wrong`).probe();
+  const rejected = await qbittorrentAdapter(server, {
+    ...credentials,
+    password: `${credentials.password}-wrong`,
+  }).probe();
   if (rejected.status !== "misconfigured" || rejected.failure?.code !== "invalid_credentials") {
     throw new DownloadFixtureFailure("credential_rejection_invalid");
   }
