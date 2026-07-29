@@ -30,9 +30,11 @@ parallel under the request abort signal so one slow client does not serialize ev
 ## Normalization and secret boundary
 
 The qBittorrent adapter establishes a short-lived authenticated session and reads the bounded
-torrent information endpoint. The SABnzbd adapter sends its API key only to the approved connector
-destination and reads the bounded queue response. In both cases the adapter validates the upstream
-payload before it returns typed internal data.
+torrent information endpoint. It accepts only qBittorrent's legacy `200`/`Ok.` login response or the
+current empty `204` response and requires the corresponding legacy or port-scoped session cookie.
+The SABnzbd adapter sends its API key only to the approved connector destination and reads the
+bounded queue response. In both cases the adapter validates the upstream payload before it returns
+typed internal data.
 
 The gateway then:
 

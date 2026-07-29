@@ -31,7 +31,8 @@ function target(
 describe("qBittorrent download queue", () => {
   it("authenticates and normalizes active downloads without returning upstream hashes", async () => {
     const mock = createMockTransport([
-      new Response("Ok.", {
+      new Response(null, {
+        status: 204,
         headers: { "set-cookie": "QBT_SID_8080=fixture+session/value; Path=/; HttpOnly" },
       }),
       jsonResponse([

@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   QBittorrentAdapter,
+  isQBittorrentLoginResponseAccepted,
   readQBittorrentSessionCookie,
 } from "../../packages/connectors/dist/adapters/qbittorrent.js";
 import { SabnzbdAdapter } from "../../packages/connectors/dist/adapters/sabnzbd.js";
@@ -529,7 +530,9 @@ async function qbittorrentLogin(baseUrl, credentials) {
     method: "POST",
   });
   const cookie = readQBittorrentSessionCookie(response.headers.get("set-cookie"));
-  if (response.body.trim() !== "Ok.") throw new DownloadFixtureFailure("authentication_rejected");
+  if (!isQBittorrentLoginResponseAccepted(response.status, response.body)) {
+    throw new DownloadFixtureFailure("authentication_rejected");
+  }
   if (!cookie) throw new DownloadFixtureFailure("authentication_cookie_invalid");
   return cookie;
 }

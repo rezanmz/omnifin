@@ -16,6 +16,11 @@ export interface QBittorrentAdapterConfig extends ConnectorTargetConfig {
   password: string;
 }
 
+export function isQBittorrentLoginResponseAccepted(status: number, body: string): boolean {
+  const normalizedBody = body.trim();
+  return (status === 200 && normalizedBody === "Ok.") || (status === 204 && normalizedBody === "");
+}
+
 export function readQBittorrentSessionCookie(setCookie: string | null): string | null {
   if (!setCookie || setCookie.length > 16_384) return null;
   const pair = setCookie.split(";", 1)[0]?.trim();
@@ -251,7 +256,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
     });
 
     const cookie = readQBittorrentSessionCookie(login.headers.get("set-cookie"));
-    if (login.body.trim() !== "Ok." || !cookie) {
+    if (!isQBittorrentLoginResponseAccepted(login.status, login.body) || !cookie) {
       throw new SafeConnectorError({
         service: this.service,
         operation: "authenticate",
