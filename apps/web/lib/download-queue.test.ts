@@ -274,6 +274,48 @@ describe("download queue client", () => {
   });
 
   it.each([
+    [
+      "item",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        id: demoDownloadQueue.items[1]!.id,
+      }),
+    ],
+    [
+      "connector",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        connectorId: demoDownloadQueue.items[1]!.connectorId,
+      }),
+    ],
+  ] as const)("rejects a promotion receipt rebound to a different %s", async (_label, rebind) => {
+    const item = demoDownloadQueue.items[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({
+          item: rebind(item),
+          position: 0,
+          previousPosition: 1,
+          promotedAt: demoDownloadQueue.generatedAt,
+          replayed: false,
+        }),
+      ),
+    );
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+  });
+
+  it.each([
     ["a different action", { action: "resume" }],
     ["a different prior state", { previousState: "queued" }],
   ] as const)("rejects an otherwise valid response reporting %s", async (_label, override) => {
@@ -306,6 +348,8 @@ describe("download queue client", () => {
   });
 
   it.each([
+    [401, "authentication_required", "signed_out"],
+    [403, "permission_denied", "forbidden"],
     [409, "download_queue_state_changed", "stale"],
     [429, "download_queue_action_rate_limited", "rate_limited"],
     [503, "download_queue_configuration_unavailable", "configuration"],
