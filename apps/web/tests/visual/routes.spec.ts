@@ -859,6 +859,22 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await expect(page).toHaveScreenshot("acquisition-recovery-confirmation.png");
 });
 
+test("acquisition monitoring confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Acquisition monitoring covers representative desktop and phone geometry",
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  await page.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot("acquisition-monitoring-confirmation.png");
+});
+
 async function prepareManualReleaseWorkbench(page: Page) {
   await mockManualReleaseSession(page);
   await mockManualReleaseSearch(page);

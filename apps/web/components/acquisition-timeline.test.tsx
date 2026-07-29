@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AcquisitionMonitoringClient } from "../lib/acquisition-monitoring";
 import {
   AcquisitionProvenanceClientError,
   type AcquisitionProvenanceClient,
@@ -50,6 +51,52 @@ function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanc
 }
 
 describe("acquisition timeline", () => {
+  it("confirms and applies one whole-title monitoring change with current CSRF proof", async () => {
+    const user = userEvent.setup();
+    const update = vi.fn<AcquisitionMonitoringClient["update"]>(async () => ({
+      monitored: false,
+      target: { kind: "movie", mediaId: 42, service: "radarr" },
+      verifiedAt: "2026-07-27T19:02:00.000Z",
+    }));
+    const monitoringClient: AcquisitionMonitoringClient = {
+      read: vi.fn(),
+      update,
+    };
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(async () => ({
+        snapshot: { csrfToken: "monitoring_csrf_0123456789abcdefghijklmnop", principal: operator },
+        status: "ready" as const,
+      })),
+      queueSearch: vi.fn(),
+    };
+    render(
+      <AcquisitionTimeline
+        monitoringClient={monitoringClient}
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Pause monitoring for The Far Meridian" }));
+    expect(screen.getByText("Pause monitoring for The Far Meridian?")).toBeVisible();
+    expect(screen.getByText(/Existing files and downloads stay intact/u)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("Monitoring paused")).toBeVisible();
+    expect(update).toHaveBeenCalledWith(
+      {
+        expectedMonitored: true,
+        mediaId: 42,
+        monitored: false,
+        service: "radarr",
+      },
+      { csrfToken: "monitoring_csrf_0123456789abcdefghijklmnop" },
+    );
+    expect(screen.getByText(/Existing files and queues are unchanged/u)).toBeVisible();
+  });
+
   it("confirms and queues an exact-target recovery without exposing destructive controls", async () => {
     const user = userEvent.setup();
     const queueSearch = vi.fn<AcquisitionRecoveryClient["queueSearch"]>(async () => ({
