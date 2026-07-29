@@ -7,17 +7,17 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   open:
     if: github.actor == 'rezanmz'
+    environment: release
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Open draft pull request once
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           PR_BODY: |
             ## Summary
 
