@@ -354,6 +354,17 @@ export const downloadQueueResponseSchema = z
   });
 export type DownloadQueueResponse = z.infer<typeof downloadQueueResponseSchema>;
 
+export const downloadQueueEventCursorSchema = z
+  .string()
+  .regex(/^download_event_[A-Za-z0-9_-]{22}$/u);
+
+export const downloadQueueSnapshotEventSchema = z.strictObject({
+  cursor: downloadQueueEventCursorSchema,
+  kind: z.literal("snapshot"),
+  queue: downloadQueueResponseSchema,
+});
+export type DownloadQueueSnapshotEvent = z.infer<typeof downloadQueueSnapshotEventSchema>;
+
 export const downloadQueueActionResponseSchema = z
   .strictObject({
     action: downloadQueueActionSchema,
@@ -403,6 +414,9 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 }
 
 export const downloadQueueResponseJsonSchema = withoutSchemaDialect(downloadQueueResponseSchema);
+export const downloadQueueSnapshotEventJsonSchema = withoutSchemaDialect(
+  downloadQueueSnapshotEventSchema,
+);
 export const downloadQueueActionInputJsonSchema = withoutSchemaDialect(
   downloadQueueActionInputSchema,
 );

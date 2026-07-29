@@ -16,6 +16,8 @@ import {
   downloadQueuePromotionResponseSchema,
   downloadQueueResponseJsonSchema,
   downloadQueueResponseSchema,
+  downloadQueueSnapshotEventJsonSchema,
+  downloadQueueSnapshotEventSchema,
 } from "../src/downloads.js";
 
 const failure = {
@@ -86,6 +88,30 @@ const response = {
 describe("download queue contracts", () => {
   it("accepts one useful client while preserving another client's safe failure", () => {
     expect(downloadQueueResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("defines a strict resumable snapshot event without upstream identifiers", () => {
+    const event = {
+      cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot" as const,
+      queue: response,
+    };
+
+    expect(downloadQueueSnapshotEventSchema.parse(event)).toEqual(event);
+    expect(downloadQueueSnapshotEventJsonSchema).not.toHaveProperty("$schema");
+    expect(downloadQueueSnapshotEventJsonSchema).toMatchObject({ type: "object" });
+    expect(
+      downloadQueueSnapshotEventSchema.safeParse({
+        ...event,
+        cursor: "1",
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueSnapshotEventSchema.safeParse({
+        ...event,
+        nativeQueueId: "must-not-cross-the-browser-boundary",
+      }).success,
+    ).toBe(false);
   });
 
   it("preserves intentional punctuation in administrator-defined client names", () => {

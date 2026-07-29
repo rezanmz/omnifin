@@ -120,6 +120,7 @@ export interface CreateAppOptions {
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
+  downloadQueueEventDependencies?: DownloadQueueRoutesOptions["eventDependencies"];
   continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
   issueWorkbenchDependencies?: IssueWorkbenchRoutesOptions["dependencies"];
@@ -435,6 +436,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.downloadQueueDependencies === undefined
         ? {}
         : { dependencies: options.downloadQueueDependencies }),
+      ...(options.downloadQueueEventDependencies === undefined
+        ? {}
+        : { eventDependencies: options.downloadQueueEventDependencies }),
     });
     await app.register(continueWatchingRoutes, {
       ...(options.continueWatchingDependencies === undefined
