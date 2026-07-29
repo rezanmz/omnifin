@@ -5,11 +5,17 @@ import {
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseSchema,
+  discoveryPersonDetailParamsSchema,
+  discoveryPersonDetailQuerySchema,
+  discoveryPersonDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryMediaDetailResponse,
+  type DiscoveryPersonDetailParams,
+  type DiscoveryPersonDetailQuery,
+  type DiscoveryPersonDetailResponse,
   type DiscoverySearchQuery,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -46,6 +52,11 @@ export interface DiscoverySearchAdapter {
     query: DiscoveryMediaDetailQuery,
     signal?: AbortSignal,
   ): Promise<DiscoveryMediaDetailResponse>;
+  personDetail(
+    params: DiscoveryPersonDetailParams,
+    query: DiscoveryPersonDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryPersonDetailResponse>;
   search(input: DiscoverySearchQuery, signal?: AbortSignal): Promise<DiscoverySearchResponse>;
 }
 
@@ -156,6 +167,21 @@ export class DiscoverySearchService {
     const query = discoveryMediaDetailQuerySchema.parse(queryInput);
     const adapter = this.#adapter();
     return discoveryMediaDetailResponseSchema.parse(await adapter.detail(params, query, signal));
+  }
+
+  public async personDetail(
+    paramsInput: DiscoveryPersonDetailParams,
+    queryInput: DiscoveryPersonDetailQuery,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ) {
+    requirePermission(context.principal, "media.view");
+    const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = discoveryPersonDetailQuerySchema.parse(queryInput);
+    const adapter = this.#adapter();
+    return discoveryPersonDetailResponseSchema.parse(
+      await adapter.personDetail(params, query, signal),
+    );
   }
 
   #adapter() {

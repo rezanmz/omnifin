@@ -7,6 +7,11 @@ import {
   discoveryMediaDetailQueryJsonSchema,
   discoveryMediaDetailResponseJsonSchema,
   discoveryMediaDetailResponseSchema,
+  discoveryPersonDetailParamsJsonSchema,
+  discoveryPersonDetailParamsSchema,
+  discoveryPersonDetailQueryJsonSchema,
+  discoveryPersonDetailResponseJsonSchema,
+  discoveryPersonDetailResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -50,11 +55,45 @@ describe("discovery contracts", () => {
   it("accepts normalized movie and series details", () => {
     const common = {
       availability: "available",
-      cast: [{ character: "Neo", name: "Keanu Reeves" }],
-      crew: [{ name: "Lana Wachowski", role: "Director" }],
+      cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+      crew: [{ name: "Lana Wachowski", personId: 9339, role: "Director" }],
       genres: ["Action", "Science Fiction"],
       id: "movie:603",
       kind: "movie",
+      intelligence: {
+        ratings: [
+          {
+            audience: "community",
+            label: "TMDB",
+            scale: 10,
+            sentiment: null,
+            source: "tmdb",
+            value: 8.2,
+            voteCount: 27_000,
+          },
+          {
+            audience: "critics",
+            label: "Tomatometer",
+            scale: 100,
+            sentiment: "Certified Fresh",
+            source: "rotten_tomatoes",
+            value: 83,
+            voteCount: null,
+          },
+        ],
+        ratingsState: "ready",
+        recommendations: [],
+        recommendationsState: "empty",
+        trailers: [
+          {
+            id: "youtube:m8e-FF8MsqU",
+            provider: "youtube",
+            resolution: 1080,
+            title: "Official trailer",
+            type: "trailer",
+          },
+        ],
+      },
       originalTitle: "The Matrix",
       overview: "A hacker discovers that the world he knows is a constructed reality.",
       productionStatus: "Released",
@@ -102,6 +141,13 @@ describe("discovery contracts", () => {
       crew: [],
       genres: [],
       id: "movie:603",
+      intelligence: {
+        ratings: [],
+        ratingsState: "unavailable",
+        recommendations: [],
+        recommendationsState: "unavailable",
+        trailers: [],
+      },
       kind: "movie",
       originalTitle: null,
       overview: null,
@@ -138,7 +184,84 @@ describe("discovery contracts", () => {
           cast: Array.from({ length: 13 }, (_, index) => ({
             character: null,
             name: `Performer ${index}`,
+            personId: index + 1,
           })),
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        ...response,
+        item: {
+          ...detail,
+          intelligence: {
+            ...detail.intelligence,
+            ratings: [
+              {
+                audience: "community",
+                label: "IMDb",
+                scale: 10,
+                sentiment: null,
+                source: "imdb",
+                value: 95,
+                voteCount: null,
+              },
+            ],
+            ratingsState: "ready",
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("normalizes person biographies and bounded credits", () => {
+    expect(discoveryPersonDetailParamsSchema.parse({ tmdbId: "6384" })).toEqual({
+      tmdbId: 6384,
+    });
+    expect(
+      discoveryPersonDetailResponseSchema.parse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          biography: "An actor known for exacting genre work.",
+          birthday: "1964-09-02",
+          birthplace: "Beirut, Lebanon",
+          credits: [
+            {
+              availability: "available",
+              kind: "movie",
+              role: "Neo",
+              title: "The Matrix",
+              tmdbId: 603,
+              voteAverage: 8.2,
+              year: 1999,
+            },
+          ],
+          creditsState: "ready",
+          deathday: null,
+          department: "Acting",
+          id: "person:6384",
+          name: "Keanu Reeves",
+          source: "seerr",
+          tmdbId: 6384,
+        },
+      }).item.name,
+    ).toBe("Keanu Reeves");
+    expect(
+      discoveryPersonDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          biography: null,
+          birthday: null,
+          birthplace: null,
+          credits: [],
+          creditsState: "empty",
+          deathday: null,
+          department: null,
+          id: "person:6384",
+          imdbId: "nm0000206",
+          name: "Keanu Reeves",
+          source: "seerr",
+          tmdbId: 6384,
         },
       }).success,
     ).toBe(false);
@@ -217,6 +340,9 @@ describe("discovery contracts", () => {
     expect(discoveryMediaDetailParamsJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryMediaDetailQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryMediaDetailResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonDetailParamsJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonDetailQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonDetailResponseJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchResponseJsonSchema).not.toHaveProperty("$schema");
   });

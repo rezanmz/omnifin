@@ -1,13 +1,18 @@
 import type {
   DiscoveryMediaDetailResponse,
   DiscoveryMovieResult,
+  DiscoveryPersonDetailResponse,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { expect, fn, waitFor, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 
 import { MediaDetailDrawer } from "../components/media-detail-drawer";
-import { MediaDetailClientError, type DiscoveryMediaDetailClient } from "../lib/media-details";
+import {
+  MediaDetailClientError,
+  type DiscoveryMediaDetailClient,
+  type DiscoveryPersonDetailClient,
+} from "../lib/media-details";
 
 const movie: DiscoveryMovieResult = {
   availability: "unavailable",
@@ -38,20 +43,104 @@ const movieResponse: DiscoveryMediaDetailResponse = {
   item: {
     availability: "unavailable",
     cast: [
-      { character: "Neo", name: "Keanu Reeves" },
-      { character: "Morpheus", name: "Laurence Fishburne" },
-      { character: "Trinity", name: "Carrie-Anne Moss" },
-      { character: "Agent Smith", name: "Hugo Weaving" },
+      { character: "Neo", name: "Keanu Reeves", personId: 6384 },
+      { character: "Morpheus", name: "Laurence Fishburne", personId: 2975 },
+      { character: "Trinity", name: "Carrie-Anne Moss", personId: 530 },
+      { character: "Agent Smith", name: "Hugo Weaving", personId: 1331 },
     ],
     crew: [
-      { name: "Lana Wachowski", role: "Director" },
-      { name: "Lilly Wachowski", role: "Writer" },
-      { name: "Bill Pope", role: "Director of Photography" },
-      { name: "Don Davis", role: "Original Music Composer" },
+      { name: "Lana Wachowski", personId: 9340, role: "Director" },
+      { name: "Lilly Wachowski", personId: 9341, role: "Writer" },
+      { name: "Bill Pope", personId: 13302, role: "Director of Photography" },
+      { name: "Don Davis", personId: 1262, role: "Original Music Composer" },
     ],
     genres: ["Action", "Science Fiction"],
     id: "movie:603",
     kind: "movie",
+    intelligence: {
+      ratings: [
+        {
+          audience: "community",
+          label: "TMDB",
+          scale: 10,
+          sentiment: null,
+          source: "tmdb",
+          value: 8.2,
+          voteCount: 27_000,
+        },
+        {
+          audience: "community",
+          label: "IMDb",
+          scale: 10,
+          sentiment: null,
+          source: "imdb",
+          value: 8.7,
+          voteCount: 2_100_000,
+        },
+        {
+          audience: "critics",
+          label: "Tomatometer",
+          scale: 100,
+          sentiment: "Certified Fresh",
+          source: "rotten_tomatoes",
+          value: 83,
+          voteCount: null,
+        },
+        {
+          audience: "audience",
+          label: "RT audience",
+          scale: 100,
+          sentiment: "Upright",
+          source: "rotten_tomatoes",
+          value: 85,
+          voteCount: null,
+        },
+      ],
+      ratingsState: "ready",
+      recommendations: [
+        {
+          availability: "requested",
+          id: "movie:604",
+          kind: "movie",
+          originalTitle: "The Matrix Reloaded",
+          overview: "The signal continues.",
+          source: "seerr",
+          title: "The Matrix Reloaded",
+          tmdbId: 604,
+          voteAverage: 7.1,
+          year: 2003,
+        },
+        {
+          availability: "available",
+          id: "movie:157336",
+          kind: "movie",
+          originalTitle: "Interstellar",
+          overview: "Explorers cross a new frontier.",
+          source: "seerr",
+          title: "Interstellar",
+          tmdbId: 157336,
+          voteAverage: 8.5,
+          year: 2014,
+        },
+      ],
+      recommendationsState: "ready",
+      trailers: [
+        {
+          id: "youtube:m8e-FF8MsqU",
+          provider: "youtube",
+          resolution: 1080,
+          title: "The Matrix — official trailer",
+          type: "trailer",
+        },
+        {
+          id: "youtube:f7MiaSr-0ug",
+          provider: "youtube",
+          resolution: 1080,
+          title: "Behind the simulation",
+          type: "behind_the_scenes",
+        },
+      ],
+    },
     originalTitle: "The Matrix",
     overview:
       "A hacker discovers that the world he knows is a constructed reality and joins a rebellion fighting to free humanity from its hidden machinery.",
@@ -66,19 +155,63 @@ const movieResponse: DiscoveryMediaDetailResponse = {
     year: 1999,
   },
 };
+
+const personResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    biography:
+      "An actor and producer whose work spans independent drama, action cinema, and landmark science fiction.",
+    birthday: "1964-09-02",
+    birthplace: "Beirut, Lebanon",
+    credits: [
+      {
+        availability: "available",
+        kind: "movie",
+        role: "Neo",
+        title: "The Matrix",
+        tmdbId: 603,
+        voteAverage: 8.2,
+        year: 1999,
+      },
+      {
+        availability: "requested",
+        kind: "movie",
+        role: "John Wick",
+        title: "John Wick",
+        tmdbId: 245891,
+        voteAverage: 7.4,
+        year: 2014,
+      },
+    ],
+    creditsState: "ready",
+    deathday: null,
+    department: "Acting",
+    id: "person:6384",
+    name: "Keanu Reeves",
+    source: "seerr",
+    tmdbId: 6384,
+  },
+};
 const seriesResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     availability: "partial",
     cast: [
-      { character: "Walter White", name: "Bryan Cranston" },
-      { character: "Jesse Pinkman", name: "Aaron Paul" },
+      { character: "Walter White", name: "Bryan Cranston", personId: 17419 },
+      { character: "Jesse Pinkman", name: "Aaron Paul", personId: 84497 },
     ],
-    crew: [{ name: "Vince Gilligan", role: "Creator" }],
+    crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
     episodeCount: 62,
     genres: ["Drama", "Crime"],
     id: "series:1396",
     kind: "series",
+    intelligence: {
+      ratings: [],
+      ratingsState: "empty",
+      recommendations: [],
+      recommendationsState: "empty",
+      trailers: [],
+    },
     originalTitle: "Breaking Bad",
     overview:
       "A chemistry teacher facing a life-changing diagnosis enters the drug trade to secure his family’s future.",
@@ -107,6 +240,10 @@ function client(load: DiscoveryMediaDetailClient["load"]): DiscoveryMediaDetailC
   return { load };
 }
 
+function personClient(load: DiscoveryPersonDetailClient["load"]): DiscoveryPersonDetailClient {
+  return { load };
+}
+
 const meta = {
   args: {
     client: client(async () => movieResponse),
@@ -114,6 +251,7 @@ const meta = {
     onOpenChange: fn(),
     onRequest: fn(),
     open: true,
+    personClient: personClient(async () => personResponse),
   },
   component: MediaDetailDrawer,
   decorators: [
@@ -147,6 +285,36 @@ export const Series: Story = {
       expect(canvas.getByRole("heading", { name: "Breaking Bad" })).toBeVisible(),
     );
     expect(canvas.getByRole("heading", { name: "Season guide" })).toBeVisible();
+  },
+};
+
+export const PersonContext: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    await waitFor(() => expect(canvas.getByRole("heading", { name: "The Matrix" })).toBeVisible());
+    await userEvent.click(canvas.getByRole("button", { name: /Keanu Reeves/iu }));
+    await waitFor(() =>
+      expect(canvas.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible(),
+    );
+    expect(canvas.getByRole("heading", { name: "Biography" })).toBeVisible();
+  },
+};
+
+export const IntelligenceDegraded: Story = {
+  args: {
+    client: client(async () => ({
+      ...movieResponse,
+      item: {
+        ...movieResponse.item,
+        intelligence: {
+          ratings: [movieResponse.item.intelligence.ratings[0]!],
+          ratingsState: "unavailable",
+          recommendations: [],
+          recommendationsState: "unavailable",
+          trailers: [],
+        },
+      },
+    })),
   },
 };
 

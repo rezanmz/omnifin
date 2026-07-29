@@ -222,10 +222,21 @@ test("media details preserve search context and expose a guarded request handoff
   const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
-  const drawer = page.getByRole("dialog", { name: "The Matrix details" });
-  await expect(drawer).toBeVisible();
+  const drawer = page.locator("dialog.media-detail");
+  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
   await expect(drawer.getByRole("heading", { name: "The Matrix" })).toBeVisible();
-  await expect(drawer.getByText("Keanu Reeves")).toBeVisible();
+  await expect(drawer.getByText("83%")).toBeVisible();
+  await expect(drawer.getByRole("link", { name: /official trailer/iu })).toHaveAttribute(
+    "href",
+    "https://www.youtube.com/watch?v=m8e-FF8MsqU",
+  );
+  await drawer.getByRole("button", { name: /Keanu Reeves/iu }).click();
+  await expect(page.getByRole("dialog", { name: "Keanu Reeves person context" })).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Biography" })).toBeVisible();
+  await drawer.getByRole("button", { name: "Back to The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "The Matrix" })).toBeVisible();
   const requestAction = drawer.getByRole("button", { name: "Request The Matrix" });
   await requestAction.scrollIntoViewIfNeeded();
   await expect(requestAction).toBeInViewport();

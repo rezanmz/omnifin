@@ -54,10 +54,12 @@ does not establish a public live-support baseline.
 
 The Seerr fixture gate includes normalized request-destination discovery for Radarr and
 Sonarr, standard/4K filtering, partial destination failures, delegated user context, and
-explicit server/profile/root/language mutation fields. Gateway evidence separately
-proves that raw paths and numeric identifiers are replaced with expiring, user-bound
-opaque references before reaching the browser. Live routing compatibility remains
-pending.
+explicit server/profile/root/language mutation fields. It also exercises bounded media
+ratings, validated YouTube trailer references, recommendations, person biographies and
+credits, and partial optional-intelligence failure. Gateway evidence separately proves that
+raw paths and numeric routing identifiers are replaced with expiring, user-bound opaque
+references before reaching the browser, and that provider URLs and raw upstream payloads do
+not cross the gateway. Live routing and intelligence compatibility remain pending.
 
 The protected connector aggregate also creates a deterministic, copyright-free media fixture and
 imports it into a fresh digest-pinned Jellyfin instance. Omnifin's production connector must then

@@ -6,15 +6,28 @@ import type {
 import {
   DISCOVERY_DETAIL_MAX_CAST,
   DISCOVERY_DETAIL_MAX_CREW,
+  DISCOVERY_DETAIL_MAX_RATINGS,
+  DISCOVERY_DETAIL_MAX_RECOMMENDATIONS,
+  DISCOVERY_DETAIL_MAX_TRAILERS,
+  DISCOVERY_PERSON_MAX_CREDITS,
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseSchema,
+  discoveryPersonDetailParamsSchema,
+  discoveryPersonDetailQuerySchema,
+  discoveryPersonDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryAvailability,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryMediaDetailResponse,
+  type DiscoveryMediaRecommendation,
+  type DiscoveryPersonDetailParams,
+  type DiscoveryPersonDetailQuery,
+  type DiscoveryPersonDetailResponse,
+  type DiscoveryRating,
+  type DiscoveryTrailer,
   type DiscoverySearchQuery,
   type DiscoverySearchResult,
   type DiscoverySearchResponse,
@@ -119,11 +132,13 @@ const upstreamGenreSchema = z.object({
 
 const upstreamCastCreditSchema = z.object({
   character: z.string().trim().max(200).nullish(),
+  id: upstreamIdentifierSchema,
   name: z.string().trim().min(1).max(160),
   order: z.int().nonnegative().max(100_000).default(100_000),
 });
 
 const upstreamCrewCreditSchema = z.object({
+  id: upstreamIdentifierSchema,
   job: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
 });
@@ -135,12 +150,64 @@ const upstreamCreditsSchema = z
   })
   .default({ cast: [], crew: [] });
 
+const upstreamRelatedVideoSchema = z.object({
+  key: z
+    .string()
+    .trim()
+    .min(6)
+    .max(32)
+    .regex(/^[A-Za-z0-9_-]+$/u),
+  name: upstreamTitleSchema,
+  site: z.string().trim().min(1).max(80),
+  size: z.int().positive().max(8_640).nullish(),
+  type: z.enum([
+    "Behind the Scenes",
+    "Bloopers",
+    "Clip",
+    "Featurette",
+    "Opening Credits",
+    "Teaser",
+    "Trailer",
+  ]),
+});
+
+const upstreamRtRatingSchema = z.object({
+  audienceRating: z.string().trim().min(1).max(80).nullish(),
+  audienceScore: z.number().finite().min(0).max(100).nullish(),
+  criticsRating: z.string().trim().min(1).max(80),
+  criticsScore: z.number().finite().min(0).max(100),
+});
+
+const upstreamImdbRatingSchema = z.object({
+  criticsScore: z.number().finite().min(0).max(10),
+  criticsScoreCount: z.int().nonnegative().max(1_000_000_000).nullish(),
+});
+
+const upstreamCombinedRatingSchema = z.object({
+  imdb: upstreamImdbRatingSchema.optional(),
+  rt: upstreamRtRatingSchema.optional(),
+});
+
+const upstreamMovieRecommendationSchema = upstreamMovieResultSchema.extend({
+  mediaType: z.literal("movie").optional(),
+});
+const upstreamSeriesRecommendationSchema = upstreamSeriesResultSchema.extend({
+  mediaType: z.literal("tv").optional(),
+});
+const upstreamMovieRecommendationPageSchema = z.object({
+  results: z.array(upstreamMovieRecommendationSchema).max(100).default([]),
+});
+const upstreamSeriesRecommendationPageSchema = z.object({
+  results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
+});
+
 const upstreamDetailBase = {
   credits: upstreamCreditsSchema,
   genres: z.array(upstreamGenreSchema).max(100).default([]),
   id: upstreamIdentifierSchema,
   mediaInfo: upstreamMediaInfoSchema,
   overview: upstreamOverviewSchema,
+  relatedVideos: z.array(upstreamRelatedVideoSchema).max(100).default([]),
   status: z.string().trim().max(100).nullish(),
   tagline: z.string().trim().max(500).nullish(),
   voteAverage: upstreamVoteAverageSchema,
@@ -171,6 +238,38 @@ const upstreamSeriesDetailSchema = z.object({
   numberOfSeasons: z.int().nonnegative().max(10_000).default(0),
   originalName: upstreamOptionalTitleSchema,
   seasons: z.array(upstreamSeasonSummarySchema).max(100).default([]),
+});
+
+const upstreamPersonDetailSchema = z.object({
+  biography: upstreamOverviewSchema,
+  birthday: upstreamDateSchema,
+  deathday: upstreamDateSchema,
+  id: upstreamIdentifierSchema,
+  knownForDepartment: z.string().trim().max(160).nullish(),
+  name: upstreamTitleSchema,
+  placeOfBirth: z.string().trim().max(300).nullish(),
+});
+
+const upstreamPersonCreditSchema = z.object({
+  adult: z.boolean().default(false),
+  character: z.string().trim().max(200).nullish(),
+  department: z.string().trim().max(160).nullish(),
+  firstAirDate: upstreamDateSchema,
+  id: upstreamIdentifierSchema,
+  job: z.string().trim().max(200).nullish(),
+  mediaInfo: upstreamMediaInfoSchema,
+  mediaType: z.enum(["movie", "tv"]).nullish(),
+  name: upstreamOptionalTitleSchema,
+  popularity: z.number().finite().nonnegative().max(1_000_000).default(0),
+  releaseDate: upstreamDateSchema,
+  title: upstreamOptionalTitleSchema,
+  voteAverage: upstreamVoteAverageSchema,
+});
+
+const upstreamPersonCreditsSchema = z.object({
+  cast: z.array(upstreamPersonCreditSchema).max(2_000).default([]),
+  crew: z.array(upstreamPersonCreditSchema).max(2_000).default([]),
+  id: upstreamIdentifierSchema,
 });
 
 const seerrUserIdentitySchema = z.strictObject({
@@ -319,6 +418,7 @@ type UpstreamDetailBase = Pick<
   | "id"
   | "mediaInfo"
   | "overview"
+  | "relatedVideos"
   | "status"
   | "tagline"
   | "voteAverage"
@@ -407,10 +507,10 @@ function normalizedCast(credits: UpstreamCredits) {
     .sort((left, right) => left.order - right.order)
     .flatMap((credit) => {
       const character = optionalText(credit.character);
-      const key = `${credit.name}\0${character ?? ""}`;
+      const key = `${credit.id}\0${character ?? ""}`;
       if (seen.has(key)) return [];
       seen.add(key);
-      return [{ character, name: credit.name }];
+      return [{ character, name: credit.name, personId: credit.id }];
     })
     .slice(0, DISCOVERY_DETAIL_MAX_CAST);
 }
@@ -420,12 +520,227 @@ function normalizedCrew(credits: UpstreamCredits) {
   return credits.crew
     .flatMap((credit) => {
       if (!FEATURED_CREW_ROLES.has(credit.job)) return [];
-      const key = `${credit.name}\0${credit.job}`;
+      const key = `${credit.id}\0${credit.job}`;
       if (seen.has(key)) return [];
       seen.add(key);
-      return [{ name: credit.name, role: credit.job }];
+      return [{ name: credit.name, personId: credit.id, role: credit.job }];
     })
     .slice(0, DISCOVERY_DETAIL_MAX_CREW);
+}
+
+const TRAILER_TYPE: Record<
+  z.infer<typeof upstreamRelatedVideoSchema>["type"],
+  DiscoveryTrailer["type"] | null
+> = {
+  "Behind the Scenes": "behind_the_scenes",
+  Bloopers: null,
+  Clip: "clip",
+  Featurette: "featurette",
+  "Opening Credits": null,
+  Teaser: "teaser",
+  Trailer: "trailer",
+};
+
+function normalizedTrailers(videos: readonly z.infer<typeof upstreamRelatedVideoSchema>[]) {
+  const seen = new Set<string>();
+  return videos
+    .flatMap((video): DiscoveryTrailer[] => {
+      const type = TRAILER_TYPE[video.type];
+      if (video.site !== "YouTube" || !type || seen.has(video.key)) return [];
+      seen.add(video.key);
+      return [
+        {
+          id: `youtube:${video.key}`,
+          provider: "youtube",
+          resolution: video.size ?? null,
+          title: video.name,
+          type,
+        },
+      ];
+    })
+    .sort((left, right) => {
+      const priority = { trailer: 0, teaser: 1, featurette: 2, clip: 3, behind_the_scenes: 4 };
+      return priority[left.type] - priority[right.type];
+    })
+    .slice(0, DISCOVERY_DETAIL_MAX_TRAILERS);
+}
+
+function tmdbRating(
+  value: number | null | undefined,
+  voteCount: number | null | undefined,
+): DiscoveryRating[] {
+  if (value === null || value === undefined) return [];
+  return [
+    {
+      audience: "community",
+      label: "TMDB",
+      scale: 10,
+      sentiment: null,
+      source: "tmdb",
+      value,
+      voteCount: voteCount ?? null,
+    } satisfies DiscoveryRating,
+  ];
+}
+
+function normalizedMovieRatings(
+  detail: UpstreamMovieDetail,
+  response: z.infer<typeof upstreamCombinedRatingSchema> | null,
+) {
+  const ratings = tmdbRating(detail.voteAverage, detail.voteCount);
+  if (response?.imdb) {
+    ratings.push({
+      audience: "community",
+      label: "IMDb",
+      scale: 10,
+      sentiment: null,
+      source: "imdb",
+      value: response.imdb.criticsScore,
+      voteCount: response.imdb.criticsScoreCount ?? null,
+    });
+  }
+  if (response?.rt) {
+    ratings.push({
+      audience: "critics",
+      label: "Tomatometer",
+      scale: 100,
+      sentiment: response.rt.criticsRating,
+      source: "rotten_tomatoes",
+      value: response.rt.criticsScore,
+      voteCount: null,
+    });
+    if (response.rt.audienceScore !== null && response.rt.audienceScore !== undefined) {
+      ratings.push({
+        audience: "audience",
+        label: "RT audience",
+        scale: 100,
+        sentiment: optionalText(response.rt.audienceRating),
+        source: "rotten_tomatoes",
+        value: response.rt.audienceScore,
+        voteCount: null,
+      });
+    }
+  }
+  return ratings.slice(0, DISCOVERY_DETAIL_MAX_RATINGS);
+}
+
+function normalizedSeriesRatings(
+  value: number | null | undefined,
+  voteCount: number | null | undefined,
+  response: z.infer<typeof upstreamRtRatingSchema> | null,
+) {
+  const ratings = tmdbRating(value, voteCount);
+  if (response) {
+    ratings.push({
+      audience: "critics",
+      label: "Tomatometer",
+      scale: 100,
+      sentiment: response.criticsRating,
+      source: "rotten_tomatoes",
+      value: response.criticsScore,
+      voteCount: null,
+    });
+    if (response.audienceScore !== null && response.audienceScore !== undefined) {
+      ratings.push({
+        audience: "audience",
+        label: "RT audience",
+        scale: 100,
+        sentiment: optionalText(response.audienceRating),
+        source: "rotten_tomatoes",
+        value: response.audienceScore,
+        voteCount: null,
+      });
+    }
+  }
+  return ratings.slice(0, DISCOVERY_DETAIL_MAX_RATINGS);
+}
+
+function normalizedMovieRecommendation(
+  result: z.infer<typeof upstreamMovieRecommendationSchema>,
+): DiscoveryMediaRecommendation {
+  return {
+    availability: availabilityFromMediaInfo(result.mediaInfo),
+    id: `movie:${result.id}`,
+    kind: "movie",
+    originalTitle: optionalText(result.originalTitle),
+    overview: optionalText(result.overview),
+    source: "seerr",
+    title: result.title,
+    tmdbId: result.id,
+    voteAverage: result.voteAverage ?? null,
+    year: yearFromDate(result.releaseDate),
+  };
+}
+
+function normalizedSeriesRecommendation(
+  result: z.infer<typeof upstreamSeriesRecommendationSchema>,
+): DiscoveryMediaRecommendation {
+  return {
+    availability: availabilityFromMediaInfo(result.mediaInfo),
+    id: `series:${result.id}`,
+    kind: "series",
+    originalTitle: optionalText(result.originalName),
+    overview: optionalText(result.overview),
+    source: "seerr",
+    title: result.name,
+    tmdbId: result.id,
+    voteAverage: result.voteAverage ?? null,
+    year: yearFromDate(result.firstAirDate),
+  };
+}
+
+async function optionalIntelligence<T>(promise: Promise<T>) {
+  try {
+    return { state: "ready" as const, value: await promise };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof SafeConnectorError && error.status === 404) {
+      return { state: "empty" as const, value: null };
+    }
+    return { state: "unavailable" as const, value: null };
+  }
+}
+
+function intelligenceState<T>(state: "empty" | "ready" | "unavailable", values: readonly T[]) {
+  return state === "ready" && values.length === 0 ? "empty" : state;
+}
+
+function normalizedDate(value: string | null | undefined) {
+  const normalized = optionalText(value);
+  return normalized && z.iso.date().safeParse(normalized).success ? normalized : null;
+}
+
+function normalizedPersonCredits(response: z.infer<typeof upstreamPersonCreditsSchema>) {
+  const seen = new Set<string>();
+  return [...response.cast, ...response.crew]
+    .filter((credit) => !credit.adult && credit.mediaType)
+    .sort((left, right) => right.popularity - left.popularity)
+    .flatMap((credit) => {
+      const kind = credit.mediaType === "movie" ? ("movie" as const) : ("series" as const);
+      const title = optionalText(credit.mediaType === "movie" ? credit.title : credit.name);
+      const role =
+        optionalText(credit.character) ??
+        optionalText(credit.job) ??
+        optionalText(credit.department);
+      if (!title || !role || role === "Thanks") return [];
+      const key = `${kind}\0${credit.id}\0${role}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [
+        {
+          availability: availabilityFromMediaInfo(credit.mediaInfo),
+          kind,
+          role,
+          title,
+          tmdbId: credit.id,
+          voteAverage: credit.voteAverage ?? null,
+          year: yearFromDate(
+            credit.mediaType === "movie" ? credit.releaseDate : credit.firstAirDate,
+          ),
+        },
+      ];
+    })
+    .slice(0, DISCOVERY_PERSON_MAX_CREDITS);
 }
 
 function runtimeMinutes(values: readonly number[]) {
@@ -633,17 +948,56 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       ...(signal ? { signal } : {}),
     } as const;
     if (params.kind === "movie") {
-      const response = await this.client.requestJson(
+      const responsePromise = this.client.requestJson(
         `api/v1/movie/${params.tmdbId}`,
         upstreamMovieDetailSchema,
         options,
       );
+      const ratingsPromise = optionalIntelligence(
+        this.client.requestJson(
+          `api/v1/movie/${params.tmdbId}/ratingscombined`,
+          upstreamCombinedRatingSchema,
+          {
+            headers: options.headers,
+            operation: "discovery.detail.ratings",
+            ...(signal ? { signal } : {}),
+          },
+        ),
+      );
+      const recommendationsPromise = optionalIntelligence(
+        this.client.requestJson(
+          `api/v1/movie/${params.tmdbId}/recommendations`,
+          upstreamMovieRecommendationPageSchema,
+          {
+            headers: options.headers,
+            operation: "discovery.detail.recommendations",
+            query: new URLSearchParams({ language: query.language, page: "1" }),
+            ...(signal ? { signal } : {}),
+          },
+        ),
+      );
+      const response = await responsePromise;
       if (response.id !== params.tmdbId) throw invalidDetailResponse();
+      const [ratingResult, recommendationResult] = await Promise.all([
+        ratingsPromise,
+        recommendationsPromise,
+      ]);
+      const ratings = normalizedMovieRatings(response, ratingResult.value);
+      const recommendations = (recommendationResult.value?.results ?? [])
+        .map(normalizedMovieRecommendation)
+        .slice(0, DISCOVERY_DETAIL_MAX_RECOMMENDATIONS);
       return discoveryMediaDetailResponseSchema.parse({
         generatedAt: this.clock.now().toISOString(),
         item: {
           ...normalizedDetailBase(response, response.originalTitle),
           id: `movie:${response.id}`,
+          intelligence: {
+            ratings,
+            ratingsState: intelligenceState(ratingResult.state, ratings),
+            recommendations,
+            recommendationsState: intelligenceState(recommendationResult.state, recommendations),
+            trailers: normalizedTrailers(response.relatedVideos),
+          },
           kind: "movie",
           runtimeMinutes: response.runtime && response.runtime > 0 ? response.runtime : null,
           title: response.title,
@@ -652,18 +1006,57 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       });
     }
 
-    const response = await this.client.requestJson(
+    const responsePromise = this.client.requestJson(
       `api/v1/tv/${params.tmdbId}`,
       upstreamSeriesDetailSchema,
       options,
     );
+    const ratingsPromise = optionalIntelligence(
+      this.client.requestJson(`api/v1/tv/${params.tmdbId}/ratings`, upstreamRtRatingSchema, {
+        headers: options.headers,
+        operation: "discovery.detail.ratings",
+        ...(signal ? { signal } : {}),
+      }),
+    );
+    const recommendationsPromise = optionalIntelligence(
+      this.client.requestJson(
+        `api/v1/tv/${params.tmdbId}/recommendations`,
+        upstreamSeriesRecommendationPageSchema,
+        {
+          headers: options.headers,
+          operation: "discovery.detail.recommendations",
+          query: new URLSearchParams({ language: query.language, page: "1" }),
+          ...(signal ? { signal } : {}),
+        },
+      ),
+    );
+    const response = await responsePromise;
     if (response.id !== params.tmdbId) throw invalidDetailResponse();
+    const [ratingResult, recommendationResult] = await Promise.all([
+      ratingsPromise,
+      recommendationsPromise,
+    ]);
+    const ratings = normalizedSeriesRatings(
+      response.voteAverage,
+      response.voteCount,
+      ratingResult.value,
+    );
+    const recommendations = (recommendationResult.value?.results ?? [])
+      .map(normalizedSeriesRecommendation)
+      .slice(0, DISCOVERY_DETAIL_MAX_RECOMMENDATIONS);
     return discoveryMediaDetailResponseSchema.parse({
       generatedAt: this.clock.now().toISOString(),
       item: {
         ...normalizedDetailBase(response, response.originalName),
         episodeCount: response.numberOfEpisodes,
         id: `series:${response.id}`,
+        intelligence: {
+          ratings,
+          ratingsState: intelligenceState(ratingResult.state, ratings),
+          recommendations,
+          recommendationsState: intelligenceState(recommendationResult.state, recommendations),
+          trailers: normalizedTrailers(response.relatedVideos),
+        },
         kind: "series",
         runtimeMinutes: runtimeMinutes(response.episodeRunTime),
         seasonCount: response.numberOfSeasons,
@@ -675,6 +1068,70 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         })),
         title: response.name,
         year: yearFromDate(response.firstAirDate),
+      },
+    });
+  }
+
+  async personDetail(
+    paramsInput: DiscoveryPersonDetailParams,
+    queryInput: DiscoveryPersonDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryPersonDetailResponse> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr person details require configured credentials.",
+        operation: "discovery.person.detail",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = discoveryPersonDetailQuerySchema.parse(queryInput);
+    const headers = { "X-Api-Key": this.#apiKey };
+    const responsePromise = this.client.requestJson(
+      `api/v1/person/${params.tmdbId}`,
+      upstreamPersonDetailSchema,
+      {
+        headers,
+        operation: "discovery.person.detail",
+        query: new URLSearchParams({ language: query.language }),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const creditsPromise = optionalIntelligence(
+      this.client.requestJson(
+        `api/v1/person/${params.tmdbId}/combined_credits`,
+        upstreamPersonCreditsSchema,
+        {
+          headers,
+          operation: "discovery.person.credits",
+          query: new URLSearchParams({ language: query.language }),
+          ...(signal ? { signal } : {}),
+        },
+      ),
+    );
+    const response = await responsePromise;
+    if (response.id !== params.tmdbId) throw invalidDetailResponse();
+    const creditsResult = await creditsPromise;
+    if (creditsResult.value && creditsResult.value.id !== params.tmdbId) {
+      throw invalidDetailResponse();
+    }
+    const credits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
+    return discoveryPersonDetailResponseSchema.parse({
+      generatedAt: this.clock.now().toISOString(),
+      item: {
+        biography: optionalText(response.biography),
+        birthday: normalizedDate(response.birthday),
+        birthplace: optionalText(response.placeOfBirth),
+        credits,
+        creditsState: intelligenceState(creditsResult.state, credits),
+        deathday: normalizedDate(response.deathday),
+        department: optionalText(response.knownForDepartment),
+        id: `person:${response.id}`,
+        name: response.name,
+        source: "seerr",
+        tmdbId: response.id,
       },
     });
   }

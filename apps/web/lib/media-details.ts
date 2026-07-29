@@ -2,6 +2,9 @@ import type {
   DiscoveryMediaDetailParams,
   DiscoveryMediaDetailQuery,
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonDetailParams,
+  DiscoveryPersonDetailQuery,
+  DiscoveryPersonDetailResponse,
 } from "@omnifin/contracts/discovery";
 
 async function loadContractSchemas() {
@@ -73,6 +76,14 @@ export interface DiscoveryMediaDetailClient {
   ): Promise<DiscoveryMediaDetailResponse>;
 }
 
+export interface DiscoveryPersonDetailClient {
+  load(
+    params: DiscoveryPersonDetailParams,
+    query: DiscoveryPersonDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryPersonDetailResponse>;
+}
+
 export const discoveryMediaDetailClient: DiscoveryMediaDetailClient = {
   async load(paramsInput, queryInput, signal) {
     const schemas = await contractSchemas();
@@ -115,6 +126,54 @@ export const discoveryMediaDetailClient: DiscoveryMediaDetailClient = {
         "invalid_response",
         "invalid_response",
         "Media details did not match the public contract.",
+      );
+    }
+    return parsed.data;
+  },
+};
+
+export const discoveryPersonDetailClient: DiscoveryPersonDetailClient = {
+  async load(paramsInput, queryInput, signal) {
+    const schemas = await contractSchemas();
+    const params = schemas.discovery.discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = schemas.discovery.discoveryPersonDetailQuerySchema.parse(queryInput);
+    let response: Response;
+    try {
+      response = await fetch(
+        `/api/discovery/people/${params.tmdbId}?${new URLSearchParams({
+          language: query.language,
+        }).toString()}`,
+        {
+          cache: "no-store",
+          credentials: "same-origin",
+          ...(signal ? { signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new MediaDetailClientError(
+        "unavailable",
+        "service_unavailable",
+        "Person details could not reach the gateway.",
+      );
+    }
+    if (!response.ok) throw await responseError(response);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new MediaDetailClientError(
+        "invalid_response",
+        "invalid_response",
+        "Person details returned an unreadable response.",
+      );
+    }
+    const parsed = schemas.discovery.discoveryPersonDetailResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new MediaDetailClientError(
+        "invalid_response",
+        "invalid_response",
+        "Person details did not match the public contract.",
       );
     }
     return parsed.data;

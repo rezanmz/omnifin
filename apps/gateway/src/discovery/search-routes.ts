@@ -6,6 +6,12 @@ import {
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseJsonSchema,
   discoveryMediaDetailResponseSchema,
+  discoveryPersonDetailParamsJsonSchema,
+  discoveryPersonDetailParamsSchema,
+  discoveryPersonDetailQueryJsonSchema,
+  discoveryPersonDetailQuerySchema,
+  discoveryPersonDetailResponseJsonSchema,
+  discoveryPersonDetailResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -176,6 +182,52 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
           await discovery.detail(
             discoveryMediaDetailParamsSchema.parse(request.params),
             discoveryMediaDetailQuerySchema.parse(request.query),
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof DiscoverySearchError) throw searchError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/discovery/people/:tmdbId",
+    {
+      config: { rateLimit: { max: 80, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: discoveryPersonDetailParamsJsonSchema,
+        querystring: discoveryPersonDetailQueryJsonSchema,
+        response: { 200: discoveryPersonDetailResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return discoveryPersonDetailResponseSchema.parse(
+          await discovery.personDetail(
+            discoveryPersonDetailParamsSchema.parse(request.params),
+            discoveryPersonDetailQuerySchema.parse(request.query),
             { principal },
             controller.signal,
           ),
