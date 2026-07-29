@@ -56,6 +56,22 @@ const routes = [
     path: "/settings/connectors?test-view=forbidden",
   },
   {
+    label: "system health",
+    path: "/operations/health?test-view=ready",
+  },
+  {
+    label: "degraded system health",
+    path: "/operations/health?test-view=degraded",
+  },
+  {
+    label: "system health onboarding",
+    path: "/operations/health?test-view=unconfigured",
+  },
+  {
+    label: "restricted system health",
+    path: "/operations/health?test-view=forbidden",
+  },
+  {
     label: "indexer intelligence",
     path: "/operations/indexers?test-view=ready",
   },
@@ -361,6 +377,7 @@ for (const route of [
     path: "/settings/identity-providers?test-view=ready",
   },
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
+  { label: "system health", path: "/operations/health?test-view=ready" },
   { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },
   { label: "download queue", path: "/operations/downloads?test-view=ready" },
   { label: "media issue workbench", path: "/operations/issues?test-view=ready" },

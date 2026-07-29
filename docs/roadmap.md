@@ -66,6 +66,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
   monitoring, searches, and manual releases
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
 - qBittorrent and SABnzbd live queues (read path implemented; protected live evidence pending)
+- Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry
+  (implemented; protected live evidence pending)
 - Title-level Acquisition Provenance and exact-target automatic-search recovery
   plus manual release recovery (implemented; protected live evidence pending)
 

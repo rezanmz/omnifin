@@ -193,6 +193,22 @@ application boundary; operators must still patch and isolate the host.
   and a three-per-minute route limit. Sanitized success and failure audits contain no provider
   payload, credential, address, or private error.
 
+## System-health controls
+
+- Reads require `acquisition.manage` at both the session route and service boundary. Unauthorized
+  callers are rejected before connector selection or credential decryption.
+- Only enabled, currently validated Radarr, Sonarr, and Prowlarr connectors advertising
+  `system.health` are eligible. Capacity reads additionally require `storage.read`; source fan-out
+  is bounded and an over-limit deployment fails closed.
+- Health and storage payloads are independently bounded and schema-validated. Upstream paths are
+  used only as inputs to deployment-local keyed identifiers, then replaced with non-sensitive
+  ordinal labels before public validation.
+- Normalization removes control characters, URLs, filesystem paths, and configured API keys from
+  warning text. Public contracts exclude upstream identifiers, wiki links, raw provider fields,
+  credentials, and private connector diagnostics.
+- `GET /v1/system/status` is abort-aware, read-only, rate-limited, and explicitly non-cacheable.
+  Partial failures retain only independently verified telemetry and never infer a healthy state.
+
 ## Browser protections
 
 The web and gateway emit Content Security Policy, HSTS for secure requests,

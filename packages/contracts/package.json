@@ -60,6 +60,10 @@
     "./subtitles": {
       "types": "./dist/subtitles.d.ts",
       "default": "./dist/subtitles.js"
+    },
+    "./system": {
+      "types": "./dist/system.d.ts",
+      "default": "./dist/system.js"
     }
   },
   "files": [

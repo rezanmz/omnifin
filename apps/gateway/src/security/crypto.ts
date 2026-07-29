@@ -30,6 +30,9 @@ export type PrivacyHashDomain =
   | "oidc_failure_audit_user_agent"
   | "oidc_session_id"
   | "rate_limit_client"
+  | "system_status_signal"
+  | "system_status_source"
+  | "system_status_storage"
   | "user_agent";
 
 function deriveDomainKey(rootKey: Buffer, purpose: string) {

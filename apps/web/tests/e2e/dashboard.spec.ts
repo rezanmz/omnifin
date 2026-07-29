@@ -246,12 +246,50 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 });
 
-test("operations navigation opens the live download queue workspace", async ({ page }) => {
+test("operations navigation opens the system health workspace", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute(
     "href",
+    "/operations/health",
+  );
+});
+
+test("system health preserves partial service visibility and private storage boundaries", async ({
+  page,
+}) => {
+  await page.goto("/operations/health?test-view=degraded");
+
+  await expect(
+    page.getByRole("heading", { name: "The stack is holding, with gaps." }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Cinema" })).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Television" })).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Indexers" })).toBeVisible();
+  await expect(
+    page.getByText("Indexers did not answer before the connector timeout."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("meter", { name: "Cinema storage 1: 11 percent free" }),
+  ).toHaveAttribute("aria-valuenow", "11");
+  await expect(page.getByText(/private mount paths never leave the gateway/iu)).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("/srv/");
+});
+
+test("system health links every operational workspace and switches appearance", async ({
+  page,
+}) => {
+  await page.goto("/operations/health?test-view=ready");
+
+  await expect(page.getByRole("link", { name: "Downloads" })).toHaveAttribute(
+    "href",
     "/operations/downloads",
   );
+  await expect(page.getByRole("link", { name: "Indexers" })).toHaveAttribute(
+    "href",
+    "/operations/indexers",
+  );
+  await page.getByRole("radio", { name: "Light theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
 test("download queue supports focused search and attention filtering", async ({ page }) => {

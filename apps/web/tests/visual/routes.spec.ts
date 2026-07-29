@@ -443,6 +443,52 @@ test("degraded indexer intelligence visual baseline", async ({ page }, testInfo)
   await expect(page).toHaveScreenshot("indexer-intelligence-degraded.png", { fullPage: true });
 });
 
+test("system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "System health covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=ready");
+  await page.getByRole("heading", { name: "2 clear things to check." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health.png", { fullPage: true });
+});
+
+test("light system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light system health covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/health?test-view=ready");
+  await page.getByRole("heading", { name: "2 clear things to check." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("system-health-light.png", { fullPage: true });
+});
+
+test("degraded system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded system health covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=degraded");
+  await page.getByText("Partial visibility", { exact: true }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health-degraded.png", { fullPage: true });
+});
+
+test("system health onboarding visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "System health onboarding covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=unconfigured");
+  await page.getByRole("heading", { name: "Connect the stack." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health-unconfigured.png", { fullPage: true });
+});
+
 test("download queue visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),

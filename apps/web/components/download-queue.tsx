@@ -172,6 +172,9 @@ function PageFrame({ children }: { children: React.ReactNode }) {
         <header className={styles.topbar} data-liquid-glass>
           <BrandMark />
           <nav aria-label="Operations navigation" className={styles.topbarActions}>
+            <Link className={styles.indexerLink} href="/operations/health" prefetch={false}>
+              <Activity aria-hidden="true" size={16} /> Health
+            </Link>
             <Link className={styles.indexerLink} href="/operations/indexers" prefetch={false}>
               <Radio aria-hidden="true" size={16} /> Indexers
             </Link>

@@ -199,8 +199,10 @@ export class ProwlarrAdapter extends ServarrAdapter {
     "connector.version",
     "indexer.statistics",
     "indexer.test",
+    "system.health",
   ] as const;
   protected readonly apiPath = "api/v1/system/status";
+  protected readonly apiRoot = "api/v1";
 
   constructor(config: ApiKeyConnectorConfig) {
     super(config);

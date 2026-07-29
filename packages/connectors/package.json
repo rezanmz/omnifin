@@ -17,6 +17,10 @@
       "types": "./dist/calendar.d.ts",
       "default": "./dist/calendar.js"
     },
+    "./system": {
+      "types": "./dist/system.d.ts",
+      "default": "./dist/system.js"
+    },
     "./http/safe-http-client": {
       "types": "./dist/http/safe-http-client.d.ts",
       "default": "./dist/http/safe-http-client.js"

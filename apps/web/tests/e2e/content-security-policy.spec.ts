@@ -5,6 +5,7 @@ for (const route of [
   "/login",
   "/settings",
   "/settings/identity-providers?test-view=ready",
+  "/operations/health?test-view=ready",
   "/operations/indexers?test-view=ready",
   "/operations/downloads?test-view=ready",
   "/operations/issues?test-view=ready",
