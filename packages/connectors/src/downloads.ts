@@ -30,6 +30,11 @@ export interface DownloadQueueMutation {
   externalId: string;
 }
 
+export interface DownloadQueueRemoval {
+  externalId: string;
+}
+
 export interface DownloadQueueController extends DownloadQueueReader {
+  removeDownloadQueueItem(input: DownloadQueueRemoval, signal?: AbortSignal): Promise<void>;
   updateDownloadQueueItem(input: DownloadQueueMutation, signal?: AbortSignal): Promise<void>;
 }

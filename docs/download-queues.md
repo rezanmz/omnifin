@@ -1,8 +1,8 @@
 # Download queues
 
 Omnifin exposes one normalized queue across validated qBittorrent and SABnzbd connectors. The
-workspace gives operators current progress, degraded-client context, and narrow pause/resume
-controls without
+workspace gives operators current progress, degraded-client context, and exact-item pause, resume,
+and removal controls without
 placing reusable download-client credentials, raw queue responses, download hashes, or media paths
 in the browser.
 
@@ -59,10 +59,13 @@ complete view.
 The route is non-cacheable and rate-limited. The workspace polls every 12 seconds while live,
 supports an explicit refresh, and preserves the last verified queue if a later refresh fails. A
 visible stale notice distinguishes retained evidence from current telemetry. Search and state
-filters operate only on normalized in-memory data. Pause and resume first open an inline
-confirmation with the safe cancel action focused. The browser then revalidates the active session,
-permission, and CSRF token before sending one opaque item identifier, its connector, its observed
-state, and the requested action.
+filters operate only on normalized in-memory data. Queue changes first open an inline confirmation
+with the safe cancel action focused. The browser then revalidates the active session, permission,
+and CSRF token before sending one opaque item identifier, its connector, and its observed state.
+Removal also requires the operator to type `REMOVE`, explains the client-specific consequence, and
+uses a fresh cryptographic idempotency key for each confirmation. A successful removal updates the
+local queue totals without waiting for the next poll and leaves a persistent screen-reader status
+announcement after the card disappears.
 
 Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
 component coverage. Dark and light desktop/mobile baselines are committed, and representative
@@ -89,6 +92,30 @@ and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly
 `nzo_id`. Raw hashes, `nzo_id` values, credentials, cookies, and upstream responses never reach the
 browser or audit metadata.
 
-Removal, relocation, priority changes, category changes, blocklisting, and bulk mutations remain
-intentionally absent. They require separate destructive-action and recovery design plus disposable
-live-service evidence before the interface can expose them.
+## Exact-item removal with downloaded files preserved
+
+`POST /v1/downloads/queue/removals` has the same active-user, `downloads.manage`, same-origin, CSRF,
+1 KiB body, connector-capability, rate-limit, and no-store boundaries as pause and resume. It also
+requires an `Idempotency-Key` header. Its strict contract contains one connector, one deployment-
+local opaque item, and the freshly observed state; it cannot express a filesystem path, bulk target,
+client-native command, or deletion of downloaded content.
+
+The gateway hashes the per-user idempotency key and a canonical target fingerprint before storing
+them. It durably reserves the operation, snapshots the exact public queue item, and commits the
+`download.queue.removal.requested` audit record before contacting the client. qBittorrent receives
+one validated torrent hash with `deleteFiles=false`. SABnzbd receives one validated `nzo_id` without
+`del_files=1`, so already-downloaded files are preserved. The gateway then performs bounded exact-
+item reads and reports success only after that opaque item is absent.
+
+Completed and failed outcomes replay without another upstream mutation. A recent pending operation
+is rejected instead of joined. After the short recovery lease, the gateway can complete an operation
+whose exact item is already absent, or retry only when the current item still matches the durable
+snapshot; identifier reuse or changed item metadata fails closed. Completed operation records are
+retained for 30 days and pruned transactionally before new reservations. Responses and audit events
+contain only bounded public identifiers, the normalized snapshot, an operation identifier, and the
+fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency keys,
+credentials, cookies, paths, and upstream bodies remain inside the gateway.
+
+Relocation, priority changes, category changes, blocklisting, deletion of downloaded content, and
+bulk mutations remain intentionally absent. They require their own destructive-action and recovery
+design plus disposable live-service evidence before the interface can expose them.

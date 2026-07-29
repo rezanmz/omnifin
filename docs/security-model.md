@@ -178,17 +178,22 @@ application boundary; operators must still patch and isolate the host.
   aggregate response size are independently bounded and schema-validated.
 - `GET /v1/downloads/queue` is abort-aware, rate-limited, and explicitly non-cacheable. Filtering
   and refresh remain browser-local reads.
-- Pause and resume use a separate strict action contract containing one connector, one opaque item,
-  its observed state, and one allowed action. The `POST` route requires an active user, session-bound
-  CSRF and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
+- Pause, resume, and removal use separate strict action contracts containing one connector, one
+  opaque item, and its observed state. The `POST` routes require an active user, session-bound CSRF
+  and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
   `download.queue.mutate` on the selected healthy connector.
 - The gateway resolves the opaque ID against a fresh exact-connector queue read, rejects missing or
   stale targets, writes a durable requested audit before mutation, and verifies the desired state
   with bounded post-write reads. Safe replay avoids a duplicate write when the state is already
   achieved. Public responses and audit metadata never contain the qBittorrent hash or SABnzbd
   `nzo_id`.
-- The action contract cannot express removal, relocation, categories, priorities, arbitrary URLs,
-  bulk identifiers, or client-native command fields.
+- Removal additionally requires a per-user idempotency key and a typed browser confirmation. The
+  durable operation and requested audit commit before mutation; bounded verification requires the
+  exact item to disappear. Recovery reuses the public item snapshot and fails closed on identifier
+  reuse. qBittorrent is always called with `deleteFiles=false`, and SABnzbd is never called with
+  `del_files=1`, preserving downloaded content.
+- The public contracts cannot express downloaded-file deletion, relocation, categories, priorities,
+  arbitrary URLs, bulk identifiers, or client-native command fields.
 
 ## Acquisition-calendar read controls
 

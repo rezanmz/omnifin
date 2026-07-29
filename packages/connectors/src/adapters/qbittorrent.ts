@@ -3,7 +3,11 @@ import { DOWNLOAD_QUEUE_MAX_ITEMS } from "@omnifin/contracts/downloads";
 import { z } from "zod";
 
 import { ProbeOnlyAdapter } from "./base.js";
-import type { ConnectorDownloadQueueResult, DownloadQueueMutation } from "../downloads.js";
+import type {
+  ConnectorDownloadQueueResult,
+  DownloadQueueMutation,
+  DownloadQueueRemoval,
+} from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 
@@ -200,6 +204,21 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
       },
       body: new URLSearchParams({ hashes: externalId }),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async removeDownloadQueueItem(input: DownloadQueueRemoval, signal?: AbortSignal): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    await this.client.requestText("api/v2/torrents/delete", {
+      operation: "download.queue.remove",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId, deleteFiles: "false" }),
       ...(signal ? { signal } : {}),
     });
   }

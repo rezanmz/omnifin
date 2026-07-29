@@ -1000,13 +1000,14 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("playback_sessions");
       expect(names).toContain("library_artwork_searches");
       expect(names).toContain("library_mutation_operations");
+      expect(names).toContain("download_queue_removal_operations");
       expect(names).toContain("subtitle_download_operations");
       expect(names).toContain("subtitle_searches");
       expect(names).toContain("session_rotation_aliases");
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 17 });
+      ).toEqual({ count: 18 });
       expect(
         database.sqlite
           .prepare(

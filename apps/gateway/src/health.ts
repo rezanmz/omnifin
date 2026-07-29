@@ -11,6 +11,7 @@ const REQUIRED_TABLES = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
   "media_issue_operations",
@@ -47,6 +48,11 @@ function assertDatabaseReady(database: DatabaseHandle) {
       throw new Error("Required database schema is not present.");
     }
 
+    database.sqlite
+      .prepare(
+        "select id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash, state, item_snapshot_json, response_json, failure_code, mutation_started_at, completed_at from download_queue_removal_operations limit 0",
+      )
+      .all();
     database.sqlite
       .prepare(
         "select id, user_id, service_identity_link_id, link_revision, item_digest, encrypted_payload, last_used_at, expires_at from media_references limit 0",

@@ -3,6 +3,7 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   downloadQueueActionResponseSchema,
+  downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
 } from "@omnifin/contracts/downloads";
 import { describe, expect, it, vi } from "vitest";
@@ -94,11 +95,16 @@ async function harness(options: { capable?: boolean } = {}) {
     truncated: false,
   }));
   const updateDownloadQueueItem = vi.fn(async () => undefined);
+  const removeDownloadQueueItem = vi.fn(async () => undefined);
   const app = await createApp({
     config,
     downloadQueueDependencies: {
       clock: () => now,
-      createAdapter: () => ({ readDownloadQueue, updateDownloadQueueItem }),
+      createAdapter: () => ({
+        readDownloadQueue,
+        removeDownloadQueueItem,
+        updateDownloadQueueItem,
+      }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -200,7 +206,14 @@ async function harness(options: { capable?: boolean } = {}) {
       userId: "viewer-user",
     },
   });
-  return { app, operator, readDownloadQueue, updateDownloadQueueItem, viewer };
+  return {
+    app,
+    operator,
+    readDownloadQueue,
+    removeDownloadQueueItem,
+    updateDownloadQueueItem,
+    viewer,
+  };
 }
 
 describe("download queue routes", () => {
@@ -469,6 +482,144 @@ describe("download queue routes", () => {
       );
       expect(limited.body).not.toContain("Private qBittorrent rate-limit detail");
       expect(updateDownloadQueueItem).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("removes one exact queue item with idempotency and downloaded files preserved", async () => {
+    const { app, operator, readDownloadQueue, removeDownloadQueueItem } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      readDownloadQueue
+        .mockResolvedValueOnce({
+          generatedAt: now.toISOString(),
+          items: [
+            {
+              addedAt: "2026-07-28T02:50:00.000Z",
+              category: "movies",
+              etaSeconds: 90,
+              externalId: privateUpstreamId,
+              leechers: 3,
+              progress: 0.8,
+              rateBytesPerSecond: 8_000_000,
+              remainingBytes: 2_000_000_000,
+              seeders: 28,
+              sizeBytes: 10_000_000_000,
+              state: "downloading",
+              title: "The.Far.Meridian.2160p",
+            },
+          ],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({ generatedAt: now.toISOString(), items: [], truncated: false });
+
+      const removalRequest = () =>
+        app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            "idempotency-key": "download-removal-route-fixture",
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: {
+            connectorId: item.connectorId,
+            expectedState: item.state,
+            itemId: item.id,
+          },
+          url: "/v1/downloads/queue/removals",
+        });
+      const removed = await removalRequest();
+
+      expect(removed.statusCode, removed.body).toBe(200);
+      expect(downloadQueueRemovalResponseSchema.parse(removed.json())).toMatchObject({
+        contentDisposition: "preserved",
+        item: { id: item.id },
+        replayed: false,
+      });
+      expect(removeDownloadQueueItem).toHaveBeenCalledWith(
+        { externalId: privateUpstreamId },
+        expect.any(AbortSignal),
+      );
+      expect(removed.headers["idempotency-replayed"]).toBe("false");
+      expect(removed.headers["cache-control"]).toBe("no-store");
+      expect(removed.body).not.toContain(privateUpstreamId);
+      expect(removed.body).not.toContain(privatePassword);
+
+      const replayed = await removalRequest();
+      expect(replayed.statusCode, replayed.body).toBe(200);
+      expect(downloadQueueRemovalResponseSchema.parse(replayed.json()).replayed).toBe(true);
+      expect(replayed.headers["idempotency-replayed"]).toBe("true");
+      expect(removeDownloadQueueItem).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects queue removal before mutation when CSRF, permission, or idempotency proof is missing", async () => {
+    const { app, operator, readDownloadQueue, removeDownloadQueueItem, viewer } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      const body = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      readDownloadQueue.mockClear();
+
+      const csrfDenied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "csrf-denied-removal-fixture",
+          origin: baseUrl,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/removals",
+      });
+      expect(csrfDenied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(csrfDenied.json()).error.code).toBe("csrf_denied");
+
+      const permissionDenied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": "permission-denied-removal-fixture",
+          origin: baseUrl,
+          "x-omnifin-csrf": viewer.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/removals",
+      });
+      expect(permissionDenied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(permissionDenied.json()).error.code).toBe("permission_denied");
+
+      const idempotencyDenied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/removals",
+      });
+      expect(idempotencyDenied.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(idempotencyDenied.json()).error.code).toBe("invalid_request");
+
+      expect(readDownloadQueue).not.toHaveBeenCalled();
+      expect(removeDownloadQueueItem).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

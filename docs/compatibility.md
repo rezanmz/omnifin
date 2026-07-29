@@ -18,8 +18,8 @@ combination is described as supported.
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Monitoring/history fixtures ready; live baseline pending |
 | Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                             |
 | Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Intelligence fixtures ready; live baseline pending       |
-| qBittorrent                       | Queue, rates, progress, exact pause/resume                     | Read/write fixtures ready; live baseline pending         |
-| SABnzbd                           | Queue, rates, progress, exact pause/resume                     | Read/write fixtures ready; live baseline pending         |
+| qBittorrent                       | Queue, rates, exact pause/resume, preserve-files removal       | Read/write fixtures ready; live baseline pending         |
+| SABnzbd                           | Queue, rates, exact pause/resume, preserve-files removal       | Read/write fixtures ready; live baseline pending         |
 
 Seerr is the primary request-management target. Compatibility with older Jellyseerr
 and Overseerr installations is capability-based and will be listed only after it is

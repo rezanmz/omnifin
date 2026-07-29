@@ -6,7 +6,10 @@ import {
   type Role,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
-import { downloadQueueResponseSchema } from "@omnifin/contracts/downloads";
+import {
+  downloadQueueRemovalResponseSchema,
+  downloadQueueResponseSchema,
+} from "@omnifin/contracts/downloads";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -16,7 +19,7 @@ import {
   DownloadQueueService,
   type DownloadQueueAdapterFactoryInput,
 } from "../src/downloads/queue-service.js";
-import { EnvelopeCipher } from "../src/security/crypto.js";
+import { EnvelopeCipher, hashToken } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T02:30:00.000Z");
 const QB_PASSWORD = "private-qbittorrent-password";
@@ -179,8 +182,13 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
     qbittorrent: vi.fn(async () => undefined),
     sabnzbd: vi.fn(async () => undefined),
   };
+  const removals = {
+    qbittorrent: vi.fn(async () => undefined),
+    sabnzbd: vi.fn(async () => undefined),
+  };
   const createAdapter = vi.fn((input: DownloadQueueAdapterFactoryInput) => ({
     readDownloadQueue: readers[input.service],
+    removeDownloadQueueItem: removals[input.service],
     updateDownloadQueueItem: actions[input.service],
   }));
   let identifier = 0;
@@ -189,9 +197,10 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
     clock: () => now,
     createAdapter,
     createId: () => `download-action-audit-${++identifier}`,
+    createOperationId: () => "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
     wait,
   });
-  return { actions, config, createAdapter, database, readers, service, wait };
+  return { actions, config, createAdapter, database, readers, removals, service, wait };
 }
 
 describe("download queue service", () => {
@@ -723,6 +732,363 @@ describe("download queue service", () => {
         .get() as string;
       expect(JSON.stringify(audit)).not.toContain("private adapter detail");
       expect(JSON.parse(audit)).toMatchObject({ failureCode: "connector_unavailable" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("recovers a stale in-flight removal when the exact item is already absent", async () => {
+    const { database, readers, removals, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      const idempotencyKey = "stale-removal-recovery-fixture";
+      const operationId = "download_removal_ABCDEFGHIJKLMNOPQRSTUV";
+      const staleAt = now.getTime() - 60_000;
+      database.sqlite
+        .prepare(
+          `insert into download_queue_removal_operations (
+             id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash,
+             state, item_snapshot_json, mutation_started_at, created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        )
+        .run(
+          operationId,
+          "operator-user",
+          input.connectorId,
+          input.itemId,
+          hashToken(`operator-user\u0000download_queue_removal\u0000${idempotencyKey}`),
+          hashToken(JSON.stringify({ contentDisposition: "preserved", input, version: 1 })),
+          JSON.stringify(item),
+          staleAt,
+          staleAt,
+          staleAt,
+        );
+      readers.qbittorrent.mockResolvedValueOnce({
+        generatedAt: now.toISOString(),
+        items: [],
+        truncated: false,
+      });
+
+      const result = await service.remove(input, idempotencyKey, { principal: principal() });
+
+      expect(downloadQueueRemovalResponseSchema.parse(result)).toMatchObject({
+        item: { id: item.id },
+        operationId,
+        replayed: true,
+      });
+      expect(removals.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("durably completes, replays without reconstructing the adapter, and conflict-checks an exact removal", async () => {
+    const { createAdapter, database, readers, removals, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      readers.qbittorrent
+        .mockResolvedValueOnce(queueResult("qbittorrent"))
+        .mockResolvedValueOnce({ generatedAt: now.toISOString(), items: [], truncated: false });
+
+      const completed = await service.remove(input, "durable-removal-fixture", {
+        ipAddress: "203.0.113.8",
+        principal: principal(),
+        requestId: "removal-request",
+      });
+      createAdapter.mockImplementationOnce(() => {
+        throw new Error("adapter should not be reconstructed for a replay");
+      });
+      const replayed = await service.remove(input, "durable-removal-fixture", {
+        principal: principal(),
+      });
+
+      expect(downloadQueueRemovalResponseSchema.parse(completed)).toMatchObject({
+        item: { id: item.id },
+        replayed: false,
+      });
+      expect(replayed).toMatchObject({ operationId: completed.operationId, replayed: true });
+      expect(removals.qbittorrent).toHaveBeenCalledOnce();
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from download_queue_removal_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: null, state: "succeeded" });
+      expect(
+        database.sqlite
+          .prepare("select event_type as eventType from audit_events order by created_at, id")
+          .all(),
+      ).toEqual([
+        { eventType: "download.queue.removal.requested" },
+        { eventType: "download.queue.removal.completed" },
+      ]);
+
+      await expect(
+        service.remove({ ...input, expectedState: "paused" }, "durable-removal-fixture", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "idempotency_conflict" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("prunes expired completed removal operations before reserving another", async () => {
+    const { database, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const expiredAt = now.getTime() - 31 * 24 * 60 * 60 * 1_000;
+      database.sqlite
+        .prepare(
+          `insert into download_queue_removal_operations (
+             id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash,
+             state, item_snapshot_json, response_json, mutation_started_at, completed_at,
+             created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, 'succeeded', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "download_removal_0000000000000000000000",
+          "operator-user",
+          item.connectorId,
+          item.id,
+          hashToken("expired-removal-idempotency-key"),
+          hashToken("expired-removal-fingerprint"),
+          JSON.stringify(item),
+          JSON.stringify({
+            contentDisposition: "preserved",
+            item,
+            operationId: "download_removal_0000000000000000000000",
+            removedAt: new Date(expiredAt).toISOString(),
+            replayed: false,
+          }),
+          expiredAt,
+          expiredAt,
+          expiredAt,
+          expiredAt,
+        );
+      readers.qbittorrent
+        .mockResolvedValueOnce(queueResult("qbittorrent"))
+        .mockResolvedValueOnce({ generatedAt: now.toISOString(), items: [], truncated: false });
+
+      await service.remove(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        "new-removal-after-retention-window",
+        { principal: principal() },
+      );
+
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from download_queue_removal_operations where id = ?")
+          .get("download_removal_0000000000000000000000"),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("records a missing exact target once and replays the bounded failure", async () => {
+    const { database, readers, removals, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      readers.qbittorrent.mockResolvedValueOnce({
+        generatedAt: now.toISOString(),
+        items: [],
+        truncated: false,
+      });
+
+      await expect(
+        service.remove(input, "missing-removal-fixture", { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "target_not_found" });
+      await expect(
+        service.remove(input, "missing-removal-fixture", { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "operation_failed" });
+
+      expect(removals.qbittorrent).not.toHaveBeenCalled();
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from download_queue_removal_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: "target_not_found", state: "failed" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when an upstream client does not make the exact item disappear", async () => {
+    const { database, removals, service, wait } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+
+      await expect(
+        service.remove(
+          {
+            connectorId: item.connectorId,
+            expectedState: item.state,
+            itemId: item.id,
+          },
+          "unconfirmed-removal-fixture",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "response_invalid" });
+
+      expect(removals.qbittorrent).toHaveBeenCalledOnce();
+      expect(wait).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from download_queue_removal_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: "response_invalid", state: "failed" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps an uncertain upstream removal pending for exact-target recovery", async () => {
+    const { database, removals, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      removals.qbittorrent.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "timeout",
+          message: "private removal transport outcome",
+          operation: "download.queue.remove",
+          retryable: true,
+          service: "qbittorrent",
+        }),
+      );
+
+      await expect(
+        service.remove(input, "uncertain-removal-fixture", { principal: principal() }),
+      ).rejects.toMatchObject({ code: "timeout" });
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from download_queue_removal_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: null, state: "pending" });
+      await expect(
+        service.remove(input, "uncertain-removal-fixture", { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+      expect(removals.qbittorrent).toHaveBeenCalledOnce();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not join a recently leased removal operation", async () => {
+    const { database, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      const idempotencyKey = "leased-removal-fixture";
+      database.sqlite
+        .prepare(
+          `insert into download_queue_removal_operations (
+             id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash,
+             state, created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        )
+        .run(
+          "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
+          "operator-user",
+          input.connectorId,
+          input.itemId,
+          hashToken(`operator-user\u0000download_queue_removal\u0000${idempotencyKey}`),
+          hashToken(JSON.stringify({ contentDisposition: "preserved", input, version: 1 })),
+          now.getTime(),
+          now.getTime(),
+        );
+      readers.qbittorrent.mockClear();
+
+      await expect(
+        service.remove(input, idempotencyKey, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+      expect(readers.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects stale recovery when an upstream identifier now describes another item", async () => {
+    const { database, readers, removals, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      };
+      const idempotencyKey = "stale-target-recovery-fixture";
+      const staleAt = now.getTime() - 60_000;
+      database.sqlite
+        .prepare(
+          `insert into download_queue_removal_operations (
+             id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash,
+             state, item_snapshot_json, mutation_started_at, created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        )
+        .run(
+          "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
+          "operator-user",
+          input.connectorId,
+          input.itemId,
+          hashToken(`operator-user\u0000download_queue_removal\u0000${idempotencyKey}`),
+          hashToken(JSON.stringify({ contentDisposition: "preserved", input, version: 1 })),
+          JSON.stringify(item),
+          staleAt,
+          staleAt,
+          staleAt,
+        );
+      readers.qbittorrent.mockResolvedValueOnce({
+        ...queueResult("qbittorrent"),
+        items: [{ ...queueResult("qbittorrent").items[0]!, title: "Different release" }],
+      });
+
+      await expect(
+        service.remove(input, idempotencyKey, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "stale_state" });
+      expect(removals.qbittorrent).not.toHaveBeenCalled();
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from download_queue_removal_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: "stale_state", state: "failed" });
     } finally {
       database.close();
     }

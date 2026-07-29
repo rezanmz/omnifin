@@ -170,6 +170,28 @@ describe("qBittorrent download queue", () => {
     ).rejects.toThrow();
     expect(mock.requests).toHaveLength(0);
   });
+
+  it("removes exactly one torrent while preserving its downloaded files", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.removeDownloadQueueItem({ externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/torrents/delete",
+    ]);
+    expect(mock.requests[1]?.init.method).toBe("POST");
+    expect(String(mock.requests[1]?.init.body)).toBe(`hashes=${hash}&deleteFiles=false`);
+  });
 });
 
 describe("SABnzbd download queue", () => {
@@ -275,6 +297,22 @@ describe("SABnzbd download queue", () => {
     expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
     expect(mock.requests[0]?.url.searchParams.get("apikey")).toBe(API_KEY);
     expect(adapter.capabilities).toContain("download.queue.mutate");
+  });
+
+  it("removes exactly one Usenet job without requesting downloaded-file deletion", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ nzo_ids: [externalId], status: true })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.removeDownloadQueueItem({ externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("queue");
+    expect(mock.requests[0]?.url.searchParams.get("name")).toBe("delete");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.has("del_files")).toBe(false);
   });
 
   it("rejects an SABnzbd confirmation for a different queue item", async () => {

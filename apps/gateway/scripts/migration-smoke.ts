@@ -18,6 +18,7 @@ const requiredTables = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
   "jellyfin_quick_connect_transactions",
@@ -71,6 +72,19 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  download_queue_removal_operations: [
+    "completed_at",
+    "connector_id",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "item_id",
+    "item_snapshot_json",
+    "mutation_started_at",
+    "response_json",
+    "state",
+    "user_id",
+  ],
   external_issue_references: [
     "connector_id",
     "encrypted_upstream_id",
@@ -232,6 +246,11 @@ const requiredIndexes = {
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  download_queue_removal_operations: [
+    "download_queue_removal_operations_item_idx",
+    "download_queue_removal_operations_state_created_idx",
+    "download_queue_removal_operations_user_key_unique",
+  ],
   external_issue_references: [
     "external_issue_references_connector_digest_unique",
     "external_issue_references_expiry_idx",
@@ -433,8 +452,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0016_issue_lifecycle",
-  "Current migration journal must end at migration 0016_issue_lifecycle.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0017_download_queue_removals",
+  "Current migration journal must end at migration 0017_download_queue_removals.",
 );
 
 try {

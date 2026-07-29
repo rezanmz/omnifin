@@ -6,6 +6,10 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseJsonSchema,
   downloadQueueActionResponseSchema,
+  downloadQueueRemovalInputJsonSchema,
+  downloadQueueRemovalInputSchema,
+  downloadQueueRemovalResponseJsonSchema,
+  downloadQueueRemovalResponseSchema,
   downloadQueueResponseJsonSchema,
   downloadQueueResponseSchema,
 } from "../src/downloads.js";
@@ -223,5 +227,25 @@ describe("download queue contracts", () => {
         item: torrent,
       }).success,
     ).toBe(false);
+  });
+
+  it("binds a content-preserving removal to the exact observed queue item", () => {
+    const input = {
+      connectorId: torrent.connectorId,
+      expectedState: torrent.state,
+      itemId: torrent.id,
+    };
+    const removal = {
+      contentDisposition: "preserved" as const,
+      item: torrent,
+      operationId: "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
+      removedAt: response.generatedAt,
+      replayed: false,
+    };
+
+    expect(downloadQueueRemovalInputSchema.parse(input)).toEqual(input);
+    expect(downloadQueueRemovalResponseSchema.parse(removal)).toEqual(removal);
+    expect(downloadQueueRemovalInputJsonSchema).not.toHaveProperty("$schema");
+    expect(downloadQueueRemovalResponseJsonSchema).not.toHaveProperty("$schema");
   });
 });

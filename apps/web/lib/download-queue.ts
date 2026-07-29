@@ -2,6 +2,8 @@ import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import type {
   DownloadQueueActionInput,
   DownloadQueueActionResponse,
+  DownloadQueueRemovalInput,
+  DownloadQueueRemovalResponse,
   DownloadQueueResponse,
 } from "@omnifin/contracts/downloads";
 
@@ -65,6 +67,10 @@ export type DownloadQueueEligibility =
 export interface DownloadQueueActionOptions {
   csrfToken: string;
   signal?: AbortSignal;
+}
+
+export interface DownloadQueueRemovalOptions extends DownloadQueueActionOptions {
+  idempotencyKey: string;
 }
 
 async function safeJson(response: Response): Promise<unknown> {
@@ -179,6 +185,10 @@ export interface DownloadQueueClient {
   ): Promise<DownloadQueueActionResponse>;
   load(signal?: AbortSignal): Promise<DownloadQueueResponse>;
   loadEligibility?(signal?: AbortSignal): Promise<DownloadQueueEligibility>;
+  remove?(
+    input: DownloadQueueRemovalInput,
+    options: DownloadQueueRemovalOptions,
+  ): Promise<DownloadQueueRemovalResponse>;
 }
 
 export const downloadQueueClient: DownloadQueueClient = {
@@ -254,6 +264,36 @@ export const downloadQueueClient: DownloadQueueClient = {
         "invalid_response",
         "invalid_response",
         "The gateway returned an action response outside the public contract.",
+      );
+    }
+    return parsed.data;
+  },
+
+  async remove(input, options) {
+    const { downloads } = await contractSchemas();
+    const body = downloads.downloadQueueRemovalInputSchema.parse(input);
+    const response = await fetchSameOrigin("/api/downloads/queue/removals", {
+      body: JSON.stringify(body),
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": options.idempotencyKey,
+        [CSRF_HEADER]: options.csrfToken,
+      },
+      method: "POST",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!response.ok) throw await actionResponseError(response);
+    const parsed = downloads.downloadQueueRemovalResponseSchema.safeParse(await safeJson(response));
+    if (
+      !parsed.success ||
+      parsed.data.item.id !== body.itemId ||
+      parsed.data.item.connectorId !== body.connectorId ||
+      parsed.data.item.state !== body.expectedState
+    ) {
+      throw new DownloadQueueClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned a removal response outside the public contract.",
       );
     }
     return parsed.data;
