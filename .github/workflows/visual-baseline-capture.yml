@@ -30,8 +30,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build web application
         run: pnpm build
-      - name: Install Chromium
-        run: pnpm --filter @omnifin/web exec playwright install chromium
+      - name: Install browser runtimes
+        run: pnpm --filter @omnifin/web exec playwright install chromium webkit
       - name: Capture removal confirmation baselines
         env:
           CI: "true"
