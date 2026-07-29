@@ -13,6 +13,7 @@ import {
   readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
   serviceEnvironmentArguments,
+  validateSanitizedFailureReport,
   validateSanitizedReport,
 } from "../integration/download-clients.mjs";
 
@@ -154,6 +155,30 @@ test("accepts only identifier-free, path-free fixture evidence", () => {
   );
 });
 
+test("accepts only bounded failure evidence without upstream details", () => {
+  const report = validateSanitizedFailureReport({
+    code: "exact_resume_upstream_error",
+    schemaVersion: 1,
+    service: "qbittorrent",
+    status: "failed",
+  });
+  assert.deepEqual(report, {
+    code: "exact_resume_upstream_error",
+    schemaVersion: 1,
+    service: "qbittorrent",
+    status: "failed",
+  });
+
+  assert.throws(
+    () => validateSanitizedFailureReport({ ...report, path: "/downloads/private" }),
+    /failure_report_invalid/u,
+  );
+  assert.throws(
+    () => validateSanitizedFailureReport({ ...report, code: "password=private" }),
+    /failure_report_invalid/u,
+  );
+});
+
 test("the protected connector aggregate runs both isolated download clients", () => {
   const workflow = parse(
     readFileSync(new URL("../../.github/workflows/integration.yml", import.meta.url), "utf8"),
@@ -169,5 +194,11 @@ test("the protected connector aggregate runs both isolated download clients", ()
   const exercise = fixture.steps.find((step) => step.name === "Exercise isolated download queue");
   assert.match(exercise.run, /--service "\$OMNIFIN_DOWNLOAD_CLIENT"/u);
   assert.match(exercise.run, /download-clients\/\$OMNIFIN_DOWNLOAD_CLIENT\/report\.json/u);
+  const diagnostics = fixture.steps.find(
+    (step) => step.name === "Report sanitized fixture failure",
+  );
+  assert.equal(diagnostics.if, "failure()");
+  assert.match(diagnostics.run, /failure_report_invalid/u);
+  assert.match(diagnostics.run, /::error title=Download client fixture::/u);
   assert.ok(workflow.jobs.gate.needs.includes("download-client-fixtures"));
 });

@@ -213,6 +213,24 @@ jobs:
           pnpm fixture:download-client
           --service "$OMNIFIN_DOWNLOAD_CLIENT"
           --output "artifacts/integration/download-clients/$OMNIFIN_DOWNLOAD_CLIENT/report.json"
+      - name: Report sanitized fixture failure
+        if: failure()
+        env:
+          OMNIFIN_DOWNLOAD_CLIENT: ${{ matrix.service }}
+        shell: bash
+        run: |
+          report="artifacts/integration/download-clients/$OMNIFIN_DOWNLOAD_CLIENT/report.json"
+          code="failure_report_missing"
+          if [[ -f "$report" ]]; then
+            parsed=$(jq -r --arg service "$OMNIFIN_DOWNLOAD_CLIENT" '
+              if type == "object" and length == 4
+                and .schemaVersion == 1 and .status == "failed" and .service == $service
+                and (.code | type == "string" and test("^[a-z][a-z0-9_]{0,63}$"))
+              then .code else "failure_report_invalid" end
+            ' "$report") || parsed="failure_report_invalid"
+            code="$parsed"
+          fi
+          printf '::error title=Download client fixture::%s\n' "$code"
       - name: Upload sanitized fixture evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

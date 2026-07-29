@@ -98,6 +98,24 @@ export function validateSanitizedReport(report) {
   return structuredClone(report);
 }
 
+export function validateSanitizedFailureReport(report) {
+  if (
+    !report ||
+    typeof report !== "object" ||
+    Array.isArray(report) ||
+    sortedKeys(report).join(",") !== "code,schemaVersion,service,status" ||
+    report.schemaVersion !== 1 ||
+    report.status !== "failed" ||
+    !SERVICES.includes(report.service) ||
+    typeof report.code !== "string" ||
+    !/^[a-z][a-z0-9_]{0,63}$/u.test(report.code) ||
+    JSON.stringify(report).length > 512
+  ) {
+    throw new DownloadFixtureFailure("failure_report_invalid");
+  }
+  return structuredClone(report);
+}
+
 function bencode(value) {
   if (Buffer.isBuffer(value)) {
     return Buffer.concat([Buffer.from(`${value.byteLength}:`), value]);
@@ -753,11 +771,31 @@ async function main(options) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let options;
   try {
-    await main(parseArguments(process.argv.slice(2)));
+    options = parseArguments(process.argv.slice(2));
+    await main(options);
   } catch (error) {
-    const code =
+    const candidateCode =
       error instanceof DownloadFixtureFailure ? error.code : "download_client_fixture_failed";
+    const code = /^[a-z][a-z0-9_]{0,63}$/u.test(candidateCode)
+      ? candidateCode
+      : "download_client_fixture_failed";
+    if (options) {
+      try {
+        await writeReport(
+          options.outputPath,
+          validateSanitizedFailureReport({
+            code,
+            schemaVersion: 1,
+            service: options.service,
+            status: "failed",
+          }),
+        );
+      } catch {
+        // The bounded stderr diagnostic remains available if the evidence path is unavailable.
+      }
+    }
     process.stderr.write(`${JSON.stringify({ code, status: "failed" })}\n`);
     process.exitCode = 1;
   }
