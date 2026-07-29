@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import { parse } from "yaml";
+import {
+  JELLYFIN_FIXTURE_IMAGE,
+  validateFixtureProbe,
+  validateSeekProbe,
+} from "../media/playback-fixture.mjs";
+
+const sourceProbe = {
+  format: { duration: "12.000000" },
+  streams: [
+    {
+      avg_frame_rate: "24/1",
+      codec_name: "h264",
+      codec_type: "video",
+      height: 360,
+      width: 640,
+    },
+    { codec_name: "aac", codec_type: "audio", tags: { language: "eng" } },
+    { codec_name: "aac", codec_type: "audio", tags: { language: "fra" } },
+    { codec_name: "mov_text", codec_type: "subtitle", tags: { language: "eng" } },
+    { codec_name: "mov_text", codec_type: "subtitle", tags: { language: "fra" } },
+  ],
+};
+
+test("the generated media contract requires both audio and subtitle languages", () => {
+  assert.deepEqual(validateFixtureProbe(sourceProbe), {
+    audioLanguages: ["eng", "fra"],
+    durationSeconds: 12,
+    subtitleLanguages: ["eng", "fra"],
+    video: { codec: "h264", frameRate: "24/1", height: 360, width: 640 },
+  });
+  assert.throws(
+    () => validateFixtureProbe({ ...sourceProbe, streams: sourceProbe.streams.slice(0, 4) }),
+    /fixture_subtitle_invalid/u,
+  );
+});
+
+test("the seek transcode contract requires alternate audio and reduced geometry", () => {
+  assert.deepEqual(
+    validateSeekProbe({
+      format: { duration: "2.000000" },
+      streams: [
+        { codec_name: "h264", codec_type: "video", height: 180, width: 320 },
+        { codec_name: "aac", codec_type: "audio", tags: { language: "fra" } },
+      ],
+    }),
+    { audioLanguage: "fra", durationSeconds: 2, height: 180, width: 320 },
+  );
+});
+
+test("the fixture workflow uses the immutable official Jellyfin image", () => {
+  assert.match(
+    JELLYFIN_FIXTURE_IMAGE,
+    /^ghcr\.io\/jellyfin\/jellyfin:10\.11\.11@sha256:[0-9a-f]{64}$/u,
+  );
+  const workflow = parse(
+    readFileSync(new URL("../../.github/workflows/integration.yml", import.meta.url), "utf8"),
+  );
+  const fixture = workflow.jobs["playback-fixture"];
+  assert.equal(fixture.name, "Isolated Jellyfin playback integration");
+  assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
+  const generation = fixture.steps.find((step) => step.name === "Generate and transcode media");
+  assert.equal(generation.run, "pnpm fixture:media --output artifacts/media/playback-fixture");
+  const upload = fixture.steps.find((step) => step.name === "Upload sanitized fixture evidence");
+  assert.match(
+    upload.with.path,
+    /artifacts\/media\/playback-fixture\/playback-fixture-report\.json/u,
+  );
+  assert.match(upload.with.path, /artifacts\/integration\/jellyfin-playback\/report\.json/u);
+  assert.equal(upload.with["if-no-files-found"], "error");
+});

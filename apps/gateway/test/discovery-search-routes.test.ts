@@ -1,6 +1,8 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
+  discoveryMediaDetailResponseSchema,
+  type DiscoveryMediaDetailResponse,
   discoverySearchResponseSchema,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -69,13 +71,40 @@ const normalizedResponse: DiscoverySearchResponse = {
   totalResults: 1,
 };
 
+const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
+  generatedAt: now.toISOString(),
+  item: {
+    availability: "available",
+    cast: [],
+    crew: [{ name: "Vince Gilligan", role: "Creator" }],
+    episodeCount: 62,
+    genres: ["Drama"],
+    id: "series:1396",
+    kind: "series",
+    originalTitle: "Breaking Bad",
+    overview: "A chemistry teacher turns to manufacturing.",
+    productionStatus: "Ended",
+    runtimeMinutes: 48,
+    seasonCount: 5,
+    seasons: [{ episodeCount: 7, number: 1, title: "Season 1", year: 2008 }],
+    source: "seerr",
+    tagline: "All bad things must come to an end.",
+    title: "Breaking Bad",
+    tmdbId: 1396,
+    voteAverage: 8.9,
+    voteCount: 15_000,
+    year: 2008,
+  },
+};
+
 async function harness(searchImplementation = vi.fn(async () => normalizedResponse)) {
   const config = testConfig();
+  const detailImplementation = vi.fn(async () => normalizedDetailResponse);
   const app = await createApp({
     config,
     discoverySearchDependencies: {
       clock: () => now,
-      createAdapter: () => ({ search: searchImplementation }),
+      createAdapter: () => ({ detail: detailImplementation, search: searchImplementation }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -156,10 +185,64 @@ async function harness(searchImplementation = vi.fn(async () => normalizedRespon
   const recovery = app.sessionService.createSession({
     attribution: { authMethod: "recovery" },
   });
-  return { app, recovery, searchImplementation, session };
+  return { app, detailImplementation, recovery, searchImplementation, session };
 }
 
 describe("discovery search routes", () => {
+  it("serves private normalized details through a bounded media route", async () => {
+    const { app, detailImplementation, recovery, session } = await harness();
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/discovery/details/series/1396",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const deniedRecovery = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396",
+      });
+      expect(deniedRecovery.statusCode).toBe(403);
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396?language=en-CA",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(discoveryMediaDetailResponseSchema.parse(response.json())).toEqual(
+        normalizedDetailResponse,
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toContain("route-private-api-key");
+      expect(detailImplementation).toHaveBeenCalledWith(
+        { kind: "series", tmdbId: 1396 },
+        { language: "en-CA" },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects invalid detail identifiers before invoking Seerr", async () => {
+    const { app, detailImplementation, session } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/person/287",
+      });
+      expect(response.statusCode).toBe(400);
+      expect(detailImplementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("requires an active media session and returns a private normalized response", async () => {
     const { app, recovery, searchImplementation, session } = await harness();
     try {

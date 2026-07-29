@@ -42,6 +42,8 @@ The current roadmap covers:
 - Unified discovery, search, requests, approvals, calendars, queues, and manual
   release selection.
 - Jellyfin playback, watch progress, subtitle management, and library operations.
+- One operator issue queue for in-player reports and Seerr issues, with guarded
+  resolve and reopen decisions.
 - Prowlarr indexer intelligence and title-level acquisition provenance.
 - Capability-aware integration with Jellyfin, Seerr, Radarr, Sonarr, Bazarr,
   Prowlarr, qBittorrent, and SABnzbd.
@@ -64,8 +66,11 @@ and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
 Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
-Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, and qBittorrent/SABnzbd queue
-reads through normalized, browser-safe contracts and responsive operational workspaces.
+Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
+and qBittorrent/SABnzbd queue reads with exact-item pause/resume and downloaded-file-preserving
+removal through normalized, browser-safe contracts and responsive operational workspaces. An
+operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
+with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces.
@@ -77,9 +82,12 @@ versions and dates. Permission checks cover every implemented administrative and
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
 identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
 and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
-queue and acquisition calendar are available as pre-release development surfaces. Later Phase 3
-slices add request review, monitoring controls, and live events;
-Phase 4 adds media proxying and playback.
+queue and acquisition calendar are available as pre-release development surfaces. Phase 4 also
+provides Jellyfin playback negotiation and protected media proxying, progress reporting and
+Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
+maintenance. Operator request review and the unified player/Seerr issue lifecycle are also
+available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
+available to operators; broader acquisition mutations and live events remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -127,16 +135,22 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   failure handling
 - [Authentication](docs/authentication.md) — OIDC, Jellyfin pairing, roles, sessions,
   and recovery
-- [Discovery](docs/discovery.md) — normalized Seerr search, permissions, errors, and
-  browser behavior
+- [Discovery](docs/discovery.md) — normalized Seerr search and media details,
+  permissions, errors, and browser behavior
 - [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,
   normalized mutations, and audits
+- [Media issues](docs/media-issues.md) — normalized player and Seerr issue lifecycle,
+  opaque references, partial failure, and idempotent decisions
 - [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
   Sonarr title history, partial failure, and operator access
+- [Acquisition monitoring](docs/acquisition-monitoring.md) — exact-title Radarr and
+  Sonarr state controls, safe mutation boundaries, and audits
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
   telemetry, application sync, failures, and safe tests
 - [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd
-  telemetry, partial failure, polling, and secret isolation
+  telemetry, exact-item pause/resume/removal, auditing, partial failure, and secret isolation
+- [System health](docs/system-health.md) — normalized Servarr warnings, private
+  storage capacity, partial failure, and freshness behavior
 - [Acquisition calendar](docs/acquisition-calendar.md) — normalized Radarr and Sonarr
   release timing, pagination, partial failure, and privacy boundaries
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,

@@ -43,6 +43,33 @@ export type DownloadQueueItemState = z.infer<typeof downloadQueueItemStateSchema
 
 export const downloadQueueItemIdSchema = z.string().regex(/^download_[A-Za-z0-9_-]{22}$/u);
 
+export const downloadQueueActionSchema = z.enum(["pause", "resume"]);
+export type DownloadQueueAction = z.infer<typeof downloadQueueActionSchema>;
+
+const downloadQueuePausableStateSchema = z.enum([
+  "queued",
+  "downloading",
+  "checking",
+  "moving",
+  "stalled",
+]);
+
+export const downloadQueueActionInputSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    action: z.literal("pause"),
+    connectorId: connectorIdentifierSchema,
+    expectedState: downloadQueuePausableStateSchema,
+    itemId: downloadQueueItemIdSchema,
+  }),
+  z.strictObject({
+    action: z.literal("resume"),
+    connectorId: connectorIdentifierSchema,
+    expectedState: z.literal("paused"),
+    itemId: downloadQueueItemIdSchema,
+  }),
+]);
+export type DownloadQueueActionInput = z.infer<typeof downloadQueueActionInputSchema>;
+
 export const downloadQueueItemSchema = z
   .strictObject({
     addedAt: z.iso.datetime({ offset: true }).nullable(),
@@ -93,6 +120,52 @@ export const downloadQueueItemSchema = z
     }
   });
 export type DownloadQueueItem = z.infer<typeof downloadQueueItemSchema>;
+
+export const downloadQueueRemovalInputSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueueItemStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+export type DownloadQueueRemovalInput = z.infer<typeof downloadQueueRemovalInputSchema>;
+
+export const downloadQueueRemovalOperationIdSchema = z
+  .string()
+  .regex(/^download_removal_[A-Za-z0-9_-]{22}$/u);
+
+export const downloadQueueRemovalResponseSchema = z.strictObject({
+  contentDisposition: z.literal("preserved"),
+  item: downloadQueueItemSchema,
+  operationId: downloadQueueRemovalOperationIdSchema,
+  removedAt: z.iso.datetime({ offset: true }),
+  replayed: z.boolean(),
+});
+export type DownloadQueueRemovalResponse = z.infer<typeof downloadQueueRemovalResponseSchema>;
+
+export const downloadQueuePromotionInputSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueueItemStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+export type DownloadQueuePromotionInput = z.infer<typeof downloadQueuePromotionInputSchema>;
+
+export const downloadQueuePromotionResponseSchema = z
+  .strictObject({
+    item: downloadQueueItemSchema,
+    position: z.literal(0),
+    previousPosition: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    promotedAt: z.iso.datetime({ offset: true }),
+    replayed: z.boolean(),
+  })
+  .superRefine((response, context) => {
+    if ((response.previousPosition === 0) !== response.replayed) {
+      context.addIssue({
+        code: "custom",
+        message: "Only an already-first queue item can replay a promotion.",
+        path: ["replayed"],
+      });
+    }
+  });
+export type DownloadQueuePromotionResponse = z.infer<typeof downloadQueuePromotionResponseSchema>;
 
 export const downloadQueueClientSchema = z
   .strictObject({
@@ -281,6 +354,59 @@ export const downloadQueueResponseSchema = z
   });
 export type DownloadQueueResponse = z.infer<typeof downloadQueueResponseSchema>;
 
+export const downloadQueueEventCursorSchema = z
+  .string()
+  .regex(/^download_event_[A-Za-z0-9_-]{22}$/u);
+
+export const downloadQueueSnapshotEventSchema = z.strictObject({
+  cursor: downloadQueueEventCursorSchema,
+  kind: z.literal("snapshot"),
+  queue: downloadQueueResponseSchema,
+});
+export type DownloadQueueSnapshotEvent = z.infer<typeof downloadQueueSnapshotEventSchema>;
+
+export const downloadQueueActionResponseSchema = z
+  .strictObject({
+    action: downloadQueueActionSchema,
+    item: downloadQueueItemSchema,
+    previousState: downloadQueueItemStateSchema,
+    replayed: z.boolean(),
+    verifiedAt: z.iso.datetime({ offset: true }),
+  })
+  .superRefine((response, context) => {
+    const achieved =
+      response.action === "pause"
+        ? response.item.state === "paused"
+        : downloadQueuePausableStateSchema.safeParse(response.item.state).success;
+    if (!achieved) {
+      context.addIssue({
+        code: "custom",
+        message: "The returned item must confirm the requested queue state transition.",
+        path: ["item", "state"],
+      });
+    }
+    if (response.replayed && response.previousState !== response.item.state) {
+      context.addIssue({
+        code: "custom",
+        message: "A replayed queue action cannot report a state transition.",
+        path: ["previousState"],
+      });
+    }
+    if (
+      !response.replayed &&
+      ((response.action === "pause" &&
+        !downloadQueuePausableStateSchema.safeParse(response.previousState).success) ||
+        (response.action === "resume" && response.previousState !== "paused"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The previous state must be valid for the reported queue action.",
+        path: ["previousState"],
+      });
+    }
+  });
+export type DownloadQueueActionResponse = z.infer<typeof downloadQueueActionResponseSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -288,3 +414,24 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 }
 
 export const downloadQueueResponseJsonSchema = withoutSchemaDialect(downloadQueueResponseSchema);
+export const downloadQueueSnapshotEventJsonSchema = withoutSchemaDialect(
+  downloadQueueSnapshotEventSchema,
+);
+export const downloadQueueActionInputJsonSchema = withoutSchemaDialect(
+  downloadQueueActionInputSchema,
+);
+export const downloadQueueActionResponseJsonSchema = withoutSchemaDialect(
+  downloadQueueActionResponseSchema,
+);
+export const downloadQueueRemovalInputJsonSchema = withoutSchemaDialect(
+  downloadQueueRemovalInputSchema,
+);
+export const downloadQueueRemovalResponseJsonSchema = withoutSchemaDialect(
+  downloadQueueRemovalResponseSchema,
+);
+export const downloadQueuePromotionInputJsonSchema = withoutSchemaDialect(
+  downloadQueuePromotionInputSchema,
+);
+export const downloadQueuePromotionResponseJsonSchema = withoutSchemaDialect(
+  downloadQueuePromotionResponseSchema,
+);

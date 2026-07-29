@@ -1,8 +1,9 @@
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/db/client.js";
+import { databaseMaintenanceLockPath } from "../src/db/maintenance-lock.js";
 import { startupFailureDetails } from "../src/startup-error.js";
 
 const temporaryDirectories: string[] = [];
@@ -46,6 +47,25 @@ describe("database file permissions", () => {
     expect(startupFailureDetails(failure)).toEqual({
       category: "database",
       code: "database_directory_permissions_invalid",
+    });
+  });
+
+  it("refuses gateway startup while explicit database maintenance owns the volume", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-database-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "omnifin.db");
+    writeFileSync(databaseMaintenanceLockPath(databasePath), "", { mode: 0o600 });
+
+    let failure: unknown;
+    try {
+      openDatabase(databasePath);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(startupFailureDetails(failure)).toEqual({
+      category: "database",
+      code: "database_maintenance_active",
     });
   });
 });

@@ -1,13 +1,21 @@
 # Download queues
 
-Omnifin exposes one normalized, read-only queue across validated qBittorrent and SABnzbd
-connectors. The workspace gives operators current progress and degraded-client context without
+Omnifin exposes one normalized queue across validated qBittorrent and SABnzbd connectors. The
+workspace gives operators current progress, degraded-client context, and exact-item pause, resume,
+front-of-queue promotion, and removal controls without
 placing reusable download-client credentials, raw queue responses, download hashes, or media paths
 in the browser.
 
 This is pre-release fixture-backed development evidence. It is not a public compatibility claim;
 the compatibility matrix remains authoritative until protected live checks record exact upstream
 versions and dates.
+
+The protected pull-request aggregate also exercises the production adapters against fresh,
+digest-pinned qBittorrent and SABnzbd containers. Its synthetic queue items must complete observed
+exact-item pause, resume, front-of-queue promotion, and preserve-files removal without retaining
+credentials, native IDs, or paths in the report. The complete isolation and evidence contract is
+documented in the
+[download-client fixture runbook](operations/download-client-fixtures.md).
 
 ## Authorization and connector selection
 
@@ -23,9 +31,11 @@ parallel under the request abort signal so one slow client does not serialize ev
 ## Normalization and secret boundary
 
 The qBittorrent adapter establishes a short-lived authenticated session and reads the bounded
-torrent information endpoint. The SABnzbd adapter sends its API key only to the approved connector
-destination and reads the bounded queue response. In both cases the adapter validates the upstream
-payload before it returns typed internal data.
+torrent information endpoint. It accepts only qBittorrent's legacy `200`/`Ok.` login response or the
+current empty `204` response and requires the corresponding legacy or port-scoped session cookie.
+The SABnzbd adapter sends its API key only to the approved connector destination and reads the
+bounded queue response. In both cases the adapter validates the upstream payload before it returns
+typed internal data.
 
 The gateway then:
 
@@ -55,19 +65,132 @@ complete view.
 
 ## Browser behavior
 
-The route is non-cacheable and rate-limited. The workspace polls every 12 seconds while live,
-supports an explicit refresh, and preserves the last verified queue if a later refresh fails. A
-visible stale notice distinguishes retained evidence from current telemetry. Search and state
-filters operate only on normalized in-memory data and never change an upstream client.
+The read route is non-cacheable and rate-limited. While the workspace is active, it opens the
+same-origin authenticated event stream described below. Strict snapshots replace the existing
+TanStack Query value in place, so progress changes do not rebuild the page or alter its geometry.
+An explicit state indicator distinguishes live, reconnecting, 12-second polling fallback, and
+fixed snapshot modes. If the stream is unavailable, interrupted, or invalid, the last verified
+queue remains visible and foreground polling resumes every 12 seconds. An explicit refresh remains
+available. A later read failure produces a visible stale notice rather than presenting retained
+evidence as current telemetry.
+
+Search and state filters operate only on normalized in-memory data. Pause and resume first open an
+inline confirmation with the safe cancel action focused. Promotion is a reversible, non-blocking
+action with a direct **First** control. Before any write, the browser revalidates the active
+session, permission, and CSRF token, then sends one opaque item identifier, its connector, and its
+observed state. Removal also requires the operator to type `REMOVE`, explains the client-specific
+consequence, and uses a fresh cryptographic idempotency key for each confirmation. Successful
+mutations update the local queue without waiting for the next live event or poll and leave
+persistent screen-reader status announcements.
 
 Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
 component coverage. Dark and light desktop/mobile baselines are committed, and representative
 routes are checked for automatic accessibility violations, keyboard filtering, responsive
 overflow, Content Security Policy, and production rendering.
 
-## Intentionally absent mutations
+## Authenticated live snapshot stream
 
-This slice does not pause, resume, reprioritize, remove, relocate, or otherwise modify a transfer.
-Those operations require separate narrow contracts, local authorization, CSRF protection,
-idempotency where applicable, destructive-action confirmation, auditing, and isolated safe-write
-evidence before the interface can expose them.
+`GET /v1/downloads/queue/events` is a versioned `text/event-stream` endpoint for the same bounded
+queue representation returned by `GET /v1/downloads/queue`. It requires a current server-side
+session and `downloads.manage`; unauthenticated, unauthorized, malformed-cursor, rate-limit, and
+capacity failures use the canonical JSON error contract before streaming begins. The safe GET does
+not require a CSRF header. It accepts no query parameters or caller-selected destination.
+
+Each message uses the default SSE event type and contains:
+
+```text
+id: download_event_<opaque 22-character value>
+data: {"cursor":"download_event_<same value>","kind":"snapshot","queue":{...}}
+```
+
+The strict data contract rejects extra fields. In particular, it cannot represent connector
+credentials, native queue identifiers, media paths, cookies, or arbitrary upstream values. The
+browser accepts a message only when the SSE `lastEventId` exactly matches the validated cursor in
+its JSON data. The queue is bounded to 200 items, so each message is a complete normalized snapshot
+and this endpoint deliberately has no pagination or partial-delta semantics.
+
+The gateway sends `retry: 3000`, emits comment heartbeats every 15 seconds, and ends each stream
+after about 45 seconds. Native `EventSource` reconnection then re-enters session rotation,
+expiration, and authorization checks. A reconnect may send `Last-Event-ID`; only the newest
+snapshot retained inside a 30-second recovery window can be replayed, and an exact cursor is never
+duplicated. Invalid cursors fail with `download_queue_event_cursor_invalid`. The response uses
+`Cache-Control: no-store, no-transform`, `Pragma: no-cache`, `Vary: Cookie`, and
+`X-Accel-Buffering: no` so intermediaries do not cache, transform, or batch events.
+
+One process-wide broker performs a single upstream refresh for all connected operators instead of
+polling administrative clients once per browser. It admits at most 64 streams globally and two per
+session. Excess connections fail before streaming with `429`, `Retry-After`, and
+`download_queue_event_capacity_reached`. When the final subscriber leaves, the shared read is
+aborted. If a shared refresh fails after headers are committed, streams close without exposing the
+private failure; browsers retain the last verified value and use the polling fallback while native
+reconnection continues.
+
+## Exact-item pause and resume
+
+`POST /v1/downloads/queue/actions` requires an active user with `downloads.manage`, same-origin and
+CSRF validation, a 1 KiB body limit, mutation rate limiting, and an abort-aware request. The strict
+contract cannot express deletion, paths, categories, priorities, URLs, or multiple targets.
+
+The gateway selects the named healthy connector only when it advertises both queue read and mutate
+capabilities. It reads the queue, derives every deployment-local opaque identifier, and requires
+exactly one match. An already-achieved action returns as a verified replay; otherwise the observed
+state must match the submitted state before a write is allowed. A durable `requested` audit event
+is stored before the upstream call, so audit storage failure prevents mutation. The gateway then
+re-reads the exact item with bounded retries and returns only a schema-valid desired state. Updated,
+replayed, failed, stale, and missing-target outcomes retain only bounded public identifiers and
+metadata.
+
+qBittorrent uses a validated single torrent hash and selects `stop`/`start` for version 5 or newer
+and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly one validated
+`nzo_id`. Raw hashes, `nzo_id` values, credentials, cookies, and upstream responses never reach the
+browser or audit metadata.
+
+## Exact-item front-of-queue promotion
+
+`POST /v1/downloads/queue/promotions` applies the same active-user, `downloads.manage`, same-origin,
+CSRF, 1 KiB body, connector-capability, mutation-rate, abort, and no-store boundaries as pause and
+resume. Its closed contract contains exactly one connector, one deployment-local opaque item, and
+the freshly observed state. It cannot express a numeric priority, arbitrary position, bulk target,
+path, category, URL, or client-native command.
+
+The gateway resolves the opaque target against a fresh exact queue read and retains its native
+position only inside the secret boundary. An item already at position zero returns as a verified
+replay without contacting the client. Missing or unobservable queue order fails closed; otherwise
+the observed state must match before mutation. A durable `download.queue.promotion.requested` audit
+event is committed before the upstream call, and completion, replay, and failure records contain
+only bounded public identifiers and normalized metadata.
+
+qBittorrent receives one validated torrent hash through its `topPrio` endpoint. SABnzbd receives
+one validated `nzo_id` through `mode=switch` with position zero. The gateway performs bounded exact-
+item reads after the write and reports success only after the same opaque item is observed at the
+front. Raw hashes, `nzo_id` values, credentials, cookies, client positions, and upstream responses
+never cross the public contract or enter audit metadata.
+
+## Exact-item removal with downloaded files preserved
+
+`POST /v1/downloads/queue/removals` has the same active-user, `downloads.manage`, same-origin, CSRF,
+1 KiB body, connector-capability, rate-limit, and no-store boundaries as pause and resume. It also
+requires an `Idempotency-Key` header. Its strict contract contains one connector, one deployment-
+local opaque item, and the freshly observed state; it cannot express a filesystem path, bulk target,
+client-native command, or deletion of downloaded content.
+
+The gateway hashes the per-user idempotency key and a canonical target fingerprint before storing
+them. It durably reserves the operation, snapshots the exact public queue item, and commits the
+`download.queue.removal.requested` audit record before contacting the client. qBittorrent receives
+one validated torrent hash with `deleteFiles=false`. SABnzbd receives one validated `nzo_id` without
+`del_files=1`, so already-downloaded files are preserved. The gateway then performs bounded exact-
+item reads and reports success only after that opaque item is absent.
+
+Completed and failed outcomes replay without another upstream mutation. A recent pending operation
+is rejected instead of joined. After the short recovery lease, the gateway can complete an operation
+whose exact item is already absent, or retry only when the current item still matches the durable
+snapshot; identifier reuse or changed item metadata fails closed. Completed operation records are
+retained for 30 days and pruned transactionally before new reservations. Responses and audit events
+contain only bounded public identifiers, the normalized snapshot, an operation identifier, and the
+fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency keys,
+credentials, cookies, paths, and upstream bodies remain inside the gateway.
+
+Arbitrary numeric priorities or positions, relocation, category changes, blocklisting, deletion of
+downloaded content, and bulk mutations remain intentionally absent. They require their own
+destructive-action and recovery design plus disposable live-service evidence before the interface
+can expose them.

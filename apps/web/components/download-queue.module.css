@@ -133,6 +133,7 @@
 .degradedNotice,
 .staleNotice,
 .truncatedNotice,
+.operationNotice,
 .primaryAction {
   align-items: center;
   display: flex;
@@ -386,6 +387,53 @@
   min-width: 44px;
 }
 
+.liveState {
+  align-items: center;
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 15px;
+  color: var(--paper-2);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 96px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.liveState i {
+  background: currentcolor;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentcolor 10%, transparent);
+  height: 6px;
+  width: 6px;
+}
+
+.liveState[data-state="live"] {
+  border-color: color-mix(in srgb, var(--success) 24%, var(--line-soft));
+  color: var(--success);
+}
+
+.liveState[data-state="connecting"] i {
+  animation: live-state-pulse 1.35s ease-in-out infinite;
+  color: var(--info);
+}
+
+.liveState[data-state="fallback"] {
+  color: var(--info);
+}
+
+@keyframes live-state-pulse {
+  50% {
+    opacity: 0.38;
+    transform: scale(0.72);
+  }
+}
+
 .refresh:hover:not(:disabled) {
   background: var(--fill-hover);
   color: var(--paper-0);
@@ -398,7 +446,8 @@
 
 .degradedNotice,
 .staleNotice,
-.truncatedNotice {
+.truncatedNotice,
+.operationNotice {
   border-radius: 18px;
   font-size: 0.75rem;
   gap: 11px;
@@ -422,6 +471,16 @@
   background: var(--fill-subtle);
   border: 1px solid var(--line-soft);
   color: var(--paper-2);
+}
+
+.operationNotice {
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 24%, transparent);
+  color: var(--success);
+}
+
+.operationNotice span {
+  color: var(--paper-1);
 }
 
 .degradedNotice span,
@@ -595,6 +654,72 @@
   gap: 12px;
 }
 
+.queueItemActions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.queueItemActions .status {
+  margin-left: 0;
+}
+
+.itemAction,
+.cancelAction,
+.confirmAction {
+  align-items: center;
+  border-radius: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 720;
+  gap: 7px;
+  justify-content: center;
+  min-height: 44px;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 170ms ease-out,
+    color 150ms ease-out,
+    transform 130ms ease-out;
+}
+
+.itemAction {
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  color: var(--paper-1);
+  padding: 0 12px;
+}
+
+.itemAction:hover:not(:disabled) {
+  background: var(--glass-highlight);
+  border-color: var(--accent-line);
+  color: var(--paper-0);
+}
+
+.removeAction {
+  color: var(--paper-2);
+}
+
+.removeAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 8%, var(--glass-highlight));
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line-soft));
+  color: var(--danger);
+}
+
+.itemAction:active:not(:disabled),
+.cancelAction:active,
+.confirmAction:active {
+  transform: scale(0.96);
+}
+
+.itemAction:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
 .protocolIcon {
   align-items: center;
   background: var(--accent-soft);
@@ -713,7 +838,7 @@
 }
 
 .itemTelemetry dt {
-  color: var(--paper-3);
+  color: var(--paper-2);
   font-size: 0.61rem;
 }
 
@@ -724,6 +849,155 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.actionConfirm,
+.actionFeedback {
+  align-items: center;
+  background: linear-gradient(145deg, var(--glass-highlight), transparent 46%), var(--surface-card);
+  border: 1px solid var(--line-strong);
+  border-radius: 17px;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 12px 12px 12px 15px;
+}
+
+.actionConfirm > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.actionConfirm strong {
+  font-size: 0.72rem;
+}
+
+.actionConfirm small {
+  color: var(--paper-2);
+  font-size: 0.64rem;
+  line-height: 1.45;
+}
+
+.actionConfirm > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.removalConfirm {
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--danger) 8%, transparent), transparent 52%),
+    var(--surface-card);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line-strong));
+}
+
+.removalPhrase {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 300px;
+}
+
+.removalPhrase > span {
+  color: var(--paper-3);
+  font-size: 0.61rem;
+  font-weight: 680;
+}
+
+.removalPhrase input {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  color: var(--paper-0);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  min-height: 44px;
+  outline: 0;
+  padding: 0 12px;
+  text-transform: uppercase;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 170ms ease-out;
+}
+
+.removalPhrase input:focus-visible {
+  background: var(--fill-hover);
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.cancelAction,
+.confirmAction {
+  padding: 0 14px;
+}
+
+.cancelAction {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  color: var(--paper-1);
+}
+
+.cancelAction:hover {
+  background: var(--fill-hover);
+  color: var(--paper-0);
+}
+
+.confirmAction {
+  background: var(--acid);
+  border: 1px solid color-mix(in srgb, var(--acid) 72%, var(--glass-edge));
+  box-shadow: 0 8px 24px var(--accent-ring);
+  color: var(--acid-ink);
+}
+
+.confirmAction:hover {
+  box-shadow: 0 11px 29px color-mix(in srgb, var(--acid) 23%, transparent);
+}
+
+.dangerAction {
+  background: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--glass-edge));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 18%, transparent);
+  color: white;
+}
+
+.dangerAction:hover:not(:disabled) {
+  box-shadow: 0 11px 29px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.confirmAction:disabled {
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.actionFeedback {
+  color: var(--paper-1);
+  font-size: 0.68rem;
+  justify-content: flex-start;
+  line-height: 1.45;
+}
+
+.actionFeedback[data-status="success"] {
+  background: color-mix(in srgb, var(--success) 8%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--success) 26%, var(--line-soft));
+}
+
+.actionFeedback[data-status="success"] svg {
+  color: var(--success);
+}
+
+.actionFeedback[data-status="error"] {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-card));
+  border-color: color-mix(in srgb, var(--warning) 26%, var(--line-soft));
+}
+
+.actionFeedback[data-status="error"] svg {
+  color: var(--warning);
 }
 
 .clientList article {
@@ -1106,18 +1380,23 @@
 
   .commandGlass {
     align-items: stretch;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     top: 78px;
   }
 
-  .searchControl {
-    flex-basis: 100%;
+  .searchControl,
+  .filters {
+    grid-column: 1 / -1;
   }
 
   .filters {
     display: grid;
-    flex: 1 1 auto;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .liveState {
+    justify-self: stretch;
   }
 
   .filters button {
@@ -1157,6 +1436,16 @@
     font-size: 0;
     min-width: 28px;
     padding: 0 10px;
+  }
+
+  .actionConfirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actionConfirm > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .itemTelemetry {
@@ -1212,6 +1501,15 @@
     flex-direction: row;
     min-height: 112px;
   }
+
+  .itemAction {
+    min-width: 44px;
+    padding: 0;
+  }
+
+  .itemAction span {
+    display: none;
+  }
 }
 
 @media (pointer: coarse) {
@@ -1220,6 +1518,10 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .itemAction,
+  .cancelAction,
+  .confirmAction,
+  .removalPhrase input,
   .primaryAction {
     min-height: 48px;
   }
@@ -1232,6 +1534,10 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .itemAction,
+  .cancelAction,
+  .confirmAction,
+  .removalPhrase input,
   .primaryAction,
   .topbar::after,
   .commandGlass::after,
@@ -1250,6 +1556,10 @@
   .loadingMetrics span,
   .loadingWorkspace span,
   .loadingWorkspace i {
+    animation: none;
+  }
+
+  .liveState[data-state="connecting"] i {
     animation: none;
   }
 }
@@ -1281,7 +1591,10 @@
   .queuePanel,
   .clientPanel,
   .unconfigured,
-  .queueItem {
+  .queueItem,
+  .actionConfirm,
+  .actionFeedback,
+  .operationNotice {
     border-color: currentcolor;
   }
 }
@@ -1294,7 +1607,12 @@
   .queuePanel,
   .clientPanel,
   .unconfigured,
-  .queueItem {
+  .queueItem,
+  .actionConfirm,
+  .actionFeedback,
+  .operationNotice,
+  .removalPhrase input,
+  .liveState {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: Canvas;

@@ -85,6 +85,7 @@ describe("playback client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(playbackClient.prepare(mediaReferenceId, 1_200)).resolves.toEqual({
+      canManageLibrary: false,
       csrfToken,
       session: playback,
     });
@@ -102,6 +103,25 @@ describe("playback client", () => {
       mode: "auto",
       positionSeconds: 1_200,
       subtitleStreamIndex: null,
+    });
+  });
+
+  it("carries local library-management permission without exposing the principal", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          authenticatedSession({
+            permissions: [...ROLE_PERMISSIONS.operator],
+            role: "operator",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(playback, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(playbackClient.prepare(mediaReferenceId, 0)).resolves.toMatchObject({
+      canManageLibrary: true,
     });
   });
 
@@ -146,6 +166,41 @@ describe("playback client", () => {
     ).resolves.toEqual(response);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/playback/${sessionId}/progress`);
     expect(new Headers(fetchMock.mock.calls[0]?.[1].headers).get("x-omnifin-csrf")).toBe(csrfToken);
+  });
+
+  it("reports a normalized playback issue through the opaque session", async () => {
+    const issue = {
+      category: "subtitles" as const,
+      createdAt: "2026-07-28T12:30:00.000Z",
+      id: `issue_${"i".repeat(22)}`,
+      positionSeconds: 1_245,
+      status: "open" as const,
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(issue, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(
+      playbackClient.reportIssue(
+        sessionId,
+        {
+          category: "subtitles",
+          description: "Captions lag behind dialogue.",
+          positionSeconds: 1_245,
+        },
+        csrfToken,
+        controller.signal,
+      ),
+    ).resolves.toEqual(issue);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/playback/${sessionId}/issues`);
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(new Headers(request.headers).get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(request.signal).toBe(controller.signal);
+    expect(JSON.parse(request.body)).toEqual({
+      category: "subtitles",
+      description: "Captions lag behind dialogue.",
+      positionSeconds: 1_245,
+    });
   });
 
   it("rejects unsafe stream paths and fails closed for a signed-out browser", async () => {
@@ -299,6 +354,19 @@ describe("playback client", () => {
         code: "permission_denied",
         kind: "forbidden",
       }),
+    );
+  });
+
+  it("rejects malformed issue responses without trusting gateway payloads", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse({ accepted: true }, 201)));
+    await expect(
+      playbackClient.reportIssue(
+        sessionId,
+        { category: "other", description: null, positionSeconds: 1_240 },
+        csrfToken,
+      ),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<PlaybackClientError>>({ code: "invalid_issue_response" }),
     );
   });
 });

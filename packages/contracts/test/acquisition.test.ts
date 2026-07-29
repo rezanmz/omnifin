@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  acquisitionMonitoringStateSchema,
+  acquisitionMonitoringTargetInputSchema,
+  acquisitionMonitoringUpdateInputSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchResponseSchema,
@@ -132,6 +135,47 @@ describe("acquisition provenance contracts", () => {
         generatedAt: "2026-07-27T12:02:00.000Z",
         state: "degraded",
         target: { kind: "movie", mediaId: 8, seasonNumber: null, service: "sonarr" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("acquisition monitoring contracts", () => {
+  it("normalizes one whole-title target and its verified state", () => {
+    expect(
+      acquisitionMonitoringTargetInputSchema.parse({ mediaId: "42", service: "radarr" }),
+    ).toEqual({ mediaId: 42, service: "radarr" });
+    expect(
+      acquisitionMonitoringStateSchema.parse({
+        monitored: true,
+        target: { kind: "series", mediaId: 77, service: "sonarr" },
+        verifiedAt: "2026-07-28T12:00:00.000Z",
+      }),
+    ).toMatchObject({ monitored: true, target: { kind: "series" } });
+  });
+
+  it("requires a real state transition and rejects ambiguous or raw upstream fields", () => {
+    expect(() =>
+      acquisitionMonitoringUpdateInputSchema.parse({
+        expectedMonitored: true,
+        mediaId: 42,
+        monitored: true,
+        service: "radarr",
+      }),
+    ).toThrow();
+    expect(() =>
+      acquisitionMonitoringTargetInputSchema.parse({
+        mediaId: 77,
+        seasonNumber: 2,
+        service: "sonarr",
+      }),
+    ).toThrow();
+    expect(() =>
+      acquisitionMonitoringStateSchema.parse({
+        monitored: false,
+        path: "/private/series",
+        target: { kind: "movie", mediaId: 77, service: "sonarr" },
+        verifiedAt: "2026-07-28T12:00:00.000Z",
       }),
     ).toThrow();
   });

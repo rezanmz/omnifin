@@ -2,6 +2,9 @@ import {
   ACQUISITION_MAX_EVENTS,
   MANUAL_RELEASE_MAX_RESULTS,
   acquisitionProvenanceResponseSchema,
+  acquisitionMonitoringStateSchema,
+  acquisitionMonitoringTargetInputSchema,
+  acquisitionMonitoringUpdateInputSchema,
   acquisitionSearchInputSchema,
   acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
@@ -10,6 +13,9 @@ import {
   type AcquisitionEventKind,
   type AcquisitionEventState,
   type AcquisitionProvenanceResponse,
+  type AcquisitionMonitoringState,
+  type AcquisitionMonitoringTargetInput,
+  type AcquisitionMonitoringUpdateInput,
   type AcquisitionRelease,
   type AcquisitionSearchInput,
   type AcquisitionSearchResponse,
@@ -29,6 +35,7 @@ import {
   type AcquisitionCalendarSourceResult,
 } from "../calendar.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
+import type { ConnectorStorageCapacity } from "../system.js";
 import { ServarrAdapter } from "./servarr.js";
 
 const MAX_UPSTREAM_IDENTIFIER = 2_147_483_647;
@@ -37,10 +44,30 @@ const safeLabelSchema = z.string().trim().min(1).max(160);
 const releaseTitleSchema = z.string().trim().min(1).max(500);
 const dateSchema = z.iso.datetime({ offset: true });
 const commandResponseSchema = z.object({ id: safeIdentifierSchema });
+const monitoringResourceSchema = z.object({
+  id: safeIdentifierSchema,
+  monitored: z.boolean(),
+});
+const monitoringEditorResponseSchema = z.array(monitoringResourceSchema).min(1).max(1);
 const internalReleaseReferenceSchema = z.strictObject({
   guid: z.string().trim().min(1).max(2_048),
   indexerId: safeIdentifierSchema,
 });
+
+const diskSpaceResponseSchema = z
+  .array(
+    z
+      .object({
+        freeSpace: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        path: z.string().trim().min(1).max(4_096),
+        totalSpace: z.int().positive().max(Number.MAX_SAFE_INTEGER),
+      })
+      .refine((storage) => storage.freeSpace <= storage.totalSpace, {
+        message: "Free storage cannot exceed total storage.",
+        path: ["freeSpace"],
+      }),
+  )
+  .max(64);
 
 const qualitySchema = z
   .object({
@@ -408,6 +435,14 @@ function manualTarget(target: ManualReleaseTargetInput): ManualReleaseTarget {
   };
 }
 
+function monitoringTarget(target: AcquisitionMonitoringTargetInput) {
+  return {
+    kind: target.service === "radarr" ? ("movie" as const) : ("series" as const),
+    mediaId: target.mediaId,
+    service: target.service,
+  };
+}
+
 function manualReleaseDetails(record: ManualReleaseRecord): ManualReleaseCandidateDetails {
   const decision = record.rejected
     ? ("rejected" as const)
@@ -617,7 +652,86 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "acquisition.search",
     "acquisition.grab",
     "acquisition.calendar",
+    "acquisition.monitoring",
+    "system.health",
+    "storage.read",
   ];
+
+  async readAcquisitionMonitoring(
+    input: AcquisitionMonitoringTargetInput,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionMonitoringState> {
+    const target = acquisitionMonitoringTargetInputSchema.parse(input);
+    this.#assertMonitoringService(target.service, "acquisition.monitoring.read");
+    const resource = await this.client.requestJson(
+      `${this.apiRoot}/${this.service === "radarr" ? "movie" : "series"}/${target.mediaId}`,
+      monitoringResourceSchema,
+      {
+        headers: { "X-Api-Key": this.apiKey },
+        operation: "acquisition.monitoring.read",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (resource.id !== target.mediaId) {
+      throw this.#invalidMonitoringResponse("acquisition.monitoring.read");
+    }
+    return acquisitionMonitoringStateSchema.parse({
+      monitored: resource.monitored,
+      target: monitoringTarget(target),
+      verifiedAt: this.clock.now().toISOString(),
+    });
+  }
+
+  async updateAcquisitionMonitoring(
+    input: AcquisitionMonitoringUpdateInput,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionMonitoringState> {
+    const update = acquisitionMonitoringUpdateInputSchema.parse(input);
+    this.#assertMonitoringService(update.service, "acquisition.monitoring.update");
+    const collection = this.service === "radarr" ? "movie" : "series";
+    const identifiers = this.service === "radarr" ? "movieIds" : "seriesIds";
+    const resources = await this.client.requestJson(
+      `${this.apiRoot}/${collection}/editor`,
+      monitoringEditorResponseSchema,
+      {
+        body: JSON.stringify({ [identifiers]: [update.mediaId], monitored: update.monitored }),
+        headers: { "Content-Type": "application/json", "X-Api-Key": this.apiKey },
+        method: "PUT",
+        operation: "acquisition.monitoring.update",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const resource = resources[0];
+    if (!resource || resource.id !== update.mediaId || resource.monitored !== update.monitored) {
+      throw this.#invalidMonitoringResponse("acquisition.monitoring.update");
+    }
+    return acquisitionMonitoringStateSchema.parse({
+      monitored: resource.monitored,
+      target: monitoringTarget(update),
+      verifiedAt: this.clock.now().toISOString(),
+    });
+  }
+
+  #assertMonitoringService(service: "radarr" | "sonarr", operation: string) {
+    if (service === this.service) return;
+    throw new SafeConnectorError({
+      code: "configuration_invalid",
+      message: "The monitoring target does not match the connector service.",
+      operation,
+      retryable: false,
+      service: this.service,
+    });
+  }
+
+  #invalidMonitoringResponse(operation: string) {
+    return new SafeConnectorError({
+      code: "response_invalid",
+      message: "The acquisition service returned an unexpected monitoring response.",
+      operation,
+      retryable: false,
+      service: this.service,
+    });
+  }
 
   async readAcquisitionCalendar(
     input: AcquisitionCalendarReadRequest,
@@ -670,6 +784,25 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
       events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
       truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
     };
+  }
+
+  async readStorageCapacity(signal?: AbortSignal): Promise<readonly ConnectorStorageCapacity[]> {
+    const records = await this.client.requestJson(
+      `${this.apiRoot}/diskspace`,
+      diskSpaceResponseSchema,
+      {
+        headers: { "X-Api-Key": this.apiKey },
+        operation: "storage.read",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    return records
+      .map((record) => ({
+        externalId: record.path,
+        freeBytes: record.freeSpace,
+        totalBytes: record.totalSpace,
+      }))
+      .toSorted((left, right) => left.externalId.localeCompare(right.externalId));
   }
 
   async searchManualReleases(

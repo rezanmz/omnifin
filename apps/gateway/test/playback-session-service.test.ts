@@ -189,7 +189,12 @@ function harness() {
   }).createOrRefresh({ linkId: "viewer-link", linkRevision: 3, userId: "viewer-user" }, [
     {
       artwork: { backdropItemId: null, posterItemId: null },
+      episodeNumber: null,
       itemId: privateItemId,
+      kind: "movie",
+      seasonNumber: null,
+      title: "The Far Meridian",
+      year: 2026,
     },
   ])[0]!;
   const negotiate = vi.fn(async () => negotiatedResult());

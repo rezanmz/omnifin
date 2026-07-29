@@ -254,6 +254,48 @@ describe("gateway proxy transport", () => {
     await bodyAssertion;
   });
 
+  it("preserves SSE framing, resume cursors, and anti-buffering headers", async () => {
+    let sentEndpoint: URL | string | Request | undefined;
+    let sentHeaders: Headers | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (endpoint: URL | string | Request, init?: RequestInit) => {
+        sentEndpoint = endpoint;
+        sentHeaders = init?.headers as Headers;
+        return new Response(
+          "retry: 3000\n\nid: download_event_ABCDEFGHIJKLMNOPQRSTUV\ndata: {}\n\n",
+          {
+            headers: {
+              "cache-control": "no-store, no-transform",
+              connection: "keep-alive",
+              "content-type": "text/event-stream; charset=utf-8",
+              "x-accel-buffering": "no",
+            },
+          },
+        );
+      }),
+    );
+
+    const response = await proxyGatewayRequest(
+      requestFixture({
+        headers: {
+          cookie: "omnifin_session=opaque",
+          "last-event-id": "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+        },
+        path: "/api/downloads/queue/events",
+      }),
+    );
+
+    expect(String(sentEndpoint)).toBe("http://127.0.0.1:4000/v1/downloads/queue/events");
+    expect(sentHeaders?.get("cookie")).toBe("omnifin_session=opaque");
+    expect(sentHeaders?.get("last-event-id")).toBe("download_event_ABCDEFGHIJKLMNOPQRSTUV");
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(response.headers.get("connection")).toBeNull();
+    await expect(response.text()).resolves.toContain("id: download_event_ABCDEFGHIJKLMNOPQRSTUV");
+  });
+
   it("still aborts a streamed response when the downstream request closes", async () => {
     const downstreamRequest = new AbortController();
     vi.stubGlobal(

@@ -86,6 +86,10 @@ test("the shared image does not allocate writable storage implicitly", () => {
   );
   assert.match(
     dockerfile,
+    /COPY --from=runtime-layout --chown=65532:65532 --chmod=0700 \/layout\/backups \/backups/u,
+  );
+  assert.match(
+    dockerfile,
     /^ENTRYPOINT \["\/nodejs\/bin\/node", "\/opt\/omnifin\/bin\/entrypoint\.mjs"\]$/mu,
   );
   assert.doesNotMatch(
@@ -95,10 +99,14 @@ test("the shared image does not allocate writable storage implicitly", () => {
 
   const entrypoint = repositoryFile("docker/entrypoint.mjs");
   assert.match(entrypoint, /process\.execve\(process\.execPath/u);
+  assert.match(entrypoint, /maintenance: \["\/opt\/omnifin\/gateway\/dist\/maintenance\.js"\]/u);
   assert.doesNotMatch(entrypoint, /(?:spawn|exec|fork)Sync/u);
 
   const compose = repositoryFile("compose.yaml");
   assert.match(compose, /uid=65532,gid=65532/u);
+  assert.match(compose, /^  maintenance:$/mu);
+  assert.match(compose, /OMNIFIN_GATEWAY_HEALTH_URL: http:\/\/gateway:4000\/healthz/u);
+  assert.match(compose, /create_host_path: false/u);
   assert.doesNotMatch(compose, /uid=10001|gid=10001/u);
 });
 
@@ -112,6 +120,7 @@ test("the Docker build context excludes local and sensitive output", () => {
     "**/.env.*",
     ".git",
     ".turbo",
+    "artifacts",
     "**/data",
     "**/*.db",
     "**/*.db-shm",
@@ -164,4 +173,9 @@ test("SQLite sidecars stay outside Git and nested Docker build contexts", () => 
       `Expected the Docker context to ignore the SQLite sidecar sentinel ${sentinel}`,
     );
   }
+});
+
+test("generated integration artifacts stay outside Git and Docker build contexts", () => {
+  assert.ok(ignoreEntries(".gitignore").has("artifacts/"));
+  assert.ok(ignoreEntries(".dockerignore").has("artifacts"));
 });

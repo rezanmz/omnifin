@@ -5,6 +5,7 @@ import {
   MediaReferenceError,
   MediaReferenceService,
 } from "../src/media/media-reference-service.js";
+import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const encryptionKey = Buffer.alloc(32, 91);
 const context = { linkId: "link-1", linkRevision: 3, userId: "user-1" };
@@ -62,7 +63,12 @@ const media = {
     backdropItemId: "series-upstream-1",
     posterItemId: "series-upstream-1",
   },
+  episodeNumber: 3,
   itemId: "episode-upstream-1",
+  kind: "episode" as const,
+  seasonNumber: 2,
+  title: "Northern Lights",
+  year: 2026,
 };
 
 describe("MediaReferenceService", () => {
@@ -95,9 +101,14 @@ describe("MediaReferenceService", () => {
       const resolved = service(database).resolve(context, reference);
       expect(resolved).toMatchObject({
         artwork: media.artwork,
+        episodeNumber: 3,
         id: reference,
         itemId: media.itemId,
-        schemaVersion: 1,
+        kind: "episode",
+        schemaVersion: 2,
+        seasonNumber: 2,
+        title: "Northern Lights",
+        year: 2026,
       });
       expect(Object.keys(resolved)).toEqual([]);
       expect(() => JSON.stringify(resolved)).toThrow(/cannot be serialized/i);
@@ -110,6 +121,39 @@ describe("MediaReferenceService", () => {
       expect(() => service(database).resolve({ ...context, linkRevision: 4 }, reference)).toThrow(
         MediaReferenceError,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps legacy version-one references playable but ineligible for inferred operations", () => {
+    const database = seededDatabase();
+    try {
+      const reference = service(database).createOrRefresh(context, [media])[0]!;
+      const legacyPayload = {
+        artwork: media.artwork,
+        itemId: media.itemId,
+        schemaVersion: 1,
+      };
+      database.sqlite
+        .prepare("update media_references set encrypted_payload = ? where id = ?")
+        .run(
+          new EnvelopeCipher(encryptionKey).encrypt(
+            JSON.stringify(legacyPayload),
+            `media_reference:jellyfin:${reference}`,
+          ),
+          reference,
+        );
+
+      expect(service(database).resolve(context, reference)).toMatchObject({
+        episodeNumber: null,
+        itemId: media.itemId,
+        kind: "other",
+        schemaVersion: 1,
+        seasonNumber: null,
+        title: null,
+        year: null,
+      });
     } finally {
       database.close();
     }

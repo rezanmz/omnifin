@@ -55,7 +55,7 @@ export const EventDetails: Story = {
   play: async ({ canvasElement, userEvent }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: /Inspect The Far Meridian/i }));
-    const drawer = await within(canvasElement.ownerDocument.body).findByRole("dialog");
+    const drawer = await canvas.findByRole("dialog", undefined, { timeout: 5_000 });
     await waitFor(() =>
       expect(within(drawer).getByRole("heading", { name: "The Far Meridian" })).toBeVisible(),
     );

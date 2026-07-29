@@ -328,7 +328,12 @@ export class ContinueWatchingService {
           backdropItemId: item.artwork.backdrop?.itemId ?? null,
           posterItemId: item.artwork.poster?.itemId ?? null,
         },
+        episodeNumber: item.episodeNumber,
         itemId: item.externalId,
+        kind: item.kind,
+        seasonNumber: item.seasonNumber,
+        title: item.title,
+        year: item.year,
       })),
     );
     const items = result.items.map((item, index) => {

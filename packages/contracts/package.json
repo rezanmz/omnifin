@@ -41,6 +41,14 @@
       "types": "./dist/indexers.d.ts",
       "default": "./dist/indexers.js"
     },
+    "./issues": {
+      "types": "./dist/issues.d.ts",
+      "default": "./dist/issues.js"
+    },
+    "./library": {
+      "types": "./dist/library.d.ts",
+      "default": "./dist/library.js"
+    },
     "./playback": {
       "types": "./dist/playback.d.ts",
       "default": "./dist/playback.js"
@@ -48,6 +56,14 @@
     "./requests": {
       "types": "./dist/requests.d.ts",
       "default": "./dist/requests.js"
+    },
+    "./subtitles": {
+      "types": "./dist/subtitles.d.ts",
+      "default": "./dist/subtitles.js"
+    },
+    "./system": {
+      "types": "./dist/system.d.ts",
+      "default": "./dist/system.js"
     }
   },
   "files": [

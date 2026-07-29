@@ -18,6 +18,7 @@ export const connectorCapabilitySchema = z.enum([
   "connector.version",
   "identity.authenticate",
   "identity.quick_connect",
+  "media.detail",
   "media.discover",
   "media.library.read",
   "media.library.mutate",
@@ -29,12 +30,17 @@ export const connectorCapabilitySchema = z.enum([
   "acquisition.grab",
   "acquisition.history",
   "acquisition.calendar",
+  "acquisition.monitoring",
   "indexer.statistics",
   "indexer.test",
+  "system.health",
+  "storage.read",
   "download.queue.read",
   "download.queue.mutate",
   "subtitle.search",
   "subtitle.download",
+  "issue.read",
+  "issue.manage",
 ]);
 export type ConnectorCapability = z.infer<typeof connectorCapabilitySchema>;
 

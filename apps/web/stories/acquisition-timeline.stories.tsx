@@ -69,6 +69,7 @@ const meta = {
   },
   argTypes: {
     client: { control: false },
+    monitoringClient: { control: false },
     onOpenChange: { control: false },
     recoveryClient: { control: false },
   },

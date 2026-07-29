@@ -24,6 +24,7 @@ export interface CalendarItemModel {
 export interface OperationModel {
   eta: string;
   id: string;
+  monitoring?: AcquisitionMonitoringState;
   progress: number;
   provenance?: AcquisitionProvenanceResponse;
   rate: string;
@@ -155,6 +156,11 @@ export const demoDashboard: DashboardModel = {
     {
       eta: "12m",
       id: "op-1",
+      monitoring: {
+        monitored: true,
+        target: { kind: "movie", mediaId: 42, service: "radarr" },
+        verifiedAt: "2026-07-27T19:00:00.000Z",
+      },
       progress: 0.72,
       provenance: {
         events: [
@@ -271,6 +277,7 @@ export const demoDashboard: DashboardModel = {
   ],
 };
 import type {
+  AcquisitionMonitoringState,
   AcquisitionProvenanceResponse,
   AcquisitionTargetInput,
 } from "@omnifin/contracts/acquisition";

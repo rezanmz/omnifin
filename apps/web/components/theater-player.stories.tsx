@@ -74,15 +74,22 @@ const directSession: PlaybackNegotiationResponse = {
 };
 const csrfToken = "storybook_playback_csrf_0123456789abcdefghijklmnop";
 
-function clientFor(session: PlaybackNegotiationResponse): PlaybackClient {
+function clientFor(session: PlaybackNegotiationResponse, canManageLibrary = true): PlaybackClient {
   return {
-    prepare: async () => ({ csrfToken, session }),
+    prepare: async () => ({ canManageLibrary, csrfToken, session }),
     report: async (_currentSessionId, request) => ({
       acceptedAt: "2026-07-28T12:30:00.000Z",
       positionSeconds: request.positionSeconds,
       sessionId,
       state:
         request.event === "paused" ? "paused" : request.event === "stopped" ? "stopped" : "playing",
+    }),
+    reportIssue: async (_currentSessionId, request) => ({
+      category: request.category,
+      createdAt: "2026-07-28T12:30:00.000Z",
+      id: `issue_${"i".repeat(22)}`,
+      positionSeconds: request.positionSeconds,
+      status: "open",
     }),
   };
 }
@@ -129,12 +136,23 @@ export const SettingsOpen: Story = {
   },
 };
 
+export const IssueReporter: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Report playback issue" }));
+    await expect(canvas.getByRole("region", { name: "Report playback issue" })).toBeVisible();
+  },
+};
+
 export const Preparing: Story = {
   args: {
     client: {
       prepare: () => new Promise<never>(() => undefined),
       report: async () => {
         throw new Error("A preparing player cannot report progress.");
+      },
+      reportIssue: async () => {
+        throw new Error("A preparing player cannot report an issue.");
       },
     },
   },
@@ -148,6 +166,9 @@ export const NegotiationError: Story = {
       },
       report: async () => {
         throw new Error("An unavailable player cannot report progress.");
+      },
+      reportIssue: async () => {
+        throw new Error("An unavailable player cannot report an issue.");
       },
     },
   },

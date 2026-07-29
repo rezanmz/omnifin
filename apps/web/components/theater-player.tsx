@@ -2,7 +2,9 @@
 
 import type HlsType from "hls.js";
 import {
+  Bug,
   Captions,
+  CheckCircle2,
   CircleAlert,
   Headphones,
   LoaderCircle,
@@ -11,11 +13,13 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Send,
   Settings2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
@@ -25,7 +29,21 @@ import {
   type PlaybackPreparationOptions,
   type PreparedPlayback,
 } from "../lib/playback";
+import type { SubtitleClient } from "../lib/subtitles";
 import styles from "./theater-player.module.css";
+
+const SubtitleWorkbench = dynamic(
+  () => import("./subtitle-workbench").then((module) => module.SubtitleWorkbench),
+  {
+    loading: () => (
+      <section aria-label="Opening subtitle workbench" className={styles.subtitleChunkLoader}>
+        <LoaderCircle aria-hidden="true" className={styles.spinner} size={18} />
+        <span>Opening subtitle workbench…</span>
+      </section>
+    ),
+    ssr: false,
+  },
+);
 
 export interface TheaterMedia {
   accent: string;
@@ -40,11 +58,14 @@ export interface TheaterPlayerProperties {
   client?: PlaybackClient;
   media: TheaterMedia;
   onClose: () => void;
+  subtitleClient?: SubtitleClient;
 }
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
+type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "video_quality";
+type IssueStatus = "error" | "idle" | "submitting" | "success";
 
 interface PlaybackPreferences {
   audioStreamIndex: number | null;
@@ -62,6 +83,15 @@ const QUALITY_PRESETS = {
   QualityPreset,
   { bitrate: number; label: string; mode: "auto" | "direct" | "transcode" }
 >;
+
+const ISSUE_CATEGORIES = [
+  { label: "Buffering", value: "buffering" },
+  { label: "Audio", value: "audio" },
+  { label: "Subtitles", value: "subtitles" },
+  { label: "A/V sync", value: "sync" },
+  { label: "Video quality", value: "video_quality" },
+  { label: "Other", value: "other" },
+] as const satisfies readonly { label: string; value: IssueCategory }[];
 
 function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
@@ -110,6 +140,7 @@ export function TheaterPlayer({
   client = playbackClient,
   media,
   onClose,
+  subtitleClient,
 }: TheaterPlayerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const videoReference = useRef<HTMLVideoElement>(null);
@@ -120,6 +151,8 @@ export function TheaterPlayer({
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumeAfterPreparationReference = useRef(false);
+  const restoreSubtitleFocusReference = useRef(false);
+  const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
@@ -138,6 +171,12 @@ export function TheaterPlayer({
   const [fullscreen, setFullscreen] = useState(false);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [issuePanelOpen, setIssuePanelOpen] = useState(false);
+  const [subtitleWorkbenchOpen, setSubtitleWorkbenchOpen] = useState(false);
+  const [issueCategory, setIssueCategory] = useState<IssueCategory>("buffering");
+  const [issueDescription, setIssueDescription] = useState("");
+  const [issueStatus, setIssueStatus] = useState<IssueStatus>("idle");
+  const [issueMessage, setIssueMessage] = useState("");
   const [currentTime, setCurrentTime] = useState(media.positionSeconds);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -198,10 +237,10 @@ export function TheaterPlayer({
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current = null;
-    if (playing && !settingsOpen) {
+    if (playing && !settingsOpen && !issuePanelOpen && !subtitleWorkbenchOpen) {
       controlsTimeoutReference.current = setTimeout(() => setControlsVisible(false), 2_800);
     }
-  }, [playing, settingsOpen]);
+  }, [issuePanelOpen, playing, settingsOpen, subtitleWorkbenchOpen]);
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -211,6 +250,12 @@ export function TheaterPlayer({
       else dialog.setAttribute("open", "");
     }
   }, []);
+
+  useEffect(() => {
+    if (!restoreSubtitleFocusReference.current || subtitleWorkbenchOpen || !settingsOpen) return;
+    subtitleTriggerReference.current?.focus();
+    restoreSubtitleFocusReference.current = false;
+  }, [settingsOpen, subtitleWorkbenchOpen]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement !== null);
@@ -314,11 +359,13 @@ export function TheaterPlayer({
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     controlsTimeoutReference.current =
-      playing && !settingsOpen ? setTimeout(() => setControlsVisible(false), 2_800) : null;
+      playing && !settingsOpen && !issuePanelOpen
+        ? setTimeout(() => setControlsVisible(false), 2_800)
+        : null;
     return () => {
       if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
     };
-  }, [playing, settingsOpen]);
+  }, [issuePanelOpen, playing, settingsOpen]);
 
   useEffect(
     () => () => {
@@ -401,11 +448,39 @@ export function TheaterPlayer({
     else await dialog.requestFullscreen?.();
   }
 
+  async function submitIssue(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!prepared || issueStatus === "submitting") return;
+    const description = issueDescription.trim();
+    setIssueStatus("submitting");
+    setIssueMessage("Sending the timestamp and playback context…");
+    try {
+      await client.reportIssue(
+        prepared.session.sessionId,
+        {
+          category: issueCategory,
+          description: description ? description : null,
+          positionSeconds: Math.max(0, Math.floor(absolutePosition())),
+        },
+        prepared.csrfToken,
+      );
+      setIssueStatus("success");
+      setIssueMessage("Thanks — the issue and playback context were captured privately.");
+    } catch (error) {
+      setIssueStatus("error");
+      setIssueMessage(
+        error instanceof Error ? error.message : "The issue could not be sent. Try again.",
+      );
+    }
+  }
+
   function handleKeyboard(event: React.KeyboardEvent<HTMLDialogElement>) {
     if (isInteractiveTarget(event.target)) return;
-    if (event.key === "Escape" && settingsOpen) {
+    if (event.key === "Escape" && (settingsOpen || issuePanelOpen || subtitleWorkbenchOpen)) {
       event.preventDefault();
       setSettingsOpen(false);
+      setIssuePanelOpen(false);
+      setSubtitleWorkbenchOpen(false);
       return;
     }
     if (event.key === " " || event.key.toLowerCase() === "k") {
@@ -583,6 +658,101 @@ export function TheaterPlayer({
         )}
 
         <footer className={styles.controls}>
+          {subtitleWorkbenchOpen && prepared?.canManageLibrary && (
+            <SubtitleWorkbench
+              csrfToken={prepared.csrfToken}
+              mediaReferenceId={media.id}
+              mediaTitle={media.title}
+              onClose={() => {
+                setSubtitleWorkbenchOpen(false);
+                setSettingsOpen(true);
+                restoreSubtitleFocusReference.current = true;
+              }}
+              {...(subtitleClient === undefined ? {} : { client: subtitleClient })}
+            />
+          )}
+          {issuePanelOpen && prepared && (
+            <section
+              aria-label="Report playback issue"
+              className={`${styles.settingsPanel} ${styles.issuePanel}`}
+              id={`${titleId}-issue`}
+            >
+              {issueStatus === "success" ? (
+                <div className={styles.issueSuccess} role="status">
+                  <span className={styles.issueSuccessIcon}>
+                    <CheckCircle2 aria-hidden="true" size={22} />
+                  </span>
+                  <div>
+                    <strong>Issue captured</strong>
+                    <p>{issueMessage}</p>
+                  </div>
+                  <button
+                    className={styles.issueDone}
+                    onClick={() => setIssuePanelOpen(false)}
+                    type="button"
+                  >
+                    Done
+                  </button>
+                </div>
+              ) : (
+                <form className={styles.issueForm} onSubmit={(event) => void submitIssue(event)}>
+                  <div className={styles.settingsHeading}>
+                    <span>Report an issue</span>
+                    <small>Current timestamp included</small>
+                  </div>
+                  <fieldset className={styles.issueCategories}>
+                    <legend className="sr-only">Issue category</legend>
+                    {ISSUE_CATEGORIES.map((category) => (
+                      <label key={category.value}>
+                        <input
+                          checked={issueCategory === category.value}
+                          name="issue-category"
+                          onChange={() => setIssueCategory(category.value)}
+                          type="radio"
+                          value={category.value}
+                        />
+                        <span>{category.label}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                  <label className={styles.issueDescription}>
+                    <span>
+                      What happened? <small>Optional</small>
+                    </span>
+                    <textarea
+                      aria-describedby={`${titleId}-issue-privacy`}
+                      maxLength={1_000}
+                      onChange={(event) => setIssueDescription(event.currentTarget.value)}
+                      placeholder="A short note helps pinpoint the problem."
+                      rows={3}
+                      value={issueDescription}
+                    />
+                  </label>
+                  <div className={styles.issueFooter}>
+                    <p
+                      data-error={issueStatus === "error" || undefined}
+                      id={`${titleId}-issue-privacy`}
+                      role={issueStatus === "error" ? "alert" : "status"}
+                    >
+                      {issueMessage || "No media paths, credentials, or account details are sent."}
+                    </p>
+                    <button
+                      className={styles.issueSubmit}
+                      disabled={issueStatus === "submitting"}
+                      type="submit"
+                    >
+                      {issueStatus === "submitting" ? (
+                        <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                      ) : (
+                        <Send aria-hidden="true" size={16} />
+                      )}
+                      {issueStatus === "submitting" ? "Sending…" : "Send report"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          )}
           {settingsOpen && prepared && (
             <section
               aria-label="Playback settings"
@@ -659,6 +829,26 @@ export function TheaterPlayer({
                   ))}
                 </select>
               </label>
+              {prepared.canManageLibrary && (
+                <button
+                  className={styles.subtitleWorkbenchButton}
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setSubtitleWorkbenchOpen(true);
+                  }}
+                  ref={subtitleTriggerReference}
+                  type="button"
+                >
+                  <span className={styles.subtitleWorkbenchButtonIcon} aria-hidden="true">
+                    <Captions size={17} />
+                  </span>
+                  <span>
+                    <strong>Find subtitles</strong>
+                    <small>Search connected Bazarr providers</small>
+                  </span>
+                  <span aria-hidden="true">Open</span>
+                </button>
+              )}
               <label className={styles.settingField}>
                 <span>
                   <Settings2 aria-hidden="true" size={16} /> Quality
@@ -765,12 +955,37 @@ export function TheaterPlayer({
             </div>
             <div className={styles.controlCluster}>
               <button
+                aria-controls={`${titleId}-issue`}
+                aria-expanded={issuePanelOpen}
+                aria-label="Report playback issue"
+                className={styles.iconButton}
+                disabled={!prepared}
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setSubtitleWorkbenchOpen(false);
+                  setIssuePanelOpen((value) => {
+                    if (!value) {
+                      setIssueStatus("idle");
+                      setIssueMessage("");
+                    }
+                    return !value;
+                  });
+                }}
+                type="button"
+              >
+                <Bug aria-hidden="true" size={18} />
+              </button>
+              <button
                 aria-controls={`${titleId}-settings`}
                 aria-expanded={settingsOpen}
                 aria-label="Playback settings"
                 className={styles.iconButton}
                 disabled={status !== "ready"}
-                onClick={() => setSettingsOpen((value) => !value)}
+                onClick={() => {
+                  setIssuePanelOpen(false);
+                  setSubtitleWorkbenchOpen(false);
+                  setSettingsOpen((value) => !value);
+                }}
                 type="button"
               >
                 <Settings2 aria-hidden="true" size={19} />

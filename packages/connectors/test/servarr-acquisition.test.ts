@@ -43,6 +43,89 @@ function sonarrWithResponses(responses: Response[]) {
 
 const quality = { quality: { id: 7, name: "Bluray-1080p", source: "bluray" } };
 
+describe("Servarr acquisition monitoring", () => {
+  it("reads and updates one Radarr movie without sending unrelated fields", async () => {
+    const { adapter, requests } = radarrWithResponses([
+      jsonResponse({ id: 42, monitored: true, path: "/private/movies/Example" }),
+      jsonResponse([{ id: 42, monitored: false, path: "/private/movies/Example" }], {
+        status: 202,
+      }),
+    ]);
+
+    const read = await adapter.readAcquisitionMonitoring({ mediaId: 42, service: "radarr" });
+    expect(read).toEqual({
+      monitored: true,
+      target: { kind: "movie", mediaId: 42, service: "radarr" },
+      verifiedAt: "2026-07-25T12:00:00.000Z",
+    });
+    const updated = await adapter.updateAcquisitionMonitoring({
+      expectedMonitored: true,
+      mediaId: 42,
+      monitored: false,
+      service: "radarr",
+    });
+    expect(updated).toMatchObject({ monitored: false, target: { kind: "movie", mediaId: 42 } });
+
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v3/movie/42",
+      "/api/v3/movie/editor",
+    ]);
+    expect(requests[1]?.init.method).toBe("PUT");
+    expect(JSON.parse(new TextDecoder().decode(requests[1]?.init.body))).toEqual({
+      monitored: false,
+      movieIds: [42],
+    });
+    expect(JSON.stringify({ read, updated })).not.toContain("/private/");
+  });
+
+  it("uses the Sonarr series editor and rejects cross-service targets before transport", async () => {
+    const { adapter, requests } = sonarrWithResponses([
+      jsonResponse([{ id: 77, monitored: true }], { status: 202 }),
+    ]);
+
+    await expect(
+      adapter.updateAcquisitionMonitoring({
+        expectedMonitored: false,
+        mediaId: 77,
+        monitored: true,
+        service: "sonarr",
+      }),
+    ).resolves.toMatchObject({ monitored: true, target: { kind: "series", mediaId: 77 } });
+    expect(JSON.parse(new TextDecoder().decode(requests[0]?.init.body))).toEqual({
+      monitored: true,
+      seriesIds: [77],
+    });
+
+    await expect(
+      adapter.readAcquisitionMonitoring({ mediaId: 77, service: "radarr" }),
+    ).rejects.toMatchObject({
+      code: "configuration_invalid",
+      operation: "acquisition.monitoring.read",
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("fails closed when an editor response does not confirm the exact target state", async () => {
+    const { adapter } = radarrWithResponses([
+      jsonResponse([{ id: 43, monitored: false, rootFolderPath: "/private/media" }], {
+        status: 202,
+      }),
+    ]);
+
+    await expect(
+      adapter.updateAcquisitionMonitoring({
+        expectedMonitored: true,
+        mediaId: 42,
+        monitored: false,
+        service: "radarr",
+      }),
+    ).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "acquisition.monitoring.update",
+    });
+  });
+});
+
 describe("Servarr acquisition provenance", () => {
   it("queues an exact Radarr movie search with a bounded normalized response", async () => {
     const { adapter, requests } = radarrWithResponses([

@@ -1,7 +1,8 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  DownloadQueueAction,
   DownloadQueueItem,
   DownloadQueueItemState,
   DownloadQueueResponse,
@@ -9,6 +10,7 @@ import type {
 import {
   Activity,
   ArrowLeft,
+  ArrowUpToLine,
   Cable,
   Check,
   CircleAlert,
@@ -22,6 +24,8 @@ import {
   Monitor,
   Moon,
   Network,
+  Pause,
+  Play,
   Radio,
   RefreshCw,
   Search,
@@ -29,17 +33,20 @@ import {
   ShieldCheck,
   Sun,
   Timer,
+  Trash2,
   TriangleAlert,
   Unplug,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   downloadQueueClient,
+  DownloadQueueClientError,
   outcomeFromError,
   type DownloadQueueClient,
+  type DownloadQueueLiveStatus,
   type DownloadQueueLoadOutcome,
 } from "../lib/download-queue";
 import type { ThemePreference } from "../lib/theme";
@@ -77,6 +84,36 @@ const STATE_LABELS: Record<DownloadQueueItemState, string> = {
 
 const ACTIVE_STATES = new Set<DownloadQueueItemState>(["checking", "downloading", "moving"]);
 const ATTENTION_STATES = new Set<DownloadQueueItemState>(["failed", "stalled"]);
+const PAUSABLE_STATES = new Set<DownloadQueueItemState>([
+  "checking",
+  "downloading",
+  "moving",
+  "queued",
+  "stalled",
+]);
+
+type QueueActionStatus = "confirming" | "error" | "submitting" | "success";
+
+interface QueueActionState {
+  action: DownloadQueueAction;
+  itemId: string;
+  message: string;
+  status: QueueActionStatus;
+}
+
+interface QueueRemovalState {
+  confirmation: string;
+  idempotencyKey: string;
+  itemId: string;
+  message: string;
+  status: QueueActionStatus;
+}
+
+interface QueuePromotionState {
+  itemId: string;
+  message: string;
+  status: "error" | "submitting";
+}
 
 export interface DownloadQueueProperties {
   client?: DownloadQueueClient;
@@ -117,6 +154,61 @@ function formatTimestamp(value: string) {
   const hour = date.getUTCHours();
   const minute = String(date.getUTCMinutes()).padStart(2, "0");
   return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${String(date.getUTCDate()).padStart(2, "0")} · ${hour % 12 || 12}:${minute} ${hour < 12 ? "AM" : "PM"} UTC`;
+}
+
+function queueWithItems(
+  current: DownloadQueueResponse,
+  items: DownloadQueueItem[],
+  generatedAt: string,
+): DownloadQueueResponse {
+  const clients = current.clients.map((queueClient) => {
+    const clientItems = items.filter(
+      (candidate) => candidate.connectorId === queueClient.connectorId,
+    );
+    return {
+      ...queueClient,
+      itemCount: clientItems.length,
+      rateBytesPerSecond: clientItems.reduce(
+        (total, candidate) => total + candidate.rateBytesPerSecond,
+        0,
+      ),
+    };
+  });
+  return {
+    ...current,
+    clients,
+    generatedAt,
+    items,
+    summary: {
+      attention: items.filter(
+        (candidate) => candidate.state === "failed" || candidate.state === "stalled",
+      ).length,
+      downloading: items.filter((candidate) => ACTIVE_STATES.has(candidate.state)).length,
+      paused: items.filter((candidate) => candidate.state === "paused").length,
+      queued: items.filter((candidate) => candidate.state === "queued").length,
+      remainingBytes: items.reduce((total, candidate) => total + candidate.remainingBytes, 0),
+      total: items.length,
+      totalRateBytesPerSecond: items.reduce(
+        (total, candidate) => total + candidate.rateBytesPerSecond,
+        0,
+      ),
+    },
+  };
+}
+
+function itemsAfterPromotion(
+  items: readonly DownloadQueueItem[],
+  promoted: DownloadQueueItem,
+): DownloadQueueItem[] {
+  const currentIndex = items.findIndex((candidate) => candidate.id === promoted.id);
+  if (currentIndex < 0) return [...items];
+  const remaining = items.filter((candidate) => candidate.id !== promoted.id);
+  const firstClientIndex = remaining.findIndex(
+    (candidate) => candidate.connectorId === promoted.connectorId,
+  );
+  const insertionIndex =
+    firstClientIndex < 0 ? Math.min(currentIndex, remaining.length) : firstClientIndex;
+  return [...remaining.slice(0, insertionIndex), promoted, ...remaining.slice(insertionIndex)];
 }
 
 function ThemeControl() {
@@ -172,6 +264,9 @@ function PageFrame({ children }: { children: React.ReactNode }) {
         <header className={styles.topbar} data-liquid-glass>
           <BrandMark />
           <nav aria-label="Operations navigation" className={styles.topbarActions}>
+            <Link className={styles.indexerLink} href="/operations/health" prefetch={false}>
+              <Activity aria-hidden="true" size={16} /> Health
+            </Link>
             <Link className={styles.indexerLink} href="/operations/indexers" prefetch={false}>
               <Radio aria-hidden="true" size={16} /> Indexers
             </Link>
@@ -295,11 +390,55 @@ function Metric({
   );
 }
 
-function QueueItem({ item }: { item: DownloadQueueItem }) {
+function QueueItem({
+  actionAvailable,
+  actionLocked,
+  actionState,
+  item,
+  onBeginAction,
+  onBeginRemoval,
+  onCancelAction,
+  onCancelRemoval,
+  onChangeRemovalConfirmation,
+  onConfirmAction,
+  onConfirmRemoval,
+  onPromote,
+  promotionAvailable,
+  promotionState,
+  removalAvailable,
+  removalState,
+}: {
+  actionAvailable: boolean;
+  actionLocked: boolean;
+  actionState: QueueActionState | null;
+  item: DownloadQueueItem;
+  onBeginAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+  onBeginRemoval: (item: DownloadQueueItem) => void;
+  onCancelAction: (item: DownloadQueueItem) => void;
+  onCancelRemoval: (item: DownloadQueueItem) => void;
+  onChangeRemovalConfirmation: (value: string) => void;
+  onConfirmAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+  onConfirmRemoval: (item: DownloadQueueItem) => void;
+  onPromote: (item: DownloadQueueItem) => void;
+  promotionAvailable: boolean;
+  promotionState: QueuePromotionState | null;
+  removalAvailable: boolean;
+  removalState: QueueRemovalState | null;
+}) {
   const percent = Math.round(item.progress * 100);
   const ProtocolIcon = item.protocol === "torrent" ? Network : Layers3;
+  const action =
+    item.state === "paused" ? "resume" : PAUSABLE_STATES.has(item.state) ? "pause" : null;
+  const ActionIcon = action === "resume" ? Play : Pause;
+  const activeAction = actionState?.itemId === item.id ? actionState : null;
+  const activePromotion = promotionState?.itemId === item.id ? promotionState : null;
+  const activeRemoval = removalState?.itemId === item.id ? removalState : null;
   return (
-    <article className={styles.queueItem} data-state={item.state}>
+    <article
+      className={styles.queueItem}
+      data-action={activeAction?.status ?? activePromotion?.status}
+      data-state={item.state}
+    >
       <div className={styles.queueItemLead}>
         <span className={styles.protocolIcon} aria-hidden="true">
           <ProtocolIcon size={19} />
@@ -311,9 +450,69 @@ function QueueItem({ item }: { item: DownloadQueueItem }) {
             {item.category ? ` · ${item.category}` : ""}
           </p>
         </div>
-        <span className={styles.status} data-state={item.state}>
-          <i aria-hidden="true" /> {STATE_LABELS[item.state]}
-        </span>
+        <div className={styles.queueItemActions}>
+          <span className={styles.status} data-state={item.state}>
+            <i aria-hidden="true" /> {STATE_LABELS[item.state]}
+          </span>
+          {promotionAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
+            <button
+              aria-label={`Move ${item.title} to front of queue`}
+              className={styles.itemAction}
+              data-item-promotion={item.id}
+              disabled={actionLocked}
+              onClick={() => onPromote(item)}
+              type="button"
+            >
+              {activePromotion?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <ArrowUpToLine aria-hidden="true" size={15} />
+              )}
+              <span>First</span>
+            </button>
+          ) : null}
+          {action &&
+          actionAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
+            <button
+              aria-label={`${action === "pause" ? "Pause" : "Resume"} ${item.title}`}
+              className={styles.itemAction}
+              data-item-action={item.id}
+              disabled={actionLocked}
+              onClick={() => onBeginAction(item, action)}
+              type="button"
+            >
+              {activeAction?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <ActionIcon aria-hidden="true" size={15} />
+              )}
+              <span>{action === "pause" ? "Pause" : "Resume"}</span>
+            </button>
+          ) : null}
+          {removalAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
+            <button
+              aria-label={`Remove ${item.title}`}
+              className={`${styles.itemAction} ${styles.removeAction}`}
+              data-item-removal={item.id}
+              disabled={actionLocked}
+              onClick={() => onBeginRemoval(item)}
+              type="button"
+            >
+              {activeRemoval?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <Trash2 aria-hidden="true" size={15} />
+              )}
+              <span>Remove</span>
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className={styles.itemProgressLine}>
         <span
@@ -350,6 +549,103 @@ function QueueItem({ item }: { item: DownloadQueueItem }) {
           </dd>
         </div>
       </dl>
+      {activeRemoval?.status === "confirming" ? (
+        <div
+          className={`${styles.actionConfirm} ${styles.removalConfirm}`}
+          role="group"
+          aria-label="remove confirmation"
+        >
+          <span>
+            <strong>Remove this transfer?</strong>
+            <small>
+              {item.client === "qbittorrent"
+                ? `This stops tracking the torrent in ${item.clientName}. Downloaded content stays on disk.`
+                : `This removes the job from ${item.clientName}. Already-downloaded files stay on disk, but the queue job cannot continue.`}
+            </small>
+            <label className={styles.removalPhrase}>
+              <span>Type REMOVE to confirm</span>
+              <input
+                aria-label="Type REMOVE to confirm"
+                autoComplete="off"
+                onChange={(event) => onChangeRemovalConfirmation(event.target.value)}
+                spellCheck={false}
+                value={activeRemoval.confirmation}
+              />
+            </label>
+          </span>
+          <div>
+            <button
+              autoFocus
+              className={styles.cancelAction}
+              onClick={() => onCancelRemoval(item)}
+              type="button"
+            >
+              Cancel removal
+            </button>
+            <button
+              className={`${styles.confirmAction} ${styles.dangerAction}`}
+              disabled={activeRemoval.confirmation !== "REMOVE"}
+              onClick={() => onConfirmRemoval(item)}
+              type="button"
+            >
+              Remove transfer
+            </button>
+          </div>
+        </div>
+      ) : activeAction?.status === "confirming" && action ? (
+        <div className={styles.actionConfirm} role="group" aria-label={`${action} confirmation`}>
+          <span>
+            <strong>{action === "pause" ? "Pause this transfer?" : "Resume this transfer?"}</strong>
+            <small>
+              Omnifin will verify the exact item state with {item.clientName} before and after the
+              change.
+            </small>
+          </span>
+          <div>
+            <button
+              autoFocus
+              className={styles.cancelAction}
+              onClick={() => onCancelAction(item)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className={styles.confirmAction}
+              onClick={() => onConfirmAction(item, action)}
+              type="button"
+            >
+              {action === "pause" ? "Confirm pause" : "Confirm resume"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {activeRemoval?.status === "error" ? (
+        <div className={styles.actionFeedback} data-status="error" role="alert">
+          <TriangleAlert aria-hidden="true" size={16} />
+          <span>{activeRemoval.message}</span>
+        </div>
+      ) : null}
+      {activePromotion?.status === "error" ? (
+        <div className={styles.actionFeedback} data-status="error" role="alert">
+          <TriangleAlert aria-hidden="true" size={16} />
+          <span>{activePromotion.message}</span>
+        </div>
+      ) : null}
+      {activeAction?.status === "error" || activeAction?.status === "success" ? (
+        <div
+          className={styles.actionFeedback}
+          data-status={activeAction.status}
+          role={activeAction.status === "error" ? "alert" : "status"}
+        >
+          {activeAction.status === "success" ? (
+            <Check aria-hidden="true" size={16} />
+          ) : (
+            <TriangleAlert aria-hidden="true" size={16} />
+          )}
+          <span>{activeAction.message}</span>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -434,20 +730,29 @@ function UnconfiguredQueue() {
 }
 
 function ReadyQueue({
+  client,
   isFetching,
+  liveStatus,
   onRefresh,
   queue,
   refreshAvailable,
   stale,
 }: {
+  client: DownloadQueueClient;
   isFetching: boolean;
+  liveStatus: DownloadQueueLiveStatus | "snapshot";
   onRefresh: () => void;
   queue: DownloadQueueResponse;
   refreshAvailable: boolean;
   stale: boolean;
 }) {
+  const queryClient = useQueryClient();
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [query, setQuery] = useState("");
+  const [actionState, setActionState] = useState<QueueActionState | null>(null);
+  const [promotionState, setPromotionState] = useState<QueuePromotionState | null>(null);
+  const [removalState, setRemovalState] = useState<QueueRemovalState | null>(null);
+  const [operationAnnouncement, setOperationAnnouncement] = useState("");
   const visibleItems = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     return queue.items.filter((item) => {
@@ -465,6 +770,208 @@ function ReadyQueue({
     });
   }, [filter, query, queue.items]);
   const filtered = filter !== "all" || query.trim().length > 0;
+  const actionAvailable = Boolean(client.act && client.loadEligibility);
+  const promotionAvailable = Boolean(client.promote && client.loadEligibility);
+  const removalAvailable = Boolean(client.remove && client.loadEligibility);
+  const actionLocked =
+    actionState?.status === "submitting" ||
+    promotionState?.status === "submitting" ||
+    removalState?.status === "submitting";
+
+  const cancelAction = (item: DownloadQueueItem) => {
+    setActionState(null);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-item-action="${item.id}"]`)?.focus();
+    });
+  };
+
+  const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
+    if (actionLocked) return;
+    setPromotionState(null);
+    setRemovalState(null);
+    setActionState({ action, itemId: item.id, message: "", status: "confirming" });
+  };
+
+  const cancelRemoval = (item: DownloadQueueItem) => {
+    setRemovalState(null);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-item-removal="${item.id}"]`)?.focus();
+    });
+  };
+
+  const beginRemoval = (item: DownloadQueueItem) => {
+    if (actionLocked) return;
+    setActionState(null);
+    setPromotionState(null);
+    setOperationAnnouncement("");
+    setRemovalState({
+      confirmation: "",
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      itemId: item.id,
+      message: "",
+      status: "confirming",
+    });
+  };
+
+  const confirmAction = async (item: DownloadQueueItem, action: DownloadQueueAction) => {
+    if (!client.act || !client.loadEligibility) return;
+    setActionState({ action, itemId: item.id, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before changing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to change this transfer."
+              : "The session could not be verified. No transfer state was changed.";
+        setActionState({ action, itemId: item.id, message, status: "error" });
+        return;
+      }
+      const input =
+        action === "resume"
+          ? ({
+              action,
+              connectorId: item.connectorId,
+              expectedState: "paused",
+              itemId: item.id,
+            } as const)
+          : ({
+              action,
+              connectorId: item.connectorId,
+              expectedState: item.state as
+                "checking" | "downloading" | "moving" | "queued" | "stalled",
+              itemId: item.id,
+            } as const);
+      const result = await client.act(input, { csrfToken: eligibility.snapshot.csrfToken });
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        const items = current.items.map((candidate) =>
+          candidate.id === result.item.id ? result.item : candidate,
+        );
+        return queueWithItems(current, items, result.verifiedAt);
+      });
+      setActionState({
+        action,
+        itemId: item.id,
+        message: `${item.title} ${action === "pause" ? "paused" : "resumed"}${result.replayed ? "—the requested state was already verified." : "."}`,
+        status: "success",
+      });
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The download action could not be verified. No further change was attempted.";
+      setActionState({ action, itemId: item.id, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
+
+  const confirmRemoval = async (item: DownloadQueueItem) => {
+    if (
+      !client.remove ||
+      !client.loadEligibility ||
+      removalState?.itemId !== item.id ||
+      removalState.confirmation !== "REMOVE"
+    ) {
+      return;
+    }
+    const idempotencyKey = removalState.idempotencyKey;
+    setRemovalState({ ...removalState, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before removing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to remove this transfer."
+              : "The session could not be verified. The transfer was not removed.";
+        setRemovalState({ ...removalState, message, status: "error" });
+        return;
+      }
+      const result = await client.remove(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: eligibility.snapshot.csrfToken, idempotencyKey },
+      );
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        return queueWithItems(
+          current,
+          current.items.filter((candidate) => candidate.id !== result.item.id),
+          result.removedAt,
+        );
+      });
+      setRemovalState(null);
+      setOperationAnnouncement(
+        `${item.title} removed from ${item.clientName}. Downloaded files were preserved.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The removal could not be verified. Refresh before trying again.";
+      setRemovalState({ ...removalState, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
+
+  const promoteItem = async (item: DownloadQueueItem) => {
+    if (!client.promote || !client.loadEligibility || actionLocked) return;
+    setActionState(null);
+    setRemovalState(null);
+    setOperationAnnouncement("");
+    setPromotionState({ itemId: item.id, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before prioritizing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to prioritize this transfer."
+              : "The session could not be verified. The queue order was not changed.";
+        setPromotionState({ itemId: item.id, message, status: "error" });
+        return;
+      }
+      const result = await client.promote(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: eligibility.snapshot.csrfToken },
+      );
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        const items = itemsAfterPromotion(current.items, result.item);
+        return queueWithItems(current, items, result.promotedAt);
+      });
+      setPromotionState(null);
+      setOperationAnnouncement(
+        result.replayed
+          ? `${item.title} was already first in ${item.clientName}.`
+          : `${item.title} moved to the front of ${item.clientName}.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The queue promotion could not be verified. No further change was attempted.";
+      setPromotionState({ itemId: item.id, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
 
   return (
     <PageFrame>
@@ -527,6 +1034,18 @@ function ReadyQueue({
                 </button>
               ))}
             </div>
+            <div aria-live="polite" className={styles.liveState} data-state={liveStatus}>
+              <i aria-hidden="true" />
+              <span>
+                {liveStatus === "live"
+                  ? "Live"
+                  : liveStatus === "connecting"
+                    ? "Connecting"
+                    : liveStatus === "fallback"
+                      ? "12s fallback"
+                      : "Snapshot"}
+              </span>
+            </div>
             <button
               aria-label="Refresh download queue"
               className={styles.refresh}
@@ -566,6 +1085,12 @@ function ReadyQueue({
             <div className={styles.truncatedNotice} role="status">
               <Layers3 aria-hidden="true" size={18} />
               The queue is large. Showing the first 200 verified transfers.
+            </div>
+          ) : null}
+          {operationAnnouncement ? (
+            <div className={styles.operationNotice} role="status">
+              <Check aria-hidden="true" size={18} />
+              <span>{operationAnnouncement}</span>
             </div>
           ) : null}
 
@@ -614,7 +1139,29 @@ function ReadyQueue({
               ) : (
                 <div className={styles.queueList}>
                   {visibleItems.map((item) => (
-                    <QueueItem item={item} key={item.id} />
+                    <QueueItem
+                      actionAvailable={actionAvailable}
+                      actionLocked={actionLocked}
+                      actionState={actionState}
+                      item={item}
+                      key={item.id}
+                      onBeginAction={beginAction}
+                      onBeginRemoval={beginRemoval}
+                      onCancelAction={cancelAction}
+                      onCancelRemoval={cancelRemoval}
+                      onChangeRemovalConfirmation={(confirmation) =>
+                        setRemovalState((current) =>
+                          current ? { ...current, confirmation } : current,
+                        )
+                      }
+                      onConfirmAction={(target, action) => void confirmAction(target, action)}
+                      onConfirmRemoval={(target) => void confirmRemoval(target)}
+                      onPromote={(target) => void promoteItem(target)}
+                      promotionAvailable={promotionAvailable}
+                      promotionState={promotionState}
+                      removalAvailable={removalAvailable}
+                      removalState={removalState}
+                    />
                   ))}
                 </div>
               )}
@@ -625,7 +1172,7 @@ function ReadyQueue({
             <span>
               <Timer aria-hidden="true" size={14} /> Verified {formatTimestamp(queue.generatedAt)}
             </span>
-            <span>Read-only telemetry · no transfer controls</span>
+            <span>Exact-item controls · credentials remain private</span>
           </footer>
         </>
       )}
@@ -641,16 +1188,34 @@ function DownloadQueueContent({
   Pick<DownloadQueueProperties, "initialOutcome" | "live">) {
   const refreshAvailable = live ?? initialOutcome === undefined;
   const initialQueue = initialOutcome?.status === "ready" ? initialOutcome.queue : undefined;
+  const queryClient = useQueryClient();
+  const [streamStatus, setStreamStatus] = useState<DownloadQueueLiveStatus>("connecting");
+  const liveStatus: DownloadQueueLiveStatus | "snapshot" = !refreshAvailable
+    ? "snapshot"
+    : client.watch
+      ? streamStatus
+      : "fallback";
   const query = useQuery({
     enabled: refreshAvailable,
     initialData: initialQueue,
     queryFn: ({ signal }) => client.load(signal),
     queryKey: ["download-queue"],
-    refetchInterval: refreshAvailable ? 12_000 : false,
+    refetchInterval: refreshAvailable && liveStatus !== "live" ? 12_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
     staleTime: 8_000,
   });
+
+  useEffect(() => {
+    if (!refreshAvailable || !client.watch) return;
+    return client.watch({
+      onSnapshot: (event) => {
+        queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], event.queue);
+        setStreamStatus("live");
+      },
+      onStatus: setStreamStatus,
+    });
+  }, [client, queryClient, refreshAvailable]);
 
   if (!refreshAvailable && initialOutcome) {
     if (
@@ -665,7 +1230,9 @@ function DownloadQueueContent({
   if (!query.data) return <BoundaryState status={outcomeFromError(query.error)} />;
   return (
     <ReadyQueue
+      client={client}
       isFetching={query.isFetching}
+      liveStatus={liveStatus}
       onRefresh={() => void query.refetch()}
       queue={query.data}
       refreshAvailable={refreshAvailable}

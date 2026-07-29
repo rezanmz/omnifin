@@ -63,7 +63,25 @@ test("fixture reports claim only authentication behavior covered by their tests"
     "secret_isolation",
     "version_discovery",
   ]);
-  assert.deepEqual(fixtureChecksFor("sabnzbd"), ["health_normalization", "version_discovery"]);
+  assert.deepEqual(fixtureChecksFor("qbittorrent"), [
+    "authentication",
+    "credential_rejection",
+    "exact_target_validation",
+    "queue_read",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_compatible_mutation",
+    "version_discovery",
+  ]);
+  assert.deepEqual(fixtureChecksFor("sabnzbd"), [
+    "authentication",
+    "exact_target_validation",
+    "health_normalization",
+    "queue_read",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_discovery",
+  ]);
   assert.deepEqual(fixtureChecksFor("prowlarr"), [
     "application_sync",
     "authentication_header",
@@ -75,6 +93,19 @@ test("fixture reports claim only authentication behavior covered by their tests"
     "statistics",
     "version_discovery",
   ]);
+  for (const service of ["radarr", "sonarr"]) {
+    assert.deepEqual(fixtureChecksFor(service), [
+      "acquisition_search",
+      "authentication_header",
+      "exact_target_validation",
+      "health_normalization",
+      "monitoring_read",
+      "monitoring_update",
+      "safe_mutation_shape",
+      "secret_isolation",
+      "version_discovery",
+    ]);
+  }
   assert.equal(fixtureChecksFor("oidc"), null);
 });
 

@@ -1220,6 +1220,14 @@
 }
 
 @media (max-width: 420px) {
+  .topbar :global(.brand__word) {
+    display: none;
+  }
+
+  .topbarActions {
+    gap: 3px;
+  }
+
   .themeControl button {
     min-width: 33px;
   }

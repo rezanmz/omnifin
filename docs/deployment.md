@@ -171,17 +171,17 @@ After a release explicitly advertises identity and connector support:
 
 ## Backups
 
-For a future supported release, a complete recovery set must contain a transactionally
-consistent SQLite backup, the matching encryption master key, deployment configuration,
-and any required Docker secrets. Protect and rotate backup access as carefully as live
-access.
+The maintenance container creates an online, transactionally consistent SQLite snapshot and
+a strict integrity manifest without exposing host paths. Restore remains an explicit downtime
+operation: it verifies the selected pair, refuses a live or non-quiescent gateway, creates a
+verified pre-restore rollback pair, and atomically replaces the active database.
 
-The current checkpoint has no supported in-application backup or restore operation. For disposable
-source-preview data, stop the gateway before copying SQLite. Future supported releases
-must provide and document a transactionally safe procedure; record the running image
-digest and schema version with every recovery set.
+Follow the complete [backup and restore runbook](operations/backup-and-restore.md). A recovery
+set is incomplete without the matching encryption master key, recovery secret, deployment
+configuration, immutable image digest, database, and manifest. Keep secrets separate from the
+database backup and protect backup access as carefully as live access.
 
-## Future supported-release upgrade
+## Upgrade
 
 1. Read the release notes and compatibility changes.
 2. Back up and verify the recovery set.
@@ -194,7 +194,7 @@ digest and schema version with every recovery set.
 Moving tags are convenience aliases. For a controlled upgrade, pin the digest that
 the GitHub Release and attestation identify.
 
-## Future supported-release rollback
+## Rollback
 
 Never overwrite a published image tag. Roll back by selecting a previously verified
 version or digest. Application rollback may also require restoring the pre-upgrade

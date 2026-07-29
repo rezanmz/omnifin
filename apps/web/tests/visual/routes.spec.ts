@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import { mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -126,6 +126,36 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   await search.fill("matrix");
   await page.getByRole("option", { name: /The Matrix/i }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
+});
+
+async function openMediaDetails(page: Page) {
+  await mockDiscoverySearch(page);
+  await mockDiscoveryDetails(page);
+  await page.goto("/");
+  const search = page.getByRole("combobox");
+  await search.fill("matrix");
+  await page.getByRole("button", { name: "View details for The Matrix" }).click();
+  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
+}
+
+test("media detail drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Media details cover representative desktop and phone geometry",
+  );
+  await openMediaDetails(page);
+  await expect(page).toHaveScreenshot("dashboard-media-details.png");
+});
+
+test("light media detail drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light media details cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await openMediaDetails(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-media-details-light.png");
 });
 
 async function openRequestComposer(page: Page) {
@@ -413,6 +443,52 @@ test("degraded indexer intelligence visual baseline", async ({ page }, testInfo)
   await expect(page).toHaveScreenshot("indexer-intelligence-degraded.png", { fullPage: true });
 });
 
+test("system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "System health covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=ready");
+  await page.getByRole("heading", { name: "2 clear things to check." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health.png", { fullPage: true });
+});
+
+test("light system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light system health covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/health?test-view=ready");
+  await page.getByRole("heading", { name: "2 clear things to check." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("system-health-light.png", { fullPage: true });
+});
+
+test("degraded system health visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Degraded system health covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=degraded");
+  await page.getByText("Partial visibility", { exact: true }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health-degraded.png", { fullPage: true });
+});
+
+test("system health onboarding visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "System health onboarding covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/health?test-view=unconfigured");
+  await page.getByRole("heading", { name: "Connect the stack." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("system-health-unconfigured.png", { fullPage: true });
+});
+
 test("download queue visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),
@@ -422,6 +498,40 @@ test("download queue visual baseline", async ({ page }, testInfo) => {
   await page.getByRole("heading", { name: "Every byte, in motion." }).waitFor();
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("download-queue.png", { fullPage: true });
+});
+
+test("download queue confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Queue confirmations cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Pause The.Far.Meridian.2026.2160p.WEB-DL" }).click();
+  await page.getByText("Pause this transfer?").waitFor();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-confirmation.png", { fullPage: true });
+});
+
+test("download queue removal confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Queue removals cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Remove The.Far.Meridian.2026.2160p.WEB-DL" }).click();
+  await page.getByText("Remove this transfer?").waitFor();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-removal-confirmation.png", {
+    fullPage: true,
+  });
 });
 
 test("light download queue visual baseline", async ({ page }, testInfo) => {
@@ -505,6 +615,166 @@ test("acquisition calendar event drawer visual baseline", async ({ page }, testI
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("acquisition-calendar-event.png");
 });
+
+test("library care visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Library care covers representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("heading", { name: "Make every title feel finished." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("library-care.png", { fullPage: true });
+});
+
+test("light library care visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light library care covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("heading", { name: "Make every title feel finished." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("library-care-light.png", { fullPage: true });
+});
+
+test("library item inspector visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Library item inspection covers representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: "Inspect Northern Lights" }).click();
+  await expect(page.getByRole("button", { name: "Close library inspector" })).toBeFocused();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("library-care-inspector.png");
+});
+
+test("raised library card visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Hover treatment uses desktop Chromium");
+  await page.goto("/library?test-view=ready");
+  const card = page.getByRole("button", { name: "Inspect Ember Coast" });
+  await card.hover();
+  await removeDevelopmentIndicator(page);
+  await expect(page.getByRole("region", { name: "Details worth finishing" })).toHaveScreenshot(
+    "library-care-card-hover.png",
+  );
+});
+
+for (const state of ["empty", "unavailable"] as const) {
+  test(`${state} library care visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Library care boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/library?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`library-care-${state}.png`, { fullPage: true });
+  });
+}
+
+test("request review visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Request review covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/requests?test-view=ready");
+  await page.getByRole("heading", { name: "Decide what enters the library." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("request-review.png", { fullPage: true });
+});
+
+test("light request review visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light request review covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/requests?test-view=ready");
+  await page.getByRole("heading", { name: "Decide what enters the library." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("request-review-light.png", { fullPage: true });
+});
+
+test("request approval confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Request approval confirmation covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/requests?test-view=ready");
+  const card = page.getByText("A House of Dynamite").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("dialog", { name: "Send this into acquisition?" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("request-review-confirmation.png");
+});
+
+for (const state of ["empty", "unavailable"] as const) {
+  test(`${state} request review visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Request review boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/operations/requests?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`request-review-${state}.png`, { fullPage: true });
+  });
+}
+
+test("media issue workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Issue workbench covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/issues?test-view=ready");
+  await page.getByRole("heading", { name: "Close the loop on every stream." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("media-issue-workbench.png", { fullPage: true });
+});
+
+test("light media issue workbench visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light issue workbench covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/operations/issues?test-view=ready");
+  await page.getByRole("heading", { name: "Close the loop on every stream." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("media-issue-workbench-light.png", { fullPage: true });
+});
+
+test("issue resolution confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Issue resolution covers representative desktop and phone geometry",
+  );
+  await page.goto("/operations/issues?test-view=ready");
+  const card = page.getByText("Northern Lights").locator("xpath=ancestor::article");
+  await card.getByRole("button", { name: "Resolve" }).click();
+  await expect(page.getByRole("dialog", { name: "Mark issue resolved?" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("media-issue-resolution.png");
+});
+
+for (const state of ["empty", "degraded", "unavailable"] as const) {
+  test(`${state} media issue workbench visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Issue workbench boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/operations/issues?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`media-issue-workbench-${state}.png`, { fullPage: true });
+  });
+}
 
 test("unconfigured login visual baseline", async ({ page }, testInfo) => {
   test.skip(
@@ -621,6 +891,22 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot("acquisition-recovery-confirmation.png");
+});
+
+test("acquisition monitoring confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Acquisition monitoring covers representative desktop and phone geometry",
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  await page.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot("acquisition-monitoring-confirmation.png");
 });
 
 async function prepareManualReleaseWorkbench(page: Page) {

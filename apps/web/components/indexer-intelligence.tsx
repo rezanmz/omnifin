@@ -48,6 +48,7 @@ import {
 import type { ThemePreference } from "../lib/theme";
 import { BrandMark } from "./brand-mark";
 import { CinematicBackdrop } from "./cinematic-backdrop";
+import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { useTheme } from "./theme-provider";
 import styles from "./indexer-intelligence.module.css";
 
@@ -185,16 +186,23 @@ function ThemeControl() {
 function PageFrame({ children }: { children: React.ReactNode }) {
   return (
     <div className={styles.layout}>
+      <LiquidGlassEnvironment />
       <CinematicBackdrop />
       <main className={styles.shell} id="main-content" tabIndex={-1}>
-        <header className={styles.topbar}>
+        <header className={styles.topbar} data-liquid-glass>
           <BrandMark />
-          <div className={styles.topbarActions}>
+          <nav aria-label="Operations navigation" className={styles.topbarActions}>
+            <Link className={styles.back} href="/operations/health" prefetch={false}>
+              <Activity aria-hidden="true" size={16} /> Health
+            </Link>
+            <Link className={styles.back} href="/operations/downloads" prefetch={false}>
+              <Gauge aria-hidden="true" size={16} /> Downloads
+            </Link>
             <Link className={styles.back} href="/">
               <ArrowLeft aria-hidden="true" size={17} /> Discover
             </Link>
             <ThemeControl />
-          </div>
+          </nav>
         </header>
         {children}
       </main>

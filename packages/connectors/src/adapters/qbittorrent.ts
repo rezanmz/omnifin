@@ -3,7 +3,12 @@ import { DOWNLOAD_QUEUE_MAX_ITEMS } from "@omnifin/contracts/downloads";
 import { z } from "zod";
 
 import { ProbeOnlyAdapter } from "./base.js";
-import type { ConnectorDownloadQueueResult } from "../downloads.js";
+import type {
+  ConnectorDownloadQueueResult,
+  DownloadQueueMutation,
+  DownloadQueuePromotion,
+  DownloadQueueRemoval,
+} from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 
@@ -12,9 +17,23 @@ export interface QBittorrentAdapterConfig extends ConnectorTargetConfig {
   password: string;
 }
 
-function readSessionCookie(setCookie: string | null): string | null {
-  const sessionId = setCookie?.match(/(?:^|;\s*)SID=([^;]+)/i)?.[1];
-  return sessionId && /^[A-Za-z0-9._~-]{1,512}$/.test(sessionId) ? `SID=${sessionId}` : null;
+export function isQBittorrentLoginResponseAccepted(status: number, body: string): boolean {
+  const normalizedBody = body.trim();
+  return (status === 200 && normalizedBody === "Ok.") || (status === 204 && normalizedBody === "");
+}
+
+export function readQBittorrentSessionCookie(setCookie: string | null): string | null {
+  if (!setCookie || setCookie.length > 16_384) return null;
+  const pair = setCookie.split(";", 1)[0]?.trim();
+  const separator = pair?.indexOf("=") ?? -1;
+  if (!pair || separator <= 0) return null;
+  const name = pair.slice(0, separator);
+  const value = pair.slice(separator + 1);
+  if (name !== "SID") {
+    const port = name.match(/^QBT_SID_([1-9]\d{0,4})$/u)?.[1];
+    if (!port || Number(port) > 65_535) return null;
+  }
+  return /^(?=.{1,512}$)[A-Za-z0-9._~+\/-]+={0,2}$/u.test(value) ? `${name}=${value}` : null;
 }
 
 const torrentSchema = z.object({
@@ -27,12 +46,14 @@ const torrentSchema = z.object({
   name: z.string().min(1).max(4_096),
   num_leechs: z.number().int().nonnegative().max(2_147_483_647).nullish(),
   num_seeds: z.number().int().nonnegative().max(2_147_483_647).nullish(),
+  priority: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER).nullish(),
   progress: z.number().finite().min(0).max(1),
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   state: z.string().trim().min(1).max(64),
 });
 
 const torrentListSchema = z.array(torrentSchema).max(DOWNLOAD_QUEUE_MAX_ITEMS + 1);
+const torrentHashSchema = z.string().regex(/^(?:[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64})$/u);
 
 const activeStates = new Set([
   "allocating",
@@ -92,6 +113,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
     "connector.health",
     "connector.version",
     "download.queue.read",
+    "download.queue.mutate",
   ] as const;
   readonly #username: string;
   readonly #password: string;
@@ -113,7 +135,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       });
       return {
         value: version.body,
-        additionalProtectedValues: [cookie.slice("SID=".length)],
+        additionalProtectedValues: [cookie.slice(cookie.indexOf("=") + 1)],
       };
     });
   }
@@ -145,6 +167,10 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
         externalId: torrent.hash.toLowerCase(),
         leechers: torrent.num_leechs ?? null,
         progress: torrent.progress,
+        queuePosition:
+          torrent.priority !== undefined && torrent.priority !== null && torrent.priority > 0
+            ? torrent.priority - 1
+            : null,
         rateBytesPerSecond: torrent.dlspeed ?? 0,
         remainingBytes: Math.min(
           torrent.size,
@@ -158,6 +184,81 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       truncated:
         active.length > DOWNLOAD_QUEUE_MAX_ITEMS || torrents.length > DOWNLOAD_QUEUE_MAX_ITEMS,
     };
+  }
+
+  async updateDownloadQueueItem(input: DownloadQueueMutation, signal?: AbortSignal): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    const version = await this.client.requestText("api/v2/app/version", {
+      operation: "download.queue.action",
+      headers: this.authenticatedHeaders(cookie),
+      ...(signal ? { signal } : {}),
+    });
+    const versionMatch = /^v?(\d+)(?:\.\d+){1,3}(?:[^\p{Cc}\p{Cf}]*)?$/u.exec(version.body.trim());
+    if (!versionMatch?.[1]) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "unsupported_version",
+        message: "qbittorrent returned a version that cannot be safely controlled.",
+        retryable: false,
+      });
+    }
+    const major = Number(versionMatch[1]);
+    if (!Number.isSafeInteger(major) || major < 4) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "unsupported_version",
+        message: "qbittorrent does not support safe queue controls at this version.",
+        retryable: false,
+      });
+    }
+    const command =
+      input.action === "pause" ? (major >= 5 ? "stop" : "pause") : major >= 5 ? "start" : "resume";
+    await this.client.requestText(`api/v2/torrents/${command}`, {
+      operation: "download.queue.action",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId }),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async removeDownloadQueueItem(input: DownloadQueueRemoval, signal?: AbortSignal): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    await this.client.requestText("api/v2/torrents/delete", {
+      operation: "download.queue.remove",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId, deleteFiles: "false" }),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async promoteDownloadQueueItem(
+    input: DownloadQueuePromotion,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    await this.client.requestText("api/v2/torrents/topPrio", {
+      operation: "download.queue.promote",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId }),
+      ...(signal ? { signal } : {}),
+    });
   }
 
   private authenticatedHeaders(cookie: string) {
@@ -178,8 +279,8 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       ...(signal ? { signal } : {}),
     });
 
-    const cookie = readSessionCookie(login.headers.get("set-cookie"));
-    if (login.body.trim() !== "Ok." || !cookie) {
+    const cookie = readQBittorrentSessionCookie(login.headers.get("set-cookie"));
+    if (!isQBittorrentLoginResponseAccepted(login.status, login.body) || !cookie) {
       throw new SafeConnectorError({
         service: this.service,
         operation: "authenticate",

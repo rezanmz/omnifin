@@ -1,11 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { demoContinueWatchingFeed } from "../../lib/continue-watching-demo";
 import {
+  acquisitionMonitoringCsrfToken,
+  mockAcquisitionMonitoringSession,
+  mockAcquisitionMonitoringUpdate,
+} from "../fixtures/acquisition-monitoring";
+import {
   acquisitionRecoveryCsrfToken,
   mockAcquisitionRecoverySession,
   mockAcquisitionSearch,
 } from "../fixtures/acquisition-recovery";
-import { mockDiscoverySearch } from "../fixtures/discovery";
+import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import {
   mediaRequestCsrfToken,
   mockMediaRequestCreation,
@@ -98,6 +103,36 @@ test("operators can inspect a title-level acquisition trace before choosing reco
   await expect(timeline).not.toBeVisible();
 });
 
+test("operators can explicitly pause whole-title monitoring without touching files", async ({
+  page,
+}) => {
+  await mockAcquisitionMonitoringSession(page);
+  const capture = await mockAcquisitionMonitoringUpdate(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(timeline.getByText("Pause monitoring for The Far Meridian?")).toBeVisible();
+  await expect(timeline.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(timeline.getByText(/Existing files and downloads stay intact/u)).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /delete|remove|move/i })).toHaveCount(0);
+  await timeline.getByRole("button", { name: "Pause" }).click();
+
+  await expect(timeline.getByText("Monitoring paused", { exact: true })).toBeVisible();
+  expect(capture.requests).toBe(1);
+  expect(capture.body).toEqual({
+    expectedMonitored: true,
+    mediaId: 42,
+    monitored: false,
+    service: "radarr",
+  });
+  expect(capture.csrfToken).toBe(acquisitionMonitoringCsrfToken);
+});
+
 test("operators can queue one exact-target acquisition search", async ({ page }) => {
   await mockAcquisitionRecoverySession(page);
   const capture = await mockAcquisitionSearch(page);
@@ -175,6 +210,35 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await expect(search).toHaveValue("matrix");
 });
 
+test("media details preserve search context and expose a guarded request handoff", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await mockDiscoveryDetails(page);
+  await page.goto("/");
+
+  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  await search.fill("matrix");
+  await page.getByRole("button", { name: "View details for The Matrix" }).click();
+  const drawer = page.getByRole("dialog", { name: "The Matrix details" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "The Matrix" })).toBeVisible();
+  await expect(drawer.getByText("Keanu Reeves")).toBeVisible();
+  const requestAction = drawer.getByRole("button", { name: "Request The Matrix" });
+  await requestAction.scrollIntoViewIfNeeded();
+  await expect(requestAction).toBeInViewport();
+  await expect(search).toHaveAttribute("aria-expanded", "false");
+  expect(
+    await drawer
+      .locator(".media-detail__scroll")
+      .evaluate((scrollRegion) => scrollRegion.scrollWidth <= scrollRegion.clientWidth + 1),
+  ).toBe(true);
+
+  await drawer.getByRole("button", { name: "Close media details" }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(search).toHaveValue("matrix");
+});
+
 test("request composer delegates a bounded request through the verified session", async ({
   page,
 }) => {
@@ -217,17 +281,61 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 });
 
-test("operations navigation opens the live download queue workspace", async ({ page }) => {
+test("operations navigation opens the system health workspace", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute(
     "href",
+    "/operations/health",
+  );
+});
+
+test("system health preserves partial service visibility and private storage boundaries", async ({
+  page,
+}) => {
+  await page.goto("/operations/health?test-view=degraded");
+
+  await expect(
+    page.getByRole("heading", { name: "The stack is holding, with gaps." }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Cinema" })).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Television" })).toBeVisible();
+  await expect(page.getByRole("heading", { exact: true, name: "Indexers" })).toBeVisible();
+  await expect(
+    page.getByText("Indexers did not answer before the connector timeout."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("meter", { name: "Cinema storage 1: 11 percent free" }),
+  ).toHaveAttribute("aria-valuenow", "11");
+  await expect(page.getByText(/private mount paths never leave the gateway/iu)).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("/srv/");
+});
+
+test("system health links every operational workspace and switches appearance", async ({
+  page,
+}) => {
+  await page.goto("/operations/health?test-view=ready");
+
+  await expect(page.getByRole("link", { name: "Downloads" })).toHaveAttribute(
+    "href",
     "/operations/downloads",
   );
+  await expect(page.getByRole("link", { name: "Indexers" })).toHaveAttribute(
+    "href",
+    "/operations/indexers",
+  );
+  await page.getByRole("radio", { name: "Light theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
 test("download queue supports focused search and attention filtering", async ({ page }) => {
   await page.goto("/operations/downloads?test-view=ready");
   await expect(page.getByRole("heading", { name: "Every byte, in motion." })).toBeVisible();
+  const promotions = page.getByRole("button", { name: /^Move .+ to front of queue$/u });
+  await expect(promotions).toHaveCount(3);
+  const promotionTarget = await promotions.first().boundingBox();
+  expect(promotionTarget).not.toBeNull();
+  expect(promotionTarget!.height).toBeGreaterThanOrEqual(44);
+  expect(promotionTarget!.width).toBeGreaterThanOrEqual(44);
 
   await page.getByRole("button", { name: "Attention" }).click();
   await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toBeVisible();
@@ -237,6 +345,14 @@ test("download queue supports focused search and attention filtering", async ({ 
   await page.getByRole("searchbox", { name: "Search downloads" }).fill("signal");
   await expect(page.getByText("Signal.S01E07.1080p.WEB-DL")).toBeVisible();
   await expect(page.getByText("Glass.Horizon.2025.1080p.BluRay")).toHaveCount(0);
+
+  await page.getByRole("searchbox", { name: "Search downloads" }).fill("");
+  const resume = page.getByRole("button", { name: "Resume Signal.S01E07.1080p.WEB-DL" });
+  await resume.click();
+  await expect(page.getByText("Resume this transfer?")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(resume).toBeFocused();
 });
 
 test("indexer intelligence hydrates without changing deterministic telemetry", async ({ page }) => {
@@ -362,6 +478,12 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
   const geometry = await page.evaluate(() => {
     const navigation = document.querySelector<HTMLElement>(".mobile-navigation")!;
     const navigationBox = navigation.getBoundingClientRect();
+    const navigationItems = Array.from(
+      navigation.querySelectorAll<HTMLElement>(".mobile-navigation__item"),
+    ).map((item) => {
+      const box = item.getBoundingClientRect();
+      return { height: box.height, top: Math.round(box.top), width: box.width };
+    });
     const firstRailHeading = document
       .querySelector<HTMLElement>(".media-rail .section-heading")!
       .getBoundingClientRect();
@@ -383,11 +505,18 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
       firstRailHeadingTop: firstRailHeading.top,
       heroBottom: heroBox.bottom,
       navigationBottom: navigationBox.bottom,
+      navigationItems,
       navigationTop: navigationBox.top,
     };
   });
 
   expect(geometry.actions).toHaveLength(2);
+  expect(geometry.navigationItems).toHaveLength(6);
+  expect(new Set(geometry.navigationItems.map((item) => item.top)).size).toBe(1);
+  for (const item of geometry.navigationItems) {
+    expect(item.height).toBeGreaterThanOrEqual(44);
+    expect(item.width).toBeGreaterThanOrEqual(44);
+  }
   expect(geometry.heroBottom + 8).toBeLessThanOrEqual(geometry.navigationTop);
   expect(
     geometry.firstRailHeadingBottom <= geometry.navigationTop - 8 ||

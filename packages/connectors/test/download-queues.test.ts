@@ -31,7 +31,10 @@ function target(
 describe("qBittorrent download queue", () => {
   it("authenticates and normalizes active downloads without returning upstream hashes", async () => {
     const mock = createMockTransport([
-      new Response("Ok.", { headers: { "set-cookie": "SID=fixture-session; Path=/; HttpOnly" } }),
+      new Response(null, {
+        status: 204,
+        headers: { "set-cookie": "QBT_SID_8080=fixture+session/value; Path=/; HttpOnly" },
+      }),
       jsonResponse([
         {
           added_on: 1_774_648_200,
@@ -43,6 +46,7 @@ describe("qBittorrent download queue", () => {
           name: "/private/media/The.Far.Meridian.2160p",
           num_leechs: 2,
           num_seeds: 31,
+          priority: 2,
           progress: 0.75,
           size: 1_024,
           state: "downloading",
@@ -74,6 +78,7 @@ describe("qBittorrent download queue", () => {
           externalId: "0123456789abcdef0123456789abcdef01234567",
           leechers: 2,
           progress: 0.75,
+          queuePosition: 1,
           rateBytesPerSecond: 4_096,
           remainingBytes: 256,
           seeders: 31,
@@ -89,10 +94,10 @@ describe("qBittorrent download queue", () => {
       "/api/v2/torrents/info",
     ]);
     expect(mock.requests[1]?.url.searchParams.get("limit")).toBe("201");
-    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("SID=fixture-session");
+    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("QBT_SID_8080=fixture+session/value");
     expect(mock.requests[1]?.init.headers.get("origin")).toBe("https://qbittorrent.example.test");
     expect(JSON.stringify(result)).not.toContain(PASSWORD);
-    expect(JSON.stringify(result)).not.toContain("fixture-session");
+    expect(JSON.stringify(result)).not.toContain("fixture+session/value");
   });
 
   it("maps qBittorrent's operational states and unknown ETA sentinel", async () => {
@@ -128,6 +133,92 @@ describe("qBittorrent download queue", () => {
     ]);
     expect(result.items.every(({ etaSeconds }) => etaSeconds === null)).toBe(true);
   });
+
+  it.each([
+    { action: "pause" as const, command: "/api/v2/torrents/stop", version: "v5.1.2" },
+    { action: "resume" as const, command: "/api/v2/torrents/resume", version: "v4.6.7" },
+  ])("uses the exact version-compatible $action endpoint", async ({ action, command, version }) => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(version),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.updateDownloadQueueItem({ action, externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/app/version",
+      command,
+    ]);
+    expect(mock.requests[2]?.init.method).toBe("POST");
+    expect(String(mock.requests[2]?.init.body)).toBe(`hashes=${hash}`);
+    expect(mock.requests[2]?.init.headers.get("cookie")).toBe("SID=session");
+  });
+
+  it("rejects a non-hash target before authenticating", async () => {
+    const mock = createMockTransport([]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await expect(
+      adapter.updateDownloadQueueItem({ action: "pause", externalId: "all" }),
+    ).rejects.toThrow();
+    expect(mock.requests).toHaveLength(0);
+  });
+
+  it("removes exactly one torrent while preserving its downloaded files", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.removeDownloadQueueItem({ externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/torrents/delete",
+    ]);
+    expect(mock.requests[1]?.init.method).toBe("POST");
+    expect(String(mock.requests[1]?.init.body)).toBe(`hashes=${hash}&deleteFiles=false`);
+  });
+
+  it("promotes exactly one torrent to the front of the queue", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.promoteDownloadQueueItem({ externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/torrents/topPrio",
+    ]);
+    expect(mock.requests[1]?.init.method).toBe("POST");
+    expect(String(mock.requests[1]?.init.body)).toBe(`hashes=${hash}`);
+  });
 });
 
 describe("SABnzbd download queue", () => {
@@ -140,6 +231,7 @@ describe("SABnzbd download queue", () => {
             {
               cat: "series",
               filename: "Signal.S01E07.1080p.WEB-DL",
+              index: 0,
               mb: "1000",
               mbleft: "250",
               nzo_id: "SABnzbd_nzo_fixture-one",
@@ -150,6 +242,7 @@ describe("SABnzbd download queue", () => {
             {
               cat: "movies",
               filename: "The.Far.Meridian.2160p",
+              index: 1,
               mb: "2000",
               mbleft: "1000",
               nzo_id: "SABnzbd_nzo_fixture-two",
@@ -174,6 +267,7 @@ describe("SABnzbd download queue", () => {
         etaSeconds: 240,
         externalId: "SABnzbd_nzo_fixture-one",
         progress: 0.75,
+        queuePosition: 0,
         rateBytesPerSecond: 1_048_576,
         remainingBytes: 262_144_000,
         sizeBytes: 1_048_576_000,
@@ -182,6 +276,7 @@ describe("SABnzbd download queue", () => {
       expect.objectContaining({
         etaSeconds: 600,
         progress: 0.5,
+        queuePosition: 1,
         rateBytesPerSecond: 0,
         state: "paused",
       }),
@@ -204,6 +299,22 @@ describe("SABnzbd download queue", () => {
     expect(mock.requests).toHaveLength(0);
   });
 
+  it("normalizes SABnzbd's bounded invalid API-key response", async () => {
+    const mock = createMockTransport([jsonResponse({ error: "API Key Incorrect", status: false })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    const error = await adapter.readDownloadQueue().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "invalid_credentials",
+      operation: "download.queue",
+    } satisfies Partial<SafeConnectorError>);
+    expect(JSON.stringify(error)).not.toContain(API_KEY);
+  });
+
   it("rejects schema drift without reflecting an upstream payload", async () => {
     const privatePayload = "private-upstream-queue-value";
     const mock = createMockTransport([jsonResponse({ queue: { slots: [{ privatePayload }] } })]);
@@ -216,5 +327,71 @@ describe("SABnzbd download queue", () => {
 
     expect(error).toMatchObject({ code: "response_invalid", operation: "download.queue" });
     expect(JSON.stringify(error)).not.toContain(privatePayload);
+  });
+
+  it("controls exactly one queue item without placing its API key in the response", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ nzo_ids: [externalId], status: true })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.updateDownloadQueueItem({ action: "pause", externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("queue");
+    expect(mock.requests[0]?.url.searchParams.get("name")).toBe("pause");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.get("apikey")).toBe(API_KEY);
+    expect(adapter.capabilities).toContain("download.queue.mutate");
+  });
+
+  it("removes exactly one Usenet job without requesting downloaded-file deletion", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ nzo_ids: [externalId], status: true })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.removeDownloadQueueItem({ externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("queue");
+    expect(mock.requests[0]?.url.searchParams.get("name")).toBe("delete");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.has("del_files")).toBe(false);
+  });
+
+  it("rejects an SABnzbd confirmation for a different queue item", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ nzo_ids: ["SABnzbd_nzo_different"], status: true }),
+    ]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await expect(
+      adapter.updateDownloadQueueItem({
+        action: "resume",
+        externalId: "SABnzbd_nzo_fixture-one",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "download.queue.action" });
+  });
+
+  it("promotes exactly one Usenet job to the front of the queue", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ result: { position: 0, priority: 0 } })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.promoteDownloadQueueItem({ externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("switch");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.get("value2")).toBe("0");
+    expect(mock.requests[0]?.url.searchParams.get("apikey")).toBe(API_KEY);
   });
 });

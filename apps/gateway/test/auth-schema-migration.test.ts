@@ -970,7 +970,13 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.auditBudgetScopes).toBeDefined();
     expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
     expect(authenticationSchema.mediaReferences).toBeDefined();
+    expect(authenticationSchema.externalIssueReferences).toBeDefined();
+    expect(authenticationSchema.mediaIssueOperations).toBeDefined();
     expect(authenticationSchema.playbackSessions).toBeDefined();
+    expect(authenticationSchema.libraryArtworkSearches).toBeDefined();
+    expect(authenticationSchema.libraryMutationOperations).toBeDefined();
+    expect(authenticationSchema.subtitleDownloadOperations).toBeDefined();
+    expect(authenticationSchema.subtitleSearches).toBeDefined();
     expect(authenticationSchema.sessionRotationAliases).toBeDefined();
     expect(authenticationSchema.sessionSecretReservations).toBeDefined();
     expect(authenticationSchema.serviceIdentityLinks).toBeDefined();
@@ -989,12 +995,19 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("audit_budget_scopes");
       expect(names).toContain("oidc_logout_receipts");
       expect(names).toContain("media_references");
+      expect(names).toContain("external_issue_references");
+      expect(names).toContain("media_issue_operations");
       expect(names).toContain("playback_sessions");
+      expect(names).toContain("library_artwork_searches");
+      expect(names).toContain("library_mutation_operations");
+      expect(names).toContain("download_queue_removal_operations");
+      expect(names).toContain("subtitle_download_operations");
+      expect(names).toContain("subtitle_searches");
       expect(names).toContain("session_rotation_aliases");
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 13 });
+      ).toEqual({ count: 18 });
       expect(
         database.sqlite
           .prepare(

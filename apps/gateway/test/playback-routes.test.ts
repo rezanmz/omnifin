@@ -1,5 +1,6 @@
 import type { JellyfinPlaybackResult } from "@omnifin/connectors/media/jellyfin-playback-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { playbackIssueSchema } from "@omnifin/contracts/issues";
 import {
   playbackNegotiationResponseSchema,
   playbackProgressResponseSchema,
@@ -9,7 +10,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
-import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIssueReferences,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:30:00.000Z");
@@ -75,7 +81,7 @@ function playbackResult(): JellyfinPlaybackResult {
   };
 }
 
-async function harness() {
+async function harness(options: { playbackIssueTokens?: readonly string[] } = {}) {
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
@@ -88,6 +94,7 @@ async function harness() {
       return { path: url.pathname.slice("/base/".length), query: url.searchParams.toString() };
     },
   );
+  let issueTokenIndex = 0;
   const app = await createApp({
     config,
     continueWatchingDependencies: {
@@ -98,12 +105,14 @@ async function harness() {
             {
               artwork: { backdrop: null, poster: null },
               contentRating: "PG-13",
+              episodeNumber: null,
               externalId: privateItemId,
               kind: "movie" as const,
               lastPlayedAt: "2026-07-28T06:15:00.000Z",
               overview: null,
               positionSeconds: 1_200,
               runtimeSeconds: 7_200,
+              seasonNumber: null,
               subtitle: null,
               title: "The Far Meridian",
               year: 2026,
@@ -128,6 +137,11 @@ async function harness() {
         streamPlaybackTarget,
       }),
       createToken: () => "p".repeat(22),
+    },
+    playbackIssueDependencies: {
+      clock: () => now,
+      createAuditId: () => "playback-issue-audit-event",
+      createToken: () => options.playbackIssueTokens?.[issueTokenIndex++] ?? "i".repeat(22),
     },
     sessionDependencies: {
       clock: () => now,
@@ -233,6 +247,174 @@ const negotiation = {
 };
 
 describe("playback routes", () => {
+  it("records an encrypted, audited issue without exposing private media details", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const description = "Dialogue drifts after the scene transition.";
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { category: "sync", description, positionSeconds: 1_247 },
+        url: `/v1/playback/${playback.sessionId}/issues`,
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      const issue = playbackIssueSchema.parse(response.json());
+      expect(issue).toEqual({
+        category: "sync",
+        createdAt: now.toISOString(),
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: 1_247,
+        status: "open",
+      });
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toContain(description);
+      expect(response.body).not.toMatch(/private-|route-private/u);
+
+      const stored = app.database.sqlite
+        .prepare(
+          `select encrypted_description as encryptedDescription,
+                  media_reference_id as mediaReferenceId,
+                  playback_session_id as playbackSessionId
+           from media_issues where id = ?`,
+        )
+        .get(issue.id) as {
+        encryptedDescription: string;
+        mediaReferenceId: string;
+        playbackSessionId: string;
+      };
+      expect(stored).toMatchObject({
+        mediaReferenceId: referenceId,
+        playbackSessionId: playback.sessionId,
+      });
+      expect(stored.encryptedDescription).not.toContain(description);
+      expect(
+        new EnvelopeCipher(testConfig().encryptionKey).decrypt(
+          stored.encryptedDescription,
+          `media_issue_description:${issue.id}`,
+        ),
+      ).toBe(description);
+
+      const audit = app.database.sqlite
+        .prepare(
+          `select event_type as eventType, metadata_json as metadataJson,
+                  target_id as targetId, target_type as targetType
+           from audit_events where id = 'playback-issue-audit-event'`,
+        )
+        .get();
+      expect(audit).toEqual({
+        eventType: "media.issue.created",
+        metadataJson: JSON.stringify({
+          category: "sync",
+          mediaReferenceId: referenceId,
+          positionSeconds: 1_247,
+        }),
+        targetId: issue.id,
+        targetType: "media_issue",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps local and external issue references in one collision-free opaque namespace", async () => {
+    const firstToken = "i".repeat(22);
+    const secondToken = "j".repeat(22);
+    const { app, headers, referenceId } = await harness({
+      playbackIssueTokens: [firstToken, secondToken],
+    });
+    app.database.db
+      .insert(externalIssueReferences)
+      .values({
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        encryptedUpstreamId: "v2.external-issue-fixture",
+        expiresAt: new Date(now.getTime() + 60_000),
+        id: `issue_${firstToken}`,
+        lastUsedAt: now,
+        upstreamIdDigest: "d".repeat(22),
+        updatedAt: now,
+      })
+      .run();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { category: "other", description: null, positionSeconds: 1_200 },
+        url: `/v1/playback/${playback.sessionId}/issues`,
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      expect(playbackIssueSchema.parse(response.json()).id).toBe(`issue_${secondToken}`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed for missing CSRF, expired sessions, and unsafe issue descriptions", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const issueUrl = `/v1/playback/${playback.sessionId}/issues`;
+      const withoutCsrf = Object.fromEntries(
+        Object.entries(headers).filter(([name]) => name !== SESSION_CSRF_HEADER),
+      );
+      const denied = await app.inject({
+        headers: withoutCsrf,
+        method: "POST",
+        payload: { category: "audio", description: null, positionSeconds: 1_200 },
+        url: issueUrl,
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("csrf_denied");
+
+      const invalid = await app.inject({
+        headers,
+        method: "POST",
+        payload: { category: "other", description: "unsafe\u0000detail", positionSeconds: 1_200 },
+        url: issueUrl,
+      });
+      expect(invalid.statusCode).toBe(400);
+
+      app.database.sqlite
+        .prepare("update playback_sessions set created_at = ?, expires_at = ? where id = ?")
+        .run(now.getTime() - 1, now.getTime(), playback.sessionId);
+      const expired = await app.inject({
+        headers,
+        method: "POST",
+        payload: { category: "buffering", description: null, positionSeconds: 1_200 },
+        url: issueUrl,
+      });
+      expect(expired.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(expired.json()).error.code).toBe("playback_session_not_found");
+      expect(
+        app.database.sqlite.prepare("select count(*) as count from media_issues").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("creates a private playback session and accepts progress with CSRF-bound auth", async () => {
     const { app, headers, negotiate, referenceId, reportPlaybackEvent } = await harness();
     try {
@@ -422,7 +604,10 @@ describe("playback routes", () => {
       expect(nested.body).not.toMatch(/private|variant\.m3u8|0\.ts/u);
 
       const token = nestedPath!.split("/").at(-1)!;
-      const tamperedToken = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+      const tokenParts = token.split(".");
+      const initializationVector = tokenParts[1]!;
+      tokenParts[1] = `${initializationVector.startsWith("A") ? "B" : "A"}${initializationVector.slice(1)}`;
+      const tamperedToken = tokenParts.join(".");
       const callsBeforeTamper = readPlaybackTarget.mock.calls.length;
       const tampered = await app.inject({
         headers: { cookie: headers.cookie },

@@ -521,6 +521,509 @@ export const playbackSessions = sqliteTable(
   ],
 );
 
+export const mediaIssues = sqliteTable(
+  "media_issues",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    playbackSessionId: text("playback_session_id").notNull(),
+    category: text("category", {
+      enum: ["audio", "buffering", "subtitles", "sync", "video_quality", "other"],
+    }).notNull(),
+    encryptedDescription: text("encrypted_description"),
+    positionSeconds: integer("position_seconds").notNull(),
+    state: text("state", { enum: ["open", "resolved"] })
+      .notNull()
+      .default("open"),
+    encryptedResolution: text("encrypted_resolution"),
+    resolvedByUserId: text("resolved_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("media_issues_state_created_idx").on(table.state, table.createdAt),
+    index("media_issues_user_created_idx").on(table.userId, table.createdAt),
+    index("media_issues_media_created_idx").on(table.mediaReferenceId, table.createdAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "media_issues_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "media_issues_id_check",
+      sql`length(${table.id}) = 28
+        and substr(${table.id}, 1, 6) = 'issue_'
+        and substr(${table.id}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issues_playback_session_id_check",
+      sql`length(${table.playbackSessionId}) = 31
+        and substr(${table.playbackSessionId}, 1, 9) = 'playback_'
+        and substr(${table.playbackSessionId}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issues_category_check",
+      sql`${table.category} in ('audio', 'buffering', 'subtitles', 'sync', 'video_quality', 'other')`,
+    ),
+    check(
+      "media_issues_description_check",
+      sql`${table.encryptedDescription} is null or length(${table.encryptedDescription}) between 1 and 8192`,
+    ),
+    check("media_issues_position_check", sql`${table.positionSeconds} between 0 and 10000000`),
+    check("media_issues_state_check", sql`${table.state} in ('open', 'resolved')`),
+    check(
+      "media_issues_resolution_check",
+      sql`(
+          ${table.state} = 'open'
+          and ${table.encryptedResolution} is null
+          and ${table.resolvedByUserId} is null
+          and ${table.resolvedAt} is null
+        ) or (
+          ${table.state} = 'resolved'
+          and ${table.encryptedResolution} is not null
+          and length(${table.encryptedResolution}) between 1 and 8192
+          and ${table.resolvedByUserId} is not null
+          and ${table.resolvedAt} is not null
+        )`,
+    ),
+    check(
+      "media_issues_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.resolvedAt} is null or ${table.resolvedAt} between ${table.createdAt} and ${table.updatedAt})`,
+    ),
+  ],
+);
+
+export const externalIssueReferences = sqliteTable(
+  "external_issue_references",
+  {
+    id: text("id").primaryKey(),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    upstreamIdDigest: text("upstream_id_digest").notNull(),
+    encryptedUpstreamId: text("encrypted_upstream_id").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("external_issue_references_connector_digest_unique").on(
+      table.connectorId,
+      table.upstreamIdDigest,
+    ),
+    index("external_issue_references_expiry_idx").on(table.expiresAt),
+    check(
+      "external_issue_references_id_check",
+      sql`length(${table.id}) = 28
+        and substr(${table.id}, 1, 6) = 'issue_'
+        and substr(${table.id}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "external_issue_references_digest_check",
+      sql`length(${table.upstreamIdDigest}) = 22
+        and ${table.upstreamIdDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "external_issue_references_payload_check",
+      sql`length(${table.encryptedUpstreamId}) between 1 and 8192`,
+    ),
+    check(
+      "external_issue_references_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const subtitleSearches = sqliteTable(
+  "subtitle_searches",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("subtitle_searches_user_created_idx").on(table.userId, table.createdAt),
+    index("subtitle_searches_expiry_idx").on(table.expiresAt),
+    index("subtitle_searches_media_idx").on(table.mediaReferenceId),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "subtitle_searches_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "subtitle_searches_id_check",
+      sql`length(${table.id}) = 38
+        and substr(${table.id}, 1, 16) = 'subtitle_search_'
+        and substr(${table.id}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_searches_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 4194304`,
+    ),
+    check(
+      "subtitle_searches_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "subtitle_searches_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const subtitleDownloadOperations = sqliteTable(
+  "subtitle_download_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    searchId: text("search_id").notNull(),
+    resultId: text("result_id").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("subtitle_download_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("subtitle_download_operations_state_created_idx").on(table.state, table.createdAt),
+    check(
+      "subtitle_download_operations_id_check",
+      sql`length(${table.id}) = 40
+        and substr(${table.id}, 1, 18) = 'subtitle_download_'
+        and substr(${table.id}, 19) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_search_id_check",
+      sql`length(${table.searchId}) = 38
+        and substr(${table.searchId}, 1, 16) = 'subtitle_search_'
+        and substr(${table.searchId}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_result_id_check",
+      sql`length(${table.resultId}) = 38
+        and substr(${table.resultId}, 1, 16) = 'subtitle_result_'
+        and substr(${table.resultId}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "subtitle_download_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "subtitle_download_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "subtitle_download_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "subtitle_download_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const libraryArtworkSearches = sqliteTable(
+  "library_artwork_searches",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("library_artwork_searches_user_created_idx").on(table.userId, table.createdAt),
+    index("library_artwork_searches_expiry_idx").on(table.expiresAt),
+    index("library_artwork_searches_media_idx").on(table.mediaReferenceId),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "library_artwork_searches_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "library_artwork_searches_id_check",
+      sql`length(${table.id}) = 45
+        and substr(${table.id}, 1, 23) = 'library_artwork_search_'
+        and substr(${table.id}, 24) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_artwork_searches_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 4194304`,
+    ),
+    check(
+      "library_artwork_searches_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "library_artwork_searches_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const libraryMutationOperations = sqliteTable(
+  "library_mutation_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["scan", "item_refresh", "metadata_update", "artwork_apply"],
+    }).notNull(),
+    referenceId: text("reference_id"),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("library_mutation_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("library_mutation_operations_state_created_idx").on(table.state, table.createdAt),
+    index("library_mutation_operations_reference_idx").on(table.referenceId, table.createdAt),
+    check(
+      "library_mutation_operations_id_check",
+      sql`length(${table.id}) = 40
+        and substr(${table.id}, 1, 18) = 'library_operation_'
+        and substr(${table.id}, 19) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_kind_check",
+      sql`${table.kind} in ('scan', 'item_refresh', 'metadata_update', 'artwork_apply')`,
+    ),
+    check(
+      "library_mutation_operations_reference_check",
+      sql`(${table.kind} = 'scan' and ${table.referenceId} is null)
+        or (${table.kind} <> 'scan'
+          and length(${table.referenceId}) = 28
+          and substr(${table.referenceId}, 1, 6) = 'media_'
+          and substr(${table.referenceId}, 7) not glob '*[^A-Za-z0-9_-]*')`,
+    ),
+    check(
+      "library_mutation_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_mutation_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "library_mutation_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "library_mutation_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "library_mutation_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const downloadQueueRemovalOperations = sqliteTable(
+  "download_queue_removal_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    itemSnapshotJson: text("item_snapshot_json"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    mutationStartedAt: integer("mutation_started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("download_queue_removal_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("download_queue_removal_operations_state_created_idx").on(table.state, table.createdAt),
+    index("download_queue_removal_operations_item_idx").on(
+      table.connectorId,
+      table.itemId,
+      table.createdAt,
+    ),
+    check(
+      "download_queue_removal_operations_id_check",
+      sql`length(${table.id}) = 39
+        and substr(${table.id}, 1, 17) = 'download_removal_'
+        and substr(${table.id}, 18) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_item_id_check",
+      sql`length(${table.itemId}) = 31
+        and substr(${table.itemId}, 1, 9) = 'download_'
+        and substr(${table.itemId}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "download_queue_removal_operations_item_snapshot_check",
+      sql`${table.itemSnapshotJson} is null
+        or (json_valid(${table.itemSnapshotJson}) and json_type(${table.itemSnapshotJson}) = 'object')`,
+    ),
+    check(
+      "download_queue_removal_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "download_queue_removal_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.itemSnapshotJson} is not null
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.mutationStartedAt} is not null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "download_queue_removal_operations_timestamp_order_check",
+      sql`(${table.mutationStartedAt} is null or ${table.mutationStartedAt} >= ${table.createdAt})
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {
@@ -1044,6 +1547,95 @@ export const mediaRequestOperations = sqliteTable(
     ),
     check(
       "media_request_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const mediaIssueOperations = sqliteTable(
+  "media_issue_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
+    source: text("source", { enum: ["omnifin", "seerr"] }).notNull(),
+    desiredStatus: text("desired_status", { enum: ["open", "resolved"] }).notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("media_issue_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("media_issue_operations_state_created_idx").on(table.state, table.createdAt),
+    index("media_issue_operations_issue_created_idx").on(table.issueId, table.createdAt),
+    check(
+      "media_issue_operations_id_check",
+      sql`length(${table.id}) = 38
+        and substr(${table.id}, 1, 16) = 'issue_operation_'
+        and substr(${table.id}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_issue_id_check",
+      sql`length(${table.issueId}) = 28
+        and substr(${table.issueId}, 1, 6) = 'issue_'
+        and substr(${table.issueId}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("media_issue_operations_source_check", sql`${table.source} in ('omnifin', 'seerr')`),
+    check(
+      "media_issue_operations_desired_status_check",
+      sql`${table.desiredStatus} in ('open', 'resolved')`,
+    ),
+    check(
+      "media_issue_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_issue_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "media_issue_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "media_issue_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "media_issue_operations_timestamp_order_check",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
     ),
   ],

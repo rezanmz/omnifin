@@ -6,6 +6,13 @@ import {
   mediaRequestInputSchema,
   mediaRequestResponseJsonSchema,
   mediaRequestResponseSchema,
+  requestReviewDecisionInputJsonSchema,
+  requestReviewDecisionInputSchema,
+  requestReviewItemJsonSchema,
+  requestReviewItemSchema,
+  requestReviewPageJsonSchema,
+  requestReviewPageSchema,
+  requestReviewQuerySchema,
 } from "../src/requests.js";
 
 describe("media request contracts", () => {
@@ -84,5 +91,59 @@ describe("media request contracts", () => {
   it("publishes dialect-neutral route schemas", () => {
     expect(mediaRequestInputJsonSchema).not.toHaveProperty("$schema");
     expect(mediaRequestResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(requestReviewDecisionInputJsonSchema).not.toHaveProperty("$schema");
+    expect(requestReviewItemJsonSchema).not.toHaveProperty("$schema");
+    expect(requestReviewPageJsonSchema).not.toHaveProperty("$schema");
+  });
+
+  it("normalizes bounded request-review pagination and decisions", () => {
+    expect(requestReviewQuerySchema.parse({})).toEqual({
+      cursor: null,
+      limit: 20,
+      status: "pending",
+    });
+    expect(
+      requestReviewQuerySchema.parse({ cursor: "requests:20", limit: 12, status: "all" }),
+    ).toEqual({ cursor: "requests:20", limit: 12, status: "all" });
+    expect(requestReviewQuerySchema.safeParse({ cursor: "20" }).success).toBe(false);
+    expect(requestReviewQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(requestReviewDecisionInputSchema.parse({ decision: "approve" })).toEqual({
+      decision: "approve",
+    });
+    expect(
+      requestReviewDecisionInputSchema.safeParse({ decision: "approve", requestId: 42 }).success,
+    ).toBe(false);
+  });
+
+  it("allows only normalized request-review records", () => {
+    const item = {
+      createdAt: "2026-07-28T16:30:00.000Z",
+      id: "request:42",
+      is4k: false,
+      kind: "movie",
+      requestedBy: "Alex",
+      seasons: null,
+      source: "seerr",
+      status: "pending",
+      title: "The Long Meridian",
+      tmdbId: 550,
+      updatedAt: "2026-07-28T16:35:00.000Z",
+      year: 2026,
+    } as const;
+    expect(requestReviewItemSchema.parse(item)).toEqual(item);
+    expect(
+      requestReviewPageSchema.parse({
+        generatedAt: "2026-07-28T16:36:00.000Z",
+        items: [item],
+        nextCursor: "requests:20",
+        status: "pending",
+      }),
+    ).toMatchObject({ items: [item], nextCursor: "requests:20" });
+    expect(
+      requestReviewItemSchema.safeParse({
+        ...item,
+        requestedBy: { email: "private@example.test" },
+      }).success,
+    ).toBe(false);
   });
 });

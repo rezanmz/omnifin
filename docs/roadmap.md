@@ -60,11 +60,17 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 **Status: In development**
 
-- Seerr and metadata discovery, global search, granular requests, and approvals
-- Radarr and Sonarr read-only calendar (implemented; protected live evidence pending), queue,
-  monitoring, searches, and manual releases
+- Seerr and metadata discovery, global search, normalized movie and series details,
+  granular requests, and operator approvals (implemented; protected live evidence pending)
+- Radarr and Sonarr read-only calendar, exact whole-title monitoring, searches, and manual releases
+  (implemented; protected live evidence pending), plus broader queue mutations
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
-- qBittorrent and SABnzbd live queues (read path implemented; protected live evidence pending)
+- qBittorrent and SABnzbd live queues with exact-item pause/resume, verified front-of-queue
+  promotion, and downloaded-file-preserving removal (implemented with deterministic contracts and
+  isolated digest-pinned upstream gates; protected live evidence and broader queue mutations
+  pending)
+- Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry
+  (implemented; protected live evidence pending)
 - Title-level Acquisition Provenance and exact-target automatic-search recovery
   plus manual release recovery (implemented; protected live evidence pending)
 
@@ -74,13 +80,16 @@ matrix.
 
 ## Phase 4 — Playback and library operations
 
-**Status: Planned**
+**Status: In development**
 
 - Jellyfin playback negotiation, direct play and HLS, range proxying, tracks,
-  subtitles, bitrate control, progress, and Continue Watching
-- Player issue reporting
-- Bazarr subtitle search and download
-- Jellyfin scans, unmatched-media handling, and metadata artwork editing
+  subtitles, bitrate control, progress, and Continue Watching (implemented;
+  protected live evidence pending)
+- Player issue reporting plus a unified local/Seerr resolve and reopen workbench
+  (implemented; protected live evidence pending)
+- Bazarr subtitle search and download (implemented; protected live evidence pending)
+- Jellyfin scans, unmatched-media handling, and metadata artwork editing (implemented;
+  protected live evidence pending)
 
 **Gate:** generated copyright-free fixtures verify seeking, reconnects, audio and
 subtitle switching, progress accuracy, token isolation, transcoding, and supported
@@ -91,7 +100,8 @@ browser behavior.
 **Status: Planned**
 
 - Full compatibility matrix, threat-model-driven security review, load testing,
-  container scans, backup and restore, migration and rollback rehearsals
+  container scans, backup and restore (implemented; protected release evidence pending),
+  migration and rollback rehearsals
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 

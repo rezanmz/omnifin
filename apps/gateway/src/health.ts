@@ -11,16 +11,23 @@ const REQUIRED_TABLES = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "download_queue_removal_operations",
+  "external_issue_references",
   "external_identities",
+  "media_issue_operations",
+  "media_issues",
   "media_references",
   "media_request_operations",
   "oidc_providers",
   "operational_failures",
+  "playback_sessions",
   "role_mappings",
   "service_identity_links",
   "session_rotation_aliases",
   "session_secret_reservations",
   "sessions",
+  "subtitle_download_operations",
+  "subtitle_searches",
   "users",
 ] as const;
 
@@ -43,7 +50,42 @@ function assertDatabaseReady(database: DatabaseHandle) {
 
     database.sqlite
       .prepare(
+        "select id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash, state, item_snapshot_json, response_json, failure_code, mutation_started_at, completed_at from download_queue_removal_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
         "select id, user_id, service_identity_link_id, link_revision, item_digest, encrypted_payload, last_used_at, expires_at from media_references limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, media_reference_id, playback_session_id, category, encrypted_description, position_seconds, state, encrypted_resolution, resolved_by_user_id, resolved_at from media_issues limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, connector_id, upstream_id_digest, encrypted_upstream_id, last_used_at, expires_at from external_issue_references limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, issue_id, source, desired_status, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from media_issue_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, media_reference_id, encrypted_payload, state, position_seconds, revision, last_reported_at, expires_at from playback_sessions limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, link_revision, media_reference_id, connector_id, encrypted_payload, expires_at from subtitle_searches limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, search_id, result_id, idempotency_key_hash, fingerprint_hash, state, response_json, failure_code, completed_at from subtitle_download_operations limit 0",
       )
       .all();
     database.sqlite
@@ -106,6 +148,18 @@ function assertDatabaseReady(database: DatabaseHandle) {
 }
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
+  let pendingReadinessCheck: Promise<void> | undefined;
+  const checkDatabaseReadiness = () => {
+    pendingReadinessCheck ??= new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    })
+      .then(() => assertDatabaseReady(app.database))
+      .finally(() => {
+        pendingReadinessCheck = undefined;
+      });
+    return pendingReadinessCheck;
+  };
+
   app.get(
     "/healthz",
     {
@@ -150,7 +204,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     },
     async (_request, reply) => {
       try {
-        assertDatabaseReady(app.database);
+        await checkDatabaseReadiness();
         return { checks: { database: "ok" as const }, status: "ready" as const };
       } catch (error) {
         app.log.error({ err: error, operation: "readiness.database" }, "Readiness check failed");

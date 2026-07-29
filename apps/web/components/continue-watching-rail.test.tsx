@@ -115,6 +115,7 @@ describe("ContinueWatchingRail", () => {
     const user = userEvent.setup();
     const playbackClient = {
       prepare: vi.fn(async () => ({
+        canManageLibrary: false,
         csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
         session: playbackSession,
       })),
@@ -123,6 +124,13 @@ describe("ContinueWatchingRail", () => {
         positionSeconds: request.positionSeconds,
         sessionId: playbackSessionId,
         state: "stopped" as const,
+      })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-28T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
       })),
     };
     render(

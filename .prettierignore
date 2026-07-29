@@ -2,6 +2,7 @@
 .turbo
 .dockerignore
 Dockerfile
+CHANGELOG.md
 coverage
 dist
 node_modules

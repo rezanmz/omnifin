@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  AcquisitionMonitoringState,
   AcquisitionEvent,
   AcquisitionProvenanceResponse,
 } from "@omnifin/contracts/acquisition";
@@ -23,6 +24,17 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+
+import {
+  AcquisitionMonitoringPanel,
+  type AcquisitionMonitoringPanelState,
+} from "./acquisition-monitoring-panel";
+import {
+  AcquisitionMonitoringClientError,
+  acquisitionMonitoringClient,
+  type AcquisitionMonitoringClient,
+  type AcquisitionMonitoringClientErrorKind,
+} from "../lib/acquisition-monitoring";
 
 import {
   AcquisitionRecoveryClientError,
@@ -51,6 +63,7 @@ type TimelineState =
 
 export interface AcquisitionTimelineProperties {
   client?: AcquisitionProvenanceClient;
+  monitoringClient?: AcquisitionMonitoringClient;
   onManualSearch?: () => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -64,6 +77,11 @@ type RecoveryState =
   | { kind: "submitting" }
   | { kind: "success"; operationId: string; replayed: boolean }
   | { errorKind: AcquisitionRecoveryClientErrorKind; kind: "error" };
+
+interface MonitoringSnapshot {
+  operationId: string;
+  state: AcquisitionMonitoringPanelState;
+}
 
 const EVENT_COPY: Record<AcquisitionEvent["kind"], { label: string; icon: typeof Search }> = {
   download_failed: { icon: CircleAlert, label: "Download failed" },
@@ -197,9 +215,11 @@ function TimelineEvent({ event }: { event: AcquisitionEvent }) {
 
 function TimelineReady({
   data,
+  monitoring,
   recovery,
 }: {
   data: AcquisitionProvenanceResponse;
+  monitoring: ReactNode;
   recovery: ReactNode;
 }) {
   const active = data.events.filter((event) => event.state === "active").length;
@@ -256,6 +276,7 @@ function TimelineReady({
           ))}
         </ol>
       )}
+      {monitoring}
       {recovery}
       <div className="acquisition-timeline__footer">
         <span>
@@ -401,6 +422,7 @@ function RecoveryPanel({
 
 export function AcquisitionTimeline({
   client = acquisitionProvenanceClient,
+  monitoringClient = acquisitionMonitoringClient,
   onManualSearch,
   onOpenChange,
   open,
@@ -411,9 +433,11 @@ export function AcquisitionTimeline({
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
+  const [monitoringAttempt, setMonitoringAttempt] = useState(0);
   const idempotencyKeyReference = useRef<string | null>(null);
   const operationIdReference = useRef(operation?.id);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>({ kind: "idle" });
+  const [monitoringSnapshot, setMonitoringSnapshot] = useState<MonitoringSnapshot | null>(null);
   const [state, setState] = useState<TimelineState>({ kind: "idle" });
 
   useEffect(() => {
@@ -454,6 +478,41 @@ export function AcquisitionTimeline({
   }, [attempt, client, open, operation]);
 
   useEffect(() => {
+    if (!open || !operation) return;
+    if (operation.monitoring) return;
+    const controller = new AbortController();
+    let current = true;
+    void monitoringClient
+      .read(
+        { mediaId: operation.target.mediaId, service: operation.target.service },
+        controller.signal,
+      )
+      .then((data) => {
+        if (current) {
+          setMonitoringSnapshot({
+            operationId: operation.id,
+            state: { data, kind: "ready" },
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+        setMonitoringSnapshot({
+          operationId: operation.id,
+          state: {
+            errorKind:
+              error instanceof AcquisitionMonitoringClientError ? error.kind : "unavailable",
+            kind: "error",
+          },
+        });
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [monitoringAttempt, monitoringClient, open, operation]);
+
+  useEffect(() => {
     if (operationIdReference.current === operation?.id) return;
     operationIdReference.current = operation?.id;
     idempotencyKeyReference.current = null;
@@ -471,6 +530,12 @@ export function AcquisitionTimeline({
     : "operationId" in state && state.operationId === operation.id
       ? state
       : { kind: "idle" };
+  const visibleMonitoringState: AcquisitionMonitoringPanelState =
+    monitoringSnapshot?.operationId === operation.id
+      ? monitoringSnapshot.state
+      : operation.monitoring
+        ? { data: operation.monitoring, kind: "ready" }
+        : { kind: "loading" };
 
   return (
     <dialog
@@ -556,6 +621,87 @@ export function AcquisitionTimeline({
           ) : (
             <TimelineReady
               data={visibleState.data}
+              monitoring={
+                <AcquisitionMonitoringPanel
+                  onBegin={() => {
+                    if (visibleMonitoringState.kind !== "ready") return;
+                    setMonitoringSnapshot({
+                      operationId: operation.id,
+                      state: { data: visibleMonitoringState.data, kind: "confirming" },
+                    });
+                  }}
+                  onCancel={() => {
+                    if (visibleMonitoringState.kind !== "confirming") return;
+                    setMonitoringSnapshot({
+                      operationId: operation.id,
+                      state: { data: visibleMonitoringState.data, kind: "ready" },
+                    });
+                  }}
+                  onConfirm={() => {
+                    void (async () => {
+                      if (visibleMonitoringState.kind !== "confirming") return;
+                      const currentState: AcquisitionMonitoringState = visibleMonitoringState.data;
+                      setMonitoringSnapshot({
+                        operationId: operation.id,
+                        state: { data: currentState, kind: "submitting" },
+                      });
+                      const eligibility = await recoveryClient.loadEligibility();
+                      if (eligibility.status !== "ready") {
+                        const errorKind: AcquisitionMonitoringClientErrorKind =
+                          eligibility.status === "signed_out"
+                            ? "signed_out"
+                            : eligibility.status === "forbidden"
+                              ? "forbidden"
+                              : "unavailable";
+                        setMonitoringSnapshot({
+                          operationId: operation.id,
+                          state: { errorKind, kind: "error" },
+                        });
+                        return;
+                      }
+                      try {
+                        const updated = await monitoringClient.update(
+                          {
+                            expectedMonitored: currentState.monitored,
+                            mediaId: currentState.target.mediaId,
+                            monitored: !currentState.monitored,
+                            service: currentState.target.service,
+                          },
+                          { csrfToken: eligibility.snapshot.csrfToken },
+                        );
+                        setMonitoringSnapshot({
+                          operationId: operation.id,
+                          state: {
+                            data: updated,
+                            kind: "ready",
+                            statusMessage: `Monitoring ${updated.monitored ? "enabled" : "paused"} for ${operation.title}.`,
+                          },
+                        });
+                      } catch (error) {
+                        setMonitoringSnapshot({
+                          operationId: operation.id,
+                          state: {
+                            errorKind:
+                              error instanceof AcquisitionMonitoringClientError
+                                ? error.kind
+                                : "unavailable",
+                            kind: "error",
+                          },
+                        });
+                      }
+                    })();
+                  }}
+                  onRetry={() => {
+                    setMonitoringSnapshot({
+                      operationId: operation.id,
+                      state: { kind: "loading" },
+                    });
+                    setMonitoringAttempt((value) => value + 1);
+                  }}
+                  state={visibleMonitoringState}
+                  title={operation.title}
+                />
+              }
               recovery={
                 <RecoveryPanel
                   onConfirm={() => {

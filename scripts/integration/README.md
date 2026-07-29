@@ -11,6 +11,23 @@ The integration runner has two deliberately distinct profiles:
   surfaces used by Indexer Intelligence. Safe mutations run only in disposable
   fixtures until isolated live service environments are provisioned.
 
+The Radarr and Sonarr fixture profiles include exact-target acquisition search,
+title-monitoring reads, and editor updates. They assert that monitoring writes
+contain only the selected movie or series identifier and the desired boolean;
+file, path, profile, tag, and queue fields are never sent. Live profiles remain
+read-only until disposable upstream environments are available.
+
+The qBittorrent and SABnzbd contract profiles include bounded queue reads plus exact-item pause,
+resume, front-of-queue promotion, and preserve-files removal shapes. qBittorrent contracts cover
+both the version 5 `stop`/`start` and version 4 `pause`/`resume` endpoints plus `topPrio`; SABnzbd
+contracts bind every action to one validated `nzo_id` and promotion to position zero. The protected
+aggregate additionally starts both current digest-pinned upstream services in isolated internal
+networks, seeds synthetic queue items, and exercises the production adapters. It requires observed
+pause/resume and promotion state, exact removal, credential rejection, preserved fixture bytes,
+sanitized evidence, and deterministic teardown. See the
+[download-client fixture runbook](../../docs/operations/download-client-fixtures.md). Protected live
+profiles remain pending until external compatibility environments record versioned evidence.
+
 Run one service or the full matrix:
 
 ```sh
@@ -45,6 +62,17 @@ foundation PR is limited to the already ready fixture services. The OIDC and
 isolated Authentik fixtures are ready and enforced. Authentik readiness combines
 the strict harness contract selected by the matrix with the dedicated browser flow
 that starts the pinned upstream provider in the same pull-request workflow.
+
+The same protected aggregate also generates the copyright-free
+[playback fixture](../../docs/operations/playback-fixtures.md) with the FFmpeg build
+from an immutable official Jellyfin image. It verifies seeking, alternate audio,
+embedded captions, and HLS transcoding without claiming live Jellyfin API coverage.
+
+The aggregate also runs the
+[isolated download-client fixtures](../../docs/operations/download-client-fixtures.md) against
+current digest-pinned qBittorrent and SABnzbd images. These checks use synthetic torrent and NZB
+metadata on internal Docker networks, call the production adapters, and upload only a closed,
+identifier-free pass report.
 
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter

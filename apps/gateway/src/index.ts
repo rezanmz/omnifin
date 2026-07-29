@@ -117,6 +117,52 @@ export {
   type MediaArtworkErrorReason,
 } from "./media/continue-watching-service.js";
 export {
+  PlaybackIssueError,
+  PlaybackIssueService,
+  type PlaybackIssueContext,
+  type PlaybackIssueDependencies,
+  type PlaybackIssueErrorReason,
+} from "./media/issue-service.js";
+export {
+  IssueWorkbenchService,
+  IssueWorkbenchServiceError,
+  type IssueWorkbenchConnector,
+  type IssueWorkbenchContext,
+  type IssueWorkbenchDependencies,
+  type IssueWorkbenchFailureCode,
+  type IssueWorkbenchServiceErrorReason,
+  type IssueWorkbenchUpdateResult,
+} from "./media/issue-workbench-service.js";
+export {
+  PlaybackSessionError,
+  PlaybackSessionService,
+  type PlaybackClientFactoryInput,
+  type PlaybackSessionContext,
+  type PlaybackSessionDependencies,
+  type PlaybackSessionErrorReason,
+} from "./media/playback-session-service.js";
+export {
+  LibraryOperationError,
+  LibraryOperationService,
+  type LibraryClientFactoryInput,
+  type LibraryMutationResult,
+  type LibraryOperationClient,
+  type LibraryOperationContext,
+  type LibraryOperationDependencies,
+  type LibraryOperationErrorReason,
+  type LibraryOperationFailureCode,
+} from "./library/operation-service.js";
+export {
+  SubtitleOperationError,
+  SubtitleOperationService,
+  type SubtitleAdapter,
+  type SubtitleDownloadFailureCode,
+  type SubtitleDownloadResult,
+  type SubtitleOperationContext,
+  type SubtitleOperationDependencies,
+  type SubtitleOperationErrorReason,
+} from "./subtitles/operation-service.js";
+export {
   constantTimeTextEqual,
   EnvelopeCipher,
   hashToken,

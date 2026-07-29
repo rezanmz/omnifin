@@ -142,7 +142,28 @@ application boundary; operators must still patch and isolate the host.
   exact-target body cannot express direct release selection, grabs, blocklisting, deletion, or
   arbitrary retry commands.
 
-## Download-queue read controls
+## Acquisition-monitoring mutation controls
+
+- Reads and updates require `acquisition.manage` at both the session route and service boundary.
+  Updates additionally require an active user, same-origin validation, a session-bound CSRF token,
+  a 2 KiB body limit, mutation rate limiting, and an abort signal; recovery sessions cannot mutate.
+- The strict public contract can identify only one Radarr movie or one whole Sonarr series, its
+  observed boolean, and the opposite desired boolean. Season, episode, path, file, profile, tag,
+  queue, deletion, blocklist, and arbitrary editor fields are impossible to express.
+- Exactly one enabled, healthy connector advertising `acquisition.monitoring` is selected before
+  credential decryption. The gateway reads the exact target first and returns an already-desired
+  state as a verified replay without another upstream write.
+- The adapters send only `movieIds` or `seriesIds` plus `monitored`. The normalized response must
+  confirm the exact target and desired state; mismatches and malformed responses fail closed.
+- A durable requested event is inserted before any real upstream write, so audit storage failure
+  prevents mutation. Updated, replayed, and failed follow-up outcomes carry bounded state metadata.
+  Credentials, CSRF values, paths, raw editor responses, cookies, and private upstream errors are
+  excluded.
+- `GET` and `PUT /v1/acquisitions/monitoring` are abort-aware, rate-limited, and explicitly
+  non-cacheable. Enabling monitoring does not itself queue a search; pausing it does not change
+  existing files, downloads, queues, profiles, or tags.
+
+## Download-queue controls
 
 - Queue reads require `downloads.manage` at both the session route and service boundary.
   Unauthorized callers are rejected before connector selection or credential decryption.
@@ -155,9 +176,24 @@ application boundary; operators must still patch and isolate the host.
 - Every returned transfer receives a deployment-local opaque identifier derived from its
   connector and upstream identifier. Item counts, byte values, rates, text, client count, and
   aggregate response size are independently bounded and schema-validated.
-- `GET /v1/downloads/queue` is abort-aware, rate-limited, explicitly non-cacheable, and read-only.
-  The browser offers filtering and refresh but no pause, resume, removal, priority, or path
-  mutation in this slice.
+- `GET /v1/downloads/queue` is abort-aware, rate-limited, and explicitly non-cacheable. Filtering
+  and refresh remain browser-local reads.
+- Pause, resume, and removal use separate strict action contracts containing one connector, one
+  opaque item, and its observed state. The `POST` routes require an active user, session-bound CSRF
+  and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
+  `download.queue.mutate` on the selected healthy connector.
+- The gateway resolves the opaque ID against a fresh exact-connector queue read, rejects missing or
+  stale targets, writes a durable requested audit before mutation, and verifies the desired state
+  with bounded post-write reads. Safe replay avoids a duplicate write when the state is already
+  achieved. Public responses and audit metadata never contain the qBittorrent hash or SABnzbd
+  `nzo_id`.
+- Removal additionally requires a per-user idempotency key and a typed browser confirmation. The
+  durable operation and requested audit commit before mutation; bounded verification requires the
+  exact item to disappear. Recovery reuses the public item snapshot and fails closed on identifier
+  reuse. qBittorrent is always called with `deleteFiles=false`, and SABnzbd is never called with
+  `del_files=1`, preserving downloaded content.
+- The public contracts cannot express downloaded-file deletion, relocation, categories, priorities,
+  arbitrary URLs, bulk identifiers, or client-native command fields.
 
 ## Acquisition-calendar read controls
 
@@ -192,6 +228,22 @@ application boundary; operators must still patch and isolate the host.
 - Tests require an active identity, same-origin session-bound CSRF validation, abort propagation,
   and a three-per-minute route limit. Sanitized success and failure audits contain no provider
   payload, credential, address, or private error.
+
+## System-health controls
+
+- Reads require `acquisition.manage` at both the session route and service boundary. Unauthorized
+  callers are rejected before connector selection or credential decryption.
+- Only enabled, currently validated Radarr, Sonarr, and Prowlarr connectors advertising
+  `system.health` are eligible. Capacity reads additionally require `storage.read`; source fan-out
+  is bounded and an over-limit deployment fails closed.
+- Health and storage payloads are independently bounded and schema-validated. Upstream paths are
+  used only as inputs to deployment-local keyed identifiers, then replaced with non-sensitive
+  ordinal labels before public validation.
+- Normalization removes control characters, URLs, filesystem paths, and configured API keys from
+  warning text. Public contracts exclude upstream identifiers, wiki links, raw provider fields,
+  credentials, and private connector diagnostics.
+- `GET /v1/system/status` is abort-aware, read-only, rate-limited, and explicitly non-cacheable.
+  Partial failures retain only independently verified telemetry and never infer a healthy state.
 
 ## Browser protections
 

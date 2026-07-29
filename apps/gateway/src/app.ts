@@ -63,19 +63,37 @@ import {
   indexerIntelligenceRoutes,
   type IndexerIntelligenceRoutesOptions,
 } from "./indexers/intelligence-routes.js";
+import {
+  libraryOperationRoutes,
+  type LibraryOperationRoutesOptions,
+} from "./library/operation-routes.js";
 import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import {
   continueWatchingRoutes,
   type ContinueWatchingRoutesOptions,
 } from "./media/continue-watching-routes.js";
+import { playbackIssueRoutes, type PlaybackIssueRoutesOptions } from "./media/issue-routes.js";
+import {
+  issueWorkbenchRoutes,
+  type IssueWorkbenchRoutesOptions,
+} from "./media/issue-workbench-routes.js";
 import { playbackRoutes, type PlaybackRoutesOptions } from "./media/playback-routes.js";
 import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
 } from "./requests/media-request-routes.js";
+import {
+  requestReviewRoutes,
+  type RequestReviewRoutesOptions,
+} from "./requests/request-review-routes.js";
 import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
+import {
+  subtitleOperationRoutes,
+  type SubtitleOperationRoutesOptions,
+} from "./subtitles/operation-routes.js";
+import { systemStatusRoutes, type SystemStatusRoutesOptions } from "./system/status-routes.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -102,13 +120,20 @@ export interface CreateAppOptions {
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
+  downloadQueueEventDependencies?: DownloadQueueRoutesOptions["eventDependencies"];
   continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
+  playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
+  issueWorkbenchDependencies?: IssueWorkbenchRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
+  subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
+  libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
+  requestReviewDependencies?: RequestReviewRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
+  systemStatusDependencies?: SystemStatusRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -411,6 +436,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.downloadQueueDependencies === undefined
         ? {}
         : { dependencies: options.downloadQueueDependencies }),
+      ...(options.downloadQueueEventDependencies === undefined
+        ? {}
+        : { eventDependencies: options.downloadQueueEventDependencies }),
     });
     await app.register(continueWatchingRoutes, {
       ...(options.continueWatchingDependencies === undefined
@@ -422,10 +450,35 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         ? {}
         : { dependencies: options.playbackDependencies }),
     });
+    await app.register(playbackIssueRoutes, {
+      ...(options.playbackIssueDependencies === undefined
+        ? {}
+        : { dependencies: options.playbackIssueDependencies }),
+    });
+    await app.register(issueWorkbenchRoutes, {
+      ...(options.issueWorkbenchDependencies === undefined
+        ? {}
+        : { dependencies: options.issueWorkbenchDependencies }),
+    });
+    await app.register(subtitleOperationRoutes, {
+      ...(options.subtitleOperationDependencies === undefined
+        ? {}
+        : { dependencies: options.subtitleOperationDependencies }),
+    });
+    await app.register(libraryOperationRoutes, {
+      ...(options.libraryOperationDependencies === undefined
+        ? {}
+        : { dependencies: options.libraryOperationDependencies }),
+    });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined
         ? {}
         : { dependencies: options.mediaRequestDependencies }),
+    });
+    await app.register(requestReviewRoutes, {
+      ...(options.requestReviewDependencies === undefined
+        ? {}
+        : { dependencies: options.requestReviewDependencies }),
     });
     await app.register(acquisitionProvenanceRoutes, {
       ...(options.acquisitionProvenanceDependencies === undefined
@@ -446,6 +499,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.indexerIntelligenceDependencies === undefined
         ? {}
         : { dependencies: options.indexerIntelligenceDependencies }),
+    });
+    await app.register(systemStatusRoutes, {
+      ...(options.systemStatusDependencies === undefined
+        ? {}
+        : { dependencies: options.systemStatusDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

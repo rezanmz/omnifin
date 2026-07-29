@@ -7,7 +7,35 @@ import { demoDownloadQueue, demoDownloadQueueGeneratedAt } from "../lib/download
 
 const ready: DownloadQueueLoadOutcome = { queue: demoDownloadQueue, status: "ready" };
 
-const staticClient: DownloadQueueClient = { load: async () => demoDownloadQueue };
+const staticClient: DownloadQueueClient = {
+  act: async () => {
+    throw new Error("Story actions stop at confirmation.");
+  },
+  load: async () => demoDownloadQueue,
+  loadEligibility: async () => ({ status: "unavailable" }),
+  promote: async () => {
+    throw new Error("Story promotions stop at the eligibility boundary.");
+  },
+  remove: async () => {
+    throw new Error("Story removals stop at confirmation.");
+  },
+};
+
+const liveClient: DownloadQueueClient = {
+  ...staticClient,
+  watch: (callbacks) => {
+    callbacks.onStatus("live");
+    return () => undefined;
+  },
+};
+
+const fallbackClient: DownloadQueueClient = {
+  ...staticClient,
+  watch: (callbacks) => {
+    callbacks.onStatus("fallback");
+    return () => undefined;
+  },
+};
 
 const meta = {
   args: { client: staticClient, initialOutcome: ready, live: false },
@@ -26,12 +54,58 @@ type Story = StoryObj<typeof meta>;
 
 export const Ready: Story = {};
 export const ReadyLight: Story = { globals: { theme: "light" } };
+export const LiveUpdates: Story = { args: { client: liveClient, live: true } };
+export const PollingFallback: Story = { args: { client: fallbackClient, live: true } };
 export const AttentionFilter: Story = {
   play: async ({ canvasElement, userEvent }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "Attention" }));
     await expect(canvas.getByText("Glass.Horizon.2025.1080p.BluRay")).toBeVisible();
     await expect(canvas.queryByText("Signal.S01E07.1080p.WEB-DL")).not.toBeInTheDocument();
+  },
+};
+export const PauseConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Pause The.Far.Meridian.2026.2160p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await expect(canvas.getByText("Pause this transfer?")).toBeVisible();
+  },
+};
+export const ResumeConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Resume Signal.S01E07.1080p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await expect(canvas.getByText("Resume this transfer?")).toBeVisible();
+  },
+};
+export const RemoveConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Remove The.Far.Meridian.2026.2160p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel removal" })).toHaveFocus();
+    await expect(canvas.getByText("Remove this transfer?")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Remove transfer" })).toBeDisabled();
+  },
+};
+export const PromotionEligibilityFailure: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", {
+        name: "Move The.Far.Meridian.2026.2160p.WEB-DL to front of queue",
+      }),
+    );
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "The session could not be verified. The queue order was not changed.",
+    );
   },
 };
 export const Empty: Story = {

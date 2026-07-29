@@ -18,8 +18,14 @@ const requiredTables = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "download_queue_removal_operations",
+  "external_issue_references",
   "external_identities",
   "jellyfin_quick_connect_transactions",
+  "library_artwork_searches",
+  "library_mutation_operations",
+  "media_issues",
+  "media_issue_operations",
   "media_references",
   "media_request_operations",
   "oidc_logout_receipts",
@@ -31,6 +37,8 @@ const requiredTables = [
   "session_rotation_aliases",
   "session_secret_reservations",
   "sessions",
+  "subtitle_download_operations",
+  "subtitle_searches",
   "users",
 ] as const;
 const requiredColumns = {
@@ -64,6 +72,26 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  download_queue_removal_operations: [
+    "completed_at",
+    "connector_id",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "item_id",
+    "item_snapshot_json",
+    "mutation_started_at",
+    "response_json",
+    "state",
+    "user_id",
+  ],
+  external_issue_references: [
+    "connector_id",
+    "encrypted_upstream_id",
+    "expires_at",
+    "last_used_at",
+    "upstream_id_digest",
+  ],
   jellyfin_quick_connect_transactions: [
     "browser_binding_hash",
     "connector_id",
@@ -76,6 +104,24 @@ const requiredColumns = {
     "poll_count",
     "purpose",
   ],
+  library_artwork_searches: [
+    "encrypted_payload",
+    "expires_at",
+    "link_revision",
+    "media_reference_id",
+    "service_identity_link_id",
+    "user_id",
+  ],
+  library_mutation_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "reference_id",
+    "response_json",
+    "state",
+    "user_id",
+  ],
   media_references: [
     "encrypted_payload",
     "expires_at",
@@ -83,6 +129,31 @@ const requiredColumns = {
     "last_used_at",
     "link_revision",
     "service_identity_link_id",
+    "user_id",
+  ],
+  media_issues: [
+    "category",
+    "encrypted_description",
+    "encrypted_resolution",
+    "media_reference_id",
+    "playback_session_id",
+    "position_seconds",
+    "resolved_at",
+    "resolved_by_user_id",
+    "service_identity_link_id",
+    "state",
+    "user_id",
+  ],
+  media_issue_operations: [
+    "completed_at",
+    "desired_status",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "issue_id",
+    "response_json",
+    "source",
+    "state",
     "user_id",
   ],
   media_request_operations: [
@@ -140,6 +211,26 @@ const requiredColumns = {
     "last_rotated_at",
     "service_identity_link_id",
   ],
+  subtitle_download_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "response_json",
+    "result_id",
+    "search_id",
+    "state",
+    "user_id",
+  ],
+  subtitle_searches: [
+    "connector_id",
+    "encrypted_payload",
+    "expires_at",
+    "link_revision",
+    "media_reference_id",
+    "service_identity_link_id",
+    "user_id",
+  ],
   users: ["role_source"],
 } as const;
 const requiredIndexes = {
@@ -155,15 +246,44 @@ const requiredIndexes = {
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  download_queue_removal_operations: [
+    "download_queue_removal_operations_item_idx",
+    "download_queue_removal_operations_state_created_idx",
+    "download_queue_removal_operations_user_key_unique",
+  ],
+  external_issue_references: [
+    "external_issue_references_connector_digest_unique",
+    "external_issue_references_expiry_idx",
+  ],
   jellyfin_quick_connect_transactions: [
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
     "jellyfin_quick_connect_transactions_pairing_session_idx",
   ],
+  library_artwork_searches: [
+    "library_artwork_searches_expiry_idx",
+    "library_artwork_searches_media_idx",
+    "library_artwork_searches_user_created_idx",
+  ],
+  library_mutation_operations: [
+    "library_mutation_operations_reference_idx",
+    "library_mutation_operations_state_created_idx",
+    "library_mutation_operations_user_key_unique",
+  ],
   media_references: [
     "media_references_expiry_idx",
     "media_references_link_item_unique",
     "media_references_user_last_used_idx",
+  ],
+  media_issues: [
+    "media_issues_media_created_idx",
+    "media_issues_state_created_idx",
+    "media_issues_user_created_idx",
+  ],
+  media_issue_operations: [
+    "media_issue_operations_issue_created_idx",
+    "media_issue_operations_state_created_idx",
+    "media_issue_operations_user_key_unique",
   ],
   media_request_operations: [
     "media_request_operations_state_created_idx",
@@ -188,6 +308,15 @@ const requiredIndexes = {
     "sessions_recovery_created_idx",
     "sessions_user_active_idx",
     "sessions_user_created_idx",
+  ],
+  subtitle_download_operations: [
+    "subtitle_download_operations_state_created_idx",
+    "subtitle_download_operations_user_key_unique",
+  ],
+  subtitle_searches: [
+    "subtitle_searches_expiry_idx",
+    "subtitle_searches_media_idx",
+    "subtitle_searches_user_created_idx",
   ],
 } as const;
 const requiredTriggers = [
@@ -323,8 +452,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag?.startsWith("0012_"),
-  "Current migration journal must end at migration 0012.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0017_download_queue_removals",
+  "Current migration journal must end at migration 0017_download_queue_removals.",
 );
 
 try {
@@ -459,6 +588,83 @@ try {
       )
     ) {
       throw new Error("Migration is missing the playback-to-media-reference foreign key.");
+    }
+
+    const mediaIssueForeignKeys = database.sqlite.pragma("foreign_key_list(media_issues)") as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const mediaIssueLinkForeignKeyId = mediaIssueForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const mediaIssueLinkForeignKeyColumns = mediaIssueForeignKeys
+      .filter(({ id }) => id === mediaIssueLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (
+      mediaIssueLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error("Migration is missing the user-bound media issue identity foreign key.");
+    }
+    if (
+      !mediaIssueForeignKeys.some(
+        ({ from, table, to }) =>
+          from === "media_reference_id" && table === "media_references" && to === "id",
+      )
+    ) {
+      throw new Error("Migration is missing the issue-to-media-reference foreign key.");
+    }
+
+    const subtitleSearchForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(subtitle_searches)",
+    ) as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const subtitleSearchLinkForeignKeyId = subtitleSearchForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const subtitleSearchLinkForeignKeyColumns = subtitleSearchForeignKeys
+      .filter(({ id }) => id === subtitleSearchLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (
+      subtitleSearchLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error("Migration is missing the user-bound subtitle search identity foreign key.");
+    }
+    for (const [column, table] of [
+      ["media_reference_id", "media_references"],
+      ["connector_id", "connector_configs"],
+    ] as const) {
+      if (
+        !subtitleSearchForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the subtitle-search ${column} foreign key.`);
+      }
+    }
+
+    const subtitleDownloadForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(subtitle_download_operations)",
+    ) as { from: string; table: string; to: string }[];
+    if (
+      !subtitleDownloadForeignKeys.some(
+        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+      )
+    ) {
+      throw new Error("Migration is missing the subtitle-download user foreign key.");
     }
 
     const rotationAliasForeignKeys = database.sqlite.pragma(
@@ -601,7 +807,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0012.",
+      "Production migration did not advance the historical fixture exactly through migration 0015.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -766,7 +972,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0012, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0015, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -1,7 +1,13 @@
+import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoDownloadQueue } from "./download-queue-demo";
-import { DownloadQueueClientError, downloadQueueClient, outcomeFromError } from "./download-queue";
+import {
+  DownloadQueueClientError,
+  downloadQueueClient,
+  outcomeFromError,
+  watchDownloadQueueEvents,
+} from "./download-queue";
 
 function json(value: unknown, status = 200) {
   return Promise.resolve(
@@ -24,6 +30,106 @@ describe("download queue client", () => {
       "/api/downloads/queue",
       expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
     );
+  });
+
+  it("accepts only a strict SSE snapshot bound to its transport cursor", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    const stop = watchDownloadQueueEvents({ onSnapshot, onStatus }, (url) => {
+      expect(url).toBe("/api/downloads/queue/events");
+      return source;
+    });
+    source.onopen?.(new Event("open"));
+    const event = {
+      cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot",
+      queue: demoDownloadQueue,
+    };
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify(event),
+        lastEventId: event.cursor,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledWith(event));
+    expect(onStatus).toHaveBeenNthCalledWith(1, "connecting");
+    expect(onStatus).toHaveBeenCalledWith("live");
+    expect(source.close).not.toHaveBeenCalled();
+
+    stop();
+    expect(source.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed to polling when an SSE cursor or payload is untrusted", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot, onStatus }, () => source);
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+          kind: "snapshot",
+          queue: demoDownloadQueue,
+        }),
+        lastEventId: "download_event_ZYXWVUTSRQPONMLKJIHGFE",
+      }),
+    );
+
+    await vi.waitFor(() => expect(source.close).toHaveBeenCalledOnce());
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("rejects an oversized SSE message before parsing it", () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot, onStatus }, () => source);
+
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: "x".repeat(512_001),
+        lastEventId: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+      }),
+    );
+
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("keeps the native reconnect path available after a transient SSE error", () => {
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot: vi.fn(), onStatus }, () => source);
+
+    source.onerror?.(new Event("error"));
+
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(source.close).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -126,5 +232,251 @@ describe("download queue client", () => {
       outcomeFromError(new DownloadQueueClientError("invalid_response", "invalid", "Invalid")),
     ).toBe("unavailable");
     expect(outcomeFromError(new Error("private failure"))).toBe("unavailable");
+  });
+
+  it("loads CSRF-bound action eligibility without exposing a session to ineligible users", async () => {
+    const principal: SessionPrincipal = {
+      absoluteExpiresAt: "2026-07-29T03:00:00.000Z",
+      accountState: "active",
+      authenticationMethod: { kind: "jellyfin" },
+      displayName: "Operator",
+      externalIdentity: null,
+      inactivityExpiresAt: "2026-07-28T04:00:00.000Z",
+      issuedAt: "2026-07-28T03:00:00.000Z",
+      linkedServices: [
+        {
+          displayName: "Operator",
+          externalUserId: "jellyfin-operator",
+          health: "linked",
+          id: "jellyfin-link-operator",
+          lastVerifiedAt: "2026-07-28T03:00:00.000Z",
+          linkedAt: "2026-07-27T03:00:00.000Z",
+          service: "jellyfin",
+          username: "operator",
+        },
+      ],
+      permissions: [...ROLE_PERMISSIONS.operator],
+      role: "operator",
+      sessionId: "session-1",
+      userId: "operator-user",
+    };
+    const session = {
+      csrfToken: "download_queue_csrf_0123456789abcdefghijklmnopqrstuvwxyz",
+      principal,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => json(session)),
+    );
+
+    await expect(downloadQueueClient.loadEligibility!()).resolves.toMatchObject({
+      snapshot: { csrfToken: "download_queue_csrf_0123456789abcdefghijklmnopqrstuvwxyz" },
+      status: "ready",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => json({ csrfToken: null, principal: null })),
+    );
+    await expect(downloadQueueClient.loadEligibility!()).resolves.toEqual({ status: "signed_out" });
+  });
+
+  it("sends one strict action with CSRF and validates its exact opaque target", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      action: "pause" as const,
+      item: { ...item, etaSeconds: null, rateBytesPerSecond: 0, state: "paused" as const },
+      previousState: item.state,
+      replayed: false,
+      verifiedAt: demoDownloadQueue.generatedAt,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/actions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-omnifin-csrf": "fixture-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("sends one idempotent removal and verifies the preserved-content response", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      contentDisposition: "preserved" as const,
+      item,
+      operationId: "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
+      removedAt: demoDownloadQueue.generatedAt,
+      replayed: false,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.remove!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf", idempotencyKey: "removal-fixture-key" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/removals",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "idempotency-key": "removal-fixture-key",
+          "x-omnifin-csrf": "fixture-csrf",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("sends one exact front-of-queue promotion and verifies the position receipt", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      item,
+      position: 0 as const,
+      previousPosition: 1,
+      promotedAt: demoDownloadQueue.generatedAt,
+      replayed: false,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/promotions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-omnifin-csrf": "fixture-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "item",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        id: demoDownloadQueue.items[1]!.id,
+      }),
+    ],
+    [
+      "connector",
+      (item: (typeof demoDownloadQueue.items)[number]) => ({
+        ...item,
+        connectorId: demoDownloadQueue.items[1]!.connectorId,
+      }),
+    ],
+  ] as const)("rejects a promotion receipt rebound to a different %s", async (_label, rebind) => {
+    const item = demoDownloadQueue.items[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({
+          item: rebind(item),
+          position: 0,
+          previousPosition: 1,
+          promotedAt: demoDownloadQueue.generatedAt,
+          replayed: false,
+        }),
+      ),
+    );
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+  });
+
+  it.each([
+    ["a different action", { action: "resume" }],
+    ["a different prior state", { previousState: "queued" }],
+  ] as const)("rejects an otherwise valid response reporting %s", async (_label, override) => {
+    const item = demoDownloadQueue.items[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({
+          action: "pause",
+          item: { ...item, etaSeconds: null, rateBytesPerSecond: 0, state: "paused" },
+          previousState: item.state,
+          replayed: false,
+          verifiedAt: demoDownloadQueue.generatedAt,
+          ...override,
+        }),
+      ),
+    );
+
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ kind: "invalid_response" });
+  });
+
+  it.each([
+    [401, "authentication_required", "signed_out"],
+    [403, "permission_denied", "forbidden"],
+    [409, "download_queue_state_changed", "stale"],
+    [429, "download_queue_action_rate_limited", "rate_limited"],
+    [503, "download_queue_configuration_unavailable", "configuration"],
+    [502, "download_queue_action_unconfirmed", "invalid_response"],
+  ] as const)("maps action HTTP %s to %s", async (status, code, kind) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        json({ error: { code, message: "Safe action message", requestId: "request-1" } }, status),
+      ),
+    );
+    const item = demoDownloadQueue.items[0]!;
+    await expect(
+      downloadQueueClient.act!(
+        {
+          action: "pause",
+          connectorId: item.connectorId,
+          expectedState: "downloading",
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).rejects.toMatchObject({ code, kind });
   });
 });
