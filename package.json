@@ -22,6 +22,7 @@
     "fixture:jellyfin-playback": "node scripts/integration/jellyfin/playback.mjs",
     "license:check": "node scripts/check-licenses.mjs",
     "lighthouse": "pnpm --filter @omnifin/web lighthouse",
+    "load:gateway": "node scripts/load/gateway-smoke.mjs",
     "lint": "cross-env TURBO_TELEMETRY_DISABLED=1 turbo run lint && pnpm lint:root",
     "lint:root": "eslint --max-warnings=0 scripts docker/*.mjs *.config.mjs",
     "migration:smoke": "pnpm --filter @omnifin/gateway migration:smoke",
