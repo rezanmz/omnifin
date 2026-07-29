@@ -3,6 +3,55 @@ import type { Page } from "@playwright/test";
 export const mediaRequestCsrfToken =
   "media_request_fixture_csrf_0123456789abcdefghijklmnopqrstuvwxyz";
 
+export function mediaRequestRoutingReference(name: string) {
+  return `routing-v1.v2.${name}.${"e".repeat(32)}.${"f".repeat(32)}`;
+}
+
+export const mediaRequestRoutingOptions = {
+  destinations: [
+    {
+      id: mediaRequestRoutingReference("radarr-primary"),
+      isDefault: true,
+      label: "Cinema primary",
+      languageProfiles: [],
+      qualityProfiles: [
+        {
+          id: mediaRequestRoutingReference("quality-balanced"),
+          isDefault: true,
+          label: "Balanced",
+        },
+        {
+          id: mediaRequestRoutingReference("quality-remux"),
+          isDefault: false,
+          label: "Remux",
+        },
+      ],
+      rootFolders: [
+        {
+          availableBytes: 860_000_000_000,
+          capacityBytes: 2_000_000_000_000,
+          id: mediaRequestRoutingReference("root-cinema"),
+          isDefault: true,
+          label: "Cinema",
+        },
+        {
+          availableBytes: 1_620_000_000_000,
+          capacityBytes: 4_000_000_000_000,
+          id: mediaRequestRoutingReference("root-archive"),
+          isDefault: false,
+          label: "Archive",
+        },
+      ],
+      service: "radarr",
+    },
+  ],
+  expiresAt: "2026-07-27T12:15:00.000Z",
+  failures: [],
+  generatedAt: "2026-07-27T12:00:00.000Z",
+  is4k: false,
+  kind: "movie",
+} as const;
+
 export const mediaRequestPrincipal = {
   absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
   accountState: "active",
@@ -53,6 +102,16 @@ export async function mockMediaRequestSession(page: Page) {
         csrfToken: mediaRequestCsrfToken,
         principal: mediaRequestPrincipal,
       }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
+
+export async function mockMediaRequestRouting(page: Page) {
+  await page.route("**/api/requests/routing-options?*", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(mediaRequestRoutingOptions),
       contentType: "application/json",
       status: 200,
     });

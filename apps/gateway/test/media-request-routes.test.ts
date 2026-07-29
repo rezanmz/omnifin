@@ -58,6 +58,7 @@ const createdRequest: MediaRequestResponse = {
 async function harness(
   options: {
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
+    listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
     role?: "requester" | "viewer";
   } = {},
 ) {
@@ -66,12 +67,20 @@ async function harness(
   const createMediaRequest =
     options.createMediaRequest ??
     vi.fn<MediaRequestAdapter["createMediaRequest"]>(async () => createdRequest);
+  const listRequestRouting =
+    options.listRequestRouting ??
+    vi.fn<MediaRequestAdapter["listRequestRouting"]>(async (kind, is4k) => ({
+      destinations: [],
+      failures: [],
+      is4k,
+      kind,
+    }));
   let requestIdentifier = 0;
   const app = await createApp({
     config,
     mediaRequestDependencies: {
       clock: () => now,
-      createAdapter: () => ({ createMediaRequest, resolveUser }),
+      createAdapter: () => ({ createMediaRequest, listRequestRouting, resolveUser }),
       createId: () => `media-route-request-${++requestIdentifier}`,
     },
     sessionDependencies: sessionDependencies(),
@@ -95,7 +104,12 @@ async function harness(
         baseUrl: "https://seerr.example.test/",
         capabilitySnapshotJson: JSON.stringify({
           health: {
-            capabilities: ["connector.health", "connector.version", "request.create"],
+            capabilities: [
+              "connector.health",
+              "connector.version",
+              "request.configure",
+              "request.create",
+            ],
             checkedAt: now.toISOString(),
             connectorId: "seerr-main",
             displayName: "Seerr",
@@ -169,10 +183,95 @@ async function harness(
     "idempotency-key": "route-request-key-0001",
     origin: baseUrl,
   };
-  return { app, createMediaRequest, headers, resolveUser };
+  return { app, createMediaRequest, headers, listRequestRouting, resolveUser };
 }
 
 describe("media request routes", () => {
+  it("returns private, path-safe routing options for an eligible linked user", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({
+        destinations: [
+          {
+            activeDirectory: "/srv/private/movies",
+            activeLanguageProfileId: null,
+            activeProfileId: 4,
+            id: 1,
+            isDefault: true,
+            label: "Cinema",
+            languageProfiles: [],
+            profiles: [{ id: 4, label: "1080p" }],
+            rootFolders: [
+              {
+                availableBytes: 800_000_000_000,
+                capacityBytes: 2_000_000_000_000,
+                path: "/srv/private/movies",
+              },
+            ],
+          },
+        ],
+        failures: [],
+        is4k,
+        kind,
+      }),
+    );
+    const { app, headers, resolveUser } = await harness({ listRequestRouting });
+    try {
+      const response = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.json()).toMatchObject({
+        destinations: [
+          {
+            isDefault: true,
+            label: "Cinema",
+            rootFolders: [{ isDefault: true, label: "movies" }],
+            service: "radarr",
+          },
+        ],
+        failures: [],
+        is4k: false,
+        kind: "movie",
+      });
+      expect(response.body).not.toContain("/srv/private");
+      expect(listRequestRouting).toHaveBeenCalledWith("movie", false, expect.any(AbortSignal));
+      expect(resolveUser).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects an unauthenticated routing reference before an upstream write", async () => {
+    const { app, createMediaRequest, headers } = await harness();
+    const invalidReference = `routing-v1.v2.${"A".repeat(16)}.${"B".repeat(64)}.${"C".repeat(22)}`;
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: {
+          kind: "movie",
+          routing: {
+            destination: invalidReference,
+            languageProfile: null,
+            qualityProfile: invalidReference,
+            rootFolder: invalidReference,
+          },
+          tmdbId: 550,
+        },
+        url: "/v1/requests",
+      });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_routing_invalid");
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("requires CSRF-bound requester authority and returns a private replayable response", async () => {
     const { app, createMediaRequest, headers, resolveUser } = await harness();
     try {

@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
-import { mockMediaRequestSession } from "../fixtures/media-request";
+import { mockMediaRequestRouting, mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
   mockManualReleaseSession,
@@ -239,10 +239,13 @@ test("request composer has no automatically detectable accessibility violations"
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
+  await mockMediaRequestRouting(page);
   await page.goto("/");
   await page.getByRole("combobox").fill("matrix");
   await page.getByRole("button", { name: "Request The Matrix" }).click();
   await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+  await page.getByText("Advanced routing").click();
+  await expect(page.getByRole("combobox", { name: /Destination/i })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

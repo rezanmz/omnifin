@@ -3,6 +3,7 @@ import type {
   IdempotencyKey,
   MediaRequestInput,
   MediaRequestResponse,
+  MediaRequestRoutingOptionsResponse,
 } from "@omnifin/contracts/requests";
 
 const CSRF_HEADER = "x-omnifin-csrf";
@@ -46,6 +47,7 @@ export type MediaRequestClientErrorKind =
   | "no_seasons"
   | "pending"
   | "rate_limited"
+  | "routing"
   | "signed_out"
   | "unavailable";
 
@@ -141,6 +143,9 @@ function mappedError(status: number, code: string, message: string): MediaReques
   if (code === "request_outcome_pending") {
     return new MediaRequestClientError("pending", code, message, "same_key");
   }
+  if (code === "request_routing_invalid") {
+    return new MediaRequestClientError("routing", code, message, "new_key");
+  }
   if (code === "request_configuration_unavailable") {
     return new MediaRequestClientError("configuration", code, message, "new_key");
   }
@@ -193,6 +198,11 @@ export interface MediaRequestClient {
     options: CreateMediaRequestOptions,
   ): Promise<MediaRequestCreation>;
   loadEligibility(signal?: AbortSignal): Promise<MediaRequestEligibility>;
+  loadRoutingOptions(
+    kind: "movie" | "series",
+    is4k: boolean,
+    signal?: AbortSignal,
+  ): Promise<MediaRequestRoutingOptionsResponse>;
 }
 
 export const mediaRequestClient: MediaRequestClient = {
@@ -264,5 +274,25 @@ export const mediaRequestClient: MediaRequestClient = {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       return { status: "unavailable" };
     }
+  },
+
+  async loadRoutingOptions(kind, is4k, signal) {
+    const parameters = new URLSearchParams({ is4k: String(is4k), kind });
+    const response = await fetchSameOrigin(`/api/requests/routing-options?${parameters}`, {
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.ok) throw await responseError(response);
+    const schemas = await contractSchemas();
+    const parsed = schemas.requests.mediaRequestRoutingOptionsResponseSchema.safeParse(
+      await safeJson(response),
+    );
+    if (!parsed.success) {
+      throw new MediaRequestClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned request routing data that did not match the public contract.",
+      );
+    }
+    return parsed.data;
   },
 };

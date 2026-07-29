@@ -1,5 +1,6 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import type { DiscoveryMovieResult, DiscoverySeriesResult } from "@omnifin/contracts/discovery";
+import type { MediaRequestRoutingOptionsResponse } from "@omnifin/contracts/requests";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 
@@ -74,6 +75,42 @@ const series: DiscoverySeriesResult = {
   year: 2008,
 };
 
+function routingReference(name: string) {
+  return `routing-v1.v2.${name}.${"c".repeat(32)}.${"d".repeat(32)}`;
+}
+
+const seriesRoutingOptions: MediaRequestRoutingOptionsResponse = {
+  destinations: [
+    {
+      id: routingReference("sonarr-main"),
+      isDefault: true,
+      label: "Series archive",
+      languageProfiles: [
+        { id: routingReference("language-original"), isDefault: true, label: "Original" },
+      ],
+      qualityProfiles: [
+        { id: routingReference("quality-balanced"), isDefault: true, label: "Balanced" },
+        { id: routingReference("quality-remux"), isDefault: false, label: "Remux" },
+      ],
+      rootFolders: [
+        {
+          availableBytes: 1_400_000_000_000,
+          capacityBytes: 2_000_000_000_000,
+          id: routingReference("root-series"),
+          isDefault: true,
+          label: "Series",
+        },
+      ],
+      service: "sonarr",
+    },
+  ],
+  expiresAt: "2026-07-27T12:15:00.000Z",
+  failures: [],
+  generatedAt: "2026-07-27T12:00:00.000Z",
+  is4k: false,
+  kind: "series",
+};
+
 function client(
   loadEligibility: MediaRequestClient["loadEligibility"] = async () => eligibility,
   create: MediaRequestClient["create"] = async (input) => ({
@@ -89,8 +126,9 @@ function client(
       tmdbId: input.tmdbId,
     },
   }),
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async () => seriesRoutingOptions,
 ): MediaRequestClient {
-  return { create, loadEligibility };
+  return { create, loadEligibility, loadRoutingOptions };
 }
 
 const meta = {
@@ -126,6 +164,24 @@ export const MovieReady: Story = {
 };
 
 export const SeriesReady: Story = { args: { media: series } };
+
+export const AdvancedRouting: Story = {
+  args: { media: series },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => expect(canvas.getByText("Mina’s Jellyfin")).toBeVisible());
+    await userEvent.click(canvas.getByText("Advanced routing"));
+    await waitFor(() =>
+      expect(canvas.getByRole("combobox", { name: /Destination/i })).toHaveValue(
+        routingReference("sonarr-main"),
+      ),
+    );
+    await userEvent.selectOptions(canvas.getByRole("combobox", { name: /Quality profile/i }), [
+      routingReference("quality-remux"),
+    ]);
+    await expect(canvas.getByText("Series archive · Remux")).toBeVisible();
+  },
+};
 
 export const LoadingIdentity: Story = {
   args: {

@@ -1,18 +1,30 @@
 "use client";
 
 import type { DiscoveryMovieResult, DiscoverySeriesResult } from "@omnifin/contracts/discovery";
-import type { MediaRequestInput } from "@omnifin/contracts/requests";
+import type {
+  MediaRequestInput,
+  MediaRequestRoutingDestination,
+  MediaRequestRoutingOptionsResponse,
+  MediaRequestRoutingSelection,
+} from "@omnifin/contracts/requests";
 import {
   BadgeCheck,
   Check,
+  ChevronDown,
   CircleAlert,
   Clapperboard,
+  Database,
+  HardDrive,
+  Languages,
   Link2,
   LoaderCircle,
   LockKeyhole,
   Plus,
   Radio,
+  RefreshCw,
   RotateCcw,
+  Server,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
@@ -34,6 +46,12 @@ type SubmissionState =
   | { kind: "submitting" }
   | { creation: MediaRequestCreation; kind: "success" }
   | { error: MediaRequestClientError; kind: "error" };
+
+type RoutingState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; options: MediaRequestRoutingOptionsResponse }
+  | { kind: "error" };
 
 export interface RequestComposerProperties {
   client?: MediaRequestClient;
@@ -106,6 +124,10 @@ const ERROR_COPY: Record<MediaRequestClientError["kind"], { detail: string; titl
     detail: "The request limit was reached. Wait a moment, then begin a fresh attempt.",
     title: "Requests are cooling down",
   },
+  routing: {
+    detail: "The selected destination changed or expired. Fresh routing choices are being loaded.",
+    title: "Review the request route",
+  },
   signed_out: {
     detail: "Your session ended before the request could be confirmed.",
     title: "Session ended",
@@ -124,6 +146,36 @@ function resultMeta(media: RequestableMedia) {
 
 function initialEligibility(): MediaRequestEligibility | { status: "loading" } {
   return { status: "loading" };
+}
+
+function preferredChoice<T extends { isDefault: boolean }>(choices: T[]) {
+  return choices.find((choice) => choice.isDefault) ?? choices[0] ?? null;
+}
+
+function defaultRoutingSelection(
+  destination: MediaRequestRoutingDestination,
+): MediaRequestRoutingSelection | null {
+  const qualityProfile = preferredChoice(destination.qualityProfiles);
+  const rootFolder = preferredChoice(destination.rootFolders);
+  if (!qualityProfile || !rootFolder) return null;
+  return {
+    destination: destination.id,
+    languageProfile: preferredChoice(destination.languageProfiles)?.id ?? null,
+    qualityProfile: qualityProfile.id,
+    rootFolder: rootFolder.id,
+  };
+}
+
+function readableBytes(bytes: number | null) {
+  if (bytes === null) return null;
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1_000 && unit < units.length - 1) {
+    value /= 1_000;
+    unit += 1;
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: value >= 10 ? 0 : 1 }).format(value)} ${units[unit]}`;
 }
 
 function RequestComposerSkeleton() {
@@ -164,6 +216,13 @@ export function RequestComposer({
   const [seasons, setSeasons] = useState<number[]>([]);
   const [seasonDraft, setSeasonDraft] = useState("1");
   const [submission, setSubmission] = useState<SubmissionState>({ kind: "idle" });
+  const [routingOpen, setRoutingOpen] = useState(false);
+  const [routingEnabled, setRoutingEnabled] = useState(false);
+  const [routingSelection, setRoutingSelection] = useState<MediaRequestRoutingSelection | null>(
+    null,
+  );
+  const [routingState, setRoutingState] = useState<RoutingState>({ kind: "idle" });
+  const [routingAttempt, setRoutingAttempt] = useState(0);
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -191,6 +250,27 @@ export function RequestComposer({
     return () => controller.abort();
   }, [client, eligibilityAttempt, media, open]);
 
+  useEffect(() => {
+    if (!open || !media || eligibility.status !== "ready" || !routingOpen) return;
+    const controller = new AbortController();
+    void client
+      .loadRoutingOptions(media.kind, is4k, controller.signal)
+      .then((options) => {
+        const destination = preferredChoice(options.destinations);
+        const selection = destination ? defaultRoutingSelection(destination) : null;
+        setRoutingSelection(selection);
+        if (!selection) setRoutingEnabled(false);
+        setRoutingState({ kind: "ready", options });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setRoutingEnabled(false);
+        setRoutingSelection(null);
+        setRoutingState({ kind: "error" });
+      });
+    return () => controller.abort();
+  }, [client, eligibility.status, is4k, media, open, routingAttempt, routingOpen]);
+
   if (!media) return null;
 
   function resetAttempt() {
@@ -201,6 +281,23 @@ export function RequestComposer({
     if (submission.kind === "submitting") return;
     idempotencyKeyReference.current = null;
     setIs4k(nextIs4k);
+    setRoutingSelection(null);
+    setRoutingState({ kind: routingOpen ? "loading" : "idle" });
+    setSubmission({ kind: "idle" });
+  }
+
+  function updateRoutingSelection(selection: MediaRequestRoutingSelection) {
+    if (submission.kind === "submitting") return;
+    idempotencyKeyReference.current = null;
+    setRoutingEnabled(true);
+    setRoutingSelection(selection);
+    setSubmission({ kind: "idle" });
+  }
+
+  function useSeerrDefaults() {
+    if (submission.kind === "submitting") return;
+    idempotencyKeyReference.current = null;
+    setRoutingEnabled(false);
     setSubmission({ kind: "idle" });
   }
 
@@ -230,10 +327,20 @@ export function RequestComposer({
     if (!media || eligibility.status !== "ready" || submission.kind === "submitting") return;
     const input: MediaRequestInput =
       media.kind === "movie"
-        ? { is4k, kind: "movie", tmdbId: media.tmdbId }
+        ? {
+            is4k,
+            kind: "movie",
+            ...(routingEnabled && routingSelection && currentRoutingOptions
+              ? { routing: routingSelection }
+              : {}),
+            tmdbId: media.tmdbId,
+          }
         : {
             is4k,
             kind: "series",
+            ...(routingEnabled && routingSelection && currentRoutingOptions
+              ? { routing: routingSelection }
+              : {}),
             seasons: seasonMode === "all" ? "all" : seasons,
             tmdbId: media.tmdbId,
           };
@@ -260,12 +367,41 @@ export function RequestComposer({
               "same_key",
             );
       if (normalized.retryMode === "new_key") idempotencyKeyReference.current = null;
+      if (normalized.kind === "routing") {
+        setRoutingSelection(null);
+        setRoutingState({ kind: "loading" });
+        setRoutingAttempt((attempt) => attempt + 1);
+      }
       setSubmission({ error: normalized, kind: "error" });
     }
   }
 
   const specificSeasonsMissing =
     media.kind === "series" && seasonMode === "specific" && seasons.length === 0;
+  const currentRoutingOptions =
+    routingState.kind === "ready" &&
+    routingState.options.kind === media.kind &&
+    routingState.options.is4k === is4k
+      ? routingState.options
+      : null;
+  const routingIsLoading =
+    routingOpen &&
+    (routingState.kind === "idle" ||
+      routingState.kind === "loading" ||
+      (routingState.kind === "ready" && currentRoutingOptions === null));
+  const selectedDestination =
+    currentRoutingOptions && routingSelection
+      ? (currentRoutingOptions.destinations.find(
+          (destination) => destination.id === routingSelection.destination,
+        ) ?? null)
+      : null;
+  const selectedQuality = selectedDestination?.qualityProfiles.find(
+    (profile) => profile.id === routingSelection?.qualityProfile,
+  );
+  const routingSummary =
+    routingEnabled && selectedDestination && selectedQuality
+      ? `${selectedDestination.label} · ${selectedQuality.label}`
+      : "Automatic · Seerr defaults";
 
   return (
     <dialog
@@ -496,6 +632,188 @@ export function RequestComposer({
                 </fieldset>
               ) : null}
 
+              <details
+                className="request-composer__routing"
+                onToggle={(event) => {
+                  const nextOpen = event.currentTarget.open;
+                  setRoutingOpen(nextOpen);
+                  if (nextOpen) {
+                    setRoutingEnabled(true);
+                    setRoutingSelection(null);
+                    setRoutingState({ kind: "loading" });
+                  }
+                }}
+              >
+                <summary>
+                  <span className="request-composer__routing-icon">
+                    <SlidersHorizontal aria-hidden="true" />
+                  </span>
+                  <span>
+                    <strong>Advanced routing</strong>
+                    <small>{routingSummary}</small>
+                  </span>
+                  <ChevronDown aria-hidden="true" />
+                </summary>
+
+                <div className="request-composer__routing-body">
+                  {routingIsLoading ? (
+                    <div className="request-composer__routing-status" role="status">
+                      <LoaderCircle aria-hidden="true" />
+                      <span>
+                        <strong>Reading request destinations</strong>
+                        <small>Matching the selected format against Seerr.</small>
+                      </span>
+                    </div>
+                  ) : routingState.kind === "error" ? (
+                    <div className="request-composer__routing-status" role="status">
+                      <CircleAlert aria-hidden="true" />
+                      <span>
+                        <strong>Routing controls are unavailable</strong>
+                        <small>You can continue safely with Seerr’s configured defaults.</small>
+                      </span>
+                      <button
+                        onClick={() => {
+                          setRoutingEnabled(true);
+                          setRoutingState({ kind: "loading" });
+                          setRoutingAttempt((attempt) => attempt + 1);
+                        }}
+                        type="button"
+                      >
+                        <RefreshCw aria-hidden="true" /> Retry
+                      </button>
+                    </div>
+                  ) : !currentRoutingOptions ||
+                    currentRoutingOptions.destinations.length === 0 ||
+                    !routingSelection ? (
+                    <div className="request-composer__routing-status" role="status">
+                      <CircleAlert aria-hidden="true" />
+                      <span>
+                        <strong>No matching destinations</strong>
+                        <small>Seerr defaults remain available for this format.</small>
+                      </span>
+                    </div>
+                  ) : selectedDestination ? (
+                    <>
+                      <div className="request-composer__routing-heading">
+                        <span>
+                          <Server aria-hidden="true" />
+                          Explicit route
+                        </span>
+                        <button onClick={useSeerrDefaults} type="button">
+                          Use Seerr defaults
+                        </button>
+                      </div>
+
+                      <div className="request-composer__routing-fields">
+                        <label>
+                          <span>
+                            <Database aria-hidden="true" /> Destination
+                          </span>
+                          <select
+                            onChange={(event) => {
+                              const destination = currentRoutingOptions.destinations.find(
+                                (candidate) => candidate.id === event.currentTarget.value,
+                              );
+                              const selection = destination
+                                ? defaultRoutingSelection(destination)
+                                : null;
+                              if (selection) updateRoutingSelection(selection);
+                            }}
+                            value={routingSelection.destination}
+                          >
+                            {currentRoutingOptions.destinations.map((destination) => (
+                              <option key={destination.id} value={destination.id}>
+                                {destination.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          <span>
+                            <SlidersHorizontal aria-hidden="true" /> Quality profile
+                          </span>
+                          <select
+                            onChange={(event) =>
+                              updateRoutingSelection({
+                                ...routingSelection,
+                                qualityProfile: event.currentTarget.value,
+                              })
+                            }
+                            value={routingSelection.qualityProfile}
+                          >
+                            {selectedDestination.qualityProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          <span>
+                            <HardDrive aria-hidden="true" /> Root folder
+                          </span>
+                          <select
+                            onChange={(event) =>
+                              updateRoutingSelection({
+                                ...routingSelection,
+                                rootFolder: event.currentTarget.value,
+                              })
+                            }
+                            value={routingSelection.rootFolder}
+                          >
+                            {selectedDestination.rootFolders.map((folder) => {
+                              const available = readableBytes(folder.availableBytes);
+                              return (
+                                <option key={folder.id} value={folder.id}>
+                                  {folder.label}
+                                  {available ? ` · ${available} free` : ""}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </label>
+
+                        {selectedDestination.languageProfiles.length > 0 ? (
+                          <label>
+                            <span>
+                              <Languages aria-hidden="true" /> Language profile
+                            </span>
+                            <select
+                              onChange={(event) =>
+                                updateRoutingSelection({
+                                  ...routingSelection,
+                                  languageProfile: event.currentTarget.value,
+                                })
+                              }
+                              value={routingSelection.languageProfile ?? ""}
+                            >
+                              {selectedDestination.languageProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>
+                                  {profile.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                      </div>
+
+                      <p className="request-composer__routing-note">
+                        <LockKeyhole aria-hidden="true" /> Choices expire shortly and are valid only
+                        for your session. Storage paths stay inside the gateway.
+                      </p>
+                      {currentRoutingOptions.failures.length > 0 ? (
+                        <p className="request-composer__routing-warning" role="status">
+                          <CircleAlert aria-hidden="true" /> Some Seerr destinations did not
+                          respond. Available routes remain selectable.
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              </details>
+
               {submission.kind === "error" ? (
                 <div className="request-composer__error" role="alert">
                   <CircleAlert aria-hidden="true" />
@@ -518,7 +836,9 @@ export function RequestComposer({
                 </p>
                 <button
                   className="request-composer__primary"
-                  disabled={specificSeasonsMissing || submission.kind === "submitting"}
+                  disabled={
+                    specificSeasonsMissing || routingIsLoading || submission.kind === "submitting"
+                  }
                   type="submit"
                 >
                   {submission.kind === "submitting" ? (

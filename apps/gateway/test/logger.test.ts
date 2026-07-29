@@ -157,6 +157,11 @@ describe("gateway logger", () => {
               quickConnect: { secret: "quick-connect-secret-value" },
               quickConnectSecret: "quick-connect-flat-secret-value",
               requestCookies: "omnifin_session=request-cookie-value",
+              rootFolder: "/srv/private/request-target",
+              routing: {
+                destination: "routing-v1.v2.private-routing-reference",
+              },
+              routingReference: "routing-v1.v2.private-flat-reference",
               sessionTokenHash: "session-token-hash-value",
               setCookies: ["omnifin_session=set-cookie-value"],
               state: "oidc-state-value",
@@ -195,6 +200,9 @@ describe("gateway logger", () => {
       quickConnect: { secret: "[REDACTED]" },
       quickConnectSecret: "[REDACTED]",
       requestCookies: "[REDACTED]",
+      rootFolder: "[REDACTED]",
+      routing: "[REDACTED]",
+      routingReference: "[REDACTED]",
       sessionTokenHash: "[REDACTED]",
       setCookies: "[REDACTED]",
       state: "[REDACTED]",
@@ -204,7 +212,7 @@ describe("gateway logger", () => {
     expect(record.message).toBe("Payload accepted");
     expect(fields.body.nested[0]?.requestBody.password).toBe("password-value");
     expect(output).not.toMatch(
-      /upper-case-secret|alternate-secret|access-token-value|authorization-code-value|encrypted-(?:connector-credentials|media-reference-payload|verifier|id-token-hint|nonce)-value|signed-assertion-value|oidc-(?:session-id-hash|state)-value|password-value|private\/media|proxy-secret|quick-connect-(?:flat-)?secret-value|recovery-secret-digest-value|request-cookie-value|session-token-hash-value|set-cookie-value|upstream-session-id-value/,
+      /upper-case-secret|alternate-secret|access-token-value|authorization-code-value|encrypted-(?:connector-credentials|media-reference-payload|verifier|id-token-hint|nonce)-value|signed-assertion-value|oidc-(?:session-id-hash|state)-value|password-value|private\/(?:media|request-target)|private-(?:flat-)?reference|private-routing-reference|proxy-secret|quick-connect-(?:flat-)?secret-value|recovery-secret-digest-value|request-cookie-value|session-token-hash-value|set-cookie-value|upstream-session-id-value/,
     );
   });
 

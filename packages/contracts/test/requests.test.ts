@@ -6,6 +6,9 @@ import {
   mediaRequestInputSchema,
   mediaRequestResponseJsonSchema,
   mediaRequestResponseSchema,
+  mediaRequestRoutingOptionsResponseJsonSchema,
+  mediaRequestRoutingOptionsResponseSchema,
+  mediaRequestRoutingSelectionSchema,
   requestReviewDecisionInputJsonSchema,
   requestReviewDecisionInputSchema,
   requestReviewItemJsonSchema,
@@ -16,6 +19,9 @@ import {
 } from "../src/requests.js";
 
 describe("media request contracts", () => {
+  const routingReference = (suffix: string) =>
+    `routing-v1.v2.AAAAAAAAAAAAAAAA.${"B".repeat(48)}${suffix}.${"C".repeat(22)}`;
+
   it("normalizes the smallest safe movie and series inputs", () => {
     expect(mediaRequestInputSchema.parse({ kind: "movie", tmdbId: 550 })).toEqual({
       is4k: false,
@@ -60,6 +66,51 @@ describe("media request contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts only opaque routing selections and normalized routing options", () => {
+    const routing = {
+      destination: routingReference("destination"),
+      languageProfile: null,
+      qualityProfile: routingReference("profile"),
+      rootFolder: routingReference("root"),
+    };
+    expect(mediaRequestRoutingSelectionSchema.parse(routing)).toEqual(routing);
+    expect(
+      mediaRequestRoutingSelectionSchema.safeParse({
+        ...routing,
+        rootFolder: "/private/media/movies",
+      }).success,
+    ).toBe(false);
+
+    const response = {
+      destinations: [
+        {
+          id: routing.destination,
+          isDefault: true,
+          label: "Cinema",
+          languageProfiles: [],
+          qualityProfiles: [{ id: routing.qualityProfile, isDefault: true, label: "1080p" }],
+          rootFolders: [
+            {
+              availableBytes: 1_000_000,
+              capacityBytes: 2_000_000,
+              id: routing.rootFolder,
+              isDefault: true,
+              label: "Movies",
+            },
+          ],
+          service: "radarr",
+        },
+      ],
+      expiresAt: "2026-07-29T17:15:00.000Z",
+      failures: [],
+      generatedAt: "2026-07-29T17:00:00.000Z",
+      is4k: false,
+      kind: "movie",
+    } as const;
+    expect(mediaRequestRoutingOptionsResponseSchema.parse(response)).toEqual(response);
+    expect(JSON.stringify(response)).not.toContain("/private/media");
+  });
+
   it("accepts only bounded replay keys", () => {
     expect(idempotencyKeySchema.parse("request-01HQZ6TQ8E8QD0N4GZ4TVEW4WD")).toBe(
       "request-01HQZ6TQ8E8QD0N4GZ4TVEW4WD",
@@ -91,6 +142,7 @@ describe("media request contracts", () => {
   it("publishes dialect-neutral route schemas", () => {
     expect(mediaRequestInputJsonSchema).not.toHaveProperty("$schema");
     expect(mediaRequestResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(mediaRequestRoutingOptionsResponseJsonSchema).not.toHaveProperty("$schema");
     expect(requestReviewDecisionInputJsonSchema).not.toHaveProperty("$schema");
     expect(requestReviewItemJsonSchema).not.toHaveProperty("$schema");
     expect(requestReviewPageJsonSchema).not.toHaveProperty("$schema");

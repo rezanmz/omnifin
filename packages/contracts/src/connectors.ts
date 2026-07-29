@@ -24,6 +24,7 @@ export const connectorCapabilitySchema = z.enum([
   "media.library.mutate",
   "media.playback",
   "media.watch_state",
+  "request.configure",
   "request.create",
   "request.review",
   "acquisition.search",

@@ -50,6 +50,39 @@ const createdRequest: MediaRequestResponse = {
   tmdbId: 1396,
 };
 
+function routingReference(name: string) {
+  return `routing-v1.v2.${name}.${"g".repeat(32)}.${"h".repeat(32)}`;
+}
+
+const routingOptions = {
+  destinations: [
+    {
+      id: routingReference("radarr-primary"),
+      isDefault: true,
+      label: "Cinema primary",
+      languageProfiles: [],
+      qualityProfiles: [
+        { id: routingReference("quality-balanced"), isDefault: true, label: "Balanced" },
+      ],
+      rootFolders: [
+        {
+          availableBytes: 800_000_000_000,
+          capacityBytes: 2_000_000_000_000,
+          id: routingReference("root-cinema"),
+          isDefault: true,
+          label: "Cinema",
+        },
+      ],
+      service: "radarr",
+    },
+  ],
+  expiresAt: "2026-07-27T12:15:00.000Z",
+  failures: [],
+  generatedAt: "2026-07-27T12:00:00.000Z",
+  is4k: false,
+  kind: "movie",
+};
+
 function jsonResponse(body: unknown, status = 200, headers?: HeadersInit) {
   return new Response(JSON.stringify(body), {
     headers: { "content-type": "application/json", ...headers },
@@ -107,6 +140,58 @@ describe("media request client", () => {
       status: "link_required",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("loads only normalized, opaque request routing choices", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse(routingOptions),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaRequestClient.loadRoutingOptions("movie", false)).resolves.toEqual(
+      routingOptions,
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/requests/routing-options?is4k=false&kind=movie",
+    );
+    expect(JSON.stringify(routingOptions)).not.toContain("/srv/");
+  });
+
+  it("rejects malformed routing choices and maps expired references", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ rootFolder: "/srv/private" })),
+    );
+    await expect(mediaRequestClient.loadRoutingOptions("movie", false)).rejects.toMatchObject({
+      code: "invalid_response",
+      kind: "invalid_response",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            error: {
+              code: "request_routing_invalid",
+              message: "Request routing choices are no longer valid.",
+              requestId: "routing-error",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+    await expect(
+      mediaRequestClient.create(
+        { is4k: false, kind: "movie", tmdbId: 603 },
+        { csrfToken, idempotencyKey: "media-fedcba98-7654-3210-fedc-ba9876543210" },
+      ),
+    ).rejects.toMatchObject({
+      code: "request_routing_invalid",
+      kind: "routing",
+      retryMode: "new_key",
+    });
   });
 
   it("sends a validated, CSRF-bound, idempotent request and reads replay state", async () => {
