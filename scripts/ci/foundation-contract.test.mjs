@@ -59,7 +59,7 @@ function validFiles() {
   });
   files["compose.yaml"] = [
     "x-service: &service",
-    "  image: ghcr.io/rezanmz/omnifin:latest",
+    "  image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}",
     "  init: true",
     "  read_only: true",
     "  cap_drop: [ALL]",
@@ -152,6 +152,20 @@ test("rejects a deployment that publishes the gateway", async () => {
   );
 });
 
+test("rejects any non-loopback web publication", async () => {
+  await withRepository(
+    (files) => {
+      files["compose.yaml"] = files["compose.yaml"].replace(
+        '    ports: ["127.0.0.1:3000:3000"]',
+        '    ports: ["127.0.0.1:3000:3000", "3000:3000"]',
+      );
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /web socket must bind to loopback/u);
+    },
+  );
+});
+
 test("rejects a phase0 profile that claims pending live compatibility", async () => {
   await withRepository(
     (files) => {
@@ -178,6 +192,25 @@ test("rejects CI that can bypass the foundation check", async () => {
         checkFoundationContract({ root }),
         /must execute pnpm foundation:check/u,
       );
+    },
+  );
+});
+
+test("rejects a non-blocking foundation step", async () => {
+  await withRepository(
+    (files) => {
+      files[".github/workflows/ci.yml"] = [
+        "name: CI",
+        "jobs:",
+        "  quality:",
+        "    steps:",
+        "      - run: pnpm foundation:check",
+        "        continue-on-error: true",
+        "",
+      ].join("\n");
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /must fail closed/u);
     },
   );
 });

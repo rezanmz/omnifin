@@ -74,6 +74,7 @@ export const REQUIRED_ROOT_SCRIPTS = Object.freeze([
 
 const requiredWorkspacePatterns = ["apps/*", "packages/*"];
 const requiredServiceNames = ["gateway", "maintenance", "web"];
+const defaultImage = "${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -230,7 +231,7 @@ async function verifyDeployment(root, problems) {
   );
   const image = services.gateway?.image;
   requireValue(
-    typeof image === "string" && image.includes("ghcr.io/rezanmz/omnifin"),
+    image === defaultImage,
     "compose.yaml must default to the public Omnifin GHCR image.",
     problems,
   );
@@ -242,9 +243,11 @@ async function verifyDeployment(root, problems) {
     "The gateway must not publish a host port.",
     problems,
   );
+  const webPorts = services.web?.ports;
   requireValue(
-    Array.isArray(services.web?.ports) &&
-      services.web.ports.some((entry) => String(entry).startsWith("127.0.0.1:")),
+    Array.isArray(webPorts) &&
+      webPorts.length > 0 &&
+      webPorts.every((entry) => String(entry).startsWith("127.0.0.1:")),
     "The default web socket must bind to loopback.",
     problems,
   );
@@ -326,11 +329,23 @@ async function verifyReleaseBoundary(root, problems) {
 
 async function verifyQualityWiring(root, problems) {
   const ci = await readYaml(root, ".github/workflows/ci.yml");
-  const qualitySteps = ci?.jobs?.quality?.steps;
+  const quality = ci?.jobs?.quality;
+  const qualitySteps = quality?.steps;
   requireValue(Array.isArray(qualitySteps), "CI must define the Quality job.", problems);
+  const foundationStep = qualitySteps?.find((step) => step?.run === "pnpm foundation:check");
   requireValue(
-    qualitySteps?.some((step) => step?.run === "pnpm foundation:check"),
+    foundationStep !== undefined,
     "The CI Quality job must execute pnpm foundation:check.",
+    problems,
+  );
+  requireValue(
+    quality?.["continue-on-error"] !== true && quality?.if === undefined,
+    "The CI Quality job must not bypass failures or run conditionally.",
+    problems,
+  );
+  requireValue(
+    foundationStep?.["continue-on-error"] !== true && foundationStep?.if === undefined,
+    "The foundation contract step must fail closed and run unconditionally.",
     problems,
   );
 }
