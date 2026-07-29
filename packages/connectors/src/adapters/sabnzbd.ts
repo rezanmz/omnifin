@@ -4,7 +4,11 @@ import { z } from "zod";
 
 import { ProbeOnlyAdapter } from "./base.js";
 import { upstreamVersionSchema } from "./schemas.js";
-import type { ConnectorDownloadQueueResult, DownloadQueueMutation } from "../downloads.js";
+import type {
+  ConnectorDownloadQueueResult,
+  DownloadQueueMutation,
+  DownloadQueueRemoval,
+} from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import type { OptionalApiKeyConnectorConfig } from "../types.js";
 
@@ -201,6 +205,39 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
         operation: "download.queue.action",
         code: "response_invalid",
         message: "SABnzbd did not confirm the exact queue item action.",
+        retryable: false,
+      });
+    }
+  }
+
+  async removeDownloadQueueItem(input: DownloadQueueRemoval, signal?: AbortSignal): Promise<void> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.remove",
+        code: "configuration_invalid",
+        message: "SABnzbd queue removal requires a configured API key.",
+        retryable: false,
+      });
+    }
+    const externalId = sabnzbdQueueIdSchema.parse(input.externalId);
+    const response = await this.client.requestJson("api", sabnzbdQueueActionSchema, {
+      operation: "download.queue.remove",
+      query: {
+        apikey: this.#apiKey,
+        mode: "queue",
+        name: "delete",
+        output: "json",
+        value: externalId,
+      },
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.status || response.nzo_ids?.length !== 1 || response.nzo_ids[0] !== externalId) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.remove",
+        code: "response_invalid",
+        message: "SABnzbd did not confirm the exact queue item removal.",
         retryable: false,
       });
     }

@@ -516,6 +516,24 @@ test("download queue confirmation visual baseline", async ({ page }, testInfo) =
   await expect(page).toHaveScreenshot("download-queue-confirmation.png", { fullPage: true });
 });
 
+test("download queue removal confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Queue removals cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Remove The.Far.Meridian.2026.2160p.WEB-DL" }).click();
+  await page.getByText("Remove this transfer?").waitFor();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-removal-confirmation.png", {
+    fullPage: true,
+  });
+});
+
 test("light download queue visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !lightVisualProjects.has(testInfo.project.name),

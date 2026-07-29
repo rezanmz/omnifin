@@ -19,23 +19,32 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseSchema,
   downloadQueueItemSchema,
+  downloadQueueRemovalInputSchema,
+  downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
   type DownloadClientService,
   type DownloadQueueActionInput,
   type DownloadQueueActionResponse,
   type DownloadQueueClient,
   type DownloadQueueItem,
+  type DownloadQueueRemovalInput,
+  type DownloadQueueRemovalResponse,
   type DownloadQueueResponse,
 } from "@omnifin/contracts/downloads";
+import { idempotencyKeySchema } from "@omnifin/contracts/requests";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { ZodError } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher, privacyHash } from "../security/crypto.js";
+import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const REMOVAL_OPERATION_IDENTIFIER_PATTERN = /^download_removal_[A-Za-z0-9_-]{22}$/u;
+const MAX_REMOVAL_OPERATIONS_PER_USER = 1_000;
+const REMOVAL_RECOVERY_LEASE_MS = 30_000;
+const REMOVAL_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 interface DownloadConnectorRow {
   baseUrl: string;
@@ -55,6 +64,16 @@ interface StoredConnectorSecrets {
   tlsCaCertificatePem?: unknown;
 }
 
+interface RemovalOperationRow {
+  failureCode: string | null;
+  fingerprintHash: string;
+  id: string;
+  itemSnapshotJson: string | null;
+  responseJson: string | null;
+  state: string;
+  updatedAt: number;
+}
+
 export interface DownloadQueueContext {
   ipAddress?: string;
   principal: SessionPrincipal;
@@ -72,12 +91,17 @@ export interface DownloadQueueDependencies {
   clock?: () => Date;
   createAdapter?: (input: DownloadQueueAdapterFactoryInput) => DownloadQueueController;
   createId?: () => string;
+  createOperationId?: () => string;
   wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export type DownloadQueueErrorReason =
   | "connector_unavailable"
+  | "idempotency_conflict"
+  | "idempotency_in_progress"
   | "identity_required"
+  | "operation_failed"
+  | "operation_limit_reached"
   | "response_invalid"
   | "stale_state"
   | "storage_failure"
@@ -240,6 +264,17 @@ function actionFailureCode(error: unknown) {
   return "upstream_failure";
 }
 
+function sameRemovalTarget(left: DownloadQueueItem, right: DownloadQueueItem) {
+  return (
+    left.id === right.id &&
+    left.connectorId === right.connectorId &&
+    left.client === right.client &&
+    left.title === right.title &&
+    left.sizeBytes === right.sizeBytes &&
+    left.addedAt === right.addedAt
+  );
+}
+
 function safeFailure(
   service: DownloadClientService,
   displayName: string,
@@ -314,6 +349,7 @@ export class DownloadQueueService {
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<DownloadQueueDependencies["createAdapter"]>;
   readonly #createId: () => string;
+  readonly #createOperationId: () => string;
   readonly #database: DatabaseHandle;
   readonly #wait: NonNullable<DownloadQueueDependencies["wait"]>;
 
@@ -328,6 +364,8 @@ export class DownloadQueueService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
     this.#createId = dependencies.createId ?? randomUUID;
+    this.#createOperationId =
+      dependencies.createOperationId ?? (() => `download_removal_${randomToken(16)}`);
     this.#wait = dependencies.wait ?? defaultWait;
   }
 
@@ -458,6 +496,103 @@ export class DownloadQueueService {
     }
   }
 
+  public async remove(
+    rawInput: DownloadQueueRemovalInput,
+    rawIdempotencyKey: string,
+    context: DownloadQueueContext,
+    signal?: AbortSignal,
+  ): Promise<DownloadQueueRemovalResponse> {
+    const principal = requirePermission(context.principal, "downloads.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new DownloadQueueError("identity_required");
+    }
+    const input = downloadQueueRemovalInputSchema.parse(rawInput);
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey);
+    const row = this.#actionConnector(input.connectorId);
+    const fingerprintHash = hashToken(
+      JSON.stringify({ contentDisposition: "preserved", input, version: 1 }),
+    );
+    const keyHash = hashToken(
+      `${principal.userId}\u0000download_queue_removal\u0000${idempotencyKey}`,
+    );
+    const reservation = this.#reserveRemoval(principal.userId, input, keyHash, fingerprintHash);
+    if (reservation.kind === "replay") {
+      return downloadQueueRemovalResponseSchema.parse({
+        ...reservation.response,
+        replayed: true,
+      });
+    }
+    if (reservation.kind === "failure") throw new DownloadQueueError("operation_failed");
+    if (reservation.kind === "conflict") throw new DownloadQueueError("idempotency_conflict");
+    if (reservation.kind === "pending") throw new DownloadQueueError("idempotency_in_progress");
+    let adapter: DownloadQueueController;
+    try {
+      adapter = this.#adapter(row);
+    } catch (error) {
+      const unavailable = new DownloadQueueError("connector_unavailable", { cause: error });
+      this.#completeRemovalFailure(reservation.operationId, input, context, unavailable.reason);
+      throw unavailable;
+    }
+
+    let current: ExactQueueItem | null;
+    try {
+      current = await this.#exactItem(adapter, row, input.itemId, signal);
+      if (reservation.kind === "recovered" && reservation.itemSnapshot) {
+        if (!current) {
+          const recovered = downloadQueueRemovalResponseSchema.parse({
+            contentDisposition: "preserved",
+            item: reservation.itemSnapshot,
+            operationId: reservation.operationId,
+            removedAt: this.#clock().toISOString(),
+            replayed: true,
+          });
+          this.#completeRemovalSuccess(reservation.operationId, recovered, input, context);
+          return recovered;
+        }
+        if (!sameRemovalTarget(reservation.itemSnapshot, current.publicItem)) {
+          throw new DownloadQueueError("stale_state");
+        }
+      }
+      if (!current) throw new DownloadQueueError("target_not_found");
+      if (reservation.kind !== "recovered" && current.publicItem.state !== input.expectedState) {
+        throw new DownloadQueueError("stale_state");
+      }
+      if (reservation.kind === "reserved" || !reservation.itemSnapshot) {
+        this.#prepareRemoval(reservation.operationId, current.publicItem, input, context);
+      }
+    } catch (error) {
+      this.#completeRemovalFailure(
+        reservation.operationId,
+        input,
+        context,
+        actionFailureCode(error),
+      );
+      throw error;
+    }
+
+    await adapter.removeDownloadQueueItem({ externalId: current.externalId }, signal);
+    let stillPresent: ExactQueueItem | null = current;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      stillPresent = await this.#exactItem(adapter, row, input.itemId, signal);
+      if (!stillPresent) break;
+      if (attempt < 2) await this.#wait(150 * (attempt + 1), signal);
+    }
+    if (stillPresent) {
+      const unconfirmed = new DownloadQueueError("response_invalid");
+      this.#completeRemovalFailure(reservation.operationId, input, context, unconfirmed.reason);
+      throw unconfirmed;
+    }
+    const response = downloadQueueRemovalResponseSchema.parse({
+      contentDisposition: "preserved",
+      item: current.publicItem,
+      operationId: reservation.operationId,
+      removedAt: this.#clock().toISOString(),
+      replayed: false,
+    });
+    this.#completeRemovalSuccess(reservation.operationId, response, input, context);
+    return response;
+  }
+
   async #readClient(row: DownloadConnectorRow, signal?: AbortSignal): Promise<ClientResult> {
     const service = row.type as DownloadClientService;
     const displayName = safeDisplayName(row.displayName, service);
@@ -577,6 +712,271 @@ export class DownloadQueueService {
       }
       throw error;
     }
+  }
+
+  #reserveRemoval(
+    userId: string,
+    input: DownloadQueueRemovalInput,
+    keyHash: string,
+    fingerprintHash: string,
+  ) {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const now = this.#now();
+          this.#database.sqlite
+            .prepare(
+              `delete from download_queue_removal_operations
+               where user_id = ? and state <> 'pending' and completed_at <= ?`,
+            )
+            .run(userId, now - REMOVAL_OPERATION_RETENTION_MS);
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      item_snapshot_json as itemSnapshotJson,
+                      response_json as responseJson, failure_code as failureCode,
+                      updated_at as updatedAt
+               from download_queue_removal_operations
+               where user_id = ? and idempotency_key_hash = ?
+               limit 1`,
+            )
+            .get(userId, keyHash) as RemovalOperationRow | undefined;
+          if (existing) {
+            if (existing.fingerprintHash !== fingerprintHash) {
+              return { kind: "conflict" as const };
+            }
+            if (existing.state === "pending") {
+              if (
+                !Number.isSafeInteger(existing.updatedAt) ||
+                existing.updatedAt < 0 ||
+                existing.updatedAt > now ||
+                now - existing.updatedAt < REMOVAL_RECOVERY_LEASE_MS
+              ) {
+                return { kind: "pending" as const };
+              }
+              let itemSnapshot: DownloadQueueItem | null = null;
+              if (existing.itemSnapshotJson) {
+                itemSnapshot = downloadQueueItemSchema.parse(JSON.parse(existing.itemSnapshotJson));
+              }
+              const claimed = this.#database.sqlite
+                .prepare(
+                  `update download_queue_removal_operations
+                   set updated_at = ?
+                   where id = ? and state = 'pending' and updated_at = ?`,
+                )
+                .run(now, existing.id, existing.updatedAt);
+              if (claimed.changes !== 1) return { kind: "pending" as const };
+              return {
+                itemSnapshot,
+                kind: "recovered" as const,
+                operationId: existing.id,
+              };
+            }
+            if (existing.state === "failed" && existing.failureCode) {
+              return { kind: "failure" as const };
+            }
+            if (existing.state === "succeeded" && existing.responseJson) {
+              return {
+                kind: "replay" as const,
+                response: downloadQueueRemovalResponseSchema.parse(
+                  JSON.parse(existing.responseJson),
+                ),
+              };
+            }
+            throw new DownloadQueueError("storage_failure");
+          }
+          const count = this.#database.sqlite
+            .prepare(
+              "select count(*) as count from download_queue_removal_operations where user_id = ?",
+            )
+            .get(userId) as { count: number };
+          if (count.count >= MAX_REMOVAL_OPERATIONS_PER_USER) {
+            throw new DownloadQueueError("operation_limit_reached");
+          }
+          const operationId = this.#removalOperationId();
+          this.#database.sqlite
+            .prepare(
+              `insert into download_queue_removal_operations (
+                 id, user_id, connector_id, item_id, idempotency_key_hash,
+                 fingerprint_hash, state, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(
+              operationId,
+              userId,
+              input.connectorId,
+              input.itemId,
+              keyHash,
+              fingerprintHash,
+              now,
+              now,
+            );
+          return { kind: "reserved" as const, operationId };
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #prepareRemoval(
+    operationId: string,
+    item: DownloadQueueItem,
+    input: DownloadQueueRemovalInput,
+    context: DownloadQueueContext,
+  ) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update download_queue_removal_operations
+               set item_snapshot_json = ?, mutation_started_at = ?, updated_at = ?
+               where id = ? and state = 'pending' and mutation_started_at is null`,
+            )
+            .run(JSON.stringify(item), now, now, operationId);
+          if (updated.changes !== 1) throw new DownloadQueueError("storage_failure");
+          this.#auditRemoval(
+            "download.queue.removal.requested",
+            "success",
+            operationId,
+            input,
+            context,
+            now,
+            { previousState: item.state },
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeRemovalSuccess(
+    operationId: string,
+    response: DownloadQueueRemovalResponse,
+    input: DownloadQueueRemovalInput,
+    context: DownloadQueueContext,
+  ) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update download_queue_removal_operations
+               set state = 'succeeded', response_json = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending' and item_snapshot_json is not null`,
+            )
+            .run(JSON.stringify(response), now, now, operationId);
+          if (updated.changes !== 1) throw new DownloadQueueError("storage_failure");
+          this.#auditRemoval(
+            "download.queue.removal.completed",
+            "success",
+            operationId,
+            input,
+            context,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeRemovalFailure(
+    operationId: string,
+    input: DownloadQueueRemovalInput,
+    context: DownloadQueueContext,
+    failureCode: string,
+  ) {
+    try {
+      const now = this.#now();
+      const safeFailureCode = failureCode.slice(0, 64) || "upstream_failure";
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update download_queue_removal_operations
+               set state = 'failed', failure_code = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(safeFailureCode, now, now, operationId);
+          if (updated.changes !== 1) throw new DownloadQueueError("storage_failure");
+          this.#auditRemoval(
+            "download.queue.removal.failed",
+            "failure",
+            operationId,
+            input,
+            context,
+            now,
+            { failureCode: safeFailureCode },
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #auditRemoval(
+    eventType: string,
+    outcome: "failure" | "success",
+    operationId: string,
+    input: DownloadQueueRemovalInput,
+    context: DownloadQueueContext,
+    createdAt: number,
+    metadata: Record<string, unknown> = {},
+  ) {
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method, event_type, outcome,
+           target_type, target_id, request_id, metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, ?, ?, 'download_queue_item', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        this.#createId(),
+        context.principal.userId,
+        context.principal.sessionId,
+        context.principal.authenticationMethod.kind,
+        eventType,
+        outcome,
+        input.itemId,
+        context.requestId ?? null,
+        JSON.stringify({
+          connectorId: input.connectorId,
+          contentDisposition: "preserved",
+          operationId,
+          ...metadata,
+        }),
+        context.ipAddress
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        createdAt,
+      );
+  }
+
+  #now() {
+    const value = this.#clock().getTime();
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new DownloadQueueError("storage_failure");
+    }
+    return value;
+  }
+
+  #removalOperationId() {
+    const value = this.#createOperationId();
+    if (!REMOVAL_OPERATION_IDENTIFIER_PATTERN.test(value)) {
+      throw new DownloadQueueError("storage_failure");
+    }
+    return value;
   }
 
   #audit(

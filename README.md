@@ -67,7 +67,8 @@ administration API with encrypted credentials, guarded transport policy, capabil
 snapshots, optimistic revisions, and audited lifecycle changes.
 Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
 Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
-and qBittorrent/SABnzbd queue reads with exact-item pause/resume through normalized, browser-safe contracts and responsive operational workspaces. An
+and qBittorrent/SABnzbd queue reads with exact-item pause/resume and downloaded-file-preserving
+removal through normalized, browser-safe contracts and responsive operational workspaces. An
 operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
 with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
 The interface supports light, dark, and live system appearance preferences through an
@@ -147,7 +148,7 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
   telemetry, application sync, failures, and safe tests
 - [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd
-  telemetry, exact-item pause/resume, auditing, partial failure, and secret isolation
+  telemetry, exact-item pause/resume/removal, auditing, partial failure, and secret isolation
 - [System health](docs/system-health.md) — normalized Servarr warnings, private
   storage capacity, partial failure, and freshness behavior
 - [Acquisition calendar](docs/acquisition-calendar.md) — normalized Radarr and Sonarr

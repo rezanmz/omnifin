@@ -133,6 +133,7 @@
 .degradedNotice,
 .staleNotice,
 .truncatedNotice,
+.operationNotice,
 .primaryAction {
   align-items: center;
   display: flex;
@@ -398,7 +399,8 @@
 
 .degradedNotice,
 .staleNotice,
-.truncatedNotice {
+.truncatedNotice,
+.operationNotice {
   border-radius: 18px;
   font-size: 0.75rem;
   gap: 11px;
@@ -422,6 +424,16 @@
   background: var(--fill-subtle);
   border: 1px solid var(--line-soft);
   color: var(--paper-2);
+}
+
+.operationNotice {
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 24%, transparent);
+  color: var(--success);
+}
+
+.operationNotice span {
+  color: var(--paper-1);
 }
 
 .degradedNotice span,
@@ -640,6 +652,16 @@
   color: var(--paper-0);
 }
 
+.removeAction {
+  color: var(--paper-2);
+}
+
+.removeAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 8%, var(--glass-highlight));
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line-soft));
+  color: var(--danger);
+}
+
 .itemAction:active:not(:disabled),
 .cancelAction:active,
 .confirmAction:active {
@@ -769,7 +791,7 @@
 }
 
 .itemTelemetry dt {
-  color: var(--paper-3);
+  color: var(--paper-2);
   font-size: 0.61rem;
 }
 
@@ -817,6 +839,51 @@
   gap: 7px;
 }
 
+.removalConfirm {
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--danger) 8%, transparent), transparent 52%),
+    var(--surface-card);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line-strong));
+}
+
+.removalPhrase {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 300px;
+}
+
+.removalPhrase > span {
+  color: var(--paper-3);
+  font-size: 0.61rem;
+  font-weight: 680;
+}
+
+.removalPhrase input {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  color: var(--paper-0);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  min-height: 44px;
+  outline: 0;
+  padding: 0 12px;
+  text-transform: uppercase;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 170ms ease-out;
+}
+
+.removalPhrase input:focus-visible {
+  background: var(--fill-hover);
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
 .cancelAction,
 .confirmAction {
   padding: 0 14px;
@@ -842,6 +909,23 @@
 
 .confirmAction:hover {
   box-shadow: 0 11px 29px color-mix(in srgb, var(--acid) 23%, transparent);
+}
+
+.dangerAction {
+  background: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--glass-edge));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 18%, transparent);
+  color: white;
+}
+
+.dangerAction:hover:not(:disabled) {
+  box-shadow: 0 11px 29px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.confirmAction:disabled {
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .actionFeedback {
@@ -1385,6 +1469,7 @@
   .itemAction,
   .cancelAction,
   .confirmAction,
+  .removalPhrase input,
   .primaryAction {
     min-height: 48px;
   }
@@ -1400,6 +1485,7 @@
   .itemAction,
   .cancelAction,
   .confirmAction,
+  .removalPhrase input,
   .primaryAction,
   .topbar::after,
   .commandGlass::after,
@@ -1451,7 +1537,8 @@
   .unconfigured,
   .queueItem,
   .actionConfirm,
-  .actionFeedback {
+  .actionFeedback,
+  .operationNotice {
     border-color: currentcolor;
   }
 }
@@ -1466,7 +1553,9 @@
   .unconfigured,
   .queueItem,
   .actionConfirm,
-  .actionFeedback {
+  .actionFeedback,
+  .operationNotice,
+  .removalPhrase input {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: Canvas;

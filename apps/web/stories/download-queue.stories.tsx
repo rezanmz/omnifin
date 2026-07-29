@@ -13,6 +13,9 @@ const staticClient: DownloadQueueClient = {
   },
   load: async () => demoDownloadQueue,
   loadEligibility: async () => ({ status: "unavailable" }),
+  remove: async () => {
+    throw new Error("Story removals stop at confirmation.");
+  },
 };
 
 const meta = {
@@ -58,6 +61,17 @@ export const ResumeConfirmation: Story = {
     );
     await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
     await expect(canvas.getByText("Resume this transfer?")).toBeVisible();
+  },
+};
+export const RemoveConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Remove The.Far.Meridian.2026.2160p.WEB-DL" }),
+    );
+    await expect(canvas.getByRole("button", { name: "Cancel removal" })).toHaveFocus();
+    await expect(canvas.getByText("Remove this transfer?")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Remove transfer" })).toBeDisabled();
   },
 };
 export const Empty: Story = {

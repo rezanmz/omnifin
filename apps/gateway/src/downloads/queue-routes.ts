@@ -4,9 +4,14 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseJsonSchema,
   downloadQueueActionResponseSchema,
+  downloadQueueRemovalInputJsonSchema,
+  downloadQueueRemovalInputSchema,
+  downloadQueueRemovalResponseJsonSchema,
+  downloadQueueRemovalResponseSchema,
   downloadQueueResponseJsonSchema,
   downloadQueueResponseSchema,
 } from "@omnifin/contracts/downloads";
+import { idempotencyKeySchema } from "@omnifin/contracts/requests";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import { requirePermission } from "../auth/authorization.js";
@@ -48,11 +53,39 @@ function serviceError(error: DownloadQueueError) {
         message: "The download changed before the action was confirmed. Refresh and try again.",
         statusCode: 409,
       });
+    case "idempotency_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "idempotency_key_conflict",
+        message: "The idempotency key was already used for a different queue removal.",
+        statusCode: 409,
+      });
+    case "idempotency_in_progress":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_removal_in_progress",
+        message: "That queue removal is already in progress.",
+        statusCode: 409,
+      });
+    case "operation_failed":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_removal_failed",
+        message: "The previous queue removal attempt failed. Refresh before trying again.",
+        statusCode: 409,
+      });
+    case "operation_limit_reached":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_removal_limit_reached",
+        message: "Too many queue removal records are retained for this account.",
+        statusCode: 429,
+      });
     case "response_invalid":
       return new SafeHttpError({
         cause: error,
         code: "download_queue_action_unconfirmed",
-        message: "The download client did not confirm the requested state.",
+        message: "The download client did not confirm the requested queue change.",
         statusCode: 502,
       });
     case "connector_unavailable":
@@ -80,7 +113,7 @@ function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
     return new SafeHttpError({
       cause: error,
       code: "download_queue_action_unconfirmed",
-      message: "The download client did not confirm the requested state.",
+      message: "The download client did not confirm the requested queue change.",
       statusCode: 502,
     });
   }
@@ -168,6 +201,50 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
             controller.signal,
           ),
         );
+      } catch (error) {
+        if (error instanceof DownloadQueueError) throw serviceError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/downloads/queue/removals",
+    {
+      bodyLimit: 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 6, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: downloadQueueRemovalInputJsonSchema,
+        response: { 200: downloadQueueRemovalResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "downloads.manage",
+      );
+      const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const result = downloadQueueRemovalResponseSchema.parse(
+          await queue.remove(
+            downloadQueueRemovalInputSchema.parse(request.body),
+            idempotencyKey,
+            { ipAddress: request.ip, principal, requestId: request.id },
+            controller.signal,
+          ),
+        );
+        reply.header("idempotency-replayed", String(result.replayed));
+        return result;
       } catch (error) {
         if (error instanceof DownloadQueueError) throw serviceError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);

@@ -225,6 +225,63 @@ describe("DownloadQueue", () => {
     );
   });
 
+  it("requires typed confirmation before removing one item with downloaded files preserved", async () => {
+    const user = userEvent.setup();
+    const item = demoDownloadQueue.items[0]!;
+    const remove = vi.fn(async () => ({
+      contentDisposition: "preserved" as const,
+      item,
+      operationId: "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
+      removedAt: "2026-07-28T03:00:08.000Z",
+      replayed: false,
+    }));
+    renderQueue(ready, {
+      client: {
+        load: async () => demoDownloadQueue,
+        loadEligibility: async () => ({
+          snapshot: { csrfToken: "download-queue-csrf", principal: operator },
+          status: "ready",
+        }),
+        remove,
+      },
+    });
+
+    const trigger = screen.getByRole("button", { name: `Remove ${item.title}` });
+    await user.click(trigger);
+
+    expect(screen.getByText("Remove this transfer?")).toBeVisible();
+    expect(screen.getByText(/Downloaded content stays on disk/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel removal" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Cancel removal" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: `Remove ${item.title}` })).toHaveFocus(),
+    );
+    await user.click(screen.getByRole("button", { name: `Remove ${item.title}` }));
+
+    const confirm = screen.getByRole("button", { name: "Remove transfer" });
+    expect(confirm).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Type REMOVE to confirm" }), "REMOVE");
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+
+    await waitFor(() => expect(remove).toHaveBeenCalledOnce());
+    expect(remove).toHaveBeenCalledWith(
+      {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      },
+      {
+        csrfToken: "download-queue-csrf",
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      `${item.title} removed from ${item.clientName}. Downloaded files were preserved.`,
+    );
+    expect(screen.queryByText(item.title)).not.toBeInTheDocument();
+  });
+
   it("resumes a paused transfer and updates the verified queue geometry in place", async () => {
     const user = userEvent.setup();
     const paused = demoDownloadQueue.items[1]!;

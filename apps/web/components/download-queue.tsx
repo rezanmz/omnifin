@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   Sun,
   Timer,
+  Trash2,
   TriangleAlert,
   Unplug,
   type LucideIcon,
@@ -98,6 +99,14 @@ interface QueueActionState {
   status: QueueActionStatus;
 }
 
+interface QueueRemovalState {
+  confirmation: string;
+  idempotencyKey: string;
+  itemId: string;
+  message: string;
+  status: QueueActionStatus;
+}
+
 export interface DownloadQueueProperties {
   client?: DownloadQueueClient;
   initialOutcome?: DownloadQueueLoadOutcome;
@@ -137,6 +146,46 @@ function formatTimestamp(value: string) {
   const hour = date.getUTCHours();
   const minute = String(date.getUTCMinutes()).padStart(2, "0");
   return `${String(date.getUTCMonth() + 1).padStart(2, "0")}/${String(date.getUTCDate()).padStart(2, "0")} · ${hour % 12 || 12}:${minute} ${hour < 12 ? "AM" : "PM"} UTC`;
+}
+
+function queueWithItems(
+  current: DownloadQueueResponse,
+  items: DownloadQueueItem[],
+  generatedAt: string,
+): DownloadQueueResponse {
+  const clients = current.clients.map((queueClient) => {
+    const clientItems = items.filter(
+      (candidate) => candidate.connectorId === queueClient.connectorId,
+    );
+    return {
+      ...queueClient,
+      itemCount: clientItems.length,
+      rateBytesPerSecond: clientItems.reduce(
+        (total, candidate) => total + candidate.rateBytesPerSecond,
+        0,
+      ),
+    };
+  });
+  return {
+    ...current,
+    clients,
+    generatedAt,
+    items,
+    summary: {
+      attention: items.filter(
+        (candidate) => candidate.state === "failed" || candidate.state === "stalled",
+      ).length,
+      downloading: items.filter((candidate) => ACTIVE_STATES.has(candidate.state)).length,
+      paused: items.filter((candidate) => candidate.state === "paused").length,
+      queued: items.filter((candidate) => candidate.state === "queued").length,
+      remainingBytes: items.reduce((total, candidate) => total + candidate.remainingBytes, 0),
+      total: items.length,
+      totalRateBytesPerSecond: items.reduce(
+        (total, candidate) => total + candidate.rateBytesPerSecond,
+        0,
+      ),
+    },
+  };
 }
 
 function ThemeControl() {
@@ -324,16 +373,28 @@ function QueueItem({
   actionState,
   item,
   onBeginAction,
+  onBeginRemoval,
   onCancelAction,
+  onCancelRemoval,
+  onChangeRemovalConfirmation,
   onConfirmAction,
+  onConfirmRemoval,
+  removalAvailable,
+  removalState,
 }: {
   actionAvailable: boolean;
   actionLocked: boolean;
   actionState: QueueActionState | null;
   item: DownloadQueueItem;
   onBeginAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+  onBeginRemoval: (item: DownloadQueueItem) => void;
   onCancelAction: (item: DownloadQueueItem) => void;
+  onCancelRemoval: (item: DownloadQueueItem) => void;
+  onChangeRemovalConfirmation: (value: string) => void;
   onConfirmAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+  onConfirmRemoval: (item: DownloadQueueItem) => void;
+  removalAvailable: boolean;
+  removalState: QueueRemovalState | null;
 }) {
   const percent = Math.round(item.progress * 100);
   const ProtocolIcon = item.protocol === "torrent" ? Network : Layers3;
@@ -341,6 +402,7 @@ function QueueItem({
     item.state === "paused" ? "resume" : PAUSABLE_STATES.has(item.state) ? "pause" : null;
   const ActionIcon = action === "resume" ? Play : Pause;
   const activeAction = actionState?.itemId === item.id ? actionState : null;
+  const activeRemoval = removalState?.itemId === item.id ? removalState : null;
   return (
     <article
       className={styles.queueItem}
@@ -362,7 +424,10 @@ function QueueItem({
           <span className={styles.status} data-state={item.state}>
             <i aria-hidden="true" /> {STATE_LABELS[item.state]}
           </span>
-          {action && actionAvailable && activeAction?.status !== "confirming" ? (
+          {action &&
+          actionAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
             <button
               aria-label={`${action === "pause" ? "Pause" : "Resume"} ${item.title}`}
               className={styles.itemAction}
@@ -377,6 +442,25 @@ function QueueItem({
                 <ActionIcon aria-hidden="true" size={15} />
               )}
               <span>{action === "pause" ? "Pause" : "Resume"}</span>
+            </button>
+          ) : null}
+          {removalAvailable &&
+          activeAction?.status !== "confirming" &&
+          activeRemoval?.status !== "confirming" ? (
+            <button
+              aria-label={`Remove ${item.title}`}
+              className={`${styles.itemAction} ${styles.removeAction}`}
+              data-item-removal={item.id}
+              disabled={actionLocked}
+              onClick={() => onBeginRemoval(item)}
+              type="button"
+            >
+              {activeRemoval?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <Trash2 aria-hidden="true" size={15} />
+              )}
+              <span>Remove</span>
             </button>
           ) : null}
         </div>
@@ -416,7 +500,50 @@ function QueueItem({
           </dd>
         </div>
       </dl>
-      {activeAction?.status === "confirming" && action ? (
+      {activeRemoval?.status === "confirming" ? (
+        <div
+          className={`${styles.actionConfirm} ${styles.removalConfirm}`}
+          role="group"
+          aria-label="remove confirmation"
+        >
+          <span>
+            <strong>Remove this transfer?</strong>
+            <small>
+              {item.client === "qbittorrent"
+                ? `This stops tracking the torrent in ${item.clientName}. Downloaded content stays on disk.`
+                : `This removes the job from ${item.clientName}. Already-downloaded files stay on disk, but the queue job cannot continue.`}
+            </small>
+            <label className={styles.removalPhrase}>
+              <span>Type REMOVE to confirm</span>
+              <input
+                aria-label="Type REMOVE to confirm"
+                autoComplete="off"
+                onChange={(event) => onChangeRemovalConfirmation(event.target.value)}
+                spellCheck={false}
+                value={activeRemoval.confirmation}
+              />
+            </label>
+          </span>
+          <div>
+            <button
+              autoFocus
+              className={styles.cancelAction}
+              onClick={() => onCancelRemoval(item)}
+              type="button"
+            >
+              Cancel removal
+            </button>
+            <button
+              className={`${styles.confirmAction} ${styles.dangerAction}`}
+              disabled={activeRemoval.confirmation !== "REMOVE"}
+              onClick={() => onConfirmRemoval(item)}
+              type="button"
+            >
+              Remove transfer
+            </button>
+          </div>
+        </div>
+      ) : activeAction?.status === "confirming" && action ? (
         <div className={styles.actionConfirm} role="group" aria-label={`${action} confirmation`}>
           <span>
             <strong>{action === "pause" ? "Pause this transfer?" : "Resume this transfer?"}</strong>
@@ -442,6 +569,12 @@ function QueueItem({
               {action === "pause" ? "Confirm pause" : "Confirm resume"}
             </button>
           </div>
+        </div>
+      ) : null}
+      {activeRemoval?.status === "error" ? (
+        <div className={styles.actionFeedback} data-status="error" role="alert">
+          <TriangleAlert aria-hidden="true" size={16} />
+          <span>{activeRemoval.message}</span>
         </div>
       ) : null}
       {activeAction?.status === "error" || activeAction?.status === "success" ? (
@@ -560,6 +693,8 @@ function ReadyQueue({
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [query, setQuery] = useState("");
   const [actionState, setActionState] = useState<QueueActionState | null>(null);
+  const [removalState, setRemovalState] = useState<QueueRemovalState | null>(null);
+  const [operationAnnouncement, setOperationAnnouncement] = useState("");
   const visibleItems = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     return queue.items.filter((item) => {
@@ -578,7 +713,9 @@ function ReadyQueue({
   }, [filter, query, queue.items]);
   const filtered = filter !== "all" || query.trim().length > 0;
   const actionAvailable = Boolean(client.act && client.loadEligibility);
-  const actionLocked = actionState?.status === "submitting";
+  const removalAvailable = Boolean(client.remove && client.loadEligibility);
+  const actionLocked =
+    actionState?.status === "submitting" || removalState?.status === "submitting";
 
   const cancelAction = (item: DownloadQueueItem) => {
     setActionState(null);
@@ -589,7 +726,28 @@ function ReadyQueue({
 
   const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
     if (actionLocked) return;
+    setRemovalState(null);
     setActionState({ action, itemId: item.id, message: "", status: "confirming" });
+  };
+
+  const cancelRemoval = (item: DownloadQueueItem) => {
+    setRemovalState(null);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-item-removal="${item.id}"]`)?.focus();
+    });
+  };
+
+  const beginRemoval = (item: DownloadQueueItem) => {
+    if (actionLocked) return;
+    setActionState(null);
+    setOperationAnnouncement("");
+    setRemovalState({
+      confirmation: "",
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      itemId: item.id,
+      message: "",
+      status: "confirming",
+    });
   };
 
   const confirmAction = async (item: DownloadQueueItem, action: DownloadQueueAction) => {
@@ -628,39 +786,7 @@ function ReadyQueue({
         const items = current.items.map((candidate) =>
           candidate.id === result.item.id ? result.item : candidate,
         );
-        const clients = current.clients.map((queueClient) => {
-          const clientItems = items.filter(
-            (candidate) => candidate.connectorId === queueClient.connectorId,
-          );
-          return {
-            ...queueClient,
-            itemCount: clientItems.length,
-            rateBytesPerSecond: clientItems.reduce(
-              (total, candidate) => total + candidate.rateBytesPerSecond,
-              0,
-            ),
-          };
-        });
-        return {
-          ...current,
-          clients,
-          generatedAt: result.verifiedAt,
-          items,
-          summary: {
-            attention: items.filter(
-              (candidate) => candidate.state === "failed" || candidate.state === "stalled",
-            ).length,
-            downloading: items.filter((candidate) => ACTIVE_STATES.has(candidate.state)).length,
-            paused: items.filter((candidate) => candidate.state === "paused").length,
-            queued: items.filter((candidate) => candidate.state === "queued").length,
-            remainingBytes: items.reduce((total, candidate) => total + candidate.remainingBytes, 0),
-            total: items.length,
-            totalRateBytesPerSecond: items.reduce(
-              (total, candidate) => total + candidate.rateBytesPerSecond,
-              0,
-            ),
-          },
-        };
+        return queueWithItems(current, items, result.verifiedAt);
       });
       setActionState({
         action,
@@ -674,6 +800,61 @@ function ReadyQueue({
           ? error.message
           : "The download action could not be verified. No further change was attempted.";
       setActionState({ action, itemId: item.id, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
+
+  const confirmRemoval = async (item: DownloadQueueItem) => {
+    if (
+      !client.remove ||
+      !client.loadEligibility ||
+      removalState?.itemId !== item.id ||
+      removalState.confirmation !== "REMOVE"
+    ) {
+      return;
+    }
+    const idempotencyKey = removalState.idempotencyKey;
+    setRemovalState({ ...removalState, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before removing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to remove this transfer."
+              : "The session could not be verified. The transfer was not removed.";
+        setRemovalState({ ...removalState, message, status: "error" });
+        return;
+      }
+      const result = await client.remove(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: eligibility.snapshot.csrfToken, idempotencyKey },
+      );
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        return queueWithItems(
+          current,
+          current.items.filter((candidate) => candidate.id !== result.item.id),
+          result.removedAt,
+        );
+      });
+      setRemovalState(null);
+      setOperationAnnouncement(
+        `${item.title} removed from ${item.clientName}. Downloaded files were preserved.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The removal could not be verified. Refresh before trying again.";
+      setRemovalState({ ...removalState, message, status: "error" });
       if (error instanceof DownloadQueueClientError && error.kind === "stale") {
         void onRefresh();
       }
@@ -782,6 +963,12 @@ function ReadyQueue({
               The queue is large. Showing the first 200 verified transfers.
             </div>
           ) : null}
+          {operationAnnouncement ? (
+            <div className={styles.operationNotice} role="status">
+              <Check aria-hidden="true" size={18} />
+              <span>{operationAnnouncement}</span>
+            </div>
+          ) : null}
 
           <section className={styles.metrics} aria-label="Download queue summary">
             <Metric
@@ -835,8 +1022,18 @@ function ReadyQueue({
                       item={item}
                       key={item.id}
                       onBeginAction={beginAction}
+                      onBeginRemoval={beginRemoval}
                       onCancelAction={cancelAction}
+                      onCancelRemoval={cancelRemoval}
+                      onChangeRemovalConfirmation={(confirmation) =>
+                        setRemovalState((current) =>
+                          current ? { ...current, confirmation } : current,
+                        )
+                      }
                       onConfirmAction={(target, action) => void confirmAction(target, action)}
+                      onConfirmRemoval={(target) => void confirmRemoval(target)}
+                      removalAvailable={removalAvailable}
+                      removalState={removalState}
                     />
                   ))}
                 </div>

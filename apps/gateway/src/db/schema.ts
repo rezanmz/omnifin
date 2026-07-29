@@ -925,6 +925,105 @@ export const libraryMutationOperations = sqliteTable(
   ],
 );
 
+export const downloadQueueRemovalOperations = sqliteTable(
+  "download_queue_removal_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    itemSnapshotJson: text("item_snapshot_json"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    mutationStartedAt: integer("mutation_started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("download_queue_removal_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("download_queue_removal_operations_state_created_idx").on(table.state, table.createdAt),
+    index("download_queue_removal_operations_item_idx").on(
+      table.connectorId,
+      table.itemId,
+      table.createdAt,
+    ),
+    check(
+      "download_queue_removal_operations_id_check",
+      sql`length(${table.id}) = 39
+        and substr(${table.id}, 1, 17) = 'download_removal_'
+        and substr(${table.id}, 18) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_item_id_check",
+      sql`length(${table.itemId}) = 31
+        and substr(${table.itemId}, 1, 9) = 'download_'
+        and substr(${table.itemId}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_removal_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "download_queue_removal_operations_item_snapshot_check",
+      sql`${table.itemSnapshotJson} is null
+        or (json_valid(${table.itemSnapshotJson}) and json_type(${table.itemSnapshotJson}) = 'object')`,
+    ),
+    check(
+      "download_queue_removal_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "download_queue_removal_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.itemSnapshotJson} is not null
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.mutationStartedAt} is not null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "download_queue_removal_operations_timestamp_order_check",
+      sql`(${table.mutationStartedAt} is null or ${table.mutationStartedAt} >= ${table.createdAt})
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

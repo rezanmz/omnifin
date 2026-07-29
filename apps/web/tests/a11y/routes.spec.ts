@@ -388,6 +388,22 @@ test("issue resolution confirmation has no automatically detectable accessibilit
   expect(results.violations).toEqual([]);
 });
 
+test("download removal confirmation has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Download removals cover representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Remove The.Far.Meridian.2026.2160p.WEB-DL" }).click();
+  await expect(page.getByRole("button", { name: "Cancel removal" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Remove transfer" })).toBeDisabled();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },

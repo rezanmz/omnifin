@@ -121,6 +121,26 @@ export const downloadQueueItemSchema = z
   });
 export type DownloadQueueItem = z.infer<typeof downloadQueueItemSchema>;
 
+export const downloadQueueRemovalInputSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueueItemStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+export type DownloadQueueRemovalInput = z.infer<typeof downloadQueueRemovalInputSchema>;
+
+export const downloadQueueRemovalOperationIdSchema = z
+  .string()
+  .regex(/^download_removal_[A-Za-z0-9_-]{22}$/u);
+
+export const downloadQueueRemovalResponseSchema = z.strictObject({
+  contentDisposition: z.literal("preserved"),
+  item: downloadQueueItemSchema,
+  operationId: downloadQueueRemovalOperationIdSchema,
+  removedAt: z.iso.datetime({ offset: true }),
+  replayed: z.boolean(),
+});
+export type DownloadQueueRemovalResponse = z.infer<typeof downloadQueueRemovalResponseSchema>;
+
 export const downloadQueueClientSchema = z
   .strictObject({
     connectorId: connectorIdentifierSchema,
@@ -362,4 +382,10 @@ export const downloadQueueActionInputJsonSchema = withoutSchemaDialect(
 );
 export const downloadQueueActionResponseJsonSchema = withoutSchemaDialect(
   downloadQueueActionResponseSchema,
+);
+export const downloadQueueRemovalInputJsonSchema = withoutSchemaDialect(
+  downloadQueueRemovalInputSchema,
+);
+export const downloadQueueRemovalResponseJsonSchema = withoutSchemaDialect(
+  downloadQueueRemovalResponseSchema,
 );
