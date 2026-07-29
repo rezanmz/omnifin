@@ -6,6 +6,7 @@ import { parse } from "yaml";
 
 import {
   DOWNLOAD_CLIENT_IMAGES,
+  containerIsolationArguments,
   createQBittorrentFixture,
   parsePublishedPort,
   readQBittorrentTemporaryPassword,
@@ -20,6 +21,27 @@ const SABNZBD_IMAGE_PATTERN = /^ghcr\.io\/linuxserver\/sabnzbd:5\.0\.4-ls263@sha
 test("pins exact current download-client images by immutable index digest", () => {
   assert.match(DOWNLOAD_CLIENT_IMAGES.qbittorrent, QBITTORRENT_IMAGE_PATTERN);
   assert.match(DOWNLOAD_CLIENT_IMAGES.sabnzbd, SABNZBD_IMAGE_PATTERN);
+});
+
+test("runs LinuxServer fixtures as the host user with a private writable runtime", () => {
+  const arguments_ = containerIsolationArguments(1001, 127);
+
+  assert.deepEqual(arguments_, [
+    "--user",
+    "1001:127",
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+    "/run:uid=1001,gid=127,exec",
+  ]);
+  assert.equal(
+    arguments_.some((argument) => argument.startsWith("PUID=")),
+    false,
+  );
+  assert.equal(
+    arguments_.some((argument) => argument.startsWith("PGID=")),
+    false,
+  );
 });
 
 test("creates one deterministic, tracker-isolated torrent fixture", () => {

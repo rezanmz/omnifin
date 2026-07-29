@@ -6,6 +6,10 @@ digest. They receive no repository or environment secrets, run on a unique inter
 publish only one ephemeral Web UI port, have CPU, memory, and process limits, and are destroyed with
 their private configuration after the check.
 
+Both images run as the host runner's unprivileged UID and GID. Their private `/run` tmpfs is owned by
+that identity so the s6 supervisor can initialize while Docker's `no-new-privileges` restriction
+remains enabled. The fixture does not use LinuxServer's root-time `PUID`/`PGID` remapping path.
+
 Run either fixture after building the production adapters:
 
 ```sh

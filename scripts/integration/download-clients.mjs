@@ -224,7 +224,7 @@ function parseArguments(arguments_) {
   };
 }
 
-function runDocker(arguments_, timeout = 180_000) {
+function runDocker(arguments_, timeout = 180_000, failureCode = "container_failed") {
   const execution = spawnSync("docker", arguments_, {
     cwd: REPOSITORY_ROOT,
     encoding: "utf8",
@@ -233,7 +233,7 @@ function runDocker(arguments_, timeout = 180_000) {
     timeout,
   });
   if (execution.status !== 0 || execution.error) {
-    throw new DownloadFixtureFailure("container_failed", { cause: execution.error });
+    throw new DownloadFixtureFailure(failureCode, { cause: execution.error });
   }
   return `${execution.stdout ?? ""}\n${execution.stderr ?? ""}`;
 }
@@ -306,25 +306,36 @@ async function waitForResult(operation, timeoutMs = SERVER_READY_TIMEOUT_MS) {
 }
 
 function publishedPort(containerName, internalPort) {
-  return parsePublishedPort(runDocker(["port", containerName, `${internalPort}/tcp`], 30_000));
+  return parsePublishedPort(
+    runDocker(["port", containerName, `${internalPort}/tcp`], 30_000, "container_port_failed"),
+  );
+}
+
+export function containerIsolationArguments(uid, gid) {
+  if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
+    throw new DownloadFixtureFailure("host_identity_unavailable");
+  }
+  return [
+    "--user",
+    `${uid}:${gid}`,
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+    `/run:uid=${uid},gid=${gid},exec`,
+  ];
 }
 
 function commonContainerArguments(context, internalPort, image) {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
-  if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
-    throw new DownloadFixtureFailure("host_identity_unavailable");
-  }
   return [
     "run",
     "--detach",
-    "--rm",
     "--name",
     context.containerName,
     "--network",
     context.networkName,
-    "--security-opt",
-    "no-new-privileges",
+    ...containerIsolationArguments(uid, gid),
     "--pids-limit",
     "512",
     "--memory",
@@ -333,10 +344,6 @@ function commonContainerArguments(context, internalPort, image) {
     "2",
     "--publish",
     `0.0.0.0::${internalPort}`,
-    "--env",
-    `PUID=${uid}`,
-    "--env",
-    `PGID=${gid}`,
     "--env",
     "TZ=Etc/UTC",
     "--env",
@@ -351,11 +358,17 @@ function commonContainerArguments(context, internalPort, image) {
 }
 
 function startContainer(context) {
-  runDocker(["network", "create", "--driver", "bridge", "--internal", context.networkName], 30_000);
+  runDocker(
+    ["network", "create", "--driver", "bridge", "--internal", context.networkName],
+    30_000,
+    "network_create_failed",
+  );
   context.networkCreated = true;
   const internalPort = context.service === "qbittorrent" ? 8080 : 8080;
   runDocker(
     commonContainerArguments(context, internalPort, DOWNLOAD_CLIENT_IMAGES[context.service]),
+    180_000,
+    "container_start_failed",
   );
   const port = publishedPort(context.containerName, internalPort);
   return {
@@ -500,7 +513,9 @@ function qbittorrentAdapter(server, password) {
 
 async function runQBittorrent(context, server) {
   const password = await waitForResult(async () =>
-    readQBittorrentTemporaryPassword(runDocker(["logs", context.containerName], 30_000)),
+    readQBittorrentTemporaryPassword(
+      runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
+    ),
   );
   const cookie = await waitForResult(() => qbittorrentLogin(server.loopbackUrl, password));
   const fixture = createQBittorrentFixture();
