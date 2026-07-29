@@ -121,6 +121,8 @@ test("security workflow separates complete Trivy reports from enforcement", () =
     assert.equal(vulnerabilities.with["skip-setup-trivy"], "true");
     assert.equal(vulnerabilities.with.version, "v0.70.0");
     assert.equal(vulnerabilities["continue-on-error"], true);
+    assert.equal(vulnerabilities.env.TRIVY_SKIP_DB_UPDATE, "true");
+    assert.equal(vulnerabilities.env.TRIVY_SKIP_JAVA_DB_UPDATE, "true");
 
     const scannerPolicy = namedStep(steps, policy.policy);
     assert.equal(scannerPolicy.id, policy.policyId);
@@ -132,6 +134,8 @@ test("security workflow separates complete Trivy reports from enforcement", () =
     assert.equal(scannerPolicy.with["skip-setup-trivy"], "true");
     assert.equal(scannerPolicy.with.version, "v0.70.0");
     assert.equal(scannerPolicy["continue-on-error"], true);
+    assert.equal(scannerPolicy.env.TRIVY_SKIP_DB_UPDATE, "true");
+    assert.equal(scannerPolicy.env.TRIVY_SKIP_JAVA_DB_UPDATE, "true");
 
     const gate = namedStep(steps, policy.gate);
     assert.match(gate.if, new RegExp(`steps\\.${policy.vulnerabilityId}\\.outcome`, "u"));
@@ -213,6 +217,8 @@ test("edge and release promotion require anonymous two-platform candidate scans"
 
     const vulnerabilities = namedStep(scan.steps, "Enforce fixable candidate vulnerabilities");
     assert.equal(vulnerabilities.env.TRIVY_PLATFORM, "${{ matrix.target.platform }}");
+    assert.equal(vulnerabilities.env.TRIVY_SKIP_DB_UPDATE, "true");
+    assert.equal(vulnerabilities.env.TRIVY_SKIP_JAVA_DB_UPDATE, "true");
     assert.equal(vulnerabilities.with.scanners, "vuln");
     assert.equal(vulnerabilities.with.severity, "HIGH,CRITICAL");
     assert.equal(vulnerabilities.with["ignore-unfixed"], "true");
@@ -220,6 +226,8 @@ test("edge and release promotion require anonymous two-platform candidate scans"
 
     const scannerPolicy = namedStep(scan.steps, "Enforce candidate secret and IaC policy");
     assert.equal(scannerPolicy.env.TRIVY_PLATFORM, "${{ matrix.target.platform }}");
+    assert.equal(scannerPolicy.env.TRIVY_SKIP_DB_UPDATE, "true");
+    assert.equal(scannerPolicy.env.TRIVY_SKIP_JAVA_DB_UPDATE, "true");
     assert.equal(scannerPolicy.with.scanners, "secret,misconfig");
     assert.equal(scannerPolicy.with.severity, "HIGH,CRITICAL");
     assert.equal(scannerPolicy.with["ignore-unfixed"], undefined);

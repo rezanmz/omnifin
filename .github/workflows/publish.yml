@@ -614,6 +614,8 @@ jobs:
         continue-on-error: true
         env:
           TRIVY_PLATFORM: ${{ matrix.target.platform }}
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -631,6 +633,8 @@ jobs:
         continue-on-error: true
         env:
           TRIVY_PLATFORM: ${{ matrix.target.platform }}
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
