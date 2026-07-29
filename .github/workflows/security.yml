@@ -134,6 +134,9 @@ jobs:
       - name: Enforce fixable source vulnerabilities
         id: trivy-source-vulnerabilities
         continue-on-error: true
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
@@ -149,6 +152,9 @@ jobs:
       - name: Enforce source secret and IaC policy
         id: trivy-source-policy
         continue-on-error: true
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
@@ -245,6 +251,9 @@ jobs:
       - name: Enforce fixable application image vulnerabilities
         id: trivy-container-vulnerabilities
         continue-on-error: true
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: omnifin:security-scan
@@ -259,6 +268,9 @@ jobs:
       - name: Enforce application image secret and IaC policy
         id: trivy-container-policy
         continue-on-error: true
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: omnifin:security-scan
