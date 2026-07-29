@@ -67,7 +67,9 @@ administration API with encrypted credentials, guarded transport policy, capabil
 snapshots, optimistic revisions, and audited lifecycle changes.
 Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
 Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, and qBittorrent/SABnzbd queue
-reads through normalized, browser-safe contracts and responsive operational workspaces.
+reads through normalized, browser-safe contracts and responsive operational workspaces. An
+operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
+with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces.
@@ -144,6 +146,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   telemetry, application sync, failures, and safe tests
 - [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd
   telemetry, partial failure, polling, and secret isolation
+- [System health](docs/system-health.md) — normalized Servarr warnings, private
+  storage capacity, partial failure, and freshness behavior
 - [Acquisition calendar](docs/acquisition-calendar.md) — normalized Radarr and Sonarr
   release timing, pagination, partial failure, and privacy boundaries
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,

@@ -55,8 +55,10 @@ available as pre-release development surfaces. Prowlarr inventory, 24-hour stati
 disabled state, application sync, normalized failures, and exact-target safe tests are
 also available through the operator-only Indexer Intelligence workspace. An operator-only
 download workspace reads bounded, normalized qBittorrent and SABnzbd queues without exposing
-upstream identifiers or credentials. Monitoring controls, broader acquisition mutations, and live
-operational events remain unavailable. A viewer-accessible acquisition
+upstream identifiers or credentials. The system-health workspace concurrently reads bounded
+Radarr, Sonarr, and Prowlarr health signals plus path-free Radarr/Sonarr capacity, retaining
+verified telemetry when one source or subsection fails. Monitoring controls, broader acquisition
+mutations, and live operational events remain unavailable. A viewer-accessible acquisition
 calendar combines bounded Radarr and Sonarr timing through opaque identifiers while keeping
 monitoring mutations unavailable. Jellyfin playback, progress, and Continue Watching use the
 paired user's permissions through server-held tokens and normalized, opaque media targets. The
