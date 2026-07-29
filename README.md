@@ -151,6 +151,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   telemetry, exact-item pause/resume/removal, auditing, partial failure, and secret isolation
 - [System health](docs/system-health.md) — normalized Servarr warnings, private
   storage capacity, partial failure, and freshness behavior
+- [Isolated service fixtures](docs/operations/servarr-service-fixtures.md) — digest-pinned
+  Radarr, Sonarr, Prowlarr, and Bazarr development evidence
 - [Acquisition calendar](docs/acquisition-calendar.md) — normalized Radarr and Sonarr
   release timing, pagination, partial failure, and privacy boundaries
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
