@@ -7,10 +7,9 @@ import { parse } from "yaml";
 import {
   DOWNLOAD_CLIENT_IMAGES,
   containerIsolationArguments,
-  containerPortArguments,
   createQBittorrentFixture,
+  parseContainerAddress,
   parseContainerState,
-  parsePublishedPort,
   readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
   validateSanitizedReport,
@@ -46,10 +45,14 @@ test("runs LinuxServer fixtures as the host user with a private writable runtime
   );
 });
 
-test("asks Docker to allocate an ephemeral host port for the Web UI", () => {
-  assert.deepEqual(containerPortArguments(8080), ["--publish", "8080/tcp"]);
-  assert.throws(() => containerPortArguments(0), /container_port_invalid/u);
-  assert.throws(() => containerPortArguments(65_536), /container_port_invalid/u);
+test("accepts only one private container address from the isolated network", () => {
+  assert.equal(parseContainerAddress("172.18.0.2\n"), "172.18.0.2");
+  assert.equal(parseContainerAddress("10.20.0.4\n"), "10.20.0.4");
+  assert.throws(() => parseContainerAddress("127.0.0.1\n"), /container_address_invalid/u);
+  assert.throws(
+    () => parseContainerAddress("172.18.0.2 172.18.0.3\n"),
+    /container_address_invalid/u,
+  );
 });
 
 test("accepts only a running disposable container state", () => {
@@ -100,16 +103,6 @@ test("reads one bounded SABnzbd API key from its private generated configuration
         "[misc]\napi_key = 0123456789abcdef0123456789abcdef\napi_key = fedcba9876543210fedcba9876543210\n",
       ),
     /credential_config_invalid/u,
-  );
-});
-
-test("parses only a valid Docker-published port", () => {
-  assert.equal(parsePublishedPort("0.0.0.0:49153\n[::]:49153\n"), 49_153);
-  assert.equal(parsePublishedPort("127.0.0.1:32768\n"), 32_768);
-  assert.throws(() => parsePublishedPort("0.0.0.0:0\n"), /container_port_invalid/u);
-  assert.throws(
-    () => parsePublishedPort("0.0.0.0:49153\n0.0.0.0:49154\n"),
-    /container_port_invalid/u,
   );
 });
 

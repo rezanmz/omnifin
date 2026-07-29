@@ -13,7 +13,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { networkInterfaces, tmpdir } from "node:os";
+import { isIP } from "node:net";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -165,22 +166,6 @@ export function readSabnzbdApiKey(configuration) {
   return matches[0];
 }
 
-export function parsePublishedPort(output) {
-  if (typeof output !== "string" || output.length > 16_384) {
-    throw new DownloadFixtureFailure("container_port_invalid");
-  }
-  const ports = new Set(
-    [...output.matchAll(/(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]):(\d{1,5})/gu)].map((match) =>
-      Number(match[1]),
-    ),
-  );
-  const [port] = ports;
-  if (ports.size !== 1 || !Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new DownloadFixtureFailure("container_port_invalid");
-  }
-  return port;
-}
-
 export function parseContainerState(output) {
   const state = typeof output === "string" ? output.trim() : "";
   if (state === "true:0") return true;
@@ -190,20 +175,12 @@ export function parseContainerState(output) {
   throw new DownloadFixtureFailure("container_state_invalid");
 }
 
-export function selectConnectorAddress(interfaces = networkInterfaces()) {
-  const candidates = Object.values(interfaces)
-    .flat()
-    .filter(
-      (entry) =>
-        entry &&
-        entry.family === "IPv4" &&
-        !entry.internal &&
-        PRIVATE_IPV4_PATTERN.test(entry.address),
-    )
-    .map((entry) => entry.address)
-    .sort();
-  if (!candidates[0]) throw new DownloadFixtureFailure("connector_address_unavailable");
-  return candidates[0];
+export function parseContainerAddress(output) {
+  const address = typeof output === "string" ? output.trim() : "";
+  if (isIP(address) !== 4 || !PRIVATE_IPV4_PATTERN.test(address)) {
+    throw new DownloadFixtureFailure("container_address_invalid");
+  }
+  return address;
 }
 
 function repositoryPath(candidate) {
@@ -314,12 +291,6 @@ async function waitForResult(operation, timeoutMs = SERVER_READY_TIMEOUT_MS) {
   throw new DownloadFixtureFailure("server_start_timeout");
 }
 
-function publishedPort(containerName, internalPort) {
-  return parsePublishedPort(
-    runDocker(["port", containerName, `${internalPort}/tcp`], 30_000, "container_port_failed"),
-  );
-}
-
 export function containerIsolationArguments(uid, gid) {
   if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
     throw new DownloadFixtureFailure("host_identity_unavailable");
@@ -334,14 +305,7 @@ export function containerIsolationArguments(uid, gid) {
   ];
 }
 
-export function containerPortArguments(internalPort) {
-  if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65_535) {
-    throw new DownloadFixtureFailure("container_port_invalid");
-  }
-  return ["--publish", `${internalPort}/tcp`];
-}
-
-function commonContainerArguments(context, internalPort, image) {
+function commonContainerArguments(context, image) {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
   return [
@@ -358,7 +322,6 @@ function commonContainerArguments(context, internalPort, image) {
     "1g",
     "--cpus",
     "2",
-    ...containerPortArguments(internalPort),
     "--env",
     "TZ=Etc/UTC",
     "--env",
@@ -379,9 +342,8 @@ function startContainer(context) {
     "network_create_failed",
   );
   context.networkCreated = true;
-  const internalPort = context.service === "qbittorrent" ? 8080 : 8080;
   runDocker(
-    commonContainerArguments(context, internalPort, DOWNLOAD_CLIENT_IMAGES[context.service]),
+    commonContainerArguments(context, DOWNLOAD_CLIENT_IMAGES[context.service]),
     180_000,
     "container_start_failed",
   );
@@ -392,22 +354,32 @@ function startContainer(context) {
       "container_state_failed",
     ),
   );
-  const port = publishedPort(context.containerName, internalPort);
+  const address = parseContainerAddress(
+    runDocker(
+      [
+        "inspect",
+        "--format",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        context.containerName,
+      ],
+      30_000,
+      "container_address_failed",
+    ),
+  );
+  const url = new URL(`http://${address}:8080/`);
   return {
-    connectorUrl: new URL(`http://${context.connectorAddress}:${port}/`),
-    loopbackUrl: new URL(`http://127.0.0.1:${port}/`),
+    connectorUrl: url,
+    directUrl: url,
   };
 }
 
 async function prepareContext(service) {
-  const connectorAddress = selectConnectorAddress();
   const temporaryDirectory = await realpath(
     await mkdtemp(join(tmpdir(), `omnifin-${service}-fixture-`)),
   );
   const suffix = `${process.pid}-${randomBytes(4).toString("hex")}`;
   const context = {
     configDirectory: resolve(temporaryDirectory, "config"),
-    connectorAddress,
     containerName: `omnifin-${service}-${suffix}`,
     mounts: [],
     networkCreated: false,
@@ -539,12 +511,12 @@ async function runQBittorrent(context, server) {
       runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
     ),
   );
-  const cookie = await waitForResult(() => qbittorrentLogin(server.loopbackUrl, password));
+  const cookie = await waitForResult(() => qbittorrentLogin(server.directUrl, password));
   const fixture = createQBittorrentFixture();
   const preservedBytes = Buffer.alloc(fixture.payload.byteLength, 0x5a);
   const preservedPath = resolve(context.downloadDirectory, fixture.fileName);
   await writeFile(preservedPath, preservedBytes, { flag: "wx", mode: 0o600 });
-  await seedQBittorrent(server.loopbackUrl, cookie, fixture);
+  await seedQBittorrent(server.directUrl, cookie, fixture);
 
   const adapter = qbittorrentAdapter(server, password);
   const health = await connectorOperation("authentication", () => adapter.probe());
@@ -630,13 +602,13 @@ function sabnzbdAdapter(server, apiKey) {
 
 async function runSabnzbd(context, server) {
   await waitForResult(async () => {
-    const version = await directJson(server.loopbackUrl, "api?mode=version&output=json");
+    const version = await directJson(server.directUrl, "api?mode=version&output=json");
     return typeof version?.version === "string" ? version.version : null;
   });
   const apiKey = await waitForResult(async () =>
     readSabnzbdApiKey(await readFile(resolve(context.configDirectory, "sabnzbd.ini"), "utf8")),
   );
-  const externalId = await seedSabnzbd(server.loopbackUrl, apiKey);
+  const externalId = await seedSabnzbd(server.directUrl, apiKey);
   const adapter = sabnzbdAdapter(server, apiKey);
   const health = await connectorOperation("authentication", () => adapter.probe());
   const version = assertHealthy(health);
