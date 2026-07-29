@@ -1,5 +1,5 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import {
   DownloadQueueClientError,
   type DownloadQueueClient,
   type DownloadQueueLoadOutcome,
+  type DownloadQueueWatchCallbacks,
 } from "../lib/download-queue";
 import { demoDownloadQueue, demoDownloadQueueGeneratedAt } from "../lib/download-queue-demo";
 import { DownloadQueue } from "./download-queue";
@@ -91,6 +92,55 @@ describe("DownloadQueue", () => {
     await user.click(screen.getByRole("button", { name: "Refresh download queue" }));
     await waitFor(() => expect(load).toHaveBeenCalled());
     expect(screen.getByRole("heading", { name: "Transfers" })).toBeVisible();
+  });
+
+  it("replaces the queue in place when a strict live snapshot arrives", async () => {
+    let callbacks: DownloadQueueWatchCallbacks | undefined;
+    const unsubscribe = vi.fn();
+    const changedTitle = "The.Far.Meridian.2026.REPACK.2160p";
+    const client: DownloadQueueClient = {
+      load: async () => demoDownloadQueue,
+      watch: (nextCallbacks) => {
+        callbacks = nextCallbacks;
+        nextCallbacks.onStatus("connecting");
+        return unsubscribe;
+      },
+    };
+    const view = renderQueue(ready, { client, live: true });
+
+    expect(screen.getByText("Connecting")).toBeVisible();
+    act(() => {
+      callbacks?.onSnapshot({
+        cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        queue: {
+          ...demoDownloadQueue,
+          items: demoDownloadQueue.items.map((item, index) =>
+            index === 0 ? { ...item, title: changedTitle } : item,
+          ),
+        },
+      });
+    });
+
+    expect(await screen.findByText(changedTitle)).toBeVisible();
+    expect(screen.getByText("Live")).toBeVisible();
+    expect(screen.queryByText(demoDownloadQueue.items[0]!.title)).not.toBeInTheDocument();
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("keeps verified data visible while live updates use polling fallback", () => {
+    const client: DownloadQueueClient = {
+      load: async () => demoDownloadQueue,
+      watch: (callbacks) => {
+        callbacks.onStatus("fallback");
+        return vi.fn();
+      },
+    };
+    renderQueue(ready, { client, live: true });
+
+    expect(screen.getByText("12s fallback")).toBeVisible();
+    expect(screen.getByText(demoDownloadQueue.items[0]!.title)).toBeVisible();
   });
 
   it("provides accessible light, dark, and system appearance controls", async () => {

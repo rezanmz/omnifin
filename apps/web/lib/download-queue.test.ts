@@ -2,7 +2,12 @@ import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoDownloadQueue } from "./download-queue-demo";
-import { DownloadQueueClientError, downloadQueueClient, outcomeFromError } from "./download-queue";
+import {
+  DownloadQueueClientError,
+  downloadQueueClient,
+  outcomeFromError,
+  watchDownloadQueueEvents,
+} from "./download-queue";
 
 function json(value: unknown, status = 200) {
   return Promise.resolve(
@@ -25,6 +30,106 @@ describe("download queue client", () => {
       "/api/downloads/queue",
       expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
     );
+  });
+
+  it("accepts only a strict SSE snapshot bound to its transport cursor", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    const stop = watchDownloadQueueEvents({ onSnapshot, onStatus }, (url) => {
+      expect(url).toBe("/api/downloads/queue/events");
+      return source;
+    });
+    source.onopen?.(new Event("open"));
+    const event = {
+      cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot",
+      queue: demoDownloadQueue,
+    };
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify(event),
+        lastEventId: event.cursor,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledWith(event));
+    expect(onStatus).toHaveBeenNthCalledWith(1, "connecting");
+    expect(onStatus).toHaveBeenCalledWith("live");
+    expect(source.close).not.toHaveBeenCalled();
+
+    stop();
+    expect(source.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed to polling when an SSE cursor or payload is untrusted", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot, onStatus }, () => source);
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+          kind: "snapshot",
+          queue: demoDownloadQueue,
+        }),
+        lastEventId: "download_event_ZYXWVUTSRQPONMLKJIHGFE",
+      }),
+    );
+
+    await vi.waitFor(() => expect(source.close).toHaveBeenCalledOnce());
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("rejects an oversized SSE message before parsing it", () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot, onStatus }, () => source);
+
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: "x".repeat(512_001),
+        lastEventId: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
+      }),
+    );
+
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("keeps the native reconnect path available after a transient SSE error", () => {
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchDownloadQueueEvents({ onSnapshot: vi.fn(), onStatus }, () => source);
+
+    source.onerror?.(new Event("error"));
+
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(source.close).not.toHaveBeenCalled();
   });
 
   it.each([

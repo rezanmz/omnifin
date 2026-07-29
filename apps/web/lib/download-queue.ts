@@ -7,9 +7,11 @@ import type {
   DownloadQueueRemovalInput,
   DownloadQueueRemovalResponse,
   DownloadQueueResponse,
+  DownloadQueueSnapshotEvent,
 } from "@omnifin/contracts/downloads";
 
 const CSRF_HEADER = "x-omnifin-csrf";
+const MAX_DOWNLOAD_QUEUE_EVENT_CHARACTERS = 512_000;
 
 interface ResponseSchema<T> {
   safeParse(input: unknown): { data: T; success: true } | { success: false };
@@ -74,6 +76,22 @@ export interface DownloadQueueActionOptions {
 export interface DownloadQueueRemovalOptions extends DownloadQueueActionOptions {
   idempotencyKey: string;
 }
+
+export type DownloadQueueLiveStatus = "connecting" | "fallback" | "live";
+
+export interface DownloadQueueWatchCallbacks {
+  onSnapshot(event: DownloadQueueSnapshotEvent): void;
+  onStatus(status: DownloadQueueLiveStatus): void;
+}
+
+interface DownloadQueueEventSource {
+  close(): void;
+  onerror: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  onopen: ((event: Event) => void) | null;
+}
+
+type DownloadQueueEventSourceFactory = (url: string) => DownloadQueueEventSource;
 
 async function safeJson(response: Response): Promise<unknown> {
   try {
@@ -195,6 +213,68 @@ export interface DownloadQueueClient {
     input: DownloadQueueRemovalInput,
     options: DownloadQueueRemovalOptions,
   ): Promise<DownloadQueueRemovalResponse>;
+  watch?(callbacks: DownloadQueueWatchCallbacks): () => void;
+}
+
+export function watchDownloadQueueEvents(
+  callbacks: DownloadQueueWatchCallbacks,
+  createEventSource: DownloadQueueEventSourceFactory = (url) => new EventSource(url),
+) {
+  let active = true;
+  let failedClosed = false;
+  let source: DownloadQueueEventSource;
+  callbacks.onStatus("connecting");
+  try {
+    source = createEventSource("/api/downloads/queue/events");
+  } catch {
+    callbacks.onStatus("fallback");
+    return () => {
+      active = false;
+    };
+  }
+
+  const failClosed = () => {
+    if (!active || failedClosed) return;
+    failedClosed = true;
+    source.close();
+    callbacks.onStatus("fallback");
+  };
+  source.onopen = () => {
+    if (active && !failedClosed) callbacks.onStatus("live");
+  };
+  source.onerror = () => {
+    if (active && !failedClosed) callbacks.onStatus("fallback");
+  };
+  source.onmessage = (message) => {
+    void (async () => {
+      let body: unknown;
+      if (message.data.length > MAX_DOWNLOAD_QUEUE_EVENT_CHARACTERS) {
+        failClosed();
+        return;
+      }
+      try {
+        body = JSON.parse(message.data);
+      } catch {
+        failClosed();
+        return;
+      }
+      const { downloads } = await contractSchemas();
+      if (!active || failedClosed) return;
+      const parsed = downloads.downloadQueueSnapshotEventSchema.safeParse(body);
+      if (!parsed.success || message.lastEventId !== parsed.data.cursor) {
+        failClosed();
+        return;
+      }
+      callbacks.onSnapshot(parsed.data);
+      callbacks.onStatus("live");
+    })();
+  };
+
+  return () => {
+    if (!active) return;
+    active = false;
+    source.close();
+  };
 }
 
 export const downloadQueueClient: DownloadQueueClient = {
@@ -333,6 +413,10 @@ export const downloadQueueClient: DownloadQueueClient = {
       );
     }
     return parsed.data;
+  },
+
+  watch(callbacks) {
+    return watchDownloadQueueEvents(callbacks);
   },
 };
 
