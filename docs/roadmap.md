@@ -70,7 +70,7 @@ desktop, tablet, mobile, and 10-foot layouts pass.
   isolated digest-pinned upstream gates; protected live evidence and broader queue mutations
   pending)
 - Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry
-  (implemented; protected live evidence pending)
+  (implemented with isolated real-service read gates; protected live evidence pending)
 - Title-level Acquisition Provenance and exact-target automatic-search recovery
   plus manual release recovery (implemented; protected live evidence pending)
 
@@ -87,7 +87,8 @@ matrix.
   protected live evidence pending)
 - Player issue reporting plus a unified local/Seerr resolve and reopen workbench
   (implemented; protected live evidence pending)
-- Bazarr subtitle search and download (implemented; protected live evidence pending)
+- Bazarr subtitle search and download (implemented with an isolated real-service empty-state gate;
+  protected live mutation evidence pending)
 - Jellyfin scans, unmatched-media handling, and metadata artwork editing (implemented;
   protected live evidence pending)
 

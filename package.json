@@ -20,6 +20,7 @@
     "fixture:media": "node scripts/media/playback-fixture.mjs",
     "fixture:download-client": "node scripts/integration/download-clients.mjs",
     "fixture:jellyfin-playback": "node scripts/integration/jellyfin/playback.mjs",
+    "fixture:servarr-service": "node scripts/integration/servarr-services.mjs",
     "license:check": "node scripts/check-licenses.mjs",
     "lighthouse": "pnpm --filter @omnifin/web lighthouse",
     "load:gateway": "node scripts/load/gateway-smoke.mjs",

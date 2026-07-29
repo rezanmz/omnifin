@@ -84,6 +84,11 @@ docker compose config --quiet
 pnpm container:smoke --build
 ```
 
+The protected connector aggregate also runs digest-pinned, disposable Radarr, Sonarr, Prowlarr,
+and Bazarr services through the production adapters. For a focused local reproduction, follow the
+[isolated service fixture runbook](operations/servarr-service-fixtures.md). These checks are
+read-only development evidence and do not advance the protected live-readiness ledger.
+
 `db:generate` must leave the tracked schema and migration files unchanged. Review
 `git status --short` immediately afterward; generated drift is a failing gate, not an
 artifact to accept without a matching, reviewed schema change. `actionlint` is also
