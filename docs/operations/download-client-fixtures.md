@@ -20,10 +20,12 @@ pnpm fixture:download-client --service qbittorrent --output artifacts/integratio
 pnpm fixture:download-client --service sabnzbd --output artifacts/integration/download-clients/sabnzbd/report.json
 ```
 
-The qBittorrent runner creates a small deterministic torrent whose tracker is loopback-only. The
-SABnzbd runner uploads a repository-generated NZB with a synthetic message identifier to an instance
-that has no news servers. The internal network has no route to the public internet, so neither
-fixture can retrieve third-party content.
+The qBittorrent runner pre-seeds a randomly generated credential using qBittorrent's current
+PBKDF2-SHA-512 configuration format, then creates a small deterministic torrent whose tracker is
+loopback-only. The plaintext credential is never written to logs or evidence and disappears with the
+private fixture directory. The SABnzbd runner uploads a repository-generated NZB with a synthetic
+message identifier to an instance that has no news servers. The internal network has no route to the
+public internet, so neither fixture can retrieve third-party content.
 
 Each runner calls Omnifin's production adapter over the host's private interface and requires:
 

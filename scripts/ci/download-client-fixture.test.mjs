@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { pbkdf2Sync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -7,11 +8,10 @@ import { parse } from "yaml";
 import {
   DOWNLOAD_CLIENT_IMAGES,
   containerIsolationArguments,
+  createQBittorrentAuthenticationFixture,
   createQBittorrentFixture,
   parseContainerAddress,
   parseContainerState,
-  readQBittorrentTemporaryCredentials,
-  readQBittorrentTemporaryPassword,
   readSabnzbdApiKey,
   serviceEnvironmentArguments,
   validateSanitizedFailureReport,
@@ -88,30 +88,30 @@ test("creates one deterministic, tracker-isolated torrent fixture", () => {
   assert.equal(first.torrent.includes(Buffer.from(first.fileName)), true);
 });
 
-test("extracts one bounded temporary qBittorrent credential without accepting ambiguity", () => {
-  const usernameLine = "The WebUI administrator username is: fixture-admin";
-  const line =
-    "The WebUI administrator password was not set. A temporary password is provided for this session: A9_fixture-Password";
-  assert.equal(
-    readQBittorrentTemporaryPassword(`startup\n${line}\nready\n`),
-    "A9_fixture-Password",
+test("creates a qBittorrent credential using its exact bounded PBKDF2 format", () => {
+  const password = "fixture-password-23456789";
+  const salt = Buffer.alloc(16, 0x2a);
+  const fixture = createQBittorrentAuthenticationFixture(password, salt);
+  const encoded = fixture.configuration.match(
+    /WebUI\\Password_PBKDF2="@ByteArray\(([^:]+):([^\)]+)\)"/u,
+  );
+
+  assert.equal(fixture.username, "omnifin-fixture");
+  assert.equal(fixture.password, password);
+  assert.equal(fixture.configuration.includes(password), false);
+  assert.equal(fixture.configuration.includes("[LegalNotice]\nAccepted=true"), true);
+  assert.deepEqual(Buffer.from(encoded?.[1] ?? "", "base64"), salt);
+  assert.deepEqual(
+    Buffer.from(encoded?.[2] ?? "", "base64"),
+    pbkdf2Sync(password, salt, 100_000, 64, "sha512"),
   );
   assert.throws(
-    () => readQBittorrentTemporaryPassword(`${line}\n${line.replace("A9_", "B8_")}\n`),
-    /credential_log_invalid/u,
+    () => createQBittorrentAuthenticationFixture("unsafe password", salt),
+    /credential_fixture_invalid/u,
   );
   assert.throws(
-    () => readQBittorrentTemporaryPassword("temporary password: private\n"),
-    /credential_log_invalid/u,
-  );
-  assert.deepEqual(readQBittorrentTemporaryCredentials(`${usernameLine}\n${line}\n`), {
-    password: "A9_fixture-Password",
-    username: "fixture-admin",
-  });
-  assert.throws(() => readQBittorrentTemporaryCredentials(`${line}\n`), /credential_log_invalid/u);
-  assert.throws(
-    () => readQBittorrentTemporaryCredentials(`${usernameLine}\n${usernameLine}\n${line}\n`),
-    /credential_log_invalid/u,
+    () => createQBittorrentAuthenticationFixture(password, Buffer.alloc(15)),
+    /credential_fixture_invalid/u,
   );
 });
 

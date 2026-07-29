@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, pbkdf2Sync, randomBytes } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -166,34 +166,24 @@ export function createQBittorrentFixture() {
   };
 }
 
-export function readQBittorrentTemporaryPassword(logs) {
-  if (typeof logs !== "string" || logs.length > 2 * 1_024 * 1_024) {
-    throw new DownloadFixtureFailure("credential_log_invalid");
+export function createQBittorrentAuthenticationFixture(
+  password = randomBytes(24).toString("base64url"),
+  salt = randomBytes(16),
+) {
+  if (
+    !/^[A-Za-z0-9._~-]{16,128}$/u.test(password) ||
+    !Buffer.isBuffer(salt) ||
+    salt.length !== 16
+  ) {
+    throw new DownloadFixtureFailure("credential_fixture_invalid");
   }
-  const matches = [
-    ...logs.matchAll(
-      /temporary password is provided for this session:\s*([^\s\p{Cc}\p{Cf}]{8,128})/giu,
-    ),
-  ].map((match) => match[1]);
-  if (matches.length !== 1 || !matches[0]) {
-    throw new DownloadFixtureFailure("credential_log_invalid");
-  }
-  return matches[0];
-}
-
-export function readQBittorrentTemporaryCredentials(logs) {
-  if (typeof logs !== "string" || logs.length > 2 * 1_024 * 1_024) {
-    throw new DownloadFixtureFailure("credential_log_invalid");
-  }
-  const usernames = [
-    ...logs.matchAll(/WebUI administrator username is:\s*([A-Za-z0-9._~-]{1,128})(?=\s|$)/giu),
-  ].map((match) => match[1]);
-  if (usernames.length !== 1 || !usernames[0]) {
-    throw new DownloadFixtureFailure("credential_log_invalid");
-  }
+  const username = "omnifin-fixture";
+  const passwordHash = pbkdf2Sync(password, salt, 100_000, 64, "sha512");
+  const encodedHash = `${salt.toString("base64")}:${passwordHash.toString("base64")}`;
   return {
-    password: readQBittorrentTemporaryPassword(logs),
-    username: usernames[0],
+    configuration: `[LegalNotice]\nAccepted=true\n\n[Preferences]\nWebUI\\Password_PBKDF2="@ByteArray(${encodedHash})"\nWebUI\\Username=${username}\n`,
+    password,
+    username,
   };
 }
 
@@ -451,8 +441,22 @@ async function prepareContext(service) {
   };
   await mkdir(context.configDirectory, { mode: 0o700 });
   if (service === "qbittorrent") {
+    const authentication = createQBittorrentAuthenticationFixture();
+    const qbittorrentConfigDirectory = resolve(context.configDirectory, "qBittorrent");
     context.downloadDirectory = resolve(temporaryDirectory, "downloads");
-    await mkdir(context.downloadDirectory, { mode: 0o700 });
+    context.qbittorrentCredentials = {
+      password: authentication.password,
+      username: authentication.username,
+    };
+    await Promise.all([
+      mkdir(context.downloadDirectory, { mode: 0o700 }),
+      mkdir(qbittorrentConfigDirectory, { mode: 0o700 }),
+    ]);
+    await writeFile(
+      resolve(qbittorrentConfigDirectory, "qBittorrent.conf"),
+      authentication.configuration,
+      { flag: "wx", mode: 0o600 },
+    );
     context.mounts.push("--mount", `type=bind,src=${context.downloadDirectory},dst=/downloads`);
   } else {
     context.downloadDirectory = resolve(temporaryDirectory, "downloads");
@@ -567,14 +571,8 @@ function qbittorrentAdapter(server, credentials) {
 }
 
 async function runQBittorrent(context, server) {
-  const credentials = await waitForResult(
-    async () =>
-      readQBittorrentTemporaryCredentials(
-        runDocker(["logs", context.containerName], 30_000, "container_logs_failed"),
-      ),
-    SERVER_READY_TIMEOUT_MS,
-    "credential_log_timeout",
-  );
+  const credentials = context.qbittorrentCredentials;
+  if (!credentials) throw new DownloadFixtureFailure("credential_fixture_invalid");
   const cookie = await waitForResult(
     () => qbittorrentLogin(server.directUrl, credentials),
     SERVER_READY_TIMEOUT_MS,
