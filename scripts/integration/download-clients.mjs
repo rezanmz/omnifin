@@ -59,6 +59,7 @@ const CHECK_NAMES = [
   "authentication",
   "credentialRejection",
   "exactPause",
+  "exactPromotion",
   "exactResume",
   "preserveFilesRemoval",
   "queueRead",
@@ -143,9 +144,17 @@ function bencode(value) {
   throw new DownloadFixtureFailure("torrent_fixture_invalid");
 }
 
-export function createQBittorrentFixture() {
-  const fileName = "Omnifin Fixture.bin";
-  const payload = Buffer.from("Omnifin deterministic download-client fixture 1\n", "utf8");
+export function createQBittorrentFixture(kind = "primary") {
+  if (kind !== "primary" && kind !== "anchor") {
+    throw new DownloadFixtureFailure("torrent_fixture_invalid");
+  }
+  const fileName = kind === "primary" ? "Omnifin Fixture.bin" : "Omnifin Queue Anchor.bin";
+  const payload = Buffer.from(
+    kind === "primary"
+      ? "Omnifin deterministic download-client fixture 1\n"
+      : "Omnifin deterministic download-client queue anchor\n",
+    "utf8",
+  );
   const info = bencode({
     length: payload.byteLength,
     name: fileName,
@@ -593,6 +602,19 @@ async function seedQBittorrent(baseUrl, cookie, fixture) {
   }
 }
 
+async function enableQBittorrentQueueing(baseUrl, cookie) {
+  await directRequest(baseUrl, "api/v2/app/setPreferences", {
+    body: new URLSearchParams({ json: JSON.stringify({ queueing_enabled: true }) }),
+    headers: {
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      cookie,
+      origin: baseUrl.origin,
+      referer: `${baseUrl.origin}/`,
+    },
+    method: "POST",
+  });
+}
+
 function qbittorrentAdapter(server, credentials) {
   return new QBittorrentAdapter({
     baseUrl: server.connectorUrl.href,
@@ -615,10 +637,13 @@ async function runQBittorrent(context, server) {
     "authentication_start_timeout",
     QBITTORRENT_AUTH_DIAGNOSTIC_CODES,
   );
+  await enableQBittorrentQueueing(server.directUrl, cookie);
   const fixture = createQBittorrentFixture();
+  const queueAnchor = createQBittorrentFixture("anchor");
   const preservedBytes = Buffer.alloc(fixture.payload.byteLength, 0x5a);
   const preservedPath = resolve(context.downloadDirectory, fixture.fileName);
   await writeFile(preservedPath, preservedBytes, { flag: "wx", mode: 0o600 });
+  await seedQBittorrent(server.directUrl, cookie, queueAnchor);
   await seedQBittorrent(server.directUrl, cookie, fixture);
 
   const adapter = qbittorrentAdapter(server, credentials);
@@ -627,7 +652,16 @@ async function runQBittorrent(context, server) {
   if (version !== DOWNLOAD_CLIENT_VERSIONS.qbittorrent) {
     throw new DownloadFixtureFailure("server_version_invalid");
   }
-  await waitForQueueItem(adapter, fixture.infoHash, (item) => item !== undefined);
+  await waitForQueueItem(
+    adapter,
+    fixture.infoHash,
+    (item) => item !== undefined && item.queuePosition !== null && item.queuePosition > 0,
+  );
+
+  await connectorOperation("exact_promotion", () =>
+    adapter.promoteDownloadQueueItem({ externalId: fixture.infoHash }),
+  );
+  await waitForQueueItem(adapter, fixture.infoHash, (item) => item?.queuePosition === 0);
 
   await connectorOperation("exact_resume", () =>
     adapter.updateDownloadQueueItem({ action: "resume", externalId: fixture.infoHash }),
@@ -668,23 +702,32 @@ async function runQBittorrent(context, server) {
   });
 }
 
-function sabnzbdNzb() {
+function sabnzbdNzb(kind) {
+  if (kind !== "primary" && kind !== "anchor") {
+    throw new DownloadFixtureFailure("nzb_fixture_invalid");
+  }
+  const suffix = kind === "primary" ? "primary" : "anchor";
+  const subject = kind === "primary" ? "Omnifin Fixture.bin" : "Omnifin Queue Anchor.bin";
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
   <head><meta type="category">movies</meta></head>
-  <file poster="fixture@omnifin.invalid" date="1774648200" subject="&quot;Omnifin Fixture.bin&quot; yEnc (1/1)">
+  <file poster="fixture@omnifin.invalid" date="1774648200" subject="&quot;${subject}&quot; yEnc (1/1)">
     <groups><group>alt.binaries.test</group></groups>
-    <segments><segment bytes="48" number="1">fixture-part@omnifin.invalid</segment></segments>
+    <segments><segment bytes="48" number="1">fixture-${suffix}@omnifin.invalid</segment></segments>
   </file>
 </nzb>
 `);
 }
 
-async function seedSabnzbd(baseUrl, apiKey) {
+async function seedSabnzbd(baseUrl, apiKey, kind) {
   const form = new FormData();
   form.append("apikey", apiKey);
   form.append("mode", "addfile");
-  form.append("nzbfile", new Blob([sabnzbdNzb()], { type: "application/x-nzb" }), "fixture.nzb");
+  form.append(
+    "nzbfile",
+    new Blob([sabnzbdNzb(kind)], { type: "application/x-nzb" }),
+    `${kind}.nzb`,
+  );
   form.append("output", "json");
   const response = await directJson(baseUrl, "api", { body: form, method: "POST" });
   const ids = response?.nzo_ids;
@@ -721,14 +764,24 @@ async function runSabnzbd(context, server) {
     SERVER_READY_TIMEOUT_MS,
     "credential_config_timeout",
   );
-  const externalId = await seedSabnzbd(server.directUrl, apiKey);
+  await seedSabnzbd(server.directUrl, apiKey, "anchor");
+  const externalId = await seedSabnzbd(server.directUrl, apiKey, "primary");
   const adapter = sabnzbdAdapter(server, apiKey);
   const health = await connectorOperation("authentication", () => adapter.probe());
   const version = assertHealthy(health);
   if (version !== DOWNLOAD_CLIENT_VERSIONS.sabnzbd) {
     throw new DownloadFixtureFailure("server_version_invalid");
   }
-  await waitForQueueItem(adapter, externalId, (item) => item !== undefined);
+  await waitForQueueItem(
+    adapter,
+    externalId,
+    (item) => item !== undefined && item.queuePosition > 0,
+  );
+
+  await connectorOperation("exact_promotion", () =>
+    adapter.promoteDownloadQueueItem({ externalId }),
+  );
+  await waitForQueueItem(adapter, externalId, (item) => item?.queuePosition === 0);
 
   await connectorOperation("exact_pause", () =>
     adapter.updateDownloadQueueItem({ action: "pause", externalId }),

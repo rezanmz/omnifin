@@ -18,12 +18,13 @@ file, path, profile, tag, and queue fields are never sent. Live profiles remain
 read-only until disposable upstream environments are available.
 
 The qBittorrent and SABnzbd contract profiles include bounded queue reads plus exact-item pause,
-resume, and preserve-files removal shapes. qBittorrent contracts cover both the version 5
-`stop`/`start` and version 4 `pause`/`resume` endpoints; SABnzbd contracts bind every action to one
-validated `nzo_id`. The protected aggregate additionally starts both current digest-pinned upstream
-services in isolated internal networks, seeds synthetic queue items, and exercises the production
-adapters. It requires observed pause/resume state, exact removal, credential rejection, preserved
-fixture bytes, sanitized evidence, and deterministic teardown. See the
+resume, front-of-queue promotion, and preserve-files removal shapes. qBittorrent contracts cover
+both the version 5 `stop`/`start` and version 4 `pause`/`resume` endpoints plus `topPrio`; SABnzbd
+contracts bind every action to one validated `nzo_id` and promotion to position zero. The protected
+aggregate additionally starts both current digest-pinned upstream services in isolated internal
+networks, seeds synthetic queue items, and exercises the production adapters. It requires observed
+pause/resume and promotion state, exact removal, credential rejection, preserved fixture bytes,
+sanitized evidence, and deterministic teardown. See the
 [download-client fixture runbook](../../docs/operations/download-client-fixtures.md). Protected live
 profiles remain pending until external compatibility environments record versioned evidence.
 

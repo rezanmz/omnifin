@@ -76,7 +76,7 @@ test("passes qBittorrent's documented internal service ports explicitly", () => 
   assert.throws(() => serviceEnvironmentArguments("other"), /service_invalid/u);
 });
 
-test("creates one deterministic, tracker-isolated torrent fixture", () => {
+test("creates deterministic, distinct, tracker-isolated torrent fixtures", () => {
   const first = createQBittorrentFixture();
   const second = createQBittorrentFixture();
 
@@ -87,6 +87,10 @@ test("creates one deterministic, tracker-isolated torrent fixture", () => {
   assert.equal(first.torrent.subarray(0, 1).toString("utf8"), "d");
   assert.equal(first.torrent.includes(Buffer.from("http://127.0.0.1:1/announce")), true);
   assert.equal(first.torrent.includes(Buffer.from(first.fileName)), true);
+  const anchor = createQBittorrentFixture("anchor");
+  assert.notEqual(anchor.infoHash, first.infoHash);
+  assert.equal(anchor.fileName, "Omnifin Queue Anchor.bin");
+  assert.throws(() => createQBittorrentFixture("other"), /torrent_fixture_invalid/u);
 });
 
 test("accepts only qBittorrent's legacy or exact current add response", () => {
@@ -169,6 +173,7 @@ test("accepts only identifier-free, path-free fixture evidence", () => {
       authentication: "passed",
       credentialRejection: "passed",
       exactPause: "passed",
+      exactPromotion: "passed",
       exactResume: "passed",
       preserveFilesRemoval: "passed",
       queueRead: "passed",

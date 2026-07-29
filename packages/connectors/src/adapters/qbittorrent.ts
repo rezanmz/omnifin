@@ -6,6 +6,7 @@ import { ProbeOnlyAdapter } from "./base.js";
 import type {
   ConnectorDownloadQueueResult,
   DownloadQueueMutation,
+  DownloadQueuePromotion,
   DownloadQueueRemoval,
 } from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
@@ -45,6 +46,7 @@ const torrentSchema = z.object({
   name: z.string().min(1).max(4_096),
   num_leechs: z.number().int().nonnegative().max(2_147_483_647).nullish(),
   num_seeds: z.number().int().nonnegative().max(2_147_483_647).nullish(),
+  priority: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER).nullish(),
   progress: z.number().finite().min(0).max(1),
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   state: z.string().trim().min(1).max(64),
@@ -165,6 +167,10 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
         externalId: torrent.hash.toLowerCase(),
         leechers: torrent.num_leechs ?? null,
         progress: torrent.progress,
+        queuePosition:
+          torrent.priority !== undefined && torrent.priority !== null && torrent.priority > 0
+            ? torrent.priority - 1
+            : null,
         rateBytesPerSecond: torrent.dlspeed ?? 0,
         remainingBytes: Math.min(
           torrent.size,
@@ -233,6 +239,24 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
       },
       body: new URLSearchParams({ hashes: externalId, deleteFiles: "false" }),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async promoteDownloadQueueItem(
+    input: DownloadQueuePromotion,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    await this.client.requestText("api/v2/torrents/topPrio", {
+      operation: "download.queue.promote",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId }),
       ...(signal ? { signal } : {}),
     });
   }

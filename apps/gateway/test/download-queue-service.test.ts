@@ -7,6 +7,7 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import {
+  downloadQueuePromotionResponseSchema,
   downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
 } from "@omnifin/contracts/downloads";
@@ -130,7 +131,10 @@ function insertConnector(
     .run();
 }
 
-function queueResult(service: "qbittorrent" | "sabnzbd"): ConnectorDownloadQueueResult {
+function queueResult(
+  service: "qbittorrent" | "sabnzbd",
+  queuePosition: number | null = 1,
+): ConnectorDownloadQueueResult {
   return {
     generatedAt: now.toISOString(),
     items: [
@@ -141,6 +145,7 @@ function queueResult(service: "qbittorrent" | "sabnzbd"): ConnectorDownloadQueue
         externalId: UPSTREAM_ID,
         leechers: service === "qbittorrent" ? 2 : null,
         progress: service === "qbittorrent" ? 0.75 : 0.5,
+        queuePosition,
         rateBytesPerSecond: service === "qbittorrent" ? 4_096 : 0,
         remainingBytes: service === "qbittorrent" ? 256 : 512,
         seeders: service === "qbittorrent" ? 31 : null,
@@ -186,7 +191,12 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
     qbittorrent: vi.fn(async () => undefined),
     sabnzbd: vi.fn(async () => undefined),
   };
+  const promotions = {
+    qbittorrent: vi.fn(async () => undefined),
+    sabnzbd: vi.fn(async () => undefined),
+  };
   const createAdapter = vi.fn((input: DownloadQueueAdapterFactoryInput) => ({
+    promoteDownloadQueueItem: promotions[input.service],
     readDownloadQueue: readers[input.service],
     removeDownloadQueueItem: removals[input.service],
     updateDownloadQueueItem: actions[input.service],
@@ -200,7 +210,17 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
     createOperationId: () => "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
     wait,
   });
-  return { actions, config, createAdapter, database, readers, removals, service, wait };
+  return {
+    actions,
+    config,
+    createAdapter,
+    database,
+    promotions,
+    readers,
+    removals,
+    service,
+    wait,
+  };
 }
 
 describe("download queue service", () => {
@@ -546,6 +566,111 @@ describe("download queue service", () => {
         { action: "resume", externalId: UPSTREAM_ID },
         undefined,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("promotes one opaque queue target, verifies first position, and audits both boundaries", async () => {
+    const { database, promotions, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      readers.qbittorrent
+        .mockResolvedValueOnce(queueResult("qbittorrent", 1))
+        .mockResolvedValueOnce(queueResult("qbittorrent", 0));
+
+      const result = await service.promote(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { ipAddress: "203.0.113.8", principal: principal(), requestId: "promotion-request-1" },
+      );
+
+      expect(downloadQueuePromotionResponseSchema.parse(result)).toMatchObject({
+        item: { id: item.id },
+        position: 0,
+        previousPosition: 1,
+        replayed: false,
+      });
+      expect(promotions.qbittorrent).toHaveBeenCalledWith({ externalId: UPSTREAM_ID }, undefined);
+      expect(
+        database.sqlite
+          .prepare("select event_type from audit_events order by created_at asc, id asc")
+          .pluck()
+          .all(),
+      ).toEqual(["download.queue.promotion.requested", "download.queue.promotion.completed"]);
+      expect(JSON.stringify(result)).not.toContain(UPSTREAM_ID);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("replays an already-first promotion and rejects unavailable queue ordering", async () => {
+    const { database, promotions, readers, service } = harness();
+    try {
+      readers.qbittorrent.mockResolvedValue(queueResult("qbittorrent", 0));
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const replayed = await service.promote(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { principal: principal() },
+      );
+
+      expect(replayed).toMatchObject({ position: 0, previousPosition: 0, replayed: true });
+      expect(promotions.qbittorrent).not.toHaveBeenCalled();
+
+      readers.qbittorrent.mockResolvedValue(queueResult("qbittorrent", null));
+      await expect(
+        service.promote(
+          {
+            connectorId: item.connectorId,
+            expectedState: item.state,
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "queue_order_unavailable" });
+      expect(promotions.qbittorrent).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails a stale promotion before mutation and records only normalized audit metadata", async () => {
+    const { database, promotions, readers, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const staleQueue = queueResult("qbittorrent", 1);
+      staleQueue.items[0] = { ...staleQueue.items[0]!, state: "paused" };
+      readers.qbittorrent.mockResolvedValueOnce(staleQueue);
+
+      await expect(
+        service.promote(
+          {
+            connectorId: item.connectorId,
+            expectedState: item.state,
+            itemId: item.id,
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "stale_state" });
+
+      expect(promotions.qbittorrent).not.toHaveBeenCalled();
+      const audit = database.sqlite
+        .prepare("select event_type as eventType, metadata_json as metadataJson from audit_events")
+        .get() as { eventType: string; metadataJson: string };
+      expect(audit.eventType).toBe("download.queue.promotion.failed");
+      expect(JSON.parse(audit.metadataJson)).toMatchObject({
+        connectorId: item.connectorId,
+        failureCode: "stale_state",
+        previousPosition: 1,
+      });
+      expect(audit.metadataJson).not.toContain(UPSTREAM_ID);
     } finally {
       database.close();
     }

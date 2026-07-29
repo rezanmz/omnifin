@@ -46,6 +46,7 @@ describe("qBittorrent download queue", () => {
           name: "/private/media/The.Far.Meridian.2160p",
           num_leechs: 2,
           num_seeds: 31,
+          priority: 2,
           progress: 0.75,
           size: 1_024,
           state: "downloading",
@@ -77,6 +78,7 @@ describe("qBittorrent download queue", () => {
           externalId: "0123456789abcdef0123456789abcdef01234567",
           leechers: 2,
           progress: 0.75,
+          queuePosition: 1,
           rateBytesPerSecond: 4_096,
           remainingBytes: 256,
           seeders: 31,
@@ -195,6 +197,28 @@ describe("qBittorrent download queue", () => {
     expect(mock.requests[1]?.init.method).toBe("POST");
     expect(String(mock.requests[1]?.init.body)).toBe(`hashes=${hash}&deleteFiles=false`);
   });
+
+  it("promotes exactly one torrent to the front of the queue", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.promoteDownloadQueueItem({ externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/torrents/topPrio",
+    ]);
+    expect(mock.requests[1]?.init.method).toBe("POST");
+    expect(String(mock.requests[1]?.init.body)).toBe(`hashes=${hash}`);
+  });
 });
 
 describe("SABnzbd download queue", () => {
@@ -207,6 +231,7 @@ describe("SABnzbd download queue", () => {
             {
               cat: "series",
               filename: "Signal.S01E07.1080p.WEB-DL",
+              index: 0,
               mb: "1000",
               mbleft: "250",
               nzo_id: "SABnzbd_nzo_fixture-one",
@@ -217,6 +242,7 @@ describe("SABnzbd download queue", () => {
             {
               cat: "movies",
               filename: "The.Far.Meridian.2160p",
+              index: 1,
               mb: "2000",
               mbleft: "1000",
               nzo_id: "SABnzbd_nzo_fixture-two",
@@ -241,6 +267,7 @@ describe("SABnzbd download queue", () => {
         etaSeconds: 240,
         externalId: "SABnzbd_nzo_fixture-one",
         progress: 0.75,
+        queuePosition: 0,
         rateBytesPerSecond: 1_048_576,
         remainingBytes: 262_144_000,
         sizeBytes: 1_048_576_000,
@@ -249,6 +276,7 @@ describe("SABnzbd download queue", () => {
       expect.objectContaining({
         etaSeconds: 600,
         progress: 0.5,
+        queuePosition: 1,
         rateBytesPerSecond: 0,
         state: "paused",
       }),
@@ -349,5 +377,21 @@ describe("SABnzbd download queue", () => {
         externalId: "SABnzbd_nzo_fixture-one",
       }),
     ).rejects.toMatchObject({ code: "response_invalid", operation: "download.queue.action" });
+  });
+
+  it("promotes exactly one Usenet job to the front of the queue", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ result: { position: 0, priority: 0 } })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.promoteDownloadQueueItem({ externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("switch");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.get("value2")).toBe("0");
+    expect(mock.requests[0]?.url.searchParams.get("apikey")).toBe(API_KEY);
   });
 });

@@ -19,6 +19,8 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseSchema,
   downloadQueueItemSchema,
+  downloadQueuePromotionInputSchema,
+  downloadQueuePromotionResponseSchema,
   downloadQueueRemovalInputSchema,
   downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
@@ -27,6 +29,8 @@ import {
   type DownloadQueueActionResponse,
   type DownloadQueueClient,
   type DownloadQueueItem,
+  type DownloadQueuePromotionInput,
+  type DownloadQueuePromotionResponse,
   type DownloadQueueRemovalInput,
   type DownloadQueueRemovalResponse,
   type DownloadQueueResponse,
@@ -102,6 +106,7 @@ export type DownloadQueueErrorReason =
   | "identity_required"
   | "operation_failed"
   | "operation_limit_reached"
+  | "queue_order_unavailable"
   | "response_invalid"
   | "stale_state"
   | "storage_failure"
@@ -341,6 +346,7 @@ interface ConnectorSelection {
 interface ExactQueueItem {
   externalId: string;
   publicItem: DownloadQueueItem;
+  queuePosition: number | null;
 }
 
 export class DownloadQueueService {
@@ -593,6 +599,100 @@ export class DownloadQueueService {
     return response;
   }
 
+  public async promote(
+    rawInput: DownloadQueuePromotionInput,
+    context: DownloadQueueContext,
+    signal?: AbortSignal,
+  ): Promise<DownloadQueuePromotionResponse> {
+    const principal = requirePermission(context.principal, "downloads.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new DownloadQueueError("identity_required");
+    }
+    const input = downloadQueuePromotionInputSchema.parse(rawInput);
+    let row: DownloadConnectorRow;
+    try {
+      row = this.#actionConnector(input.connectorId);
+    } catch (error) {
+      this.#auditPromotion("failed", "failure", input, context, null, actionFailureCode(error));
+      throw error;
+    }
+    let adapter: DownloadQueueController;
+    try {
+      adapter = this.#adapter(row);
+    } catch (error) {
+      const unavailable = new DownloadQueueError("connector_unavailable", { cause: error });
+      this.#auditPromotion("failed", "failure", input, context, null, unavailable.reason);
+      throw unavailable;
+    }
+    let current: ExactQueueItem | null;
+    try {
+      current = await this.#exactItem(adapter, row, input.itemId, signal);
+    } catch (error) {
+      this.#auditPromotion("failed", "failure", input, context, null, actionFailureCode(error));
+      throw error;
+    }
+    if (!current) {
+      this.#auditPromotion("failed", "failure", input, context, null, "target_not_found");
+      throw new DownloadQueueError("target_not_found");
+    }
+    if (current.queuePosition === 0) {
+      this.#auditPromotion("replayed", "success", input, context, 0, null);
+      return downloadQueuePromotionResponseSchema.parse({
+        item: current.publicItem,
+        position: 0,
+        previousPosition: 0,
+        promotedAt: this.#clock().toISOString(),
+        replayed: true,
+      });
+    }
+    if (current.publicItem.state !== input.expectedState) {
+      this.#auditPromotion(
+        "failed",
+        "failure",
+        input,
+        context,
+        current.queuePosition,
+        "stale_state",
+      );
+      throw new DownloadQueueError("stale_state");
+    }
+    if (current.queuePosition === null) {
+      this.#auditPromotion("failed", "failure", input, context, null, "queue_order_unavailable");
+      throw new DownloadQueueError("queue_order_unavailable");
+    }
+    this.#auditPromotion("requested", "success", input, context, current.queuePosition, null);
+    try {
+      await adapter.promoteDownloadQueueItem({ externalId: current.externalId }, signal);
+      let verified: ExactQueueItem | null = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        verified = await this.#exactItem(adapter, row, input.itemId, signal);
+        if (verified?.queuePosition === 0) break;
+        if (attempt < 2) await this.#wait(150 * (attempt + 1), signal);
+      }
+      if (!verified || verified.queuePosition !== 0) {
+        throw new DownloadQueueError("response_invalid");
+      }
+      this.#auditPromotion("completed", "success", input, context, current.queuePosition, null);
+      return downloadQueuePromotionResponseSchema.parse({
+        item: verified.publicItem,
+        position: 0,
+        previousPosition: current.queuePosition,
+        promotedAt: this.#clock().toISOString(),
+        replayed: false,
+      });
+    } catch (error) {
+      this.#auditPromotion(
+        "failed",
+        "failure",
+        input,
+        context,
+        current.queuePosition,
+        actionFailureCode(error),
+      );
+      throw error;
+    }
+  }
+
   async #readClient(row: DownloadConnectorRow, signal?: AbortSignal): Promise<ClientResult> {
     const service = row.type as DownloadClientService;
     const displayName = safeDisplayName(row.displayName, service);
@@ -665,8 +765,13 @@ export class DownloadQueueService {
   }
 
   #publicItem(row: DownloadConnectorRow, externalId: string, item: ConnectorDownloadQueueItem) {
-    const { externalId: ignoredExternalId, ...publicItem } = item;
+    const {
+      externalId: ignoredExternalId,
+      queuePosition: ignoredQueuePosition,
+      ...publicItem
+    } = item;
     void ignoredExternalId;
+    void ignoredQueuePosition;
     const service = row.type as DownloadClientService;
     return downloadQueueItemSchema.parse({
       ...publicItem,
@@ -701,9 +806,14 @@ export class DownloadQueueService {
       if (matches.length !== 1 || !matches[0]) {
         throw new DownloadQueueError("response_invalid");
       }
+      const queuePosition = matches[0].queuePosition ?? null;
+      if (queuePosition !== null && (!Number.isSafeInteger(queuePosition) || queuePosition < 0)) {
+        throw new DownloadQueueError("response_invalid");
+      }
       return {
         externalId: matches[0].externalId,
         publicItem: this.#publicItem(row, matches[0].externalId, matches[0]),
+        queuePosition,
       };
     } catch (error) {
       if (error instanceof DownloadQueueError) throw error;
@@ -1011,6 +1121,49 @@ export class DownloadQueueService {
             connectorId: input.connectorId,
             ...(failureCode ? { failureCode } : {}),
             previousState,
+            replayed: action === "replayed",
+          }),
+          context.ipAddress
+            ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+            : null,
+          createdAt,
+        );
+    } catch (error) {
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #auditPromotion(
+    action: "completed" | "failed" | "replayed" | "requested",
+    outcome: "failure" | "success",
+    input: DownloadQueuePromotionInput,
+    context: DownloadQueueContext,
+    previousPosition: number | null,
+    failureCode: string | null,
+  ) {
+    try {
+      const createdAt = this.#clock().getTime();
+      if (!Number.isSafeInteger(createdAt) || createdAt < 0) throw new Error("invalid clock");
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (
+             id, actor_user_id, actor_session_id, actor_auth_method, event_type, outcome,
+             target_type, target_id, request_id, metadata_json, ip_hash, created_at
+           ) values (?, ?, ?, ?, ?, ?, 'download_queue_item', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.#createId(),
+          context.principal.userId,
+          context.principal.sessionId,
+          context.principal.authenticationMethod.kind,
+          `download.queue.promotion.${action}`,
+          outcome,
+          input.itemId,
+          context.requestId ?? null,
+          JSON.stringify({
+            connectorId: input.connectorId,
+            ...(failureCode ? { failureCode } : {}),
+            previousPosition,
             replayed: action === "replayed",
           }),
           context.ipAddress

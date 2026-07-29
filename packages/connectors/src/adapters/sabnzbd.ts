@@ -7,6 +7,7 @@ import { upstreamVersionSchema } from "./schemas.js";
 import type {
   ConnectorDownloadQueueResult,
   DownloadQueueMutation,
+  DownloadQueuePromotion,
   DownloadQueueRemoval,
 } from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
@@ -61,6 +62,15 @@ const sabnzbdQueueActionSchema = z.object({
 });
 const sabnzbdQueueActionResponseSchema = z.union([
   sabnzbdQueueActionSchema,
+  sabnzbdAuthenticationErrorSchema,
+]);
+const sabnzbdQueuePromotionResponseSchema = z.union([
+  z.object({
+    result: z.object({
+      position: z.literal(0),
+      priority: z.number().int().min(-4).max(2),
+    }),
+  }),
   sabnzbdAuthenticationErrorSchema,
 ]);
 const sabnzbdQueueIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,512}$/u);
@@ -186,6 +196,7 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
           externalId: slot.nzo_id,
           leechers: null,
           progress: slot.percentage / 100,
+          queuePosition: index,
           rateBytesPerSecond:
             perActiveRate > 0 && activeIndexes.includes(index)
               ? perActiveRate + (index === activeIndexes[0] ? remainder : 0)
@@ -267,5 +278,33 @@ export class SabnzbdAdapter extends ProbeOnlyAdapter {
         retryable: false,
       });
     }
+  }
+
+  async promoteDownloadQueueItem(
+    input: DownloadQueuePromotion,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.promote",
+        code: "configuration_invalid",
+        message: "SABnzbd queue promotion requires a configured API key.",
+        retryable: false,
+      });
+    }
+    const externalId = sabnzbdQueueIdSchema.parse(input.externalId);
+    const response = await this.client.requestJson("api", sabnzbdQueuePromotionResponseSchema, {
+      operation: "download.queue.promote",
+      query: {
+        apikey: this.#apiKey,
+        mode: "switch",
+        output: "json",
+        value: externalId,
+        value2: "0",
+      },
+      ...(signal ? { signal } : {}),
+    });
+    if ("error" in response) rejectAuthenticationError(response, "download.queue.promote");
   }
 }

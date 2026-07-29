@@ -10,6 +10,10 @@ import {
   downloadQueueRemovalInputSchema,
   downloadQueueRemovalResponseJsonSchema,
   downloadQueueRemovalResponseSchema,
+  downloadQueuePromotionInputJsonSchema,
+  downloadQueuePromotionInputSchema,
+  downloadQueuePromotionResponseJsonSchema,
+  downloadQueuePromotionResponseSchema,
   downloadQueueResponseJsonSchema,
   downloadQueueResponseSchema,
 } from "../src/downloads.js";
@@ -247,5 +251,48 @@ describe("download queue contracts", () => {
     expect(downloadQueueRemovalResponseSchema.parse(removal)).toEqual(removal);
     expect(downloadQueueRemovalInputJsonSchema).not.toHaveProperty("$schema");
     expect(downloadQueueRemovalResponseJsonSchema).not.toHaveProperty("$schema");
+  });
+
+  it("binds front-of-queue promotion to the exact observed transfer", () => {
+    const input = {
+      connectorId: torrent.connectorId,
+      expectedState: torrent.state,
+      itemId: torrent.id,
+    };
+    const promotion = {
+      item: torrent,
+      position: 0 as const,
+      previousPosition: 1,
+      promotedAt: response.generatedAt,
+      replayed: false,
+    };
+
+    expect(downloadQueuePromotionInputSchema.parse(input)).toEqual(input);
+    expect(downloadQueuePromotionResponseSchema.parse(promotion)).toEqual(promotion);
+    expect(downloadQueuePromotionInputJsonSchema).not.toHaveProperty("$schema");
+    expect(downloadQueuePromotionResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(
+      downloadQueuePromotionInputSchema.safeParse({ ...input, expectedState: "completed" }).success,
+    ).toBe(false);
+    expect(
+      downloadQueuePromotionResponseSchema.safeParse({
+        ...promotion,
+        item: { ...torrent, id: "all" },
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueuePromotionResponseSchema.safeParse({
+        ...promotion,
+        previousPosition: 0,
+        replayed: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueuePromotionResponseSchema.safeParse({
+        ...promotion,
+        previousPosition: 1,
+        replayed: true,
+      }).success,
+    ).toBe(false);
   });
 });
