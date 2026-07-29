@@ -13,6 +13,9 @@ focused experience of a premium streaming product.
 > production release yet, and configuration, storage, and API contracts may change.
 > Follow the [roadmap](docs/roadmap.md) for verified milestone status.
 
+The verified public-project boundary and its required evidence are documented in
+[foundation verification](docs/foundation-verification.md).
+
 ## Why Omnifin?
 
 A capable home media stack often spans Jellyfin, Seerr, Radarr, Sonarr, Bazarr,
