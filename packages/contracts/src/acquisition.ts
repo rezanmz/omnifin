@@ -176,6 +176,54 @@ export const acquisitionSearchResponseSchema = z.strictObject({
 });
 export type AcquisitionSearchResponse = z.infer<typeof acquisitionSearchResponseSchema>;
 
+export const acquisitionMonitoringTargetInputSchema = z.strictObject({
+  mediaId: z.coerce.number().int().positive().max(2_147_483_647),
+  service: acquisitionServiceSchema,
+});
+export type AcquisitionMonitoringTargetInput = z.infer<
+  typeof acquisitionMonitoringTargetInputSchema
+>;
+
+export const acquisitionMonitoringTargetSchema = z
+  .strictObject({
+    kind: z.enum(["movie", "series"]),
+    mediaId: upstreamIdentifierSchema,
+    service: acquisitionServiceSchema,
+  })
+  .superRefine((target, context) => {
+    const validKind =
+      (target.service === "radarr" && target.kind === "movie") ||
+      (target.service === "sonarr" && target.kind === "series");
+    if (!validKind) {
+      context.addIssue({
+        code: "custom",
+        message: "The monitoring target kind must match its acquisition service.",
+        path: ["kind"],
+      });
+    }
+  });
+export type AcquisitionMonitoringTarget = z.infer<typeof acquisitionMonitoringTargetSchema>;
+
+export const acquisitionMonitoringStateSchema = z.strictObject({
+  monitored: z.boolean(),
+  target: acquisitionMonitoringTargetSchema,
+  verifiedAt: z.iso.datetime({ offset: true }),
+});
+export type AcquisitionMonitoringState = z.infer<typeof acquisitionMonitoringStateSchema>;
+
+export const acquisitionMonitoringUpdateInputSchema = acquisitionMonitoringTargetInputSchema
+  .extend({
+    expectedMonitored: z.boolean(),
+    monitored: z.boolean(),
+  })
+  .refine((input) => input.expectedMonitored !== input.monitored, {
+    message: "A monitoring update must request a state change.",
+    path: ["monitored"],
+  });
+export type AcquisitionMonitoringUpdateInput = z.infer<
+  typeof acquisitionMonitoringUpdateInputSchema
+>;
+
 export const manualReleaseTargetInputSchema = z
   .strictObject({
     episodeId: z.coerce.number().int().positive().max(2_147_483_647).optional(),
@@ -334,6 +382,15 @@ export const acquisitionProvenanceResponseJsonSchema = withoutSchemaDialect(
 export const acquisitionSearchInputJsonSchema = withoutSchemaDialect(acquisitionSearchInputSchema);
 export const acquisitionSearchResponseJsonSchema = withoutSchemaDialect(
   acquisitionSearchResponseSchema,
+);
+export const acquisitionMonitoringTargetInputJsonSchema = withoutSchemaDialect(
+  acquisitionMonitoringTargetInputSchema,
+);
+export const acquisitionMonitoringStateJsonSchema = withoutSchemaDialect(
+  acquisitionMonitoringStateSchema,
+);
+export const acquisitionMonitoringUpdateInputJsonSchema = withoutSchemaDialect(
+  acquisitionMonitoringUpdateInputSchema,
 );
 export const manualReleaseTargetInputJsonSchema = withoutSchemaDialect(
   manualReleaseTargetInputSchema,
