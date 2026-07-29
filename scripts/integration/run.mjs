@@ -18,8 +18,8 @@ const TEST_FILE_BASENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,143}\.(?:test|s
 const connectorPatterns = {
   jellyfin: "^'jellyfin' adapter\\b",
   seerr: "^(?:'seerr' adapter|Seerr discovery|Seerr media requests)\\b",
-  radarr: "^'radarr' adapter\\b",
-  sonarr: "^'sonarr' adapter\\b",
+  radarr: "^(?:'radarr' adapter|Servarr acquisition)\\b",
+  sonarr: "^(?:'sonarr' adapter|Servarr acquisition)\\b",
   prowlarr: "^(?:'prowlarr' adapter|Prowlarr indexer intelligence)\\b",
   bazarr: "^'bazarr' adapter\\b",
   qbittorrent: "^qBittorrent adapter\\b",
@@ -36,8 +36,28 @@ const connectorChecks = {
     "secret_isolation",
     "version_discovery",
   ],
-  radarr: ["authentication_header", "health_normalization", "version_discovery"],
-  sonarr: ["authentication_header", "health_normalization", "version_discovery"],
+  radarr: [
+    "acquisition_search",
+    "authentication_header",
+    "exact_target_validation",
+    "health_normalization",
+    "monitoring_read",
+    "monitoring_update",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_discovery",
+  ],
+  sonarr: [
+    "acquisition_search",
+    "authentication_header",
+    "exact_target_validation",
+    "health_normalization",
+    "monitoring_read",
+    "monitoring_update",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_discovery",
+  ],
   prowlarr: [
     "application_sync",
     "authentication_header",
@@ -291,6 +311,9 @@ function runFixture(service) {
   }
   if (service === "prowlarr") {
     testFiles.push(join(root, "packages/connectors/test/prowlarr-intelligence.test.ts"));
+  }
+  if (service === "radarr" || service === "sonarr") {
+    testFiles.push(join(root, "packages/connectors/test/servarr-acquisition.test.ts"));
   }
   if (testFiles.some((file) => !existsSync(file)) || !connectorPatterns[service]) {
     return { service, profile: "fixture-contract", status: "not_implemented" };

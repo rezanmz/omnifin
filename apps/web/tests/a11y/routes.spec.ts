@@ -267,6 +267,26 @@ test("acquisition timeline has no automatically detectable accessibility violati
   expect(results.violations).toEqual([]);
 });
 
+test("acquisition monitoring confirmation has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(timeline.getByRole("button", { name: "Cancel" })).toBeFocused();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("manual release review has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {

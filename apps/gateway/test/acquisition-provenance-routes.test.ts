@@ -1,9 +1,11 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type {
+  AcquisitionMonitoringState,
   AcquisitionProvenanceResponse,
   AcquisitionSearchResponse,
 } from "@omnifin/contracts/acquisition";
 import {
+  acquisitionMonitoringStateSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchResponseSchema,
 } from "@omnifin/contracts/acquisition";
@@ -84,6 +86,17 @@ const normalizedSearch: AcquisitionSearchResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const monitoredState: AcquisitionMonitoringState = {
+  monitored: true,
+  target: { kind: "movie", mediaId: 42, service: "radarr" },
+  verifiedAt: now.toISOString(),
+};
+
+const unmonitoredState: AcquisitionMonitoringState = {
+  ...monitoredState,
+  monitored: false,
+};
+
 function capabilitySnapshot() {
   return JSON.stringify({
     health: {
@@ -91,6 +104,7 @@ function capabilitySnapshot() {
         "connector.health",
         "connector.version",
         "acquisition.history",
+        "acquisition.monitoring",
         "acquisition.search",
       ],
       checkedAt: now.toISOString(),
@@ -112,11 +126,18 @@ async function harness(
 ) {
   const config = testConfig();
   const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
+  const readAcquisitionMonitoring = vi.fn(async () => monitoredState);
+  const updateAcquisitionMonitoring = vi.fn(async () => unmonitoredState);
   let operationIdentifier = 0;
   const app = await createApp({
     acquisitionProvenanceDependencies: {
       clock: () => now,
-      createAdapter: () => ({ queueAcquisitionSearch, readAcquisitionProvenance: implementation }),
+      createAdapter: () => ({
+        queueAcquisitionSearch,
+        readAcquisitionMonitoring,
+        readAcquisitionProvenance: implementation,
+        updateAcquisitionMonitoring,
+      }),
       createId: () => `acquisition-operation-${++operationIdentifier}`,
     },
     config,
@@ -236,7 +257,15 @@ async function harness(
       userId: "viewer-user",
     },
   });
-  return { app, implementation, operator, queueAcquisitionSearch, viewer };
+  return {
+    app,
+    implementation,
+    operator,
+    queueAcquisitionSearch,
+    readAcquisitionMonitoring,
+    updateAcquisitionMonitoring,
+    viewer,
+  };
 }
 
 describe("acquisition provenance routes", () => {
@@ -343,6 +372,135 @@ describe("acquisition provenance routes", () => {
         { mediaId: 42, service: "radarr" },
         expect.any(AbortSignal),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("protects exact-target monitoring reads and CSRF-bound idempotent updates", async () => {
+    const { app, operator, readAcquisitionMonitoring, updateAcquisitionMonitoring, viewer } =
+      await harness();
+    const body = {
+      expectedMonitored: true,
+      mediaId: 42,
+      monitored: false,
+      service: "radarr",
+    };
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/acquisitions/monitoring?service=radarr&mediaId=42",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const denied = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/monitoring?service=radarr&mediaId=42",
+      });
+      expect(denied.statusCode).toBe(403);
+
+      const read = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/monitoring?service=radarr&mediaId=42",
+      });
+      expect(read.statusCode, read.body).toBe(200);
+      expect(acquisitionMonitoringStateSchema.parse(read.json())).toEqual(monitoredState);
+      expect(read.headers["cache-control"]).toBe("no-store");
+
+      const missingCsrf = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "PUT",
+        payload: body,
+        url: "/v1/acquisitions/monitoring",
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+
+      const updated = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "PUT",
+        payload: body,
+        url: "/v1/acquisitions/monitoring",
+      });
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(acquisitionMonitoringStateSchema.parse(updated.json())).toEqual(unmonitoredState);
+      expect(readAcquisitionMonitoring).toHaveBeenCalledTimes(2);
+      expect(updateAcquisitionMonitoring).toHaveBeenCalledWith(body, expect.any(AbortSignal));
+      expect(updated.body).not.toContain("route-private-api-key");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps monitoring upstream failures to bounded private errors", async () => {
+    const { app, operator, readAcquisitionMonitoring } = await harness();
+    const request = () =>
+      app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/monitoring?service=radarr&mediaId=42",
+      });
+    try {
+      readAcquisitionMonitoring.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "rate_limited",
+          message: "Private Radarr rate-limit response",
+          operation: "acquisition.monitoring.read",
+          retryAfterSeconds: 45,
+          retryable: true,
+          service: "radarr",
+          status: 429,
+        }),
+      );
+      const rateLimited = await request();
+      expect(rateLimited.statusCode).toBe(429);
+      expect(rateLimited.headers["retry-after"]).toBe("45");
+      expect(apiErrorSchema.parse(rateLimited.json()).error.code).toBe(
+        "acquisition_monitoring_rate_limited",
+      );
+      expect(rateLimited.body).not.toContain("Private Radarr rate-limit response");
+
+      readAcquisitionMonitoring.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "response_invalid",
+          message: "Private malformed Radarr payload",
+          operation: "acquisition.monitoring.read",
+          retryable: false,
+          service: "radarr",
+          status: 200,
+        }),
+      );
+      const invalidResponse = await request();
+      expect(invalidResponse.statusCode).toBe(502);
+      expect(apiErrorSchema.parse(invalidResponse.json()).error.code).toBe(
+        "acquisition_monitoring_response_invalid",
+      );
+      expect(invalidResponse.body).not.toContain("Private malformed Radarr payload");
+
+      readAcquisitionMonitoring.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "invalid_credentials",
+          message: "Private rejected Radarr credential",
+          operation: "acquisition.monitoring.read",
+          retryable: false,
+          service: "radarr",
+          status: 401,
+        }),
+      );
+      const unavailable = await request();
+      expect(unavailable.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
+        "acquisition_monitoring_configuration_unavailable",
+      );
+      expect(unavailable.body).not.toContain("Private rejected Radarr credential");
     } finally {
       await app.close();
     }

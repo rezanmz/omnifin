@@ -20,7 +20,8 @@ the roadmap records when each area has passed its verification gate.
 > Indexer Intelligence are implemented. Exact-target manual release search and grabs plus
 > normalized qBittorrent/SABnzbd queue reads and the read-only Radarr/Sonarr acquisition calendar
 > are also implemented. Operator request review and the normalized Seerr issue lifecycle are
-> available; monitoring controls and broader acquisition mutations remain incomplete.
+> available. Exact whole-title Radarr/Sonarr monitoring controls are implemented; broader
+> acquisition mutations remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -57,10 +58,11 @@ also available through the operator-only Indexer Intelligence workspace. An oper
 download workspace reads bounded, normalized qBittorrent and SABnzbd queues without exposing
 upstream identifiers or credentials. The system-health workspace concurrently reads bounded
 Radarr, Sonarr, and Prowlarr health signals plus path-free Radarr/Sonarr capacity, retaining
-verified telemetry when one source or subsection fails. Monitoring controls, broader acquisition
-mutations, and live operational events remain unavailable. A viewer-accessible acquisition
-calendar combines bounded Radarr and Sonarr timing through opaque identifiers while keeping
-monitoring mutations unavailable. Jellyfin playback, progress, and Continue Watching use the
+verified telemetry when one source or subsection fails. An operator can inspect and explicitly
+change exact whole-movie or whole-series monitoring through a read-before-write, audited control;
+broader acquisition mutations and live operational events remain unavailable. A viewer-accessible
+acquisition calendar combines bounded Radarr and Sonarr timing through opaque identifiers and remains
+read-only. Jellyfin playback, progress, and Continue Watching use the
 paired user's permissions through server-held tokens and normalized, opaque media targets. The
 gateway also exposes role-gated player issue reporting, Bazarr subtitle operations, and Jellyfin
 scan, unmatched-item, artwork, and metadata maintenance without exposing upstream identifiers or
@@ -227,7 +229,9 @@ It deliberately covers prompt, loading, empty, offline, permission-denied, signe
 and responsive states. These surfaces use only the same-origin API boundary. A lazy-loaded
 signal-history drawer reads normalized, operator-only
 Radarr/Sonarr history and queue evidence with complete, degraded, empty, loading, offline,
-permission-denied, responsive, light, and dark states. As media workflows arrive,
+permission-denied, responsive, light, and dark states. Its exact-title monitoring control requires
+an explicit confirmation, defaults focus to the safe action, and reports verified upstream state
+without exposing arbitrary Servarr editor fields. As media workflows arrive,
 The download workspace uses TanStack Query for abort-aware polling, explicit refresh, and
 last-verified degraded rendering. TanStack Query owns remote data and invalidation, while Zustand remains limited to
 ephemeral interface state such as an open drawer or command-palette context. Motion is

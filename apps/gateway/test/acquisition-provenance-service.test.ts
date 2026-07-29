@@ -6,6 +6,7 @@ import {
 } from "@omnifin/contracts/auth";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type {
+  AcquisitionMonitoringState,
   AcquisitionProvenanceResponse,
   AcquisitionSearchResponse,
 } from "@omnifin/contracts/acquisition";
@@ -106,6 +107,17 @@ const normalizedSearch: AcquisitionSearchResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const monitoredState: AcquisitionMonitoringState = {
+  monitored: true,
+  target: { kind: "movie", mediaId: 42, service: "radarr" },
+  verifiedAt: now.toISOString(),
+};
+
+const unmonitoredState: AcquisitionMonitoringState = {
+  ...monitoredState,
+  monitored: false,
+};
+
 function capabilitySnapshot(id: string, service: "radarr" | "sonarr") {
   return JSON.stringify({
     health: {
@@ -113,6 +125,7 @@ function capabilitySnapshot(id: string, service: "radarr" | "sonarr") {
         "connector.health",
         "connector.version",
         "acquisition.history",
+        "acquisition.monitoring",
         "acquisition.search",
       ],
       checkedAt: now.toISOString(),
@@ -175,9 +188,16 @@ function harness(options: { withConnector?: boolean } = {}) {
     .run();
   if (options.withConnector !== false) insertConnector(database, config);
   const readAcquisitionProvenance = vi.fn(async () => normalizedResponse);
+  const readAcquisitionMonitoring = vi.fn(async () => monitoredState);
   const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
+  const updateAcquisitionMonitoring = vi.fn(async () => unmonitoredState);
   let identifier = 0;
-  const createAdapter = vi.fn(() => ({ queueAcquisitionSearch, readAcquisitionProvenance }));
+  const createAdapter = vi.fn(() => ({
+    queueAcquisitionSearch,
+    readAcquisitionMonitoring,
+    readAcquisitionProvenance,
+    updateAcquisitionMonitoring,
+  }));
   const service = new AcquisitionProvenanceService(database, config, {
     clock: () => now,
     createAdapter,
@@ -188,8 +208,10 @@ function harness(options: { withConnector?: boolean } = {}) {
     createAdapter,
     database,
     queueAcquisitionSearch,
+    readAcquisitionMonitoring,
     readAcquisitionProvenance,
     service,
+    updateAcquisitionMonitoring,
   };
 }
 
@@ -280,6 +302,135 @@ describe("acquisition provenance service", () => {
       });
       expect(audits[0]?.ipHash).toHaveLength(22);
       expect(audits[0]?.metadataJson).not.toContain("acquisition-01234567");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reads and updates exact-target monitoring with a bounded audit record", async () => {
+    const { database, readAcquisitionMonitoring, service, updateAcquisitionMonitoring } = harness();
+    try {
+      const context = {
+        ipAddress: "198.51.100.41",
+        principal: principal(),
+        requestId: "monitoring-request-1",
+      };
+      await expect(
+        service.readMonitoring({ mediaId: 42, service: "radarr" }, context),
+      ).resolves.toEqual(monitoredState);
+      await expect(
+        service.updateMonitoring(
+          {
+            expectedMonitored: true,
+            mediaId: 42,
+            monitored: false,
+            service: "radarr",
+          },
+          context,
+        ),
+      ).resolves.toEqual(unmonitoredState);
+
+      expect(readAcquisitionMonitoring).toHaveBeenCalledTimes(2);
+      expect(updateAcquisitionMonitoring).toHaveBeenCalledWith(
+        {
+          expectedMonitored: true,
+          mediaId: 42,
+          monitored: false,
+          service: "radarr",
+        },
+        undefined,
+      );
+      const audit = database.sqlite
+        .prepare(
+          `select event_type as eventType, outcome, target_type as targetType,
+             target_id as targetId, metadata_json as metadataJson, ip_hash as ipHash
+           from audit_events where event_type = 'acquisition.monitoring.updated'`,
+        )
+        .get() as {
+        eventType: string;
+        ipHash: string;
+        metadataJson: string;
+        outcome: string;
+        targetId: string;
+        targetType: string;
+      };
+      expect(audit).toMatchObject({
+        eventType: "acquisition.monitoring.updated",
+        outcome: "success",
+        targetId: "radarr:42",
+        targetType: "acquisition_monitoring",
+      });
+      expect(audit.ipHash).toHaveLength(22);
+      expect(JSON.parse(audit.metadataJson)).toEqual({
+        mediaId: 42,
+        monitored: false,
+        previousMonitored: true,
+        replayed: false,
+        service: "radarr",
+      });
+      const requestAudit = database.sqlite
+        .prepare(
+          `select event_type as eventType, outcome
+           from audit_events where event_type = 'acquisition.monitoring.requested'`,
+        )
+        .get() as { eventType: string; outcome: string };
+      expect(requestAudit).toEqual({
+        eventType: "acquisition.monitoring.requested",
+        outcome: "success",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("persists monitoring intent before an upstream mutation and fails closed on audit storage loss", async () => {
+    const { database, readAcquisitionMonitoring, service, updateAcquisitionMonitoring } = harness();
+    readAcquisitionMonitoring.mockImplementationOnce(async () => {
+      database.sqlite.exec("drop table audit_events");
+      return monitoredState;
+    });
+    try {
+      await expect(
+        service.updateMonitoring(
+          {
+            expectedMonitored: true,
+            mediaId: 42,
+            monitored: false,
+            service: "radarr",
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "storage_failure" });
+      expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("replays an already-achieved monitoring state without a second mutation", async () => {
+    const { database, readAcquisitionMonitoring, service, updateAcquisitionMonitoring } = harness();
+    readAcquisitionMonitoring.mockResolvedValueOnce(unmonitoredState);
+    try {
+      await expect(
+        service.updateMonitoring(
+          {
+            expectedMonitored: true,
+            mediaId: 42,
+            monitored: false,
+            service: "radarr",
+          },
+          { principal: principal() },
+        ),
+      ).resolves.toEqual(unmonitoredState);
+      expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+      const audit = database.sqlite
+        .prepare(
+          `select event_type as eventType, metadata_json as metadataJson
+           from audit_events where event_type = 'acquisition.monitoring.replayed'`,
+        )
+        .get() as { eventType: string; metadataJson: string };
+      expect(audit.eventType).toBe("acquisition.monitoring.replayed");
+      expect(JSON.parse(audit.metadataJson)).toMatchObject({ replayed: true });
     } finally {
       database.close();
     }

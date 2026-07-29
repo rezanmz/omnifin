@@ -75,6 +75,19 @@ test("fixture reports claim only authentication behavior covered by their tests"
     "statistics",
     "version_discovery",
   ]);
+  for (const service of ["radarr", "sonarr"]) {
+    assert.deepEqual(fixtureChecksFor(service), [
+      "acquisition_search",
+      "authentication_header",
+      "exact_target_validation",
+      "health_normalization",
+      "monitoring_read",
+      "monitoring_update",
+      "safe_mutation_shape",
+      "secret_isolation",
+      "version_discovery",
+    ]);
+  }
   assert.equal(fixtureChecksFor("oidc"), null);
 });
 

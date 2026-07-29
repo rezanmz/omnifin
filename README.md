@@ -66,8 +66,8 @@ and sign-in experience. The gateway also provides a permission-checked connector
 administration API with encrypted credentials, guarded transport policy, capability
 snapshots, optimistic revisions, and audited lifecycle changes.
 Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
-Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, and qBittorrent/SABnzbd queue
-reads through normalized, browser-safe contracts and responsive operational workspaces. An
+Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
+and qBittorrent/SABnzbd queue reads through normalized, browser-safe contracts and responsive operational workspaces. An
 operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
 with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
 The interface supports light, dark, and live system appearance preferences through an
@@ -85,8 +85,8 @@ queue and acquisition calendar are available as pre-release development surfaces
 provides Jellyfin playback negotiation and protected media proxying, progress reporting and
 Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
 maintenance. Operator request review and the unified player/Seerr issue lifecycle are also
-available as guarded pre-release surfaces. Monitoring controls, broader acquisition mutations,
-and live events remain later pre-release work.
+available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
+available to operators; broader acquisition mutations and live events remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
@@ -142,6 +142,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   opaque references, partial failure, and idempotent decisions
 - [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
   Sonarr title history, partial failure, and operator access
+- [Acquisition monitoring](docs/acquisition-monitoring.md) — exact-title Radarr and
+  Sonarr state controls, safe mutation boundaries, and audits
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
   telemetry, application sync, failures, and safe tests
 - [Download queues](docs/download-queues.md) — normalized qBittorrent and SABnzbd

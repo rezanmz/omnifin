@@ -42,8 +42,8 @@ tooling. Account and provider administration are available as pre-release develo
 The versioned gateway API can administer encrypted connector records, validate capabilities, and
 guard enablement and deletion. It exposes normalized Seerr search and media details for principals with
 `media.view`, identity-delegated, idempotent Seerr request creation for principals with
-`request.create`, and read-only Radarr/Sonarr title provenance for principals with
-`acquisition.manage`. It also exposes permission-gated, read-only qBittorrent and SABnzbd queue
+`request.create`, read-only Radarr/Sonarr title provenance, and exact whole-title monitoring for
+principals with `acquisition.manage`. It also exposes permission-gated, read-only qBittorrent and SABnzbd queue
 telemetry for principals with `downloads.manage` and a bounded Radarr/Sonarr acquisition calendar
 for principals with `media.view`. Recovery access can inspect and repair Jellyfin connector records
 without seeing or mutating other service configuration. A pinned isolated Authentik gate exercises
@@ -53,7 +53,7 @@ system-health, download-queue, and acquisition-calendar flows are pre-release de
 surfaces. The same is
 true of Jellyfin playback and progress, Continue Watching, issue reporting, Bazarr subtitle search
 and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
-monitoring controls and broader acquisition mutations remain unavailable.
+broader acquisition mutations, and live monitoring evidence remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the

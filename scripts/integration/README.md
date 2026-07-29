@@ -11,6 +11,12 @@ The integration runner has two deliberately distinct profiles:
   surfaces used by Indexer Intelligence. Safe mutations run only in disposable
   fixtures until isolated live service environments are provisioned.
 
+The Radarr and Sonarr fixture profiles include exact-target acquisition search,
+title-monitoring reads, and editor updates. They assert that monitoring writes
+contain only the selected movie or series identifier and the desired boolean;
+file, path, profile, tag, and queue fields are never sent. Live profiles remain
+read-only until disposable upstream environments are available.
+
 Run one service or the full matrix:
 
 ```sh

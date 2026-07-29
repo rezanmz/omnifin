@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { demoContinueWatchingFeed } from "../../lib/continue-watching-demo";
 import {
+  acquisitionMonitoringCsrfToken,
+  mockAcquisitionMonitoringSession,
+  mockAcquisitionMonitoringUpdate,
+} from "../fixtures/acquisition-monitoring";
+import {
   acquisitionRecoveryCsrfToken,
   mockAcquisitionRecoverySession,
   mockAcquisitionSearch,
@@ -96,6 +101,36 @@ test("operators can inspect a title-level acquisition trace before choosing reco
 
   await page.keyboard.press("Escape");
   await expect(timeline).not.toBeVisible();
+});
+
+test("operators can explicitly pause whole-title monitoring without touching files", async ({
+  page,
+}) => {
+  await mockAcquisitionMonitoringSession(page);
+  const capture = await mockAcquisitionMonitoringUpdate(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(timeline.getByText("Pause monitoring for The Far Meridian?")).toBeVisible();
+  await expect(timeline.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(timeline.getByText(/Existing files and downloads stay intact/u)).toBeVisible();
+  await expect(timeline.getByRole("button", { name: /delete|remove|move/i })).toHaveCount(0);
+  await timeline.getByRole("button", { name: "Pause" }).click();
+
+  await expect(timeline.getByText("Monitoring paused", { exact: true })).toBeVisible();
+  expect(capture.requests).toBe(1);
+  expect(capture.body).toEqual({
+    expectedMonitored: true,
+    mediaId: 42,
+    monitored: false,
+    service: "radarr",
+  });
+  expect(capture.csrfToken).toBe(acquisitionMonitoringCsrfToken);
 });
 
 test("operators can queue one exact-target acquisition search", async ({ page }) => {
