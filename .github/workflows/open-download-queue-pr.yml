@@ -1,0 +1,63 @@
+name: Open download queue pull request
+
+on:
+  push:
+    branches:
+      - feature/download-queue-actions
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open:
+    if: github.actor == 'rezanmz'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Open draft pull request once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: |
+            ## Summary
+
+            - add strict exact-item pause and resume contracts for normalized download queues
+            - implement version-aware qBittorrent and exact-target SABnzbd mutations behind fresh queue-state verification
+            - require active operator authorization, same-origin CSRF proof, bounded rate limits, durable audit events, and post-write state confirmation
+            - add polished Liquid Glass confirmations, focus restoration, responsive controls, in-flight mutation locking, and deterministic desktop/mobile visual baselines
+            - extend fixture integration coverage and public security, compatibility, development, and queue-operation documentation
+
+            ## Safety properties
+
+            - raw torrent hashes and SABnzbd `nzo_id` values remain gateway-private
+            - every write resolves one opaque item against a fresh read from the submitted connector
+            - stale, missing, duplicate, or capability-invalid targets fail before mutation
+            - an audit write must succeed before the upstream action
+            - replayed requests avoid duplicate writes when the desired state is already verified
+            - deletion, relocation, priorities, categories, arbitrary URLs, and bulk actions remain outside the contract
+
+            ## Verification
+
+            - `pnpm format:check`
+            - `pnpm lint`
+            - `pnpm typecheck`
+            - `pnpm test` (1,598 passing tests)
+            - repository policy and integration harness (102 passing tests)
+            - qBittorrent and SABnzbd strict fixture integration
+            - Storybook build and interaction suite (216 passing tests)
+            - accessibility route/state matrix (267 passing, 183 intentionally inapplicable)
+            - migration and schema drift smoke checks
+            - production build
+            - dependency audit and license policy
+            - targeted Chromium interaction and Darwin/Linux visual regression baselines
+        run: |
+          if gh pr view --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$GITHUB_REF_NAME" \
+            --draft \
+            --title "feat: add exact download queue controls" \
+            --body "$PR_BODY"
