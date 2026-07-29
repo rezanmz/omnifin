@@ -325,6 +325,83 @@ describe("DownloadQueue", () => {
     );
   });
 
+  it("promotes one exact transfer to the front without a blocking confirmation", async () => {
+    const user = userEvent.setup();
+    const item = demoDownloadQueue.items[2]!;
+    const promote = vi
+      .fn()
+      .mockResolvedValueOnce({
+        item,
+        position: 0 as const,
+        previousPosition: 2,
+        promotedAt: "2026-07-28T03:00:08.000Z",
+        replayed: false,
+      })
+      .mockResolvedValueOnce({
+        item,
+        position: 0 as const,
+        previousPosition: 0,
+        promotedAt: "2026-07-28T03:00:09.000Z",
+        replayed: true,
+      });
+    renderQueue(ready, {
+      client: {
+        load: async () => demoDownloadQueue,
+        loadEligibility: async () => ({
+          snapshot: { csrfToken: "download-queue-csrf", principal: operator },
+          status: "ready",
+        }),
+        promote,
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: `Move ${item.title} to front of queue` }));
+
+    await waitFor(() => expect(promote).toHaveBeenCalledOnce());
+    expect(promote).toHaveBeenCalledWith(
+      {
+        connectorId: item.connectorId,
+        expectedState: item.state,
+        itemId: item.id,
+      },
+      { csrfToken: "download-queue-csrf" },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      `${item.title} moved to the front of ${item.clientName}.`,
+    );
+    const promotedCard = screen.getByText(item.title).closest("article")!;
+    const formerFirstCard = screen.getByText(demoDownloadQueue.items[0]!.title).closest("article")!;
+    expect(promotedCard.compareDocumentPosition(formerFirstCard)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(screen.queryByText(/promote this transfer/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: `Move ${item.title} to front of queue` }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      `${item.title} was already first in ${item.clientName}.`,
+    );
+  });
+
+  it("keeps queue order unchanged when promotion eligibility cannot be proven", async () => {
+    const user = userEvent.setup();
+    const item = demoDownloadQueue.items[0]!;
+    const promote = vi.fn();
+    renderQueue(ready, {
+      client: {
+        load: async () => demoDownloadQueue,
+        loadEligibility: async () => ({ status: "signed_out" }),
+        promote,
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: `Move ${item.title} to front of queue` }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your session ended. Sign in again before prioritizing a transfer.",
+    );
+    expect(promote).not.toHaveBeenCalled();
+  });
+
   it("locks every queue action while one exact mutation is in flight", async () => {
     const user = userEvent.setup();
     const item = demoDownloadQueue.items[0]!;

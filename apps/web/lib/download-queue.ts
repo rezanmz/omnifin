@@ -2,6 +2,8 @@ import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import type {
   DownloadQueueActionInput,
   DownloadQueueActionResponse,
+  DownloadQueuePromotionInput,
+  DownloadQueuePromotionResponse,
   DownloadQueueRemovalInput,
   DownloadQueueRemovalResponse,
   DownloadQueueResponse,
@@ -185,6 +187,10 @@ export interface DownloadQueueClient {
   ): Promise<DownloadQueueActionResponse>;
   load(signal?: AbortSignal): Promise<DownloadQueueResponse>;
   loadEligibility?(signal?: AbortSignal): Promise<DownloadQueueEligibility>;
+  promote?(
+    input: DownloadQueuePromotionInput,
+    options: DownloadQueueActionOptions,
+  ): Promise<DownloadQueuePromotionResponse>;
   remove?(
     input: DownloadQueueRemovalInput,
     options: DownloadQueueRemovalOptions,
@@ -294,6 +300,36 @@ export const downloadQueueClient: DownloadQueueClient = {
         "invalid_response",
         "invalid_response",
         "The gateway returned a removal response outside the public contract.",
+      );
+    }
+    return parsed.data;
+  },
+
+  async promote(input, options) {
+    const { downloads } = await contractSchemas();
+    const body = downloads.downloadQueuePromotionInputSchema.parse(input);
+    const response = await fetchSameOrigin("/api/downloads/queue/promotions", {
+      body: JSON.stringify(body),
+      headers: {
+        "content-type": "application/json",
+        [CSRF_HEADER]: options.csrfToken,
+      },
+      method: "POST",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!response.ok) throw await actionResponseError(response);
+    const parsed = downloads.downloadQueuePromotionResponseSchema.safeParse(
+      await safeJson(response),
+    );
+    if (
+      !parsed.success ||
+      parsed.data.item.id !== body.itemId ||
+      parsed.data.item.connectorId !== body.connectorId
+    ) {
+      throw new DownloadQueueClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned a promotion response outside the public contract.",
       );
     }
     return parsed.data;

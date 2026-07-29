@@ -242,6 +242,37 @@ describe("download queue client", () => {
     );
   });
 
+  it("sends one exact front-of-queue promotion and verifies the position receipt", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const response = {
+      item,
+      position: 0 as const,
+      previousPosition: 1,
+      promotedAt: demoDownloadQueue.generatedAt,
+      replayed: false,
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.promote!(
+        {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        },
+        { csrfToken: "fixture-csrf" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/promotions",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "x-omnifin-csrf": "fixture-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
   it.each([
     ["a different action", { action: "resume" }],
     ["a different prior state", { previousState: "queued" }],

@@ -2,7 +2,7 @@
 
 Omnifin exposes one normalized queue across validated qBittorrent and SABnzbd connectors. The
 workspace gives operators current progress, degraded-client context, and exact-item pause, resume,
-and removal controls without
+front-of-queue promotion, and removal controls without
 placing reusable download-client credentials, raw queue responses, download hashes, or media paths
 in the browser.
 
@@ -12,8 +12,9 @@ versions and dates.
 
 The protected pull-request aggregate also exercises the production adapters against fresh,
 digest-pinned qBittorrent and SABnzbd containers. Its synthetic queue items must complete observed
-exact-item pause, resume, and preserve-files removal without retaining credentials, native IDs, or
-paths in the report. The complete isolation and evidence contract is documented in the
+exact-item pause, resume, front-of-queue promotion, and preserve-files removal without retaining
+credentials, native IDs, or paths in the report. The complete isolation and evidence contract is
+documented in the
 [download-client fixture runbook](operations/download-client-fixtures.md).
 
 ## Authorization and connector selection
@@ -67,13 +68,14 @@ complete view.
 The route is non-cacheable and rate-limited. The workspace polls every 12 seconds while live,
 supports an explicit refresh, and preserves the last verified queue if a later refresh fails. A
 visible stale notice distinguishes retained evidence from current telemetry. Search and state
-filters operate only on normalized in-memory data. Queue changes first open an inline confirmation
-with the safe cancel action focused. The browser then revalidates the active session, permission,
-and CSRF token before sending one opaque item identifier, its connector, and its observed state.
-Removal also requires the operator to type `REMOVE`, explains the client-specific consequence, and
-uses a fresh cryptographic idempotency key for each confirmation. A successful removal updates the
-local queue totals without waiting for the next poll and leaves a persistent screen-reader status
-announcement after the card disappears.
+filters operate only on normalized in-memory data. Pause and resume first open an inline
+confirmation with the safe cancel action focused. Promotion is a reversible, non-blocking action
+with a direct **First** control. Before any write, the browser revalidates the active session,
+permission, and CSRF token, then sends one opaque item identifier, its connector, and its observed
+state. Removal also requires the operator to type `REMOVE`, explains the client-specific
+consequence, and uses a fresh cryptographic idempotency key for each confirmation. Successful
+mutations update the local queue without waiting for the next poll and leave persistent
+screen-reader status announcements.
 
 Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
 component coverage. Dark and light desktop/mobile baselines are committed, and representative
@@ -100,6 +102,27 @@ and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly
 `nzo_id`. Raw hashes, `nzo_id` values, credentials, cookies, and upstream responses never reach the
 browser or audit metadata.
 
+## Exact-item front-of-queue promotion
+
+`POST /v1/downloads/queue/promotions` applies the same active-user, `downloads.manage`, same-origin,
+CSRF, 1 KiB body, connector-capability, mutation-rate, abort, and no-store boundaries as pause and
+resume. Its closed contract contains exactly one connector, one deployment-local opaque item, and
+the freshly observed state. It cannot express a numeric priority, arbitrary position, bulk target,
+path, category, URL, or client-native command.
+
+The gateway resolves the opaque target against a fresh exact queue read and retains its native
+position only inside the secret boundary. An item already at position zero returns as a verified
+replay without contacting the client. Missing or unobservable queue order fails closed; otherwise
+the observed state must match before mutation. A durable `download.queue.promotion.requested` audit
+event is committed before the upstream call, and completion, replay, and failure records contain
+only bounded public identifiers and normalized metadata.
+
+qBittorrent receives one validated torrent hash through its `topPrio` endpoint. SABnzbd receives
+one validated `nzo_id` through `mode=switch` with position zero. The gateway performs bounded exact-
+item reads after the write and reports success only after the same opaque item is observed at the
+front. Raw hashes, `nzo_id` values, credentials, cookies, client positions, and upstream responses
+never cross the public contract or enter audit metadata.
+
 ## Exact-item removal with downloaded files preserved
 
 `POST /v1/downloads/queue/removals` has the same active-user, `downloads.manage`, same-origin, CSRF,
@@ -124,6 +147,7 @@ contain only bounded public identifiers, the normalized snapshot, an operation i
 fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency keys,
 credentials, cookies, paths, and upstream bodies remain inside the gateway.
 
-Relocation, priority changes, category changes, blocklisting, deletion of downloaded content, and
-bulk mutations remain intentionally absent. They require their own destructive-action and recovery
-design plus disposable live-service evidence before the interface can expose them.
+Arbitrary numeric priorities or positions, relocation, category changes, blocklisting, deletion of
+downloaded content, and bulk mutations remain intentionally absent. They require their own
+destructive-action and recovery design plus disposable live-service evidence before the interface
+can expose them.
