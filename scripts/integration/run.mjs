@@ -17,7 +17,7 @@ const MAX_FAILED_TEST_FILES = 16;
 const TEST_FILE_BASENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,143}\.(?:test|spec)\.(?:ts|tsx)$/u;
 const connectorPatterns = {
   jellyfin: "^'jellyfin' adapter\\b",
-  seerr: "^(?:'seerr' adapter|Seerr discovery|Seerr media requests)\\b",
+  seerr: "^(?:'seerr' adapter|Seerr discovery|Seerr media requests|Seerr request routing)\\b",
   radarr: "^(?:'radarr' adapter|Servarr acquisition)\\b",
   sonarr: "^(?:'sonarr' adapter|Servarr acquisition)\\b",
   prowlarr: "^(?:'prowlarr' adapter|Prowlarr indexer intelligence)\\b",
@@ -32,6 +32,7 @@ const connectorChecks = {
     "health_normalization",
     "identity_delegation",
     "request_creation",
+    "routing_configuration",
     "response_normalization",
     "secret_isolation",
     "version_discovery",
@@ -324,6 +325,7 @@ function runFixture(service) {
     testFiles.push(
       join(root, "packages/connectors/test/seerr-discovery.test.ts"),
       join(root, "packages/connectors/test/seerr-requests.test.ts"),
+      join(root, "packages/connectors/test/seerr-routing.test.ts"),
     );
   }
   if (service === "prowlarr") {

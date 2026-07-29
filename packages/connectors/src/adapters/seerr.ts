@@ -1,4 +1,8 @@
-import type { ConnectorCapability, ConnectorHealth } from "@omnifin/contracts/connectors";
+import type {
+  ConnectorCapability,
+  ConnectorHealth,
+  PartialFailure,
+} from "@omnifin/contracts/connectors";
 import {
   DISCOVERY_DETAIL_MAX_CAST,
   DISCOVERY_DETAIL_MAX_CREW,
@@ -173,6 +177,68 @@ const seerrUserIdentitySchema = z.strictObject({
   jellyfinUserId: z.string().trim().min(1).max(256),
   jellyfinUsername: z.string().trim().min(1).max(160),
 });
+
+const seerrRequestServerSchema = z.object({
+  activeDirectory: z.string().trim().min(1).max(1_024),
+  activeLanguageProfileId: z.int().positive().max(2_147_483_647).optional(),
+  activeProfileId: z.int().positive().max(2_147_483_647),
+  id: z.int().nonnegative().max(2_147_483_647),
+  is4k: z.boolean(),
+  isDefault: z.boolean(),
+  name: z.string().trim().min(1).max(160),
+});
+
+const seerrRequestServerListSchema = z.array(seerrRequestServerSchema).max(20);
+const seerrRequestProfileSchema = z.object({
+  id: z.int().positive().max(2_147_483_647),
+  name: z.string().trim().min(1).max(160),
+});
+const seerrRequestRootFolderSchema = z.object({
+  freeSpace: z.number().finite().nonnegative().nullish(),
+  path: z.string().trim().min(1).max(1_024),
+  totalSpace: z.number().finite().nonnegative().nullish(),
+});
+const seerrRequestServerDetailsSchema = z.object({
+  languageProfiles: z.array(seerrRequestProfileSchema).max(100).nullish(),
+  profiles: z.array(seerrRequestProfileSchema).min(1).max(100),
+  rootFolders: z.array(seerrRequestRootFolderSchema).min(1).max(100),
+  server: seerrRequestServerSchema,
+});
+
+export interface SeerrRequestRouting {
+  languageProfileId?: number;
+  profileId: number;
+  rootFolder: string;
+  serverId: number;
+}
+
+const seerrRequestRoutingSchema = z.strictObject({
+  languageProfileId: z.int().positive().max(2_147_483_647).optional(),
+  profileId: z.int().positive().max(2_147_483_647),
+  rootFolder: z.string().trim().min(1).max(1_024),
+  serverId: z.int().nonnegative().max(2_147_483_647),
+});
+
+export interface SeerrRequestRoutingCatalog {
+  destinations: Array<{
+    activeDirectory: string;
+    activeLanguageProfileId: number | null;
+    activeProfileId: number;
+    id: number;
+    isDefault: boolean;
+    label: string;
+    languageProfiles: Array<{ id: number; label: string }>;
+    profiles: Array<{ id: number; label: string }>;
+    rootFolders: Array<{
+      availableBytes: number | null;
+      capacityBytes: number | null;
+      path: string;
+    }>;
+  }>;
+  failures: PartialFailure[];
+  is4k: boolean;
+  kind: "movie" | "series";
+}
 
 const seerrUserListResponseSchema = z.object({
   pageInfo: z.object({
@@ -444,6 +510,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
           "connector.version",
           "media.detail",
           "media.discover",
+          "request.configure",
           "request.create",
           "request.review",
           "issue.read",
@@ -641,10 +708,106 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     return matches[0]!.id;
   }
 
+  async listRequestRouting(
+    kind: "movie" | "series",
+    is4k: boolean,
+    signal?: AbortSignal,
+  ): Promise<SeerrRequestRoutingCatalog> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr request routing requires configured credentials.",
+        operation: "request.configure",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const service = kind === "movie" ? "radarr" : "sonarr";
+    const headers = { "X-Api-Key": this.#apiKey };
+    const servers = await this.client.requestJson(
+      `api/v1/service/${service}`,
+      seerrRequestServerListSchema,
+      {
+        headers,
+        operation: "request.configure.list",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const results = await Promise.all(
+      servers
+        .filter((server) => server.is4k === is4k)
+        .map(async (server) => {
+          try {
+            const details = await this.client.requestJson(
+              `api/v1/service/${service}/${server.id}`,
+              seerrRequestServerDetailsSchema,
+              {
+                headers,
+                operation: "request.configure.destination",
+                ...(signal ? { signal } : {}),
+              },
+            );
+            if (
+              details.server.id !== server.id ||
+              details.server.is4k !== server.is4k ||
+              details.server.name !== server.name
+            ) {
+              throw invalidRequestResponse("request.configure.destination");
+            }
+            return {
+              destination: {
+                activeDirectory: details.server.activeDirectory,
+                activeLanguageProfileId: details.server.activeLanguageProfileId ?? null,
+                activeProfileId: details.server.activeProfileId,
+                id: details.server.id,
+                isDefault: details.server.isDefault,
+                label: details.server.name,
+                languageProfiles: (details.languageProfiles ?? []).map((profile) => ({
+                  id: profile.id,
+                  label: profile.name,
+                })),
+                profiles: details.profiles.map((profile) => ({
+                  id: profile.id,
+                  label: profile.name,
+                })),
+                rootFolders: details.rootFolders.map((folder) => ({
+                  availableBytes: folder.freeSpace ?? null,
+                  capacityBytes: folder.totalSpace ?? null,
+                  path: folder.path,
+                })),
+              },
+            };
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            const safeError =
+              error instanceof SafeConnectorError
+                ? error
+                : new SafeConnectorError({
+                    code: "upstream_error",
+                    message: "Seerr could not load a request destination.",
+                    operation: "request.configure.destination",
+                    retryable: true,
+                    service: this.service,
+                  });
+            return { failure: safeError.toPartialFailure(this.clock.now()) };
+          }
+        }),
+    );
+    const destinations: SeerrRequestRoutingCatalog["destinations"] = [];
+    const failures: PartialFailure[] = [];
+    for (const result of results) {
+      if ("destination" in result) destinations.push(result.destination);
+      else failures.push(result.failure);
+    }
+    destinations.sort((left, right) => left.label.localeCompare(right.label) || left.id - right.id);
+    return { destinations, failures, is4k, kind };
+  }
+
   async createMediaRequest(
     input: MediaRequestInput,
     seerrUserId: number,
     signal?: AbortSignal,
+    routing?: SeerrRequestRouting,
   ): Promise<MediaRequestResponse> {
     if (!this.#apiKey) {
       throw new SafeConnectorError({
@@ -659,6 +822,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       throw new SeerrRequestError("identity_not_found");
     }
     const request = mediaRequestInputSchema.parse(input);
+    const selectedRouting = routing ? seerrRequestRoutingSchema.parse(routing) : undefined;
     const response = await this.client.requestText("api/v1/request", {
       acceptedStatuses: [202, 403, 409],
       body: JSON.stringify({
@@ -666,6 +830,16 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         mediaId: request.tmdbId,
         mediaType: request.kind === "movie" ? "movie" : "tv",
         ...(request.kind === "series" ? { seasons: request.seasons } : {}),
+        ...(selectedRouting
+          ? {
+              ...(selectedRouting.languageProfileId === undefined
+                ? {}
+                : { languageProfileId: selectedRouting.languageProfileId }),
+              profileId: selectedRouting.profileId,
+              rootFolder: selectedRouting.rootFolder,
+              serverId: selectedRouting.serverId,
+            }
+          : {}),
       }),
       headers: {
         "Content-Type": "application/json",

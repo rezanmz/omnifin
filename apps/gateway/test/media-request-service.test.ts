@@ -41,7 +41,11 @@ function testConfig(): AppConfig {
   };
 }
 
-function principal(role: "requester" | "viewer" = "requester"): SessionPrincipal {
+function principal(
+  role: "requester" | "viewer" = "requester",
+  userId = "viewer-user",
+  linkId = "viewer-link",
+): SessionPrincipal {
   return sessionPrincipalSchema.parse({
     absoluteExpiresAt: "2026-08-26T16:30:00.000Z",
     accountState: "active",
@@ -55,7 +59,7 @@ function principal(role: "requester" | "viewer" = "requester"): SessionPrincipal
         displayName: "Viewer",
         externalUserId: "jellyfin-user-1",
         health: "linked",
-        id: "viewer-link",
+        id: linkId,
         lastVerifiedAt: now.toISOString(),
         linkedAt: now.toISOString(),
         service: "jellyfin",
@@ -64,8 +68,8 @@ function principal(role: "requester" | "viewer" = "requester"): SessionPrincipal
     ],
     permissions: ROLE_PERMISSIONS[role],
     role,
-    sessionId: `${role}-session`,
-    userId: "viewer-user",
+    sessionId: `${userId}-${role}-session`,
+    userId,
   });
 }
 
@@ -100,7 +104,12 @@ function insertFoundation(database: DatabaseHandle, config: AppConfig) {
         baseUrl: "https://seerr.example.test/",
         capabilitySnapshotJson: JSON.stringify({
           health: {
-            capabilities: ["connector.health", "connector.version", "request.create"],
+            capabilities: [
+              "connector.health",
+              "connector.version",
+              "request.configure",
+              "request.create",
+            ],
             checkedAt: now.toISOString(),
             connectorId: "seerr-main",
             displayName: "Seerr",
@@ -165,7 +174,9 @@ function insertFoundation(database: DatabaseHandle, config: AppConfig) {
 
 function harness(
   options: {
+    clock?: () => Date;
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
+    listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
     resolveUser?: MediaRequestAdapter["resolveUser"];
   } = {},
 ) {
@@ -178,13 +189,39 @@ function harness(
   const createMediaRequest =
     options.createMediaRequest ??
     vi.fn<MediaRequestAdapter["createMediaRequest"]>(async () => createdRequest);
+  const listRequestRouting =
+    options.listRequestRouting ??
+    vi.fn<MediaRequestAdapter["listRequestRouting"]>(async (kind, is4k) => ({
+      destinations: [
+        {
+          activeDirectory: "/srv/media/movies",
+          activeLanguageProfileId: null,
+          activeProfileId: 4,
+          id: 1,
+          isDefault: true,
+          label: "Cinema",
+          languageProfiles: [],
+          profiles: [{ id: 4, label: "1080p" }],
+          rootFolders: [
+            {
+              availableBytes: 800_000_000_000,
+              capacityBytes: 2_000_000_000_000,
+              path: "/srv/media/movies",
+            },
+          ],
+        },
+      ],
+      failures: [],
+      is4k,
+      kind,
+    }));
   let id = 0;
   const service = new MediaRequestService(database, config, {
-    clock: () => now,
-    createAdapter: vi.fn(() => ({ createMediaRequest, resolveUser })),
+    clock: options.clock ?? (() => now),
+    createAdapter: vi.fn(() => ({ createMediaRequest, listRequestRouting, resolveUser })),
     createId: () => `media-request-id-${String(++id).padStart(2, "0")}`,
   });
-  return { createMediaRequest, database, resolveUser, service };
+  return { createMediaRequest, database, listRequestRouting, resolveUser, service };
 }
 
 const context = () => ({
@@ -194,6 +231,271 @@ const context = () => ({
 });
 
 describe("media request service", () => {
+  it("issues path-safe routing references and resolves them only inside the gateway", async () => {
+    const { createMediaRequest, database, listRequestRouting, resolveUser, service } = harness();
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const destination = options.destinations[0]!;
+      expect(destination).toMatchObject({
+        isDefault: true,
+        label: "Cinema",
+        service: "radarr",
+      });
+      expect(destination.rootFolders[0]).toMatchObject({
+        availableBytes: 800_000_000_000,
+        isDefault: true,
+        label: "movies",
+      });
+      expect(JSON.stringify(options)).not.toContain("/srv/media");
+      expect(listRequestRouting).toHaveBeenCalledWith("movie", false, undefined);
+
+      const routing = {
+        destination: destination.id,
+        languageProfile: null,
+        qualityProfile: destination.qualityProfiles[0]!.id,
+        rootFolder: destination.rootFolders[0]!.id,
+      };
+      await service.create(
+        { is4k: false, kind: "movie", routing, tmdbId: 550 },
+        "request-key-routing-01",
+        context(),
+      );
+
+      expect(resolveUser).toHaveBeenCalledTimes(2);
+      expect(createMediaRequest).toHaveBeenCalledWith(
+        { is4k: false, kind: "movie", tmdbId: 550 },
+        42,
+        undefined,
+        { profileId: 4, rootFolder: "/srv/media/movies", serverId: 1 },
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("disambiguates duplicate terminal storage labels without exposing parent paths", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({
+        destinations: [
+          {
+            activeDirectory: "/srv/primary/movies",
+            activeLanguageProfileId: null,
+            activeProfileId: 4,
+            id: 1,
+            isDefault: true,
+            label: "Cinema",
+            languageProfiles: [],
+            profiles: [{ id: 4, label: "1080p" }],
+            rootFolders: [
+              {
+                availableBytes: null,
+                capacityBytes: null,
+                path: "/srv/primary/movies",
+              },
+              {
+                availableBytes: null,
+                capacityBytes: null,
+                path: "/mnt/archive/movies",
+              },
+            ],
+          },
+        ],
+        failures: [],
+        is4k,
+        kind,
+      }),
+    );
+    const { database, service } = harness({ listRequestRouting });
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      expect(options.destinations[0]?.rootFolders.map((folder) => folder.label)).toEqual([
+        "movies · 1",
+        "movies · 2",
+      ]);
+      expect(JSON.stringify(options)).not.toMatch(/\/srv\/|\/mnt\//u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a modified routing reference without contacting Seerr", async () => {
+    const { createMediaRequest, database, service } = harness();
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const destination = options.destinations[0]!;
+      const rootReference = destination.rootFolders[0]!.id;
+      const modifiedRoot = `${rootReference.slice(0, -1)}${rootReference.endsWith("A") ? "B" : "A"}`;
+      await expect(
+        service.create(
+          {
+            is4k: false,
+            kind: "movie",
+            routing: {
+              destination: destination.id,
+              languageProfile: null,
+              qualityProfile: destination.qualityProfiles[0]!.id,
+              rootFolder: modifiedRoot,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-02",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("expires routing references and rejects reuse across format intent", async () => {
+    let clock = new Date(now);
+    const { createMediaRequest, database, service } = harness({ clock: () => clock });
+    try {
+      const expiredOptions = await service.routingOptions(
+        { is4k: false, kind: "movie" },
+        context(),
+      );
+      const expiredDestination = expiredOptions.destinations[0]!;
+      clock = new Date(now.getTime() + 15 * 60 * 1_000);
+      await expect(
+        service.create(
+          {
+            is4k: false,
+            kind: "movie",
+            routing: {
+              destination: expiredDestination.id,
+              languageProfile: null,
+              qualityProfile: expiredDestination.qualityProfiles[0]!.id,
+              rootFolder: expiredDestination.rootFolders[0]!.id,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-expired",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+
+      const formatOptions = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const formatDestination = formatOptions.destinations[0]!;
+      await expect(
+        service.create(
+          {
+            is4k: true,
+            kind: "movie",
+            routing: {
+              destination: formatDestination.id,
+              languageProfile: null,
+              qualityProfile: formatDestination.qualityProfiles[0]!.id,
+              rootFolder: formatDestination.rootFolders[0]!.id,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-format",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("binds routing references to the requesting local user", async () => {
+    const { createMediaRequest, database, service } = harness();
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      database.db
+        .insert(users)
+        .values({
+          createdAt: now,
+          displayName: "Alternate viewer",
+          id: "alternate-user",
+          role: "requester",
+          roleSource: "manual",
+          status: "active",
+          updatedAt: now,
+        })
+        .run();
+      database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-main",
+          createdAt: now,
+          deviceId: "alternate-device",
+          encryptedAccessToken: "v2.fixture-alternate-access-token",
+          externalDisplayName: "Alternate viewer",
+          externalServerId: "jellyfin-server",
+          externalUserId: "jellyfin-user-2",
+          externalUsername: "alternate",
+          healthState: "linked",
+          id: "alternate-link",
+          lastVerifiedAt: now,
+          service: "jellyfin",
+          tokenCreatedAt: now,
+          updatedAt: now,
+          userId: "alternate-user",
+        })
+        .run();
+      const alternatePrincipal = principal("requester", "alternate-user", "alternate-link");
+      alternatePrincipal.linkedServices[0]!.externalUserId = "jellyfin-user-2";
+      alternatePrincipal.linkedServices[0]!.username = "alternate";
+      const destination = options.destinations[0]!;
+
+      await expect(
+        service.create(
+          {
+            is4k: false,
+            kind: "movie",
+            routing: {
+              destination: destination.id,
+              languageProfile: null,
+              qualityProfile: destination.qualityProfiles[0]!.id,
+              rootFolder: destination.rootFolders[0]!.id,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-user",
+          { ...context(), principal: alternatePrincipal },
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects routing references replayed by another session for the same user", async () => {
+    const { createMediaRequest, database, service } = harness();
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const destination = options.destinations[0]!;
+      const nextSessionPrincipal = principal();
+      nextSessionPrincipal.sessionId = "viewer-user-requester-session-next";
+
+      await expect(
+        service.create(
+          {
+            is4k: false,
+            kind: "movie",
+            routing: {
+              destination: destination.id,
+              languageProfile: null,
+              qualityProfile: destination.qualityProfiles[0]!.id,
+              rootFolder: destination.rootFolders[0]!.id,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-session",
+          { ...context(), principal: nextSessionPrincipal },
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
   it("delegates to the exact Jellyfin-linked Seerr user and durably replays success", async () => {
     const { createMediaRequest, database, resolveUser, service } = harness();
     try {
@@ -219,6 +521,7 @@ describe("media request service", () => {
       expect(createMediaRequest).toHaveBeenCalledWith(
         { is4k: false, kind: "series", seasons: [1, 3], tmdbId: 1399 },
         42,
+        undefined,
         undefined,
       );
       const operation = database.sqlite

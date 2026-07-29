@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { partialFailureSchema } from "./connectors.js";
+
 const tmdbIdentifierSchema = z.int().positive().max(2_147_483_647);
 const seasonNumberSchema = z.int().nonnegative().max(10_000);
 const requestIdentifierSchema = z
@@ -7,11 +9,68 @@ const requestIdentifierSchema = z
   .min(9)
   .max(64)
   .regex(/^request:[1-9][0-9]*$/u);
+const requestRoutingReferenceSchema = z
+  .string()
+  .min(80)
+  .max(2_048)
+  .regex(/^routing-v1\.v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+
+export const mediaRequestRoutingSelectionSchema = z.strictObject({
+  destination: requestRoutingReferenceSchema,
+  languageProfile: requestRoutingReferenceSchema.nullable().default(null),
+  qualityProfile: requestRoutingReferenceSchema,
+  rootFolder: requestRoutingReferenceSchema,
+});
+export type MediaRequestRoutingSelection = z.infer<typeof mediaRequestRoutingSelectionSchema>;
 
 const mediaRequestBase = {
   is4k: z.boolean().default(false),
+  routing: mediaRequestRoutingSelectionSchema.optional(),
   tmdbId: tmdbIdentifierSchema,
 } as const;
+
+export const mediaRequestRoutingOptionsQuerySchema = z.strictObject({
+  is4k: z
+    .union([z.boolean(), z.enum(["false", "true"])])
+    .default(false)
+    .transform((value) => value === true || value === "true"),
+  kind: z.enum(["movie", "series"]),
+});
+export type MediaRequestRoutingOptionsQuery = z.infer<typeof mediaRequestRoutingOptionsQuerySchema>;
+
+const mediaRequestRoutingChoiceSchema = z.strictObject({
+  id: requestRoutingReferenceSchema,
+  isDefault: z.boolean(),
+  label: z.string().trim().min(1).max(160),
+});
+
+const mediaRequestRootFolderChoiceSchema = mediaRequestRoutingChoiceSchema.extend({
+  availableBytes: z.int().nonnegative().nullable(),
+  capacityBytes: z.int().nonnegative().nullable(),
+});
+
+export const mediaRequestRoutingDestinationSchema = z.strictObject({
+  id: requestRoutingReferenceSchema,
+  isDefault: z.boolean(),
+  label: z.string().trim().min(1).max(160),
+  languageProfiles: z.array(mediaRequestRoutingChoiceSchema).max(100),
+  qualityProfiles: z.array(mediaRequestRoutingChoiceSchema).min(1).max(100),
+  rootFolders: z.array(mediaRequestRootFolderChoiceSchema).min(1).max(100),
+  service: z.enum(["radarr", "sonarr"]),
+});
+export type MediaRequestRoutingDestination = z.infer<typeof mediaRequestRoutingDestinationSchema>;
+
+export const mediaRequestRoutingOptionsResponseSchema = z.strictObject({
+  destinations: z.array(mediaRequestRoutingDestinationSchema).max(20),
+  expiresAt: z.iso.datetime({ offset: true }),
+  failures: z.array(partialFailureSchema).max(20),
+  generatedAt: z.iso.datetime({ offset: true }),
+  is4k: z.boolean(),
+  kind: z.enum(["movie", "series"]),
+});
+export type MediaRequestRoutingOptionsResponse = z.infer<
+  typeof mediaRequestRoutingOptionsResponseSchema
+>;
 
 export const movieRequestInputSchema = z.strictObject({
   ...mediaRequestBase,
@@ -119,11 +178,13 @@ const mediaRequestWireSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     is4k: z.boolean().optional(),
     kind: z.literal("movie"),
+    routing: mediaRequestRoutingSelectionSchema.optional(),
     tmdbId: tmdbIdentifierSchema,
   }),
   z.strictObject({
     is4k: z.boolean().optional(),
     kind: z.literal("series"),
+    routing: mediaRequestRoutingSelectionSchema.optional(),
     seasons: z
       .union([
         z.literal("all"),
@@ -146,6 +207,9 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 
 export const mediaRequestInputJsonSchema = withoutSchemaDialect(mediaRequestWireSchema);
 export const mediaRequestResponseJsonSchema = withoutSchemaDialect(mediaRequestResponseSchema);
+export const mediaRequestRoutingOptionsResponseJsonSchema = withoutSchemaDialect(
+  mediaRequestRoutingOptionsResponseSchema,
+);
 export const requestReviewDecisionInputJsonSchema = withoutSchemaDialect(
   requestReviewDecisionInputSchema,
 );

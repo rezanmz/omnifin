@@ -13,7 +13,9 @@ import {
 import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
 import {
   mediaRequestCsrfToken,
+  mediaRequestRoutingReference,
   mockMediaRequestCreation,
+  mockMediaRequestRouting,
   mockMediaRequestSession,
 } from "../fixtures/media-request";
 import {
@@ -263,6 +265,46 @@ test("request composer delegates a bounded request through the verified session"
   await composer.getByRole("button", { name: "Done" }).click();
   await expect(composer).toHaveCount(0);
   await expect(page.getByRole("option", { name: /The Matrix.*Requested/i })).toBeVisible();
+});
+
+test("request composer delegates opaque advanced routing without exposing storage paths", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await mockMediaRequestSession(page);
+  await mockMediaRequestRouting(page);
+  const capture = await mockMediaRequestCreation(page);
+  await page.goto("/");
+
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  const composer = page.getByRole("dialog", { name: "Compose request" });
+  await composer.getByText("Advanced routing").click();
+  await expect(composer.getByRole("combobox", { name: /Destination/i })).toHaveValue(
+    mediaRequestRoutingReference("radarr-primary"),
+  );
+  await composer
+    .getByRole("combobox", { name: /Quality profile/i })
+    .selectOption(mediaRequestRoutingReference("quality-remux"));
+  await composer
+    .getByRole("combobox", { name: /Root folder/i })
+    .selectOption(mediaRequestRoutingReference("root-archive"));
+  await composer.getByRole("button", { name: /Send request/i }).click();
+
+  await expect(composer.getByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+  expect(capture.body).toEqual({
+    is4k: false,
+    kind: "movie",
+    routing: {
+      destination: mediaRequestRoutingReference("radarr-primary"),
+      languageProfile: null,
+      qualityProfile: mediaRequestRoutingReference("quality-remux"),
+      rootFolder: mediaRequestRoutingReference("root-archive"),
+    },
+    tmdbId: 603,
+  });
+  expect(JSON.stringify(capture.body)).not.toContain("/srv/");
+  await expect(composer).not.toContainText("/srv/");
 });
 
 test("production-first onboarding remains a complete route", async ({ page }) => {

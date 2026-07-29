@@ -1,8 +1,9 @@
 # Media requests
 
 Omnifin exposes a normalized Seerr-backed request mutation without exposing Seerr
-credentials, numeric user identifiers, server selection, storage paths, profiles, tags,
-or quota controls to the browser. This is a pre-release development surface; the
+credentials, numeric user identifiers, raw storage paths, tags, or quota controls to
+the browser. Optional server, quality, root-folder, and language choices cross the
+boundary only as short-lived opaque references. This is a pre-release development surface; the
 [compatibility matrix](compatibility.md) remains authoritative for supported versions.
 
 ## Authorization and identity
@@ -25,12 +26,27 @@ The request body accepts only:
 
 - `kind`: `movie` or `series`;
 - `tmdbId`: a positive bounded TMDB identifier;
-- `is4k`: an optional boolean that defaults to `false`; and
-- `seasons`: `all` or a bounded, duplicate-free season list for a series.
+- `is4k`: an optional boolean that defaults to `false`;
+- `seasons`: `all` or a bounded, duplicate-free season list for a series; and
+- `routing`: an optional, closed set of opaque destination, quality-profile,
+  root-folder, and language-profile references previously issued by the gateway.
 
 Movie bodies cannot contain seasons. Fields such as `userId`, `serverId`, `profileId`,
-`rootFolder`, `tags`, and `ignoreQuota` are rejected rather than forwarded. Seerr and
-its Radarr or Sonarr policy remain responsible for choosing operational settings.
+raw `rootFolder`, `tags`, and `ignoreQuota` are rejected rather than forwarded. When
+`routing` is omitted, Seerr and its Radarr or Sonarr policy remain responsible for
+choosing operational settings.
+
+`GET /v1/requests/routing-options` accepts only media kind and standard/4K intent. The
+gateway first revalidates the session, permission, Jellyfin link, Seerr user mapping,
+connector health, and routing capability. It then returns friendly destination,
+profile, and terminal folder labels with bounded capacity telemetry. Full paths and
+numeric upstream identifiers remain gateway-only.
+
+Every routing reference is authenticated and encrypted, expires after 15 minutes, and
+is bound to the local user, Seerr connector, destination, media kind, format intent,
+and issuance set. Mixing references, changing an opaque value, crossing users,
+switching format, or submitting after expiry fails closed before the Seerr mutation.
+Routing values and root folders are redacted from structured logs.
 
 The normalized response contains an Omnifin request identifier, media kind and TMDB
 identifier, 4K flag, normalized request status, requested series seasons, creation time,
@@ -57,6 +73,9 @@ Requestable discovery results open a modal Liquid Glass drawer rather than expos
 upstream controls in the search list. The composer checks the current session, local
 permission, and paired Jellyfin identity before rendering mutation controls. It supports
 standard or 4K intent and either all available or explicit, bounded season selections.
+An opt-in Advanced routing disclosure reads the currently valid Seerr destinations and
+offers native, keyboard-accessible destination, quality, storage, and language controls.
+The collapsed summary remains quiet, and a single action restores Seerr defaults.
 
 The browser creates a fresh cryptographic idempotency key for each distinct selection.
 It preserves that key after an ambiguous network outcome so a retry can recover the
@@ -68,7 +87,9 @@ The drawer uses the native modal dialog model for focus containment, Escape dism
 focus restoration, and background inertness. Desktop and mobile layouts, dark and light
 themes, reduced motion and transparency, forced colors, loading, pairing, denial, offline,
 submitting, interrupted, and accepted states are covered by component, browser,
-accessibility, and deterministic visual tests.
+accessibility, and deterministic visual tests. Loading, partial, unavailable, expired,
+and explicit-routing states preserve the baseline request path and never display a raw
+storage path.
 
 ## Failure and audit model
 
@@ -85,5 +106,5 @@ tokens, usernames, idempotency keys, media paths, and upstream response bodies.
 Deterministic connector fixtures cover user-context delegation, request payloads,
 status normalization, known upstream failures, schema drift, and secret isolation.
 Gateway tests additionally cover local authorization, CSRF, origin validation,
-idempotency conflicts and replay, durable failure replay, audit writes, and fresh and
-historical migration paths.
+idempotency conflicts and replay, durable failure replay, audit writes, opaque-reference
+tampering, user and format binding, expiry, and fresh and historical migration paths.

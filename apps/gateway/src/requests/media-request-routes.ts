@@ -3,10 +3,14 @@ import {
   mediaRequestInputSchema,
   mediaRequestResponseJsonSchema,
   mediaRequestResponseSchema,
+  mediaRequestRoutingOptionsQuerySchema,
+  mediaRequestRoutingOptionsResponseJsonSchema,
+  mediaRequestRoutingOptionsResponseSchema,
 } from "@omnifin/contracts/requests";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import { requirePermission } from "../auth/authorization.js";
+import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import {
   MediaRequestService,
@@ -56,6 +60,13 @@ function requestError(error: MediaRequestServiceError, reply: FastifyReply) {
         cause: error,
         code: "request_already_exists",
         message: "A matching media request already exists.",
+        statusCode: 409,
+      });
+    case "routing_invalid":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_routing_invalid",
+        message: "The selected request routing expired or is no longer valid.",
         statusCode: 409,
       });
     case "idempotency_conflict":
@@ -109,10 +120,57 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
 ) => {
   const mediaRequests = new MediaRequestService(app.database, app.appConfig, options.dependencies);
 
+  app.get(
+    "/v1/requests/routing-options",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        response: { 200: mediaRequestRoutingOptionsResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "request.create");
+      const query = mediaRequestRoutingOptionsQuerySchema.parse(request.query);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return mediaRequestRoutingOptionsResponseSchema.parse(
+          await mediaRequests.routingOptions(
+            query,
+            {
+              ipAddress: request.ip,
+              principal,
+              requestId: request.id,
+            },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
   app.post(
     "/v1/requests",
     {
-      bodyLimit: 2 * 1_024,
+      bodyLimit: 8 * 1_024,
       config: {
         omnifinSecurity: { kind: "session" },
         rateLimit: { max: 10, timeWindow: "1 minute" },

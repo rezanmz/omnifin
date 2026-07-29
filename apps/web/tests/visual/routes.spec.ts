@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
-import { mockMediaRequestSession } from "../fixtures/media-request";
+import { mockMediaRequestRouting, mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
   mockManualReleaseSession,
@@ -158,9 +158,10 @@ test("light media detail drawer visual baseline", async ({ page }, testInfo) => 
   await expect(page).toHaveScreenshot("dashboard-media-details-light.png");
 });
 
-async function openRequestComposer(page: Page) {
+async function openRequestComposer(page: Page, advanced = false) {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
+  if (advanced) await mockMediaRequestRouting(page);
   await page.goto("/");
   const search = page.getByRole("combobox");
   await search.click();
@@ -169,6 +170,10 @@ async function openRequestComposer(page: Page) {
   await requestAction.waitFor();
   await requestAction.click();
   await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+  if (advanced) {
+    await page.getByText("Advanced routing").click();
+    await expect(page.getByRole("combobox", { name: /Destination/i })).toBeVisible();
+  }
 }
 
 test("request composer visual baseline", async ({ page }, testInfo) => {
@@ -191,6 +196,15 @@ test("light request composer visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("dashboard-request-composer-light.png", {
     fullPage: true,
   });
+});
+
+test("advanced request routing visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Advanced routing covers representative desktop and phone geometry",
+  );
+  await openRequestComposer(page, true);
+  await expect(page).toHaveScreenshot("dashboard-request-routing.png", { fullPage: true });
 });
 
 test("first-run dashboard visual baseline", async ({ page }, testInfo) => {

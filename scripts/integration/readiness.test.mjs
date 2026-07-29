@@ -59,6 +59,7 @@ test("fixture reports claim only authentication behavior covered by their tests"
     "health_normalization",
     "identity_delegation",
     "request_creation",
+    "routing_configuration",
     "response_normalization",
     "secret_isolation",
     "version_discovery",

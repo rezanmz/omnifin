@@ -1,6 +1,8 @@
 import {
   SeerrAdapter,
   SeerrRequestError,
+  type SeerrRequestRouting,
+  type SeerrRequestRoutingCatalog,
   type SeerrUserIdentity,
 } from "@omnifin/connectors/adapters/seerr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
@@ -14,10 +16,16 @@ import {
   idempotencyKeySchema,
   mediaRequestInputSchema,
   mediaRequestResponseSchema,
+  mediaRequestRoutingOptionsQuerySchema,
+  mediaRequestRoutingOptionsResponseSchema,
   type MediaRequestInput,
   type MediaRequestResponse,
+  type MediaRequestRoutingOptionsQuery,
+  type MediaRequestRoutingOptionsResponse,
+  type MediaRequestRoutingSelection,
 } from "@omnifin/contracts/requests";
 import { randomUUID, X509Certificate } from "node:crypto";
+import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
@@ -26,6 +34,8 @@ import { EnvelopeCipher, hashToken, privacyHash } from "../security/crypto.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const REQUEST_ROUTING_REFERENCE_PREFIX = "routing-v1.";
+const REQUEST_ROUTING_TTL_MS = 15 * 60 * 1_000;
 
 interface SeerrConnectorRow {
   baseUrl: string;
@@ -62,7 +72,13 @@ export interface MediaRequestAdapter {
     input: MediaRequestInput,
     seerrUserId: number,
     signal?: AbortSignal,
+    routing?: SeerrRequestRouting,
   ): Promise<MediaRequestResponse>;
+  listRequestRouting(
+    kind: "movie" | "series",
+    is4k: boolean,
+    signal?: AbortSignal,
+  ): Promise<SeerrRequestRoutingCatalog>;
   resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number>;
 }
 
@@ -90,6 +106,7 @@ export type MediaRequestFailureCode =
   | "request_conflict"
   | "request_denied"
   | "response_invalid"
+  | "routing_invalid"
   | "temporarily_unavailable";
 
 const MEDIA_REQUEST_FAILURE_CODES = new Set<MediaRequestFailureCode>([
@@ -99,6 +116,7 @@ const MEDIA_REQUEST_FAILURE_CODES = new Set<MediaRequestFailureCode>([
   "request_conflict",
   "request_denied",
   "response_invalid",
+  "routing_invalid",
   "temporarily_unavailable",
 ]);
 
@@ -123,6 +141,44 @@ export class MediaRequestServiceError extends Error {
 function credentialContext(connectorId: string) {
   return `connector_credentials:seerr:${connectorId}`;
 }
+
+function routingContext(userId: string, sessionId: string) {
+  return `media_request_routing:v1:${userId}:${sessionId}`;
+}
+
+const requestRoutingReferenceBase = {
+  connectorId: z.string().regex(CONNECTOR_IDENTIFIER_PATTERN),
+  destinationId: z.int().nonnegative().max(2_147_483_647),
+  expiresAt: z.int().nonnegative(),
+  is4k: z.boolean(),
+  issuedAt: z.int().nonnegative(),
+  kind: z.enum(["movie", "series"]),
+} as const;
+
+const requestRoutingReferencePayloadSchema = z.discriminatedUnion("type", [
+  z.strictObject({ ...requestRoutingReferenceBase, type: z.literal("destination") }),
+  z.strictObject({
+    ...requestRoutingReferenceBase,
+    profileId: z.int().positive().max(2_147_483_647),
+    type: z.literal("quality_profile"),
+  }),
+  z.strictObject({
+    ...requestRoutingReferenceBase,
+    path: z.string().trim().min(1).max(1_024),
+    type: z.literal("root_folder"),
+  }),
+  z.strictObject({
+    ...requestRoutingReferenceBase,
+    profileId: z.int().positive().max(2_147_483_647),
+    type: z.literal("language_profile"),
+  }),
+]);
+type RequestRoutingReferencePayload = z.infer<typeof requestRoutingReferencePayloadSchema>;
+type RequestRoutingReferenceSpecific =
+  | { type: "destination" }
+  | { profileId: number; type: "quality_profile" }
+  | { path: string; type: "root_folder" }
+  | { profileId: number; type: "language_profile" };
 
 function connectorSecrets(
   row: SeerrConnectorRow,
@@ -172,7 +228,22 @@ function canonicalInput(input: MediaRequestInput): MediaRequestInput {
   return { ...input, seasons: [...input.seasons].sort((left, right) => left - right) };
 }
 
-function hasRequestCapability(row: SeerrConnectorRow) {
+function withoutRouting(input: MediaRequestInput): MediaRequestInput {
+  if (input.kind === "movie") {
+    return { is4k: input.is4k, kind: input.kind, tmdbId: input.tmdbId };
+  }
+  return {
+    is4k: input.is4k,
+    kind: input.kind,
+    seasons: input.seasons,
+    tmdbId: input.tmdbId,
+  };
+}
+
+function hasRequestCapability(
+  row: SeerrConnectorRow,
+  capability: "request.configure" | "request.create",
+) {
   try {
     const decoded = JSON.parse(row.capabilitySnapshotJson) as unknown;
     if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return false;
@@ -185,15 +256,42 @@ function hasRequestCapability(row: SeerrConnectorRow) {
       health.data.service === "seerr" &&
       health.data.status === "healthy" &&
       row.healthState === "healthy" &&
-      health.data.capabilities.includes("request.create")
+      health.data.capabilities.includes(capability)
     );
   } catch {
     return false;
   }
 }
 
+function rootFolderLabel(path: string, index: number) {
+  const segment = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean)
+    .at(-1)
+    ?.replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .trim();
+  return segment && segment !== "." && segment !== ".."
+    ? segment.slice(0, 120)
+    : `Storage ${index + 1}`;
+}
+
+function rootFolderLabels(paths: string[]) {
+  const baseLabels = paths.map(rootFolderLabel);
+  const totals = new Map<string, number>();
+  for (const label of baseLabels) totals.set(label, (totals.get(label) ?? 0) + 1);
+  const occurrences = new Map<string, number>();
+  return baseLabels.map((label) => {
+    if ((totals.get(label) ?? 0) === 1) return label;
+    const occurrence = (occurrences.get(label) ?? 0) + 1;
+    occurrences.set(label, occurrence);
+    return `${label.slice(0, 148)} · ${occurrence}`;
+  });
+}
+
 function knownFailure(error: unknown): MediaRequestFailureCode {
   if (error instanceof MediaRequestServiceError) {
+    if (error.reason === "routing_invalid") return "routing_invalid";
     if (
       error.reason === "configuration_unavailable" ||
       error.reason === "integrity_failure" ||
@@ -282,8 +380,20 @@ export class MediaRequestService {
 
     let adapter: MediaRequestAdapter;
     let seerrUserId: number;
+    let routing: SeerrRequestRouting | undefined;
     try {
-      adapter = this.#adapter();
+      const connection = this.#connection("request.create");
+      adapter = connection.adapter;
+      routing = input.routing
+        ? this.#resolveRouting(
+            input.routing,
+            principal.userId,
+            principal.sessionId,
+            connection.connectorId,
+            input.kind,
+            input.is4k,
+          )
+        : undefined;
       seerrUserId = await adapter.resolveUser(identity, signal);
     } catch (error) {
       const failureCode = knownFailure(error);
@@ -294,7 +404,7 @@ export class MediaRequestService {
     let response: MediaRequestResponse;
     try {
       response = mediaRequestResponseSchema.parse(
-        await adapter.createMediaRequest(input, seerrUserId, signal),
+        await adapter.createMediaRequest(withoutRouting(input), seerrUserId, signal, routing),
       );
     } catch (error) {
       const failureCode = knownFailure(error);
@@ -305,7 +415,36 @@ export class MediaRequestService {
     return { replayed: false, request: response };
   }
 
-  #adapter() {
+  public async routingOptions(
+    rawQuery: MediaRequestRoutingOptionsQuery,
+    context: MediaRequestContext,
+    signal?: AbortSignal,
+  ): Promise<MediaRequestRoutingOptionsResponse> {
+    const principal = requirePermission(context.principal, "request.create");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new MediaRequestServiceError("identity_link_required");
+    }
+    const query = mediaRequestRoutingOptionsQuerySchema.parse(rawQuery);
+    const identity = this.#identity(principal);
+    try {
+      const connection = this.#connection("request.configure");
+      const [, catalog] = await Promise.all([
+        connection.adapter.resolveUser(identity, signal),
+        connection.adapter.listRequestRouting(query.kind, query.is4k, signal),
+      ]);
+      return this.#routingOptionsResponse(
+        catalog,
+        principal.userId,
+        principal.sessionId,
+        connection.connectorId,
+      );
+    } catch (error) {
+      if (error instanceof MediaRequestServiceError) throw error;
+      throw new MediaRequestServiceError(knownFailure(error), { cause: error });
+    }
+  }
+
+  #connection(capability: "request.configure" | "request.create") {
     const row = this.#connector();
     const secrets = connectorSecrets(row, this.#cipher);
     const tlsPolicy =
@@ -318,26 +457,156 @@ export class MediaRequestService {
       !CONNECTOR_IDENTIFIER_PATTERN.test(row.id) ||
       !row.displayName.trim() ||
       row.displayName.length > 160 ||
-      !hasRequestCapability(row)
+      !hasRequestCapability(row, capability)
     ) {
       throw new MediaRequestServiceError("integrity_failure");
     }
     try {
-      return this.#createAdapter({
-        apiKey: secrets.apiKey,
-        baseUrl: row.baseUrl,
+      return {
+        adapter: this.#createAdapter({
+          apiKey: secrets.apiKey,
+          baseUrl: row.baseUrl,
+          connectorId: row.id,
+          displayName: row.displayName,
+          insecureHttpApproved: row.insecureHttpApproved === 1,
+          tlsPolicy,
+          ...(secrets.tlsCaCertificatePem === undefined
+            ? {}
+            : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
+          clock: { now: this.#clock, monotonicNow: () => performance.now() },
+        }),
         connectorId: row.id,
-        displayName: row.displayName,
-        insecureHttpApproved: row.insecureHttpApproved === 1,
-        tlsPolicy,
-        ...(secrets.tlsCaCertificatePem === undefined
-          ? {}
-          : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
-        clock: { now: this.#clock, monotonicNow: () => performance.now() },
-      });
+      };
     } catch (error) {
       throw new MediaRequestServiceError("integrity_failure", { cause: error });
     }
+  }
+
+  #routingOptionsResponse(
+    catalog: SeerrRequestRoutingCatalog,
+    userId: string,
+    sessionId: string,
+    connectorId: string,
+  ) {
+    const generatedAt = this.#now();
+    const expiresAt = generatedAt + REQUEST_ROUTING_TTL_MS;
+    const reference = (payload: RequestRoutingReferenceSpecific, destinationId: number) =>
+      this.#routingReference(
+        {
+          ...payload,
+          connectorId,
+          destinationId,
+          expiresAt,
+          is4k: catalog.is4k,
+          issuedAt: generatedAt,
+          kind: catalog.kind,
+        } as RequestRoutingReferencePayload,
+        userId,
+        sessionId,
+      );
+    const response = {
+      destinations: catalog.destinations.map((destination) => {
+        const labels = rootFolderLabels(destination.rootFolders.map((folder) => folder.path));
+        return {
+          id: reference({ type: "destination" }, destination.id),
+          isDefault: destination.isDefault,
+          label: destination.label,
+          languageProfiles: destination.languageProfiles.map((profile) => ({
+            id: reference({ profileId: profile.id, type: "language_profile" }, destination.id),
+            isDefault: destination.activeLanguageProfileId === profile.id,
+            label: profile.label,
+          })),
+          qualityProfiles: destination.profiles.map((profile) => ({
+            id: reference({ profileId: profile.id, type: "quality_profile" }, destination.id),
+            isDefault: destination.activeProfileId === profile.id,
+            label: profile.label,
+          })),
+          rootFolders: destination.rootFolders.map((folder, index) => ({
+            availableBytes: folder.availableBytes,
+            capacityBytes: folder.capacityBytes,
+            id: reference({ path: folder.path, type: "root_folder" }, destination.id),
+            isDefault: folder.path === destination.activeDirectory,
+            label: labels[index]!,
+          })),
+          service: catalog.kind === "movie" ? ("radarr" as const) : ("sonarr" as const),
+        };
+      }),
+      expiresAt: new Date(expiresAt).toISOString(),
+      failures: catalog.failures,
+      generatedAt: new Date(generatedAt).toISOString(),
+      is4k: catalog.is4k,
+      kind: catalog.kind,
+    };
+    return mediaRequestRoutingOptionsResponseSchema.parse(response);
+  }
+
+  #routingReference(payload: RequestRoutingReferencePayload, userId: string, sessionId: string) {
+    const parsed = requestRoutingReferencePayloadSchema.parse(payload);
+    return `${REQUEST_ROUTING_REFERENCE_PREFIX}${this.#cipher.encrypt(
+      JSON.stringify(parsed),
+      routingContext(userId, sessionId),
+    )}`;
+  }
+
+  #resolveRouting(
+    selection: MediaRequestRoutingSelection,
+    userId: string,
+    sessionId: string,
+    connectorId: string,
+    kind: "movie" | "series",
+    is4k: boolean,
+  ): SeerrRequestRouting {
+    try {
+      const destination = this.#decodeRoutingReference(selection.destination, userId, sessionId);
+      const qualityProfile = this.#decodeRoutingReference(
+        selection.qualityProfile,
+        userId,
+        sessionId,
+      );
+      const rootFolder = this.#decodeRoutingReference(selection.rootFolder, userId, sessionId);
+      const languageProfile = selection.languageProfile
+        ? this.#decodeRoutingReference(selection.languageProfile, userId, sessionId)
+        : null;
+      const references = [destination, qualityProfile, rootFolder, languageProfile].filter(
+        (reference): reference is RequestRoutingReferencePayload => reference !== null,
+      );
+      const now = this.#now();
+      if (
+        destination.type !== "destination" ||
+        qualityProfile.type !== "quality_profile" ||
+        rootFolder.type !== "root_folder" ||
+        (languageProfile !== null && languageProfile.type !== "language_profile") ||
+        references.some(
+          (reference) =>
+            reference.connectorId !== connectorId ||
+            reference.destinationId !== destination.destinationId ||
+            reference.kind !== kind ||
+            reference.is4k !== is4k ||
+            reference.issuedAt > now ||
+            reference.expiresAt <= now ||
+            reference.expiresAt !== destination.expiresAt ||
+            reference.issuedAt !== destination.issuedAt,
+        )
+      ) {
+        throw new Error("invalid");
+      }
+      return {
+        ...(languageProfile === null ? {} : { languageProfileId: languageProfile.profileId }),
+        profileId: qualityProfile.profileId,
+        rootFolder: rootFolder.path,
+        serverId: destination.destinationId,
+      };
+    } catch (error) {
+      throw new MediaRequestServiceError("routing_invalid", { cause: error });
+    }
+  }
+
+  #decodeRoutingReference(reference: string, userId: string, sessionId: string) {
+    if (!reference.startsWith(REQUEST_ROUTING_REFERENCE_PREFIX)) throw new Error("invalid");
+    const envelope = reference.slice(REQUEST_ROUTING_REFERENCE_PREFIX.length);
+    return requestRoutingReferencePayloadSchema.parse(
+      JSON.parse(this.#cipher.decrypt(envelope, routingContext(userId, sessionId))),
+    );
   }
 
   #connector() {

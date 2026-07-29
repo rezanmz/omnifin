@@ -1,6 +1,9 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import type { DiscoveryMovieResult, DiscoverySeriesResult } from "@omnifin/contracts/discovery";
-import type { MediaRequestResponse } from "@omnifin/contracts/requests";
+import type {
+  MediaRequestResponse,
+  MediaRequestRoutingOptionsResponse,
+} from "@omnifin/contracts/requests";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -72,6 +75,50 @@ const series: DiscoverySeriesResult = {
   year: 2008,
 };
 
+function routingReference(name: string) {
+  return `routing-v1.v2.${name}.${"a".repeat(32)}.${"b".repeat(32)}`;
+}
+
+const routingOptions: MediaRequestRoutingOptionsResponse = {
+  destinations: [
+    {
+      id: routingReference("sonarr-main"),
+      isDefault: true,
+      label: "Series archive",
+      languageProfiles: [
+        { id: routingReference("language-original"), isDefault: true, label: "Original" },
+        { id: routingReference("language-english"), isDefault: false, label: "English" },
+      ],
+      qualityProfiles: [
+        { id: routingReference("quality-balanced"), isDefault: true, label: "Balanced" },
+        { id: routingReference("quality-remux"), isDefault: false, label: "Remux" },
+      ],
+      rootFolders: [
+        {
+          availableBytes: 420_000_000_000,
+          capacityBytes: 1_000_000_000_000,
+          id: routingReference("root-series"),
+          isDefault: true,
+          label: "Series",
+        },
+        {
+          availableBytes: 1_400_000_000_000,
+          capacityBytes: 2_000_000_000_000,
+          id: routingReference("root-archive"),
+          isDefault: false,
+          label: "Archive",
+        },
+      ],
+      service: "sonarr",
+    },
+  ],
+  expiresAt: "2026-07-27T12:15:00.000Z",
+  failures: [],
+  generatedAt: "2026-07-27T12:00:00.000Z",
+  is4k: false,
+  kind: "series",
+};
+
 function response(input: {
   is4k: boolean;
   kind: "movie" | "series";
@@ -98,8 +145,9 @@ function client(
     }),
   }),
   loadEligibility: MediaRequestClient["loadEligibility"] = async () => eligibility,
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async () => routingOptions,
 ): MediaRequestClient {
-  return { create, loadEligibility };
+  return { create, loadEligibility, loadRoutingOptions };
 }
 
 describe("request composer", () => {
@@ -171,6 +219,62 @@ describe("request composer", () => {
     expect(await screen.findByRole("heading", { name: "The signal is in motion" })).toBeVisible();
     expect(screen.getByText("#42")).toBeVisible();
     expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it("submits only opaque, user-bound choices for explicit Seerr routing", async () => {
+    const create = vi.fn<MediaRequestClient["create"]>(async (input) => ({
+      replayed: false,
+      request: response({
+        is4k: input.is4k,
+        kind: input.kind,
+        seasons: input.kind === "series" && input.seasons !== "all" ? input.seasons : null,
+        tmdbId: input.tmdbId,
+      }),
+    }));
+    const loadRoutingOptions = vi.fn<MediaRequestClient["loadRoutingOptions"]>(
+      async () => routingOptions,
+    );
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(create, undefined, loadRoutingOptions)}
+        media={series}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    await screen.findByText("Mina Jellyfin");
+    await user.click(screen.getByText("Advanced routing"));
+    expect(await screen.findByRole("combobox", { name: /Destination/i })).toHaveValue(
+      routingReference("sonarr-main"),
+    );
+    await user.selectOptions(screen.getByRole("combobox", { name: /Quality profile/i }), [
+      routingReference("quality-remux"),
+    ]);
+    await user.selectOptions(screen.getByRole("combobox", { name: /Root folder/i }), [
+      routingReference("root-archive"),
+    ]);
+    await user.selectOptions(screen.getByRole("combobox", { name: /Language profile/i }), [
+      routingReference("language-english"),
+    ]);
+    await user.click(screen.getByRole("button", { name: /Send request/i }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(loadRoutingOptions).toHaveBeenCalledWith("series", false, expect.any(AbortSignal));
+    expect(create.mock.calls[0]?.[0]).toEqual({
+      is4k: false,
+      kind: "series",
+      routing: {
+        destination: routingReference("sonarr-main"),
+        languageProfile: routingReference("language-english"),
+        qualityProfile: routingReference("quality-remux"),
+        rootFolder: routingReference("root-archive"),
+      },
+      seasons: "all",
+      tmdbId: 1396,
+    });
+    expect(JSON.stringify(create.mock.calls[0]?.[0])).not.toContain("/srv/");
   });
 
   it("preserves the idempotency key when a network outcome is ambiguous", async () => {
