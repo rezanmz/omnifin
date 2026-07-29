@@ -22,8 +22,8 @@ const connectorPatterns = {
   sonarr: "^(?:'sonarr' adapter|Servarr acquisition)\\b",
   prowlarr: "^(?:'prowlarr' adapter|Prowlarr indexer intelligence)\\b",
   bazarr: "^'bazarr' adapter\\b",
-  qbittorrent: "^qBittorrent adapter\\b",
-  sabnzbd: "^'sabnzbd' adapter\\b",
+  qbittorrent: "^(?:qBittorrent adapter|qBittorrent download queue)\\b",
+  sabnzbd: "^(?:'sabnzbd' adapter|SABnzbd download queue)\\b",
 };
 const connectorChecks = {
   jellyfin: ["public_health", "version_discovery"],
@@ -70,8 +70,25 @@ const connectorChecks = {
     "version_discovery",
   ],
   bazarr: ["authentication_header", "health_normalization", "version_discovery"],
-  qbittorrent: ["authentication", "credential_rejection", "secret_isolation", "version_discovery"],
-  sabnzbd: ["health_normalization", "version_discovery"],
+  qbittorrent: [
+    "authentication",
+    "credential_rejection",
+    "exact_target_validation",
+    "queue_read",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_compatible_mutation",
+    "version_discovery",
+  ],
+  sabnzbd: [
+    "authentication",
+    "exact_target_validation",
+    "health_normalization",
+    "queue_read",
+    "safe_mutation_shape",
+    "secret_isolation",
+    "version_discovery",
+  ],
 };
 
 export function fixtureChecksFor(service) {

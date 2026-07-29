@@ -1,6 +1,9 @@
 import { QBittorrentAdapter } from "@omnifin/connectors/adapters/qbittorrent";
 import { SabnzbdAdapter } from "@omnifin/connectors/adapters/sabnzbd";
-import type { DownloadQueueReader } from "@omnifin/connectors/downloads";
+import type {
+  ConnectorDownloadQueueItem,
+  DownloadQueueController,
+} from "@omnifin/connectors/downloads";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
@@ -13,14 +16,18 @@ import {
 import {
   DOWNLOAD_QUEUE_MAX_CLIENTS,
   DOWNLOAD_QUEUE_MAX_ITEMS,
+  downloadQueueActionInputSchema,
+  downloadQueueActionResponseSchema,
   downloadQueueItemSchema,
   downloadQueueResponseSchema,
   type DownloadClientService,
+  type DownloadQueueActionInput,
+  type DownloadQueueActionResponse,
   type DownloadQueueClient,
   type DownloadQueueItem,
   type DownloadQueueResponse,
 } from "@omnifin/contracts/downloads";
-import { X509Certificate } from "node:crypto";
+import { randomUUID, X509Certificate } from "node:crypto";
 import { ZodError } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
@@ -49,7 +56,9 @@ interface StoredConnectorSecrets {
 }
 
 export interface DownloadQueueContext {
+  ipAddress?: string;
   principal: SessionPrincipal;
+  requestId?: string;
 }
 
 export interface DownloadQueueAdapterFactoryInput extends ConnectorTargetConfig {
@@ -61,16 +70,24 @@ export interface DownloadQueueAdapterFactoryInput extends ConnectorTargetConfig 
 
 export interface DownloadQueueDependencies {
   clock?: () => Date;
-  createAdapter?: (input: DownloadQueueAdapterFactoryInput) => DownloadQueueReader;
+  createAdapter?: (input: DownloadQueueAdapterFactoryInput) => DownloadQueueController;
+  createId?: () => string;
+  wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
-export type DownloadQueueErrorReason = "storage_failure";
+export type DownloadQueueErrorReason =
+  | "connector_unavailable"
+  | "identity_required"
+  | "response_invalid"
+  | "stale_state"
+  | "storage_failure"
+  | "target_not_found";
 
 export class DownloadQueueError extends Error {
   public readonly reason: DownloadQueueErrorReason;
 
   public constructor(reason: DownloadQueueErrorReason, options?: ErrorOptions) {
-    super("The download queue could not be retrieved.", options);
+    super("The download queue operation could not be completed.", options);
     this.name = "DownloadQueueError";
     this.reason = reason;
   }
@@ -91,7 +108,11 @@ function safeDisplayName(value: string, service: DownloadClientService) {
   return (cleaned || (service === "qbittorrent" ? "qBittorrent" : "SABnzbd")).slice(0, 160);
 }
 
-function hasQueueCapability(row: DownloadConnectorRow, service: DownloadClientService) {
+function hasQueueCapability(
+  row: DownloadConnectorRow,
+  service: DownloadClientService,
+  capability: "download.queue.mutate" | "download.queue.read" = "download.queue.read",
+) {
   try {
     const decoded = JSON.parse(row.capabilitySnapshotJson) as unknown;
     if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return false;
@@ -104,7 +125,7 @@ function hasQueueCapability(row: DownloadConnectorRow, service: DownloadClientSe
       health.data.service === service &&
       health.data.status === "healthy" &&
       row.healthState === "healthy" &&
-      health.data.capabilities.includes("download.queue.read")
+      health.data.capabilities.includes(capability)
     );
   } catch {
     return false;
@@ -160,7 +181,7 @@ function connectorSecrets(
   }
 }
 
-function defaultAdapter(input: DownloadQueueAdapterFactoryInput): DownloadQueueReader {
+function defaultAdapter(input: DownloadQueueAdapterFactoryInput): DownloadQueueController {
   const target = {
     baseUrl: input.baseUrl,
     connectorId: input.connectorId,
@@ -183,6 +204,40 @@ function defaultAdapter(input: DownloadQueueAdapterFactoryInput): DownloadQueueR
     return new SabnzbdAdapter({ ...target, apiKey: input.credentials.apiKey });
   }
   throw new DownloadConnectorIntegrityError("invalid");
+}
+
+function defaultWait(milliseconds: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+    const timeout = setTimeout(finish, milliseconds);
+    function finish() {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timeout);
+      reject(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function actionAchieved(
+  action: DownloadQueueActionInput["action"],
+  state: DownloadQueueItem["state"],
+) {
+  return action === "pause"
+    ? state === "paused"
+    : ["checking", "downloading", "moving", "queued", "stalled"].includes(state);
+}
+
+function actionFailureCode(error: unknown) {
+  if (error instanceof DownloadQueueError) return error.reason;
+  if (error instanceof SafeConnectorError) return error.code;
+  return "upstream_failure";
 }
 
 function safeFailure(
@@ -248,12 +303,19 @@ interface ConnectorSelection {
   truncated: boolean;
 }
 
+interface ExactQueueItem {
+  externalId: string;
+  publicItem: DownloadQueueItem;
+}
+
 export class DownloadQueueService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<DownloadQueueDependencies["createAdapter"]>;
+  readonly #createId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #wait: NonNullable<DownloadQueueDependencies["wait"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -265,6 +327,8 @@ export class DownloadQueueService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
+    this.#createId = dependencies.createId ?? randomUUID;
+    this.#wait = dependencies.wait ?? defaultWait;
   }
 
   public async read(
@@ -308,54 +372,100 @@ export class DownloadQueueService {
     });
   }
 
+  public async update(
+    rawInput: DownloadQueueActionInput,
+    context: DownloadQueueContext,
+    signal?: AbortSignal,
+  ): Promise<DownloadQueueActionResponse> {
+    const principal = requirePermission(context.principal, "downloads.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new DownloadQueueError("identity_required");
+    }
+    const input = downloadQueueActionInputSchema.parse(rawInput);
+    let row: DownloadConnectorRow;
+    try {
+      row = this.#actionConnector(input.connectorId);
+    } catch (error) {
+      this.#audit("failed", "failure", input, context, null, actionFailureCode(error));
+      throw error;
+    }
+    let adapter: DownloadQueueController;
+    try {
+      adapter = this.#adapter(row);
+    } catch (error) {
+      const unavailable = new DownloadQueueError("connector_unavailable", { cause: error });
+      this.#audit("failed", "failure", input, context, null, unavailable.reason);
+      throw unavailable;
+    }
+    let current: ExactQueueItem | null;
+    try {
+      current = await this.#exactItem(adapter, row, input.itemId, signal);
+    } catch (error) {
+      this.#audit("failed", "failure", input, context, null, actionFailureCode(error));
+      throw error;
+    }
+    if (!current) {
+      this.#audit("failed", "failure", input, context, null, "target_not_found");
+      throw new DownloadQueueError("target_not_found");
+    }
+    if (actionAchieved(input.action, current.publicItem.state)) {
+      this.#audit("replayed", "success", input, context, current.publicItem.state, null);
+      return downloadQueueActionResponseSchema.parse({
+        action: input.action,
+        item: current.publicItem,
+        previousState: current.publicItem.state,
+        replayed: true,
+        verifiedAt: this.#clock().toISOString(),
+      });
+    }
+    if (current.publicItem.state !== input.expectedState) {
+      this.#audit("failed", "failure", input, context, current.publicItem.state, "stale_state");
+      throw new DownloadQueueError("stale_state");
+    }
+    this.#audit("requested", "success", input, context, current.publicItem.state, null);
+    try {
+      await adapter.updateDownloadQueueItem(
+        { action: input.action, externalId: current.externalId },
+        signal,
+      );
+      let verified: ExactQueueItem | null = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        verified = await this.#exactItem(adapter, row, input.itemId, signal);
+        if (verified && actionAchieved(input.action, verified.publicItem.state)) break;
+        if (attempt < 2) await this.#wait(150 * (attempt + 1), signal);
+      }
+      if (!verified || !actionAchieved(input.action, verified.publicItem.state)) {
+        throw new DownloadQueueError("response_invalid");
+      }
+      this.#audit("updated", "success", input, context, current.publicItem.state, null);
+      return downloadQueueActionResponseSchema.parse({
+        action: input.action,
+        item: verified.publicItem,
+        previousState: current.publicItem.state,
+        replayed: false,
+        verifiedAt: this.#clock().toISOString(),
+      });
+    } catch (error) {
+      this.#audit(
+        "failed",
+        "failure",
+        input,
+        context,
+        current.publicItem.state,
+        actionFailureCode(error),
+      );
+      throw error;
+    }
+  }
+
   async #readClient(row: DownloadConnectorRow, signal?: AbortSignal): Promise<ClientResult> {
     const service = row.type as DownloadClientService;
     const displayName = safeDisplayName(row.displayName, service);
     const occurredAt = this.#clock();
     try {
-      const secrets = connectorSecrets(row, service, this.#cipher);
-      const tlsPolicy =
-        row.tlsPolicy === "strict" || row.tlsPolicy === "allow_self_signed"
-          ? row.tlsPolicy
-          : undefined;
-      if (
-        !tlsPolicy ||
-        ![0, 1].includes(row.insecureHttpApproved) ||
-        !CONNECTOR_IDENTIFIER_PATTERN.test(row.id) ||
-        !row.displayName.trim() ||
-        row.displayName.length > 160
-      ) {
-        throw new DownloadConnectorIntegrityError("invalid");
-      }
-      const adapter = this.#createAdapter({
-        baseUrl: row.baseUrl,
-        clock: { monotonicNow: () => performance.now(), now: this.#clock },
-        connectorId: row.id,
-        credentials: secrets.credentials,
-        displayName,
-        insecureHttpApproved: row.insecureHttpApproved === 1,
-        service,
-        tlsPolicy,
-        ...(secrets.tlsCaCertificatePem === undefined
-          ? {}
-          : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
-      });
+      const adapter = this.#adapter(row);
       const queue = await adapter.readDownloadQueue(signal);
-      const items = queue.items.map((item) => {
-        const { externalId, ...publicItem } = item;
-        return downloadQueueItemSchema.parse({
-          ...publicItem,
-          client: service,
-          clientName: displayName,
-          connectorId: row.id,
-          id: `download_${privacyHash(
-            "download_queue_item",
-            `${row.id}\u0000${externalId}`,
-            this.#config.encryptionKey,
-          )}`,
-          protocol: service === "qbittorrent" ? "torrent" : "usenet",
-        });
-      });
+      const items = queue.items.map((item) => this.#publicItem(row, item.externalId, item));
       return {
         client: {
           connectorId: row.id,
@@ -384,6 +494,166 @@ export class DownloadQueueService {
         items: [],
         sourceTruncated: false,
       };
+    }
+  }
+
+  #adapter(row: DownloadConnectorRow) {
+    const service = row.type as DownloadClientService;
+    const displayName = safeDisplayName(row.displayName, service);
+    const secrets = connectorSecrets(row, service, this.#cipher);
+    const tlsPolicy =
+      row.tlsPolicy === "strict" || row.tlsPolicy === "allow_self_signed"
+        ? row.tlsPolicy
+        : undefined;
+    if (
+      !tlsPolicy ||
+      ![0, 1].includes(row.insecureHttpApproved) ||
+      !CONNECTOR_IDENTIFIER_PATTERN.test(row.id) ||
+      !row.displayName.trim() ||
+      row.displayName.length > 160
+    ) {
+      throw new DownloadConnectorIntegrityError("invalid");
+    }
+    return this.#createAdapter({
+      baseUrl: row.baseUrl,
+      clock: { monotonicNow: () => performance.now(), now: this.#clock },
+      connectorId: row.id,
+      credentials: secrets.credentials,
+      displayName,
+      insecureHttpApproved: row.insecureHttpApproved === 1,
+      service,
+      tlsPolicy,
+      ...(secrets.tlsCaCertificatePem === undefined
+        ? {}
+        : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
+    });
+  }
+
+  #publicItem(row: DownloadConnectorRow, externalId: string, item: ConnectorDownloadQueueItem) {
+    const { externalId: ignoredExternalId, ...publicItem } = item;
+    void ignoredExternalId;
+    const service = row.type as DownloadClientService;
+    return downloadQueueItemSchema.parse({
+      ...publicItem,
+      client: service,
+      clientName: safeDisplayName(row.displayName, service),
+      connectorId: row.id,
+      id: this.#publicId(row.id, externalId),
+      protocol: service === "qbittorrent" ? "torrent" : "usenet",
+    });
+  }
+
+  #publicId(connectorId: string, externalId: string) {
+    return `download_${privacyHash(
+      "download_queue_item",
+      `${connectorId}\u0000${externalId}`,
+      this.#config.encryptionKey,
+    )}`;
+  }
+
+  async #exactItem(
+    adapter: DownloadQueueController,
+    row: DownloadConnectorRow,
+    itemId: string,
+    signal?: AbortSignal,
+  ): Promise<ExactQueueItem | null> {
+    try {
+      const queue = await adapter.readDownloadQueue(signal);
+      const matches = queue.items.filter(
+        (item) => this.#publicId(row.id, item.externalId) === itemId,
+      );
+      if (matches.length === 0) return null;
+      if (matches.length !== 1 || !matches[0]) {
+        throw new DownloadQueueError("response_invalid");
+      }
+      return {
+        externalId: matches[0].externalId,
+        publicItem: this.#publicItem(row, matches[0].externalId, matches[0]),
+      };
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      if (error instanceof ZodError) {
+        throw new DownloadQueueError("response_invalid", { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  #audit(
+    action: "failed" | "replayed" | "requested" | "updated",
+    outcome: "failure" | "success",
+    input: DownloadQueueActionInput,
+    context: DownloadQueueContext,
+    previousState: DownloadQueueItem["state"] | null,
+    failureCode: string | null,
+  ) {
+    try {
+      const createdAt = this.#clock().getTime();
+      if (!Number.isSafeInteger(createdAt) || createdAt < 0) throw new Error("invalid clock");
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (
+             id, actor_user_id, actor_session_id, actor_auth_method, event_type, outcome,
+             target_type, target_id, request_id, metadata_json, ip_hash, created_at
+           ) values (?, ?, ?, ?, ?, ?, 'download_queue_item', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.#createId(),
+          context.principal.userId,
+          context.principal.sessionId,
+          context.principal.authenticationMethod.kind,
+          `download.queue.action.${action}`,
+          outcome,
+          input.itemId,
+          context.requestId ?? null,
+          JSON.stringify({
+            action: input.action,
+            connectorId: input.connectorId,
+            ...(failureCode ? { failureCode } : {}),
+            previousState,
+            replayed: action === "replayed",
+          }),
+          context.ipAddress
+            ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+            : null,
+          createdAt,
+        );
+    } catch (error) {
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #actionConnector(connectorId: string) {
+    try {
+      const row = this.#database.sqlite
+        .prepare(
+          `select
+             id,
+             type,
+             display_name as displayName,
+             base_url as baseUrl,
+             encrypted_credentials as encryptedCredentials,
+             capability_snapshot_json as capabilitySnapshotJson,
+             health_state as healthState,
+             tls_policy as tlsPolicy,
+             insecure_http_approved as insecureHttpApproved
+           from connector_configs
+           where id = ? and type in ('qbittorrent', 'sabnzbd') and enabled = 1
+           limit 1`,
+        )
+        .get(connectorId) as DownloadConnectorRow | undefined;
+      if (
+        !row ||
+        !isDownloadService(row.type) ||
+        !hasQueueCapability(row, row.type) ||
+        !hasQueueCapability(row, row.type, "download.queue.mutate")
+      ) {
+        throw new DownloadQueueError("connector_unavailable");
+      }
+      return row;
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
     }
   }
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  DownloadQueueAction,
   DownloadQueueItem,
   DownloadQueueItemState,
   DownloadQueueResponse,
@@ -22,6 +23,8 @@ import {
   Monitor,
   Moon,
   Network,
+  Pause,
+  Play,
   Radio,
   RefreshCw,
   Search,
@@ -38,6 +41,7 @@ import { useMemo, useState } from "react";
 
 import {
   downloadQueueClient,
+  DownloadQueueClientError,
   outcomeFromError,
   type DownloadQueueClient,
   type DownloadQueueLoadOutcome,
@@ -77,6 +81,22 @@ const STATE_LABELS: Record<DownloadQueueItemState, string> = {
 
 const ACTIVE_STATES = new Set<DownloadQueueItemState>(["checking", "downloading", "moving"]);
 const ATTENTION_STATES = new Set<DownloadQueueItemState>(["failed", "stalled"]);
+const PAUSABLE_STATES = new Set<DownloadQueueItemState>([
+  "checking",
+  "downloading",
+  "moving",
+  "queued",
+  "stalled",
+]);
+
+type QueueActionStatus = "confirming" | "error" | "submitting" | "success";
+
+interface QueueActionState {
+  action: DownloadQueueAction;
+  itemId: string;
+  message: string;
+  status: QueueActionStatus;
+}
 
 export interface DownloadQueueProperties {
   client?: DownloadQueueClient;
@@ -298,11 +318,35 @@ function Metric({
   );
 }
 
-function QueueItem({ item }: { item: DownloadQueueItem }) {
+function QueueItem({
+  actionAvailable,
+  actionLocked,
+  actionState,
+  item,
+  onBeginAction,
+  onCancelAction,
+  onConfirmAction,
+}: {
+  actionAvailable: boolean;
+  actionLocked: boolean;
+  actionState: QueueActionState | null;
+  item: DownloadQueueItem;
+  onBeginAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+  onCancelAction: (item: DownloadQueueItem) => void;
+  onConfirmAction: (item: DownloadQueueItem, action: DownloadQueueAction) => void;
+}) {
   const percent = Math.round(item.progress * 100);
   const ProtocolIcon = item.protocol === "torrent" ? Network : Layers3;
+  const action =
+    item.state === "paused" ? "resume" : PAUSABLE_STATES.has(item.state) ? "pause" : null;
+  const ActionIcon = action === "resume" ? Play : Pause;
+  const activeAction = actionState?.itemId === item.id ? actionState : null;
   return (
-    <article className={styles.queueItem} data-state={item.state}>
+    <article
+      className={styles.queueItem}
+      data-action={activeAction?.status}
+      data-state={item.state}
+    >
       <div className={styles.queueItemLead}>
         <span className={styles.protocolIcon} aria-hidden="true">
           <ProtocolIcon size={19} />
@@ -314,9 +358,28 @@ function QueueItem({ item }: { item: DownloadQueueItem }) {
             {item.category ? ` · ${item.category}` : ""}
           </p>
         </div>
-        <span className={styles.status} data-state={item.state}>
-          <i aria-hidden="true" /> {STATE_LABELS[item.state]}
-        </span>
+        <div className={styles.queueItemActions}>
+          <span className={styles.status} data-state={item.state}>
+            <i aria-hidden="true" /> {STATE_LABELS[item.state]}
+          </span>
+          {action && actionAvailable && activeAction?.status !== "confirming" ? (
+            <button
+              aria-label={`${action === "pause" ? "Pause" : "Resume"} ${item.title}`}
+              className={styles.itemAction}
+              data-item-action={item.id}
+              disabled={actionLocked}
+              onClick={() => onBeginAction(item, action)}
+              type="button"
+            >
+              {activeAction?.status === "submitting" ? (
+                <LoaderCircle aria-hidden="true" className={styles.spinner} size={15} />
+              ) : (
+                <ActionIcon aria-hidden="true" size={15} />
+              )}
+              <span>{action === "pause" ? "Pause" : "Resume"}</span>
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className={styles.itemProgressLine}>
         <span
@@ -353,6 +416,48 @@ function QueueItem({ item }: { item: DownloadQueueItem }) {
           </dd>
         </div>
       </dl>
+      {activeAction?.status === "confirming" && action ? (
+        <div className={styles.actionConfirm} role="group" aria-label={`${action} confirmation`}>
+          <span>
+            <strong>{action === "pause" ? "Pause this transfer?" : "Resume this transfer?"}</strong>
+            <small>
+              Omnifin will verify the exact item state with {item.clientName} before and after the
+              change.
+            </small>
+          </span>
+          <div>
+            <button
+              autoFocus
+              className={styles.cancelAction}
+              onClick={() => onCancelAction(item)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className={styles.confirmAction}
+              onClick={() => onConfirmAction(item, action)}
+              type="button"
+            >
+              {action === "pause" ? "Confirm pause" : "Confirm resume"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {activeAction?.status === "error" || activeAction?.status === "success" ? (
+        <div
+          className={styles.actionFeedback}
+          data-status={activeAction.status}
+          role={activeAction.status === "error" ? "alert" : "status"}
+        >
+          {activeAction.status === "success" ? (
+            <Check aria-hidden="true" size={16} />
+          ) : (
+            <TriangleAlert aria-hidden="true" size={16} />
+          )}
+          <span>{activeAction.message}</span>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -437,20 +542,24 @@ function UnconfiguredQueue() {
 }
 
 function ReadyQueue({
+  client,
   isFetching,
   onRefresh,
   queue,
   refreshAvailable,
   stale,
 }: {
+  client: DownloadQueueClient;
   isFetching: boolean;
   onRefresh: () => void;
   queue: DownloadQueueResponse;
   refreshAvailable: boolean;
   stale: boolean;
 }) {
+  const queryClient = useQueryClient();
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [query, setQuery] = useState("");
+  const [actionState, setActionState] = useState<QueueActionState | null>(null);
   const visibleItems = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     return queue.items.filter((item) => {
@@ -468,6 +577,108 @@ function ReadyQueue({
     });
   }, [filter, query, queue.items]);
   const filtered = filter !== "all" || query.trim().length > 0;
+  const actionAvailable = Boolean(client.act && client.loadEligibility);
+  const actionLocked = actionState?.status === "submitting";
+
+  const cancelAction = (item: DownloadQueueItem) => {
+    setActionState(null);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-item-action="${item.id}"]`)?.focus();
+    });
+  };
+
+  const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
+    if (actionLocked) return;
+    setActionState({ action, itemId: item.id, message: "", status: "confirming" });
+  };
+
+  const confirmAction = async (item: DownloadQueueItem, action: DownloadQueueAction) => {
+    if (!client.act || !client.loadEligibility) return;
+    setActionState({ action, itemId: item.id, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before changing a transfer."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to change this transfer."
+              : "The session could not be verified. No transfer state was changed.";
+        setActionState({ action, itemId: item.id, message, status: "error" });
+        return;
+      }
+      const input =
+        action === "resume"
+          ? ({
+              action,
+              connectorId: item.connectorId,
+              expectedState: "paused",
+              itemId: item.id,
+            } as const)
+          : ({
+              action,
+              connectorId: item.connectorId,
+              expectedState: item.state as
+                "checking" | "downloading" | "moving" | "queued" | "stalled",
+              itemId: item.id,
+            } as const);
+      const result = await client.act(input, { csrfToken: eligibility.snapshot.csrfToken });
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        const items = current.items.map((candidate) =>
+          candidate.id === result.item.id ? result.item : candidate,
+        );
+        const clients = current.clients.map((queueClient) => {
+          const clientItems = items.filter(
+            (candidate) => candidate.connectorId === queueClient.connectorId,
+          );
+          return {
+            ...queueClient,
+            itemCount: clientItems.length,
+            rateBytesPerSecond: clientItems.reduce(
+              (total, candidate) => total + candidate.rateBytesPerSecond,
+              0,
+            ),
+          };
+        });
+        return {
+          ...current,
+          clients,
+          generatedAt: result.verifiedAt,
+          items,
+          summary: {
+            attention: items.filter(
+              (candidate) => candidate.state === "failed" || candidate.state === "stalled",
+            ).length,
+            downloading: items.filter((candidate) => ACTIVE_STATES.has(candidate.state)).length,
+            paused: items.filter((candidate) => candidate.state === "paused").length,
+            queued: items.filter((candidate) => candidate.state === "queued").length,
+            remainingBytes: items.reduce((total, candidate) => total + candidate.remainingBytes, 0),
+            total: items.length,
+            totalRateBytesPerSecond: items.reduce(
+              (total, candidate) => total + candidate.rateBytesPerSecond,
+              0,
+            ),
+          },
+        };
+      });
+      setActionState({
+        action,
+        itemId: item.id,
+        message: `${item.title} ${action === "pause" ? "paused" : "resumed"}${result.replayed ? "—the requested state was already verified." : "."}`,
+        status: "success",
+      });
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The download action could not be verified. No further change was attempted.";
+      setActionState({ action, itemId: item.id, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
+  };
 
   return (
     <PageFrame>
@@ -617,7 +828,16 @@ function ReadyQueue({
               ) : (
                 <div className={styles.queueList}>
                   {visibleItems.map((item) => (
-                    <QueueItem item={item} key={item.id} />
+                    <QueueItem
+                      actionAvailable={actionAvailable}
+                      actionLocked={actionLocked}
+                      actionState={actionState}
+                      item={item}
+                      key={item.id}
+                      onBeginAction={beginAction}
+                      onCancelAction={cancelAction}
+                      onConfirmAction={(target, action) => void confirmAction(target, action)}
+                    />
                   ))}
                 </div>
               )}
@@ -628,7 +848,7 @@ function ReadyQueue({
             <span>
               <Timer aria-hidden="true" size={14} /> Verified {formatTimestamp(queue.generatedAt)}
             </span>
-            <span>Read-only telemetry · no transfer controls</span>
+            <span>Exact-item controls · credentials remain private</span>
           </footer>
         </>
       )}
@@ -668,6 +888,7 @@ function DownloadQueueContent({
   if (!query.data) return <BoundaryState status={outcomeFromError(query.error)} />;
   return (
     <ReadyQueue
+      client={client}
       isFetching={query.isFetching}
       onRefresh={() => void query.refetch()}
       queue={query.data}

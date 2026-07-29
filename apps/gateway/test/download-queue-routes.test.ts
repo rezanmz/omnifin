@@ -1,6 +1,10 @@
 import type { DownloadQueueReader } from "@omnifin/connectors/downloads";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { downloadQueueResponseSchema } from "@omnifin/contracts/downloads";
+import {
+  downloadQueueActionResponseSchema,
+  downloadQueueResponseSchema,
+} from "@omnifin/contracts/downloads";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -52,7 +56,7 @@ function capabilitySnapshot(capable: boolean) {
       capabilities: [
         "connector.health",
         "connector.version",
-        ...(capable ? ["download.queue.read"] : []),
+        ...(capable ? ["download.queue.read", "download.queue.mutate"] : []),
       ],
       checkedAt: now.toISOString(),
       connectorId: "qbittorrent-main",
@@ -89,11 +93,12 @@ async function harness(options: { capable?: boolean } = {}) {
     ],
     truncated: false,
   }));
+  const updateDownloadQueueItem = vi.fn(async () => undefined);
   const app = await createApp({
     config,
     downloadQueueDependencies: {
       clock: () => now,
-      createAdapter: () => ({ readDownloadQueue }),
+      createAdapter: () => ({ readDownloadQueue, updateDownloadQueueItem }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -195,7 +200,7 @@ async function harness(options: { capable?: boolean } = {}) {
       userId: "viewer-user",
     },
   });
-  return { app, operator, readDownloadQueue, viewer };
+  return { app, operator, readDownloadQueue, updateDownloadQueueItem, viewer };
 }
 
 describe("download queue routes", () => {
@@ -270,6 +275,200 @@ describe("download queue routes", () => {
         state: "unconfigured",
       });
       expect(readDownloadQueue).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires same-origin CSRF and controls one opaque item for an operator", async () => {
+    const { app, operator, readDownloadQueue, updateDownloadQueueItem, viewer } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      const body = {
+        action: "pause",
+        connectorId: item.connectorId,
+        expectedState: "downloading",
+        itemId: item.id,
+      } as const;
+
+      const csrfDenied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/actions",
+      });
+      expect(csrfDenied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(csrfDenied.json()).error.code).toBe("csrf_denied");
+
+      const permissionDenied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": viewer.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/actions",
+      });
+      expect(permissionDenied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(permissionDenied.json()).error.code).toBe("permission_denied");
+
+      readDownloadQueue
+        .mockResolvedValueOnce({
+          generatedAt: now.toISOString(),
+          items: [
+            {
+              addedAt: "2026-07-28T02:50:00.000Z",
+              category: "movies",
+              etaSeconds: 90,
+              externalId: privateUpstreamId,
+              leechers: 3,
+              progress: 0.8,
+              rateBytesPerSecond: 8_000_000,
+              remainingBytes: 2_000_000_000,
+              seeders: 28,
+              sizeBytes: 10_000_000_000,
+              state: "downloading",
+              title: "The.Far.Meridian.2160p",
+            },
+          ],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          generatedAt: now.toISOString(),
+          items: [
+            {
+              addedAt: "2026-07-28T02:50:00.000Z",
+              category: "movies",
+              etaSeconds: null,
+              externalId: privateUpstreamId,
+              leechers: 3,
+              progress: 0.8,
+              rateBytesPerSecond: 0,
+              remainingBytes: 2_000_000_000,
+              seeders: 28,
+              sizeBytes: 10_000_000_000,
+              state: "paused",
+              title: "The.Far.Meridian.2160p",
+            },
+          ],
+          truncated: false,
+        });
+      const updated = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/actions",
+      });
+
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(downloadQueueActionResponseSchema.parse(updated.json())).toMatchObject({
+        action: "pause",
+        item: { id: item.id, state: "paused" },
+        replayed: false,
+      });
+      expect(updateDownloadQueueItem).toHaveBeenCalledWith(
+        { action: "pause", externalId: privateUpstreamId },
+        expect.any(AbortSignal),
+      );
+      expect(updated.headers["cache-control"]).toBe("no-store");
+      expect(updated.body).not.toContain(privateUpstreamId);
+      expect(updated.body).not.toContain(privatePassword);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps missing, stale, and rate-limited action targets to bounded errors", async () => {
+    const { app, operator, readDownloadQueue, updateDownloadQueueItem } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      const request = () =>
+        app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+          url: "/v1/downloads/queue/actions",
+        });
+
+      readDownloadQueue.mockResolvedValueOnce({
+        generatedAt: now.toISOString(),
+        items: [],
+        truncated: false,
+      });
+      const missing = await request();
+      expect(missing.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(missing.json()).error.code).toBe("download_queue_item_not_found");
+
+      readDownloadQueue.mockResolvedValueOnce({
+        generatedAt: now.toISOString(),
+        items: [
+          {
+            addedAt: null,
+            category: "movies",
+            etaSeconds: null,
+            externalId: privateUpstreamId,
+            leechers: 0,
+            progress: 0.8,
+            rateBytesPerSecond: 0,
+            remainingBytes: 2_000_000_000,
+            seeders: 0,
+            sizeBytes: 10_000_000_000,
+            state: "queued",
+            title: "The.Far.Meridian.2160p",
+          },
+        ],
+        truncated: false,
+      });
+      const stale = await request();
+      expect(stale.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(stale.json()).error.code).toBe("download_queue_state_changed");
+
+      readDownloadQueue.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "rate_limited",
+          message: "Private qBittorrent rate-limit detail",
+          operation: "download.queue.action",
+          retryAfterSeconds: 17,
+          retryable: true,
+          service: "qbittorrent",
+          status: 429,
+        }),
+      );
+      const limited = await request();
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers["retry-after"]).toBe("17");
+      expect(apiErrorSchema.parse(limited.json()).error.code).toBe(
+        "download_queue_action_rate_limited",
+      );
+      expect(limited.body).not.toContain("Private qBittorrent rate-limit detail");
+      expect(updateDownloadQueueItem).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

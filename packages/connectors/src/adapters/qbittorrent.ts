@@ -3,7 +3,7 @@ import { DOWNLOAD_QUEUE_MAX_ITEMS } from "@omnifin/contracts/downloads";
 import { z } from "zod";
 
 import { ProbeOnlyAdapter } from "./base.js";
-import type { ConnectorDownloadQueueResult } from "../downloads.js";
+import type { ConnectorDownloadQueueResult, DownloadQueueMutation } from "../downloads.js";
 import { SafeConnectorError } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 
@@ -33,6 +33,7 @@ const torrentSchema = z.object({
 });
 
 const torrentListSchema = z.array(torrentSchema).max(DOWNLOAD_QUEUE_MAX_ITEMS + 1);
+const torrentHashSchema = z.string().regex(/^(?:[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64})$/u);
 
 const activeStates = new Set([
   "allocating",
@@ -92,6 +93,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
     "connector.health",
     "connector.version",
     "download.queue.read",
+    "download.queue.mutate",
   ] as const;
   readonly #username: string;
   readonly #password: string;
@@ -158,6 +160,48 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       truncated:
         active.length > DOWNLOAD_QUEUE_MAX_ITEMS || torrents.length > DOWNLOAD_QUEUE_MAX_ITEMS,
     };
+  }
+
+  async updateDownloadQueueItem(input: DownloadQueueMutation, signal?: AbortSignal): Promise<void> {
+    const externalId = torrentHashSchema.parse(input.externalId).toLowerCase();
+    const cookie = await this.authenticate(signal);
+    const version = await this.client.requestText("api/v2/app/version", {
+      operation: "download.queue.action",
+      headers: this.authenticatedHeaders(cookie),
+      ...(signal ? { signal } : {}),
+    });
+    const versionMatch = /^v?(\d+)(?:\.\d+){1,3}(?:[^\p{Cc}\p{Cf}]*)?$/u.exec(version.body.trim());
+    if (!versionMatch?.[1]) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "unsupported_version",
+        message: "qbittorrent returned a version that cannot be safely controlled.",
+        retryable: false,
+      });
+    }
+    const major = Number(versionMatch[1]);
+    if (!Number.isSafeInteger(major) || major < 4) {
+      throw new SafeConnectorError({
+        service: this.service,
+        operation: "download.queue.action",
+        code: "unsupported_version",
+        message: "qbittorrent does not support safe queue controls at this version.",
+        retryable: false,
+      });
+    }
+    const command =
+      input.action === "pause" ? (major >= 5 ? "stop" : "pause") : major >= 5 ? "start" : "resume";
+    await this.client.requestText(`api/v2/torrents/${command}`, {
+      operation: "download.queue.action",
+      method: "POST",
+      headers: {
+        ...this.authenticatedHeaders(cookie),
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams({ hashes: externalId }),
+      ...(signal ? { signal } : {}),
+    });
   }
 
   private authenticatedHeaders(cookie: string) {

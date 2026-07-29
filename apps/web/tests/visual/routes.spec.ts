@@ -500,6 +500,22 @@ test("download queue visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("download-queue.png", { fullPage: true });
 });
 
+test("download queue confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Queue confirmations cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Pause The.Far.Meridian.2026.2160p.WEB-DL" }).click();
+  await page.getByText("Pause this transfer?").waitFor();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-confirmation.png", { fullPage: true });
+});
+
 test("light download queue visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !lightVisualProjects.has(testInfo.project.name),

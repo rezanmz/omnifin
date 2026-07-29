@@ -128,6 +128,48 @@ describe("qBittorrent download queue", () => {
     ]);
     expect(result.items.every(({ etaSeconds }) => etaSeconds === null)).toBe(true);
   });
+
+  it.each([
+    { action: "pause" as const, command: "/api/v2/torrents/stop", version: "v5.1.2" },
+    { action: "resume" as const, command: "/api/v2/torrents/resume", version: "v4.6.7" },
+  ])("uses the exact version-compatible $action endpoint", async ({ action, command, version }) => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    const mock = createMockTransport([
+      new Response("Ok.", { headers: { "set-cookie": "SID=session; Path=/" } }),
+      new Response(version),
+      new Response(""),
+    ]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await adapter.updateDownloadQueueItem({ action, externalId: hash });
+
+    expect(mock.requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v2/auth/login",
+      "/api/v2/app/version",
+      command,
+    ]);
+    expect(mock.requests[2]?.init.method).toBe("POST");
+    expect(String(mock.requests[2]?.init.body)).toBe(`hashes=${hash}`);
+    expect(mock.requests[2]?.init.headers.get("cookie")).toBe("SID=session");
+  });
+
+  it("rejects a non-hash target before authenticating", async () => {
+    const mock = createMockTransport([]);
+    const adapter = new QBittorrentAdapter({
+      ...target("qbittorrent", mock.transport),
+      password: PASSWORD,
+      username: "operator",
+    });
+
+    await expect(
+      adapter.updateDownloadQueueItem({ action: "pause", externalId: "all" }),
+    ).rejects.toThrow();
+    expect(mock.requests).toHaveLength(0);
+  });
 });
 
 describe("SABnzbd download queue", () => {
@@ -216,5 +258,39 @@ describe("SABnzbd download queue", () => {
 
     expect(error).toMatchObject({ code: "response_invalid", operation: "download.queue" });
     expect(JSON.stringify(error)).not.toContain(privatePayload);
+  });
+
+  it("controls exactly one queue item without placing its API key in the response", async () => {
+    const externalId = "SABnzbd_nzo_fixture-one";
+    const mock = createMockTransport([jsonResponse({ nzo_ids: [externalId], status: true })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await adapter.updateDownloadQueueItem({ action: "pause", externalId });
+
+    expect(mock.requests[0]?.url.searchParams.get("mode")).toBe("queue");
+    expect(mock.requests[0]?.url.searchParams.get("name")).toBe("pause");
+    expect(mock.requests[0]?.url.searchParams.get("value")).toBe(externalId);
+    expect(mock.requests[0]?.url.searchParams.get("apikey")).toBe(API_KEY);
+    expect(adapter.capabilities).toContain("download.queue.mutate");
+  });
+
+  it("rejects an SABnzbd confirmation for a different queue item", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ nzo_ids: ["SABnzbd_nzo_different"], status: true }),
+    ]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    await expect(
+      adapter.updateDownloadQueueItem({
+        action: "resume",
+        externalId: "SABnzbd_nzo_fixture-one",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "download.queue.action" });
   });
 });
