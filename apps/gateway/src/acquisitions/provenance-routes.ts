@@ -1,5 +1,11 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
+  acquisitionMonitoringStateJsonSchema,
+  acquisitionMonitoringStateSchema,
+  acquisitionMonitoringTargetInputJsonSchema,
+  acquisitionMonitoringTargetInputSchema,
+  acquisitionMonitoringUpdateInputJsonSchema,
+  acquisitionMonitoringUpdateInputSchema,
   acquisitionProvenanceResponseJsonSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
@@ -115,6 +121,52 @@ function searchError(error: AcquisitionProvenanceError, reply: FastifyReply) {
   }
 }
 
+function monitoringError(error: AcquisitionProvenanceError) {
+  switch (error.reason) {
+    case "identity_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_monitoring_identity_required",
+        message: "An active operator account is required to change monitoring.",
+        statusCode: 403,
+      });
+    case "response_invalid":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_monitoring_response_invalid",
+        message: "The acquisition service did not confirm the exact monitoring state.",
+        statusCode: 502,
+      });
+    case "rate_limited":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_monitoring_rate_limited",
+        message: "Monitoring controls are temporarily rate limited.",
+        statusCode: 429,
+      });
+    case "connector_unconfigured":
+    case "connector_ambiguous":
+    case "connector_integrity_failure":
+    case "configuration_unavailable":
+    case "storage_failure":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_monitoring_configuration_unavailable",
+        message: "Monitoring controls are temporarily unavailable due to configuration.",
+        statusCode: 503,
+      });
+    case "temporarily_unavailable":
+    case "idempotency_conflict":
+    case "idempotency_in_progress":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_monitoring_temporarily_unavailable",
+        message: "Monitoring controls are temporarily unavailable.",
+        statusCode: 503,
+      });
+  }
+}
+
 function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
   if (error.code === "rate_limited") {
     if (error.retryAfterSeconds !== undefined) {
@@ -151,6 +203,46 @@ function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
     cause: error,
     code: "acquisition_temporarily_unavailable",
     message: "Acquisition history is temporarily unavailable.",
+    statusCode: 503,
+  });
+}
+
+function monitoringUpstreamError(error: SafeConnectorError, reply: FastifyReply) {
+  if (error.code === "rate_limited") {
+    if (error.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", error.retryAfterSeconds);
+    }
+    return new SafeHttpError({
+      cause: error,
+      code: "acquisition_monitoring_rate_limited",
+      message: "Monitoring controls are temporarily rate limited.",
+      statusCode: 429,
+    });
+  }
+  if (error.code === "response_invalid" || error.code === "unsupported_version") {
+    return new SafeHttpError({
+      cause: error,
+      code: "acquisition_monitoring_response_invalid",
+      message: "The acquisition service did not confirm the exact monitoring state.",
+      statusCode: 502,
+    });
+  }
+  if (
+    error.code === "configuration_invalid" ||
+    error.code === "destination_blocked" ||
+    error.code === "invalid_credentials"
+  ) {
+    return new SafeHttpError({
+      cause: error,
+      code: "acquisition_monitoring_configuration_unavailable",
+      message: "Monitoring controls are temporarily unavailable due to configuration.",
+      statusCode: 503,
+    });
+  }
+  return new SafeHttpError({
+    cause: error,
+    code: "acquisition_monitoring_temporarily_unavailable",
+    message: "Monitoring controls are temporarily unavailable.",
     statusCode: 503,
   });
 }
@@ -212,6 +304,90 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw configurationError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/acquisitions/monitoring",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        querystring: acquisitionMonitoringTargetInputJsonSchema,
+        response: { 200: acquisitionMonitoringStateJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "acquisition.manage");
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return acquisitionMonitoringStateSchema.parse(
+          await provenance.readMonitoring(
+            acquisitionMonitoringTargetInputSchema.parse(request.query),
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof AcquisitionProvenanceError) throw monitoringError(error);
+        if (error instanceof SafeConnectorError) throw monitoringUpstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.put(
+    "/v1/acquisitions/monitoring",
+    {
+      bodyLimit: 2 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 12, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: acquisitionMonitoringUpdateInputJsonSchema,
+        response: { 200: acquisitionMonitoringStateJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "acquisition.manage",
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return acquisitionMonitoringStateSchema.parse(
+          await provenance.updateMonitoring(
+            acquisitionMonitoringUpdateInputSchema.parse(request.body),
+            { ipAddress: request.ip, principal, requestId: request.id },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof AcquisitionProvenanceError) throw monitoringError(error);
+        if (error instanceof SafeConnectorError) throw monitoringUpstreamError(error, reply);
         throw error;
       } finally {
         request.raw.off("aborted", abort);

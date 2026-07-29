@@ -4,11 +4,17 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { ApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
+  acquisitionMonitoringStateSchema,
+  acquisitionMonitoringTargetInputSchema,
+  acquisitionMonitoringUpdateInputSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchInputSchema,
   acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
+  type AcquisitionMonitoringState,
+  type AcquisitionMonitoringTargetInput,
+  type AcquisitionMonitoringUpdateInput,
   type AcquisitionProvenanceResponse,
   type AcquisitionSearchInput,
   type AcquisitionSearchResponse,
@@ -63,6 +69,10 @@ export interface AcquisitionProvenanceContext {
 }
 
 export interface AcquisitionProvenanceAdapter {
+  readAcquisitionMonitoring(
+    input: AcquisitionMonitoringTargetInput,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionMonitoringState>;
   queueAcquisitionSearch(
     input: AcquisitionSearchInput,
     signal?: AbortSignal,
@@ -71,6 +81,10 @@ export interface AcquisitionProvenanceAdapter {
     input: AcquisitionTargetInput,
     signal?: AbortSignal,
   ): Promise<AcquisitionProvenanceResponse>;
+  updateAcquisitionMonitoring(
+    input: AcquisitionMonitoringUpdateInput,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionMonitoringState>;
 }
 
 export interface AcquisitionProvenanceDependencies {
@@ -168,7 +182,10 @@ function connectorSecrets(
 function hasAcquisitionCapability(
   row: AcquisitionConnectorRow,
   service: AcquisitionService,
-  capability: Extract<ConnectorCapability, "acquisition.history" | "acquisition.search">,
+  capability: Extract<
+    ConnectorCapability,
+    "acquisition.history" | "acquisition.monitoring" | "acquisition.search"
+  >,
 ) {
   try {
     const decoded = JSON.parse(row.capabilitySnapshotJson) as unknown;
@@ -194,7 +211,11 @@ function defaultAdapter(service: AcquisitionService, config: ApiKeyConnectorConf
 }
 
 function knownSearchFailure(error: unknown): AcquisitionSearchFailureCode {
-  if (error instanceof AcquisitionProvenanceError) return "configuration_unavailable";
+  if (error instanceof AcquisitionProvenanceError) {
+    return ACQUISITION_SEARCH_FAILURE_CODES.has(error.reason as AcquisitionSearchFailureCode)
+      ? (error.reason as AcquisitionSearchFailureCode)
+      : "configuration_unavailable";
+  }
   if (error instanceof SafeConnectorError) {
     if (error.code === "rate_limited") return "rate_limited";
     if (error.code === "response_invalid" || error.code === "unsupported_version") {
@@ -243,6 +264,66 @@ export class AcquisitionProvenanceService {
     return acquisitionProvenanceResponseSchema.parse(
       await adapter.readAcquisitionProvenance(input, signal),
     );
+  }
+
+  public async readMonitoring(
+    rawInput: AcquisitionMonitoringTargetInput,
+    context: AcquisitionProvenanceContext,
+    signal?: AbortSignal,
+  ) {
+    requirePermission(context.principal, "acquisition.manage");
+    const input = acquisitionMonitoringTargetInputSchema.parse(rawInput);
+    const adapter = this.#adapter(input.service, "acquisition.monitoring");
+    return this.#monitoringState(await adapter.readAcquisitionMonitoring(input, signal), input);
+  }
+
+  public async updateMonitoring(
+    rawInput: AcquisitionMonitoringUpdateInput,
+    context: AcquisitionProvenanceContext,
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "acquisition.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new AcquisitionProvenanceError("identity_required");
+    }
+    const input = acquisitionMonitoringUpdateInputSchema.parse(rawInput);
+    const adapter = this.#adapter(input.service, "acquisition.monitoring");
+    let current: AcquisitionMonitoringState;
+    try {
+      current = this.#monitoringState(
+        await adapter.readAcquisitionMonitoring(input, signal),
+        input,
+      );
+    } catch (error) {
+      this.#auditMonitoring("failed", "failure", input, context, null, knownSearchFailure(error));
+      throw error;
+    }
+    if (current.monitored === input.monitored) {
+      this.#auditMonitoring("replayed", "success", input, context, current.monitored, null);
+      return current;
+    }
+    this.#auditMonitoring("requested", "success", input, context, current.monitored, null);
+    try {
+      const updated = this.#monitoringState(
+        await adapter.updateAcquisitionMonitoring(input, signal),
+        input,
+      );
+      if (updated.monitored !== input.monitored) {
+        throw new AcquisitionProvenanceError("response_invalid");
+      }
+      this.#auditMonitoring("updated", "success", input, context, current.monitored, null);
+      return updated;
+    } catch (error) {
+      this.#auditMonitoring(
+        "failed",
+        "failure",
+        input,
+        context,
+        current.monitored,
+        knownSearchFailure(error),
+      );
+      throw error;
+    }
   }
 
   public async queueSearch(
@@ -296,7 +377,10 @@ export class AcquisitionProvenanceService {
 
   #adapter(
     service: AcquisitionService,
-    capability: Extract<ConnectorCapability, "acquisition.history" | "acquisition.search">,
+    capability: Extract<
+      ConnectorCapability,
+      "acquisition.history" | "acquisition.monitoring" | "acquisition.search"
+    >,
   ) {
     const row = this.#connector(service);
     const secrets = connectorSecrets(row, service, this.#cipher);
@@ -331,6 +415,14 @@ export class AcquisitionProvenanceService {
     } catch (error) {
       throw new AcquisitionProvenanceError("connector_integrity_failure", { cause: error });
     }
+  }
+
+  #monitoringState(rawState: AcquisitionMonitoringState, target: AcquisitionMonitoringTargetInput) {
+    const state = acquisitionMonitoringStateSchema.parse(rawState);
+    if (state.target.mediaId !== target.mediaId || state.target.service !== target.service) {
+      throw new AcquisitionProvenanceError("response_invalid");
+    }
+    return state;
   }
 
   #reserve(userId: string, keyHash: string, fingerprintHash: string) {
@@ -505,6 +597,60 @@ export class AcquisitionProvenanceService {
           : null,
         createdAt,
       );
+  }
+
+  #auditMonitoring(
+    action: "failed" | "replayed" | "requested" | "updated",
+    outcome: "failure" | "success",
+    input: AcquisitionMonitoringUpdateInput,
+    context: AcquisitionProvenanceContext,
+    previousMonitored: boolean | null,
+    failureCode: AcquisitionSearchFailureCode | null,
+  ) {
+    try {
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (
+             id,
+             actor_user_id,
+             actor_session_id,
+             actor_auth_method,
+             event_type,
+             outcome,
+             target_type,
+             target_id,
+             request_id,
+             metadata_json,
+             ip_hash,
+             created_at
+           ) values (?, ?, ?, ?, ?, ?, 'acquisition_monitoring', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.#id(),
+          context.principal.userId,
+          context.principal.sessionId,
+          context.principal.authenticationMethod.kind,
+          `acquisition.monitoring.${action}`,
+          outcome,
+          `${input.service}:${input.mediaId}`,
+          context.requestId ?? null,
+          JSON.stringify({
+            ...(failureCode ? { failureCode } : {}),
+            mediaId: input.mediaId,
+            monitored: input.monitored,
+            previousMonitored,
+            replayed: action === "replayed",
+            service: input.service,
+          }),
+          context.ipAddress
+            ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+            : null,
+          this.#now(),
+        );
+    } catch (error) {
+      if (error instanceof AcquisitionProvenanceError) throw error;
+      throw new AcquisitionProvenanceError("storage_failure", { cause: error });
+    }
   }
 
   #now() {
