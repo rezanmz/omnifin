@@ -268,6 +268,22 @@ describe("SABnzbd download queue", () => {
     expect(mock.requests).toHaveLength(0);
   });
 
+  it("normalizes SABnzbd's bounded invalid API-key response", async () => {
+    const mock = createMockTransport([jsonResponse({ error: "API Key Incorrect", status: false })]);
+    const adapter = new SabnzbdAdapter({
+      ...target("sabnzbd", mock.transport),
+      apiKey: API_KEY,
+    });
+
+    const error = await adapter.readDownloadQueue().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "invalid_credentials",
+      operation: "download.queue",
+    } satisfies Partial<SafeConnectorError>);
+    expect(JSON.stringify(error)).not.toContain(API_KEY);
+  });
+
   it("rejects schema drift without reflecting an upstream payload", async () => {
     const privatePayload = "private-upstream-queue-value";
     const mock = createMockTransport([jsonResponse({ queue: { slots: [{ privatePayload }] } })]);

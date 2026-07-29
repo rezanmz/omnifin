@@ -18,8 +18,8 @@ combination is described as supported.
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history  | Monitoring/history fixtures ready; live baseline pending |
 | Bazarr                            | Subtitle status, search, and download                          | Target; verification pending                             |
 | Prowlarr                          | Indexer status, statistics, failures, sync, safe tests         | Intelligence fixtures ready; live baseline pending       |
-| qBittorrent                       | Queue, rates, exact pause/resume, preserve-files removal       | Read/write fixtures ready; live baseline pending         |
-| SABnzbd                           | Queue, rates, exact pause/resume, preserve-files removal       | Read/write fixtures ready; live baseline pending         |
+| qBittorrent                       | Queue, rates, exact pause/resume, preserve-files removal       | Isolated 5.2.0 gate ready; live baseline pending         |
+| SABnzbd                           | Queue, rates, exact pause/resume, preserve-files removal       | Isolated 5.0.4 gate ready; live baseline pending         |
 
 Seerr is the primary request-management target. Compatibility with older Jellyseerr
 and Overseerr installations is capability-based and will be listed only after it is
@@ -58,6 +58,15 @@ complete direct range playback, a seeked HLS transcode, alternate audio and subt
 progress persistence, and playback renegotiation after a server restart. The sanitized evidence
 records the exact Jellyfin image and version without retaining service, account, media, path, or
 credential identifiers.
+
+The same aggregate starts current digest-pinned qBittorrent 5.2.0 and SABnzbd 5.0.4 instances on
+separate internal Docker networks. Synthetic queue items must pass production-adapter
+authentication, version discovery, normalized reads, invalid-credential rejection, observed exact
+pause/resume, preserve-files removal, and teardown. The closed reports omit native item IDs,
+credentials, ports, paths, and logs. See the
+[download-client fixture runbook](operations/download-client-fixtures.md). These disposable checks
+are stronger than mocked transport contracts, but they remain development evidence rather than a
+public installation support claim.
 
 Scheduled and manual probes run in `.github/workflows/integration-live.yml` only from
 `main` and only through the protected `integration` environment. Until the repository

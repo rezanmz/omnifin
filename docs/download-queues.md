@@ -10,6 +10,12 @@ This is pre-release fixture-backed development evidence. It is not a public comp
 the compatibility matrix remains authoritative until protected live checks record exact upstream
 versions and dates.
 
+The protected pull-request aggregate also exercises the production adapters against fresh,
+digest-pinned qBittorrent and SABnzbd containers. Its synthetic queue items must complete observed
+exact-item pause, resume, and preserve-files removal without retaining credentials, native IDs, or
+paths in the report. The complete isolation and evidence contract is documented in the
+[download-client fixture runbook](operations/download-client-fixtures.md).
+
 ## Authorization and connector selection
 
 `GET /v1/downloads/queue` requires an active session with `downloads.manage`. The route and service
