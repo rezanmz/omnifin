@@ -11,11 +11,12 @@ not a calendar, controls release readiness.
 - **Planned:** accepted scope without completion evidence.
 - **Verified:** all listed phase gates have passed for a tagged release.
 
-No phase is currently marked verified. The repository is pre-release.
+Phase 0 is verified for the first pre-release; all product phases remain in development
+or planned.
 
 ## Phase 0 — Public project foundation
 
-**Status: In development**
+**Status: Verified**
 
 - Public repository, AGPL-3.0-only licensing, governance, architecture, support, and
   security documentation
@@ -26,6 +27,10 @@ No phase is currently marked verified. The repository is pre-release.
 
 **Gate:** a clean checkout can install, check, test, build, migrate, start, and report
 health using documented commands; repository settings match the contribution model.
+
+The machine-enforced contract and independent gate mapping are recorded in
+[Public-project foundation verification](foundation-verification.md). Phase 0 does not
+claim live-service compatibility; those profiles remain gated by later phases.
 
 ## Phase 1 — Identity and secure control plane
 

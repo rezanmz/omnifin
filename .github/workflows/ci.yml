@@ -93,6 +93,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify action pins
         run: node scripts/ci/check-workflow-pins.mjs
+      - name: Verify public-project foundation contract
+        run: pnpm foundation:check
       - name: Validate pull request title
         if: github.event_name == 'pull_request'
         env:
