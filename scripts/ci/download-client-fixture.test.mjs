@@ -177,6 +177,14 @@ test("accepts only bounded failure evidence without upstream details", () => {
     () => validateSanitizedFailureReport({ ...report, code: "password=private" }),
     /failure_report_invalid/u,
   );
+  assert.equal(
+    validateSanitizedFailureReport({ ...report, code: "authentication_cookie_invalid" }).code,
+    "authentication_cookie_invalid",
+  );
+  assert.equal(
+    validateSanitizedFailureReport({ ...report, code: "authentication_rejected" }).code,
+    "authentication_rejected",
+  );
 });
 
 test("the protected connector aggregate runs both isolated download clients", () => {

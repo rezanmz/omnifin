@@ -62,6 +62,13 @@ const CHECK_NAMES = [
   "preserveFilesRemoval",
   "queueRead",
 ];
+const QBITTORRENT_AUTH_DIAGNOSTIC_CODES = new Set([
+  "authentication_cookie_invalid",
+  "authentication_rejected",
+  "upstream_rejected",
+  "upstream_response_invalid",
+  "upstream_unreachable",
+]);
 
 class DownloadFixtureFailure extends Error {
   constructor(code, options) {
@@ -302,17 +309,23 @@ async function waitForResult(
   operation,
   timeoutMs = SERVER_READY_TIMEOUT_MS,
   timeoutCode = "server_start_timeout",
+  retainedFailureCodes,
 ) {
   const deadline = Date.now() + timeoutMs;
+  let retainedFailure;
   while (Date.now() < deadline) {
     try {
       const result = await operation();
       if (result !== undefined && result !== null && result !== false) return result;
-    } catch {
+    } catch (error) {
       // The disposable upstream may reject requests while first-run setup is still in progress.
+      if (error instanceof DownloadFixtureFailure && retainedFailureCodes?.has(error.code)) {
+        retainedFailure = error;
+      }
     }
     await sleep(500);
   }
+  if (retainedFailure) throw retainedFailure;
   throw new DownloadFixtureFailure(timeoutCode);
 }
 
@@ -496,9 +509,8 @@ async function qbittorrentLogin(baseUrl, password) {
     method: "POST",
   });
   const cookie = readQBittorrentSessionCookie(response.headers.get("set-cookie"));
-  if (response.body.trim() !== "Ok." || !cookie) {
-    throw new DownloadFixtureFailure("authentication_invalid");
-  }
+  if (response.body.trim() !== "Ok.") throw new DownloadFixtureFailure("authentication_rejected");
+  if (!cookie) throw new DownloadFixtureFailure("authentication_cookie_invalid");
   return cookie;
 }
 
@@ -551,6 +563,7 @@ async function runQBittorrent(context, server) {
     () => qbittorrentLogin(server.directUrl, password),
     SERVER_READY_TIMEOUT_MS,
     "authentication_start_timeout",
+    QBITTORRENT_AUTH_DIAGNOSTIC_CODES,
   );
   const fixture = createQBittorrentFixture();
   const preservedBytes = Buffer.alloc(fixture.payload.byteLength, 0x5a);
