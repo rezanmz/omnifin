@@ -91,8 +91,10 @@ The Liquid Glass surface retains focus containment, Escape dismissal, background
 inertness, keyboard-scrollable history, at least 44-pixel controls, reduced motion,
 and adaptive light, dark, system, phone, tablet, desktop, and 10-foot presentation.
 Storybook covers complete, degraded, empty, loading, offline, permission-denied,
-recovery-confirmation, and queued-success states. Component, browser, accessibility,
-and deterministic visual tests cover the assembled interaction.
+recovery-confirmation, monitoring, and queued-success states. Component, browser, accessibility,
+and deterministic visual tests cover the assembled interaction. The separate
+[acquisition-monitoring boundary](acquisition-monitoring.md) documents the exact whole-title
+mutation available inside the same drawer.
 
 ## Verification
 

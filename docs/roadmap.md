@@ -62,8 +62,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 - Seerr and metadata discovery, global search, normalized movie and series details,
   granular requests, and operator approvals (implemented; protected live evidence pending)
-- Radarr and Sonarr read-only calendar (implemented; protected live evidence pending), queue,
-  monitoring, searches, and manual releases
+- Radarr and Sonarr read-only calendar, exact whole-title monitoring, searches, and manual releases
+  (implemented; protected live evidence pending), plus broader queue mutations
 - Prowlarr Indexer Intelligence (implemented; protected live evidence pending)
 - qBittorrent and SABnzbd live queues (read path implemented; protected live evidence pending)
 - Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry

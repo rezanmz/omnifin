@@ -142,6 +142,27 @@ application boundary; operators must still patch and isolate the host.
   exact-target body cannot express direct release selection, grabs, blocklisting, deletion, or
   arbitrary retry commands.
 
+## Acquisition-monitoring mutation controls
+
+- Reads and updates require `acquisition.manage` at both the session route and service boundary.
+  Updates additionally require an active user, same-origin validation, a session-bound CSRF token,
+  a 2 KiB body limit, mutation rate limiting, and an abort signal; recovery sessions cannot mutate.
+- The strict public contract can identify only one Radarr movie or one whole Sonarr series, its
+  observed boolean, and the opposite desired boolean. Season, episode, path, file, profile, tag,
+  queue, deletion, blocklist, and arbitrary editor fields are impossible to express.
+- Exactly one enabled, healthy connector advertising `acquisition.monitoring` is selected before
+  credential decryption. The gateway reads the exact target first and returns an already-desired
+  state as a verified replay without another upstream write.
+- The adapters send only `movieIds` or `seriesIds` plus `monitored`. The normalized response must
+  confirm the exact target and desired state; mismatches and malformed responses fail closed.
+- A durable requested event is inserted before any real upstream write, so audit storage failure
+  prevents mutation. Updated, replayed, and failed follow-up outcomes carry bounded state metadata.
+  Credentials, CSRF values, paths, raw editor responses, cookies, and private upstream errors are
+  excluded.
+- `GET` and `PUT /v1/acquisitions/monitoring` are abort-aware, rate-limited, and explicitly
+  non-cacheable. Enabling monitoring does not itself queue a search; pausing it does not change
+  existing files, downloads, queues, profiles, or tags.
+
 ## Download-queue read controls
 
 - Queue reads require `downloads.manage` at both the session route and service boundary.
