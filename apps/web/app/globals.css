@@ -8603,9 +8603,17 @@ html:has([data-display-profile="ten-foot"]) {
   position: relative;
 }
 
-.media-detail__header > div {
+.media-detail__header-context {
+  align-items: center;
+  display: flex;
+  gap: 11px;
+  min-width: 0;
+}
+
+.media-detail__header-context > div {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
 .media-detail__header span,
@@ -8614,6 +8622,11 @@ html:has([data-display-profile="ten-foot"]) {
 .media-detail__people > span,
 .media-detail__crew > span,
 .media-detail__seasons > span,
+.media-detail__intelligence > span,
+.media-detail__trailers > span,
+.media-detail__recommendations > span,
+.media-detail__person-hero > div:last-child > span,
+.media-detail__person-credits > span,
 .media-detail__error > span:nth-child(2) {
   color: var(--acid);
   font-size: 0.66rem;
@@ -8627,7 +8640,8 @@ html:has([data-display-profile="ten-foot"]) {
   font-size: 0.76rem;
 }
 
-.media-detail__close {
+.media-detail__close,
+.media-detail__back {
   align-items: center;
   background: linear-gradient(145deg, var(--glass-highlight), transparent 72%), var(--fill-subtle);
   border: 1px solid var(--line-soft);
@@ -8644,17 +8658,28 @@ html:has([data-display-profile="ten-foot"]) {
   width: 48px;
 }
 
-.media-detail__close:hover {
+.media-detail__back {
+  border-radius: 14px;
+  flex: 0 0 44px;
+  height: 44px;
+  padding: 0;
+  width: 44px;
+}
+
+.media-detail__close:hover,
+.media-detail__back:hover {
   background: linear-gradient(145deg, var(--glass-highlight), transparent 72%), var(--fill-hover);
   border-color: var(--line-strong);
   transform: scale(1.035);
 }
 
-.media-detail__close:active {
+.media-detail__close:active,
+.media-detail__back:active {
   transform: scale(0.965);
 }
 
-.media-detail__close svg {
+.media-detail__close svg,
+.media-detail__back svg {
   height: 19px;
   stroke-width: 1.7;
   width: 19px;
@@ -8671,6 +8696,7 @@ html:has([data-display-profile="ten-foot"]) {
 .media-detail__content {
   display: grid;
   gap: 28px;
+  grid-template-columns: minmax(0, 1fr);
   padding: 24px 26px 28px;
 }
 
@@ -8811,7 +8837,11 @@ html:has([data-display-profile="ten-foot"]) {
 .media-detail__overview,
 .media-detail__people,
 .media-detail__crew,
-.media-detail__seasons {
+.media-detail__seasons,
+.media-detail__intelligence,
+.media-detail__trailers,
+.media-detail__recommendations,
+.media-detail__person-credits {
   border-top: 1px solid var(--line-soft);
   padding-top: 25px;
 }
@@ -8819,13 +8849,177 @@ html:has([data-display-profile="ten-foot"]) {
 .media-detail__overview h3,
 .media-detail__people h3,
 .media-detail__crew h3,
-.media-detail__seasons h3 {
+.media-detail__seasons h3,
+.media-detail__intelligence h3,
+.media-detail__trailers h3,
+.media-detail__recommendations h3,
+.media-detail__person-credits h3 {
   font-family: var(--font-display);
   font-size: 1.85rem;
   font-weight: 480;
   letter-spacing: -0.035em;
   line-height: 1;
   margin-top: 7px;
+}
+
+.media-detail__intelligence > span,
+.media-detail__trailers > span,
+.media-detail__recommendations > span,
+.media-detail__person-credits > span {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+}
+
+.media-detail__intelligence > span svg,
+.media-detail__trailers > span svg,
+.media-detail__recommendations > span svg,
+.media-detail__person-credits > span svg {
+  height: 14px;
+  stroke-width: 1.8;
+  width: 14px;
+}
+
+.media-detail__section-heading {
+  align-items: end;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.media-detail__section-heading small {
+  color: var(--paper-2);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  max-width: 190px;
+  text-align: right;
+}
+
+.media-detail__ratings {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 17px;
+}
+
+.media-detail__ratings li {
+  background:
+    radial-gradient(circle at 22% 0%, var(--glass-specular), transparent 68%),
+    linear-gradient(145deg, var(--glass-highlight), transparent 72%), var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 19px;
+  box-shadow: inset 0 1px 0 var(--glass-specular);
+  display: grid;
+  min-height: 112px;
+  padding: 14px;
+}
+
+.media-detail__ratings strong {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+  letter-spacing: -0.045em;
+  line-height: 0.95;
+}
+
+.media-detail__ratings span {
+  align-self: end;
+  font-size: 0.69rem;
+  font-weight: 660;
+  margin-top: 17px;
+}
+
+.media-detail__ratings small {
+  color: var(--paper-2);
+  font-size: 0.6rem;
+  line-height: 1.35;
+  margin-top: 3px;
+}
+
+.media-detail__quiet-state {
+  background: var(--fill-subtle);
+  border: 1px dashed var(--line-soft);
+  border-radius: 18px;
+  color: var(--paper-2);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  margin-top: 16px;
+  padding: 15px;
+}
+
+.media-detail__trailers ul {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.media-detail__trailers li a {
+  align-items: center;
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--acid) 10%, transparent), transparent 42%),
+    var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 19px;
+  color: var(--paper-0);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 66px;
+  padding: 10px 13px 10px 10px;
+  text-decoration: none;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.media-detail__trailers li a:hover {
+  background-color: var(--fill-hover);
+  border-color: var(--line-strong);
+  transform: translateX(2px);
+}
+
+.media-detail__trailers i {
+  align-items: center;
+  background: var(--acid);
+  border-radius: 15px;
+  color: var(--acid-ink);
+  display: inline-flex;
+  height: 46px;
+  justify-content: center;
+  width: 46px;
+}
+
+.media-detail__trailers i svg {
+  fill: currentColor;
+  height: 17px;
+  width: 17px;
+}
+
+.media-detail__trailers li span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.media-detail__trailers strong {
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-detail__trailers small {
+  color: var(--paper-2);
+  font-size: 0.65rem;
+  text-transform: capitalize;
+}
+
+.media-detail__trailers li a > svg {
+  color: var(--paper-2);
+  height: 15px;
+  width: 15px;
 }
 
 .media-detail__overview p {
@@ -8893,7 +9087,39 @@ html:has([data-display-profile="ten-foot"]) {
   padding: 10px;
 }
 
-.media-detail__people li > i,
+.media-detail__people li {
+  padding: 0;
+}
+
+.media-detail__people li > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  min-height: 64px;
+  padding: 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.media-detail__people li > button > svg {
+  color: var(--paper-2);
+  height: 15px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 150ms ease;
+  width: 15px;
+}
+
+.media-detail__people li > button:hover > svg,
+.media-detail__people li > button:focus-visible > svg {
+  opacity: 1;
+}
+
+.media-detail__people li > button > i,
 .media-detail__seasons li > i {
   align-items: center;
   background:
@@ -8911,7 +9137,7 @@ html:has([data-display-profile="ten-foot"]) {
   justify-content: center;
 }
 
-.media-detail__people li > span,
+.media-detail__people li > button > span,
 .media-detail__seasons li > span {
   display: grid;
   gap: 2px;
@@ -8957,8 +9183,171 @@ html:has([data-display-profile="ten-foot"]) {
   margin: 0;
 }
 
+.media-detail__crew dd button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  min-height: 44px;
+  padding: 0;
+  text-align: left;
+  text-decoration-color: transparent;
+  text-decoration-line: underline;
+  text-underline-offset: 4px;
+  transition:
+    color 150ms ease,
+    text-decoration-color 150ms ease;
+}
+
+.media-detail__crew dd button:hover {
+  color: var(--acid);
+  text-decoration-color: currentColor;
+}
+
 .media-detail__seasons ul {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.media-detail__recommendations ul,
+.media-detail__person-credits ul {
+  display: grid;
+  gap: 9px;
+  grid-auto-columns: minmax(210px, 0.72fr);
+  grid-auto-flow: column;
+  margin: 16px -26px 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 1px 26px 10px;
+  scroll-padding-inline: 26px;
+  scroll-snap-type: inline proximity;
+}
+
+.media-detail__recommendations li,
+.media-detail__person-credits li {
+  scroll-snap-align: start;
+}
+
+.media-detail__recommendations button,
+.media-detail__person-credits button {
+  align-items: center;
+  background:
+    radial-gradient(circle at 18% 0%, var(--glass-specular), transparent 64%), var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 19px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 78px;
+  padding: 11px;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+  width: 100%;
+}
+
+.media-detail__recommendations button:hover,
+.media-detail__person-credits button:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--glass-cast-shadow) 48%, transparent);
+  transform: translateY(-2px);
+}
+
+.media-detail__recommendations button > i,
+.media-detail__person-credits button > i {
+  align-items: center;
+  background: color-mix(in srgb, var(--acid) 12%, var(--fill-subtle));
+  border: 1px solid var(--accent-line);
+  border-radius: 14px;
+  color: var(--acid);
+  display: inline-flex;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-style: normal;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.media-detail__recommendations button > span,
+.media-detail__person-credits button > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.media-detail__recommendations strong,
+.media-detail__person-credits strong {
+  font-size: 0.77rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-detail__recommendations small,
+.media-detail__person-credits small {
+  color: var(--paper-2);
+  font-size: 0.64rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-detail__person-hero {
+  align-items: center;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 156px minmax(0, 1fr);
+}
+
+.media-detail__person-monogram {
+  align-items: end;
+  aspect-ratio: 0.82;
+  background:
+    radial-gradient(circle at 30% 16%, var(--glass-specular), transparent 24%),
+    linear-gradient(150deg, color-mix(in srgb, var(--acid) 40%, #7b91a1), var(--ink-0));
+  border: 1px solid var(--glass-edge);
+  border-radius: 44% 44% 25px 25px;
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-bright),
+    0 24px 58px color-mix(in srgb, var(--glass-cast-shadow) 62%, transparent);
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.media-detail__person-monogram span {
+  color: rgb(255 255 255 / 18%);
+  font-family: var(--font-display);
+  font-size: 8rem;
+  line-height: 0.76;
+}
+
+.media-detail__person-hero h2 {
+  font-family: var(--font-display);
+  font-size: clamp(2.7rem, 6vw, 4.5rem);
+  font-weight: 470;
+  letter-spacing: -0.055em;
+  line-height: 0.9;
+  margin-top: 9px;
+}
+
+.media-detail__person-hero p {
+  color: var(--paper-1);
+  font-size: 0.9rem;
+  margin-top: 12px;
+}
+
+.media-detail__person-facts {
+  color: var(--paper-2);
+  display: grid;
+  font-size: 0.68rem;
+  gap: 4px;
+  margin-top: 14px;
 }
 
 .media-detail__footer {
@@ -9076,11 +9465,23 @@ html:has([data-display-profile="ten-foot"]) {
 }
 
 .media-detail__skeleton-copy span,
+.media-detail__skeleton-metrics span,
 .media-detail__skeleton-people span {
   animation: media-detail-skeleton 1.5s ease-in-out infinite;
   background: var(--fill-hover);
   border-radius: 999px;
   height: 12px;
+}
+
+.media-detail__skeleton-metrics {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.media-detail__skeleton-metrics span {
+  border-radius: 19px;
+  height: 112px;
 }
 
 .media-detail__skeleton-copy span:nth-child(2) {
@@ -9227,10 +9628,36 @@ html:has([data-display-profile="ten-foot"]) {
   }
 
   .media-detail__availability,
+  .media-detail__ratings,
   .media-detail__people ul,
   .media-detail__seasons ul,
+  .media-detail__skeleton-metrics,
   .media-detail__skeleton-people {
     grid-template-columns: 1fr;
+  }
+
+  .media-detail__ratings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .media-detail__recommendations ul,
+  .media-detail__person-credits ul {
+    margin-inline: -18px;
+    padding-inline: 18px;
+    scroll-padding-inline: 18px;
+  }
+
+  .media-detail__person-hero {
+    gap: 18px;
+    grid-template-columns: 116px minmax(0, 1fr);
+  }
+
+  .media-detail__person-monogram span {
+    font-size: 5.8rem;
+  }
+
+  .media-detail__person-hero h2 {
+    font-size: clamp(2.3rem, 12vw, 3.5rem);
   }
 
   .media-detail__footer {
@@ -9299,6 +9726,35 @@ html:has([data-display-profile="ten-foot"]) {
   .media-detail__genres {
     margin-top: 11px;
   }
+
+  .media-detail__section-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .media-detail__section-heading small {
+    max-width: none;
+    text-align: left;
+  }
+
+  .media-detail__ratings li {
+    min-height: 104px;
+  }
+
+  .media-detail__person-hero {
+    align-items: end;
+    gap: 14px;
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+
+  .media-detail__person-monogram {
+    border-radius: 42% 42% 18px 18px;
+  }
+
+  .media-detail__person-monogram span {
+    font-size: 4.6rem;
+  }
 }
 
 @keyframes media-detail-mobile-enter {
@@ -9324,8 +9780,14 @@ html:has([data-display-profile="ten-foot"]) {
   .search-console__retry,
   .search-preview__footer button,
   .request-composer__season-chips button,
+  .media-detail__back,
   .media-detail__close,
+  .media-detail__crew dd button,
+  .media-detail__people li > button,
   .media-detail__primary,
+  .media-detail__recommendations button,
+  .media-detail__person-credits button,
+  .media-detail__trailers li a,
   .manual-workbench__header-actions button,
   .manual-inspector__review,
   .manual-confirmation__actions button,

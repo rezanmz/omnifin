@@ -3,6 +3,10 @@ import { z } from "zod";
 export const DISCOVERY_SEARCH_MAX_RESULTS = 100;
 export const DISCOVERY_DETAIL_MAX_CAST = 12;
 export const DISCOVERY_DETAIL_MAX_CREW = 12;
+export const DISCOVERY_DETAIL_MAX_RATINGS = 6;
+export const DISCOVERY_DETAIL_MAX_RECOMMENDATIONS = 12;
+export const DISCOVERY_DETAIL_MAX_TRAILERS = 6;
+export const DISCOVERY_PERSON_MAX_CREDITS = 24;
 
 const tmdbIdentifierSchema = z.int().positive().max(2_147_483_647);
 const titleSchema = z.string().trim().min(1).max(300);
@@ -109,11 +113,67 @@ export type DiscoveryMediaDetailQuery = z.infer<typeof discoveryMediaDetailQuery
 const discoveryCastCreditSchema = z.strictObject({
   character: z.string().trim().min(1).max(200).nullable(),
   name: z.string().trim().min(1).max(160),
+  personId: tmdbIdentifierSchema,
 });
 
 const discoveryCrewCreditSchema = z.strictObject({
   name: z.string().trim().min(1).max(160),
+  personId: tmdbIdentifierSchema,
   role: z.string().trim().min(1).max(160),
+});
+
+export const discoveryIntelligenceStateSchema = z.enum(["ready", "empty", "unavailable"]);
+export type DiscoveryIntelligenceState = z.infer<typeof discoveryIntelligenceStateSchema>;
+
+const discoveryRatingBase = {
+  audience: z.enum(["audience", "community", "critics"]),
+  label: z.string().trim().min(1).max(80),
+  sentiment: z.string().trim().min(1).max(80).nullable(),
+  source: z.enum(["imdb", "rotten_tomatoes", "tmdb"]),
+  voteCount: z.int().nonnegative().max(1_000_000_000).nullable(),
+} as const;
+
+export const discoveryRatingSchema = z.discriminatedUnion("scale", [
+  z.strictObject({
+    ...discoveryRatingBase,
+    scale: z.literal(10),
+    value: z.number().finite().min(0).max(10),
+  }),
+  z.strictObject({
+    ...discoveryRatingBase,
+    scale: z.literal(100),
+    value: z.number().finite().min(0).max(100),
+  }),
+]);
+export type DiscoveryRating = z.infer<typeof discoveryRatingSchema>;
+
+export const discoveryTrailerSchema = z.strictObject({
+  id: z
+    .string()
+    .min(10)
+    .max(48)
+    .regex(/^youtube:[A-Za-z0-9_-]{6,32}$/u),
+  provider: z.literal("youtube"),
+  resolution: z.int().positive().max(8_640).nullable(),
+  title: titleSchema,
+  type: z.enum(["behind_the_scenes", "clip", "featurette", "teaser", "trailer"]),
+});
+export type DiscoveryTrailer = z.infer<typeof discoveryTrailerSchema>;
+
+const discoveryMediaRecommendationSchema = z.discriminatedUnion("kind", [
+  discoveryMovieResultSchema,
+  discoverySeriesResultSchema,
+]);
+export type DiscoveryMediaRecommendation = z.infer<typeof discoveryMediaRecommendationSchema>;
+
+const discoveryMediaIntelligenceSchema = z.strictObject({
+  ratings: z.array(discoveryRatingSchema).max(DISCOVERY_DETAIL_MAX_RATINGS),
+  ratingsState: discoveryIntelligenceStateSchema,
+  recommendations: z
+    .array(discoveryMediaRecommendationSchema)
+    .max(DISCOVERY_DETAIL_MAX_RECOMMENDATIONS),
+  recommendationsState: discoveryIntelligenceStateSchema,
+  trailers: z.array(discoveryTrailerSchema).max(DISCOVERY_DETAIL_MAX_TRAILERS),
 });
 
 const discoveryMediaDetailBase = {
@@ -121,6 +181,7 @@ const discoveryMediaDetailBase = {
   cast: z.array(discoveryCastCreditSchema).max(DISCOVERY_DETAIL_MAX_CAST),
   crew: z.array(discoveryCrewCreditSchema).max(DISCOVERY_DETAIL_MAX_CREW),
   genres: z.array(z.string().trim().min(1).max(100)).max(20),
+  intelligence: discoveryMediaIntelligenceSchema,
   originalTitle: titleSchema.nullable(),
   overview: overviewSchema,
   productionStatus: z.string().trim().min(1).max(100).nullable(),
@@ -178,6 +239,49 @@ export const discoveryMediaDetailResponseSchema = z.strictObject({
 });
 export type DiscoveryMediaDetailResponse = z.infer<typeof discoveryMediaDetailResponseSchema>;
 
+export const discoveryPersonDetailParamsSchema = z.strictObject({
+  tmdbId: z.coerce.number().int().positive().max(2_147_483_647),
+});
+export type DiscoveryPersonDetailParams = z.infer<typeof discoveryPersonDetailParamsSchema>;
+
+export const discoveryPersonDetailQuerySchema = discoveryMediaDetailQuerySchema;
+export type DiscoveryPersonDetailQuery = z.infer<typeof discoveryPersonDetailQuerySchema>;
+
+const discoveryPersonCreditSchema = z.strictObject({
+  availability: discoveryAvailabilitySchema,
+  kind: discoveryMediaKindSchema,
+  role: z.string().trim().min(1).max(200),
+  title: titleSchema,
+  tmdbId: tmdbIdentifierSchema,
+  voteAverage: z.number().finite().min(0).max(10).nullable(),
+  year: yearSchema,
+});
+
+export const discoveryPersonDetailSchema = z.strictObject({
+  biography: overviewSchema,
+  birthday: z.iso.date().nullable(),
+  birthplace: z.string().trim().min(1).max(300).nullable(),
+  credits: z.array(discoveryPersonCreditSchema).max(DISCOVERY_PERSON_MAX_CREDITS),
+  creditsState: discoveryIntelligenceStateSchema,
+  deathday: z.iso.date().nullable(),
+  department: z.string().trim().min(1).max(160).nullable(),
+  id: z
+    .string()
+    .min(8)
+    .max(64)
+    .regex(/^person:[1-9][0-9]*$/u),
+  name: titleSchema,
+  source: z.literal("seerr"),
+  tmdbId: tmdbIdentifierSchema,
+});
+export type DiscoveryPersonDetail = z.infer<typeof discoveryPersonDetailSchema>;
+
+export const discoveryPersonDetailResponseSchema = z.strictObject({
+  generatedAt: z.iso.datetime({ offset: true }),
+  item: discoveryPersonDetailSchema,
+});
+export type DiscoveryPersonDetailResponse = z.infer<typeof discoveryPersonDetailResponseSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -196,4 +300,13 @@ export const discoveryMediaDetailQueryJsonSchema = withoutSchemaDialect(
 );
 export const discoveryMediaDetailResponseJsonSchema = withoutSchemaDialect(
   discoveryMediaDetailResponseSchema,
+);
+export const discoveryPersonDetailParamsJsonSchema = withoutSchemaDialect(
+  discoveryPersonDetailParamsSchema,
+);
+export const discoveryPersonDetailQueryJsonSchema = withoutSchemaDialect(
+  discoveryPersonDetailQuerySchema,
+);
+export const discoveryPersonDetailResponseJsonSchema = withoutSchemaDialect(
+  discoveryPersonDetailResponseSchema,
 );

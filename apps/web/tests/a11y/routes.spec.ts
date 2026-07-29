@@ -227,6 +227,10 @@ test("media detail drawer has no automatically detectable accessibility violatio
   await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
+  await page.getByRole("button", { name: /Keanu Reeves/iu }).click();
+  await expect(page.getByRole("dialog", { name: "Keanu Reeves person context" })).toBeVisible();
+  const personResults = await new AxeBuilder({ page }).analyze();
+  expect(personResults.violations).toEqual([]);
 });
 
 test("request composer has no automatically detectable accessibility violations", async ({

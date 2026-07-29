@@ -3,6 +3,8 @@ import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   discoveryMediaDetailResponseSchema,
   type DiscoveryMediaDetailResponse,
+  discoveryPersonDetailResponseSchema,
+  type DiscoveryPersonDetailResponse,
   discoverySearchResponseSchema,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -76,11 +78,18 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   item: {
     availability: "available",
     cast: [],
-    crew: [{ name: "Vince Gilligan", role: "Creator" }],
+    crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
     episodeCount: 62,
     genres: ["Drama"],
     id: "series:1396",
     kind: "series",
+    intelligence: {
+      ratings: [],
+      ratingsState: "empty",
+      recommendations: [],
+      recommendationsState: "empty",
+      trailers: [],
+    },
     originalTitle: "Breaking Bad",
     overview: "A chemistry teacher turns to manufacturing.",
     productionStatus: "Ended",
@@ -97,14 +106,38 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   },
 };
 
-async function harness(searchImplementation = vi.fn(async () => normalizedResponse)) {
+const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: now.toISOString(),
+  item: {
+    biography: "A performer known for precise genre work.",
+    birthday: "1964-09-02",
+    birthplace: "Beirut, Lebanon",
+    credits: [],
+    creditsState: "empty",
+    deathday: null,
+    department: "Acting",
+    id: "person:6384",
+    name: "Keanu Reeves",
+    source: "seerr",
+    tmdbId: 6384,
+  },
+};
+
+async function harness(
+  searchImplementation = vi.fn(async () => normalizedResponse),
+  personDetailImplementation = vi.fn(async () => normalizedPersonResponse),
+) {
   const config = testConfig();
   const detailImplementation = vi.fn(async () => normalizedDetailResponse);
   const app = await createApp({
     config,
     discoverySearchDependencies: {
       clock: () => now,
-      createAdapter: () => ({ detail: detailImplementation, search: searchImplementation }),
+      createAdapter: () => ({
+        detail: detailImplementation,
+        personDetail: personDetailImplementation,
+        search: searchImplementation,
+      }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -185,7 +218,14 @@ async function harness(searchImplementation = vi.fn(async () => normalizedRespon
   const recovery = app.sessionService.createSession({
     attribution: { authMethod: "recovery" },
   });
-  return { app, detailImplementation, recovery, searchImplementation, session };
+  return {
+    app,
+    detailImplementation,
+    personDetailImplementation,
+    recovery,
+    searchImplementation,
+    session,
+  };
 }
 
 describe("discovery search routes", () => {
@@ -238,6 +278,45 @@ describe("discovery search routes", () => {
       });
       expect(response.statusCode).toBe(400);
       expect(detailImplementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves a normalized person biography without upstream identifiers", async () => {
+    const { app, personDetailImplementation, session } = await harness();
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/discovery/people/6384",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const invalid = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/people/0",
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(personDetailImplementation).not.toHaveBeenCalled();
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/people/6384?language=en-CA",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(discoveryPersonDetailResponseSchema.parse(response.json())).toEqual(
+        normalizedPersonResponse,
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toContain("route-private-api-key");
+      expect(personDetailImplementation).toHaveBeenCalledWith(
+        { tmdbId: 6384 },
+        { language: "en-CA" },
+        expect.any(AbortSignal),
+      );
     } finally {
       await app.close();
     }
@@ -333,6 +412,34 @@ describe("discovery search routes", () => {
       expect(response.headers["retry-after"]).toBe("30");
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("discovery_rate_limited");
       expect(response.body).not.toContain("Private upstream details");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("normalizes person-service rate limits without exposing upstream details", async () => {
+    const upstream = new SafeConnectorError({
+      code: "rate_limited",
+      message: "Private person upstream details",
+      operation: "discovery.person_detail",
+      retryable: true,
+      service: "seerr",
+      status: 429,
+    });
+    const { app, session } = await harness(
+      undefined,
+      vi.fn(async () => Promise.reject(upstream)),
+    );
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/people/6384",
+      });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBeUndefined();
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("discovery_rate_limited");
+      expect(response.body).not.toContain("Private person upstream details");
     } finally {
       await app.close();
     }

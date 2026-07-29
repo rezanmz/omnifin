@@ -158,6 +158,17 @@ test("light media detail drawer visual baseline", async ({ page }, testInfo) => 
   await expect(page).toHaveScreenshot("dashboard-media-details-light.png");
 });
 
+test("person context drawer visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Person context covers representative desktop and phone geometry",
+  );
+  await openMediaDetails(page);
+  await page.getByRole("button", { name: /Keanu Reeves/iu }).click();
+  await expect(page.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+  await expect(page).toHaveScreenshot("dashboard-person-context.png");
+});
+
 async function openRequestComposer(page: Page, advanced = false) {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);

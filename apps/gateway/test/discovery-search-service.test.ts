@@ -6,6 +6,7 @@ import {
 } from "@omnifin/contracts/auth";
 import type {
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
 import { describe, expect, it, vi } from "vitest";
@@ -112,11 +113,18 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: now.toISOString(),
   item: {
     availability: "available",
-    cast: [{ character: "Neo", name: "Keanu Reeves" }],
-    crew: [{ name: "Lana Wachowski", role: "Director" }],
+    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+    crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
     id: "movie:603",
     kind: "movie",
+    intelligence: {
+      ratings: [],
+      ratingsState: "empty",
+      recommendations: [],
+      recommendationsState: "empty",
+      trailers: [],
+    },
     originalTitle: "The Matrix",
     overview: "A hacker discovers the nature of reality.",
     productionStatus: "Released",
@@ -128,6 +136,23 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
     voteAverage: 8.2,
     voteCount: 27_000,
     year: 1999,
+  },
+};
+
+const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: now.toISOString(),
+  item: {
+    biography: "A performer known for precise genre work.",
+    birthday: "1964-09-02",
+    birthplace: "Beirut, Lebanon",
+    credits: [],
+    creditsState: "empty",
+    deathday: null,
+    department: "Acting",
+    id: "person:6384",
+    name: "Keanu Reeves",
+    source: "seerr",
+    tmdbId: 6384,
   },
 };
 
@@ -162,12 +187,13 @@ function harness(options: { withConnector?: boolean } = {}) {
   if (options.withConnector !== false) insertSeerr(database, config);
   const search = vi.fn(async () => normalizedResponse);
   const detail = vi.fn(async () => normalizedDetailResponse);
-  const createAdapter = vi.fn(() => ({ detail, search }));
+  const personDetail = vi.fn(async () => normalizedPersonResponse);
+  const createAdapter = vi.fn(() => ({ detail, personDetail, search }));
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
   });
-  return { config, createAdapter, database, detail, search, service };
+  return { config, createAdapter, database, detail, personDetail, search, service };
 }
 
 describe("discovery search service", () => {
@@ -187,6 +213,19 @@ describe("discovery search service", () => {
         undefined,
       );
       expect(JSON.stringify(normalizedDetailResponse)).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("authorizes and returns only normalized person context", async () => {
+    const { database, personDetail, service } = harness();
+    try {
+      await expect(
+        service.personDetail({ tmdbId: 6384 }, { language: "en-CA" }, { principal: principal() }),
+      ).resolves.toEqual(normalizedPersonResponse);
+      expect(personDetail).toHaveBeenCalledWith({ tmdbId: 6384 }, { language: "en-CA" }, undefined);
+      expect(JSON.stringify(normalizedPersonResponse)).not.toContain(privateApiKey);
     } finally {
       database.close();
     }
@@ -225,6 +264,21 @@ describe("discovery search service", () => {
       await expect(
         service.search(
           { language: "en", page: 1, query: "matrix" },
+          { principal: principal("recovery") },
+        ),
+      ).rejects.toMatchObject({ code: "permission_denied", statusCode: 403 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("authorizes person context before reading connector state", async () => {
+    const { database, service } = harness({ withConnector: false });
+    try {
+      await expect(
+        service.personDetail(
+          { tmdbId: 6384 },
+          { language: "en" },
           { principal: principal("recovery") },
         ),
       ).rejects.toMatchObject({ code: "permission_denied", statusCode: 403 });
