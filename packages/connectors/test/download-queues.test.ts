@@ -31,7 +31,9 @@ function target(
 describe("qBittorrent download queue", () => {
   it("authenticates and normalizes active downloads without returning upstream hashes", async () => {
     const mock = createMockTransport([
-      new Response("Ok.", { headers: { "set-cookie": "SID=fixture-session; Path=/; HttpOnly" } }),
+      new Response("Ok.", {
+        headers: { "set-cookie": "QBT_SID_8080=fixture+session/value; Path=/; HttpOnly" },
+      }),
       jsonResponse([
         {
           added_on: 1_774_648_200,
@@ -89,10 +91,10 @@ describe("qBittorrent download queue", () => {
       "/api/v2/torrents/info",
     ]);
     expect(mock.requests[1]?.url.searchParams.get("limit")).toBe("201");
-    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("SID=fixture-session");
+    expect(mock.requests[1]?.init.headers.get("cookie")).toBe("QBT_SID_8080=fixture+session/value");
     expect(mock.requests[1]?.init.headers.get("origin")).toBe("https://qbittorrent.example.test");
     expect(JSON.stringify(result)).not.toContain(PASSWORD);
-    expect(JSON.stringify(result)).not.toContain("fixture-session");
+    expect(JSON.stringify(result)).not.toContain("fixture+session/value");
   });
 
   it("maps qBittorrent's operational states and unknown ETA sentinel", async () => {

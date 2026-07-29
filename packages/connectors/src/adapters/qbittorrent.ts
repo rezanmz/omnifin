@@ -16,9 +16,18 @@ export interface QBittorrentAdapterConfig extends ConnectorTargetConfig {
   password: string;
 }
 
-function readSessionCookie(setCookie: string | null): string | null {
-  const sessionId = setCookie?.match(/(?:^|;\s*)SID=([^;]+)/i)?.[1];
-  return sessionId && /^[A-Za-z0-9._~-]{1,512}$/.test(sessionId) ? `SID=${sessionId}` : null;
+export function readQBittorrentSessionCookie(setCookie: string | null): string | null {
+  if (!setCookie || setCookie.length > 16_384) return null;
+  const pair = setCookie.split(";", 1)[0]?.trim();
+  const separator = pair?.indexOf("=") ?? -1;
+  if (!pair || separator <= 0) return null;
+  const name = pair.slice(0, separator);
+  const value = pair.slice(separator + 1);
+  if (name !== "SID") {
+    const port = name.match(/^QBT_SID_([1-9]\d{0,4})$/u)?.[1];
+    if (!port || Number(port) > 65_535) return null;
+  }
+  return /^(?=.{1,512}$)[A-Za-z0-9._~+\/-]+={0,2}$/u.test(value) ? `${name}=${value}` : null;
 }
 
 const torrentSchema = z.object({
@@ -119,7 +128,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       });
       return {
         value: version.body,
-        additionalProtectedValues: [cookie.slice("SID=".length)],
+        additionalProtectedValues: [cookie.slice(cookie.indexOf("=") + 1)],
       };
     });
   }
@@ -241,7 +250,7 @@ export class QBittorrentAdapter extends ProbeOnlyAdapter {
       ...(signal ? { signal } : {}),
     });
 
-    const cookie = readSessionCookie(login.headers.get("set-cookie"));
+    const cookie = readQBittorrentSessionCookie(login.headers.get("set-cookie"));
     if (login.body.trim() !== "Ok." || !cookie) {
       throw new SafeConnectorError({
         service: this.service,

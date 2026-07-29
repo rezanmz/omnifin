@@ -19,7 +19,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { QBittorrentAdapter } from "../../packages/connectors/dist/adapters/qbittorrent.js";
+import {
+  QBittorrentAdapter,
+  readQBittorrentSessionCookie,
+} from "../../packages/connectors/dist/adapters/qbittorrent.js";
 import { SabnzbdAdapter } from "../../packages/connectors/dist/adapters/sabnzbd.js";
 
 export const DOWNLOAD_CLIENT_IMAGES = Object.freeze({
@@ -474,15 +477,11 @@ async function qbittorrentLogin(baseUrl, password) {
     },
     method: "POST",
   });
-  const sessionId = response.headers.get("set-cookie")?.match(/(?:^|;\s*)SID=([^;]+)/iu)?.[1];
-  if (
-    response.body.trim() !== "Ok." ||
-    !sessionId ||
-    !/^[A-Za-z0-9._~-]{1,512}$/u.test(sessionId)
-  ) {
+  const cookie = readQBittorrentSessionCookie(response.headers.get("set-cookie"));
+  if (response.body.trim() !== "Ok." || !cookie) {
     throw new DownloadFixtureFailure("authentication_invalid");
   }
-  return `SID=${sessionId}`;
+  return cookie;
 }
 
 async function seedQBittorrent(baseUrl, cookie, fixture) {
