@@ -36,6 +36,18 @@ const routes = [
     path: "/settings/identity-providers?test-view=forbidden",
   },
   {
+    label: "user access administration",
+    path: "/settings/users?test-view=ready",
+  },
+  {
+    label: "empty user access directory",
+    path: "/settings/users?test-view=empty",
+  },
+  {
+    label: "restricted user access administration",
+    path: "/settings/users?test-view=forbidden",
+  },
+  {
     label: "service connection control room",
     path: "/settings/connectors?test-view=ready",
   },

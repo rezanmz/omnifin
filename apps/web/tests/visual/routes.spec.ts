@@ -394,6 +394,38 @@ test("guided identity provider connection visual baseline", async ({ page }, tes
   await expect(page).toHaveScreenshot("identity-providers-empty.png", { fullPage: true });
 });
 
+test("user access control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "User access covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/users?test-view=ready");
+  await page.getByRole("heading", { name: "Rezan" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("user-access.png", { fullPage: true });
+});
+
+test("light user access control room visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Dense light controls use desktop Chromium");
+  await useLightTheme(page);
+  await page.goto("/settings/users?test-view=ready");
+  await page.getByRole("heading", { name: "Rezan" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("user-access-light.png", { fullPage: true });
+});
+
+test("empty user access directory visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Empty user access covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/users?test-view=empty");
+  await page.getByRole("heading", { name: "No user identities yet." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("user-access-empty.png", { fullPage: true });
+});
+
 test("service connection control room visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),

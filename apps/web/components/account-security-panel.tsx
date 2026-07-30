@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Unlink,
   UserRoundCheck,
+  UsersRound,
   WifiOff,
 } from "lucide-react";
 import Link from "next/link";
@@ -476,6 +477,15 @@ export function AccountSecurityPanel({
                           href="/settings/identity-providers"
                         >
                           <KeyRound aria-hidden="true" size={17} /> Identity providers
+                        </Link>
+                      ) : null}
+                      {snapshot!.principal.permissions.includes("roles.manage") &&
+                      snapshot!.principal.authenticationMethod.kind !== "recovery" ? (
+                        <Link
+                          className="account-action account-action--primary"
+                          href="/settings/users"
+                        >
+                          <UsersRound aria-hidden="true" size={17} /> User access
                         </Link>
                       ) : null}
                       {snapshot!.principal.authenticationMethod.kind === "oidc" ? (

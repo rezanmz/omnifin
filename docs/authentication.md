@@ -12,7 +12,10 @@ and contributors changing a security-sensitive flow.
 > recovery. The permission-checked identity control room and API can create, list, and validate
 > encrypted configurations and administer provider lifecycles and explicit role mappings. A pinned,
 > isolated Authentik environment exercises real authorization, role mapping, RP logout, and
-> back-channel logout. The protected live compatibility baseline remains pending, and Phase 1 has
+> back-channel logout. An administrator-only user access directory now exposes normalized account
+> state, role provenance, and session activity without external subjects or service credentials;
+> direct roles and local suspension are guarded by optimistic revisions and atomic session
+> revocation. The protected live compatibility baseline remains pending, and Phase 1 has
 > not passed a tagged release gate; treat this document as development evidence, not a production
 > support claim.
 
@@ -60,6 +63,21 @@ signed-out state. Its guided Authentik path reserves `oidc-{slug}` before creati
 callback and logout URLs can be registered without a temporary provider or wildcard redirect.
 Empty, loading, offline, permission-denied, validation-failure, and destructive-confirmation states
 are explicit.
+
+The browser user access directory requires a normal session with `roles.manage`; break-glass
+recovery is deliberately excluded. It lists only normalized display identity, authentication
+methods, role provenance, local account status, Jellyfin link health, and bounded session activity.
+It never returns OIDC issuer/subject pairs, Jellyfin identifiers, tokens, connector configuration,
+or upstream credentials. Direct Jellyfin-only roles may be assigned locally, while any identity
+with OIDC ownership keeps its role under provider claim mappings. Administrators cannot change
+their own row or remove the final active administrator.
+
+Every role or local account-state update requires the record's exact `updatedAt` revision,
+same-origin session CSRF proof, and the named permission for the requested field. A successful
+change, all target-session revocations, and one sanitized audit event commit in a single immediate
+transaction. Re-enabling an account derives `active` versus `pending_link` from the current
+Jellyfin link instead of trusting a browser-supplied status. The interface stages changes first,
+states the exact role and session impact, and requires a separate apply action.
 
 The OIDC flow currently creates or resolves an external identity keyed by immutable
 issuer and subject, applies explicit role mappings, provisions a `viewer` by default
@@ -140,6 +158,8 @@ gateway directly.
 | `GET /api/admin/auth/oidc/providers/{providerId}/role-mappings`                | List exact claim-to-role rules for an authorized administrator.             |
 | `POST /api/admin/auth/oidc/providers/{providerId}/role-mappings`               | Create an audited rule and revoke affected role-derived sessions.           |
 | `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}` | Delete a rule and revoke affected role-derived sessions.                    |
+| `GET /api/admin/users`                                                         | List bounded, browser-safe account authority and activity summaries.        |
+| `PATCH /api/admin/users/{userId}`                                              | Apply a revision-bound role or local-state change and revoke sessions.      |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect
@@ -280,8 +300,8 @@ reserved so a stale bearer or CSRF value cannot become valid again after a resta
 ## OIDC-to-Jellyfin pairing
 
 An OIDC identity alone does not grant media access. After first OIDC sign-in, the user
-must prove control of a Jellyfin account. Password and Quick Connect proof are
-implemented; the remaining lifecycle controls are still Phase 1 work.
+must prove control of a Jellyfin account. Password and Quick Connect proof, link inspection,
+relinking, revocation, logout-all, and administrator-controlled local suspension are implemented.
 
 - Credential pairing must be sent directly from the gateway to Jellyfin. The password
   must be discarded as soon as the exchange completes.

@@ -12,8 +12,9 @@ design and review.
 > and provider-initiated OIDC back- and front-channel logout are implemented, while
 > encrypted and audited connector administration is implemented through the versioned
 > gateway API. Permission enforcement covers every current route and is repeated inside
-> administrative services. The connector administration interface, media proxying, and
-> upstream mutations remain incomplete. Controls
+> administrative services. Browser-safe user access administration additionally protects OIDC
+> role ownership, self-lockout, the final active administrator, stale revisions, and atomic session
+> revocation. Remaining connector breadth and upstream mutations are still incomplete. Controls
 > for those remaining surfaces are mandatory implementation requirements, not claims
 > of current support.
 
@@ -94,6 +95,24 @@ application boundary; operators must still patch and isolate the host.
   deleted, and connectors referenced by a service identity link remain protected.
 - Creation, validation, update, and deletion write bounded audit metadata without connector
   credentials, private response bodies, or raw client addresses.
+
+## Current user-access administration controls
+
+- User directory reads require `roles.manage` before any account data is returned. Recovery
+  sessions cannot use the directory, even though they can repair OIDC or Jellyfin configuration.
+- Browser responses are schema-bounded to display identity, role and provenance, local status,
+  normalized sign-in methods, Jellyfin link health, and session counts/timestamps. Immutable OIDC
+  subjects, issuers, external Jellyfin identifiers, connector details, tokens, and credentials are
+  excluded.
+- Role and account-state mutations repeat named-permission checks in the service, require a current
+  `updatedAt` precondition, deny self-mutation, and preserve at least one active administrator.
+- Any identity with OIDC ownership keeps its role controlled by claim mappings. The local route can
+  suspend that identity, but cannot create a competing manual role source.
+- Re-enablement derives `active` or `pending_link` from the stored Jellyfin link. The browser cannot
+  nominate an arbitrary account status or claim that a revoked link is usable.
+- The account update, target-session revocation, and sanitized `auth.user.access_updated` audit
+  record commit atomically. Audit metadata contains only previous/new role and state plus the
+  revoked-session count; client addresses are privacy-hashed.
 
 ## Media-request mutation controls
 

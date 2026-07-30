@@ -46,6 +46,10 @@ import {
   type SessionServiceDependencies,
   type ValidatedSession,
 } from "./auth/session-service.js";
+import {
+  userAccessAdminRoutes,
+  type UserAccessAdminRoutesOptions,
+} from "./auth/user-access-admin-routes.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import { type DatabaseHandle, openDatabase } from "./db/client.js";
 import {
@@ -114,6 +118,7 @@ export interface CreateAppOptions {
   oidcDependencies?: OidcRoutesDependencies;
   oidcProviderAdminDependencies?: OidcProviderAdminRoutesOptions["dependencies"];
   oidcRoleMappingAdminDependencies?: OidcRoleMappingAdminRoutesOptions["dependencies"];
+  userAccessAdminDependencies?: UserAccessAdminRoutesOptions["dependencies"];
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
@@ -514,6 +519,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.oidcRoleMappingAdminDependencies === undefined
         ? {}
         : { dependencies: options.oidcRoleMappingAdminDependencies }),
+    });
+    await app.register(userAccessAdminRoutes, {
+      ...(options.userAccessAdminDependencies === undefined
+        ? {}
+        : { dependencies: options.userAccessAdminDependencies }),
     });
     await app.register(jellyfinRoutes, {
       ...(options.jellyfinDependencies === undefined

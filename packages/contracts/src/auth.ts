@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const AUTH_PROVIDERS_MAX_COUNT = 50;
+export const AUTH_USERS_PAGE_MAX_COUNT = 50;
 export const AUTH_PROVIDERS_RESPONSE_MAX_BYTES = 1_048_576;
 export const OIDC_ISSUER_MAX_LENGTH = 2_048;
 export const OIDC_ROLE_MAPPINGS_MAX_COUNT = 512;
@@ -543,6 +544,94 @@ export const sessionPrincipalSchema = z
     }
   });
 export type SessionPrincipal = z.infer<typeof sessionPrincipalSchema>;
+
+export const userRoleSourceSchema = z.enum([
+  "default",
+  "oidc_mapping",
+  "manual",
+  "recovery_bootstrap",
+]);
+export type UserRoleSource = z.infer<typeof userRoleSourceSchema>;
+
+export const userAccountStatusSchema = z.enum(["active", "pending_link", "disabled"]);
+export type UserAccountStatus = z.infer<typeof userAccountStatusSchema>;
+
+const userAuthenticationMethodSchema = z.enum(["jellyfin", "oidc"]);
+
+export const userAccessSummarySchema = z
+  .strictObject({
+    activeSessions: z.int().min(0).max(2_147_483_647),
+    authenticationMethods: z.array(userAuthenticationMethodSchema).max(2),
+    createdAt: z.iso.datetime({ offset: true }),
+    displayName: displayNameSchema,
+    id: identifierSchema,
+    jellyfinLinkHealth: z.enum(["linked", "unavailable", "relink_required", "revoked"]).nullable(),
+    lastActiveAt: z.iso.datetime({ offset: true }).nullable(),
+    role: roleSchema,
+    roleSource: userRoleSourceSchema,
+    status: userAccountStatusSchema,
+    updatedAt: z.iso.datetime({ offset: true }),
+  })
+  .superRefine((user, context) => {
+    if (new Set(user.authenticationMethods).size !== user.authenticationMethods.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Authentication methods cannot contain duplicates.",
+        path: ["authenticationMethods"],
+      });
+    }
+    if ((user.jellyfinLinkHealth === null) === user.authenticationMethods.includes("jellyfin")) {
+      context.addIssue({
+        code: "custom",
+        message: "Jellyfin authentication requires a normalized link health state.",
+        path: ["jellyfinLinkHealth"],
+      });
+    }
+    if (Date.parse(user.updatedAt) < Date.parse(user.createdAt)) {
+      context.addIssue({
+        code: "custom",
+        message: "User updates cannot predate account creation.",
+        path: ["updatedAt"],
+      });
+    }
+  });
+export type UserAccessSummary = z.infer<typeof userAccessSummarySchema>;
+
+export const userAccessListQuerySchema = z.strictObject({
+  cursor: identifierSchema.optional(),
+});
+export type UserAccessListQuery = z.infer<typeof userAccessListQuerySchema>;
+
+export const userAccessListResponseSchema = z.strictObject({
+  nextCursor: identifierSchema.nullable(),
+  users: z.array(userAccessSummarySchema).max(AUTH_USERS_PAGE_MAX_COUNT),
+});
+export type UserAccessListResponse = z.infer<typeof userAccessListResponseSchema>;
+
+export const userAccessMutationParamsSchema = z.strictObject({ userId: identifierSchema });
+export type UserAccessMutationParams = z.infer<typeof userAccessMutationParamsSchema>;
+
+export const userAccessMutationRequestSchema = z
+  .strictObject({
+    enabled: z.boolean().optional(),
+    expectedUpdatedAt: z.iso.datetime({ offset: true }),
+    role: roleSchema.optional(),
+  })
+  .superRefine((mutation, context) => {
+    if (mutation.enabled === undefined && mutation.role === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "A role or account-state change is required.",
+      });
+    }
+  });
+export type UserAccessMutationRequest = z.infer<typeof userAccessMutationRequestSchema>;
+
+export const userAccessMutationResponseSchema = z.strictObject({
+  revokedSessions: z.int().min(0).max(2_147_483_647),
+  user: userAccessSummarySchema,
+});
+export type UserAccessMutationResponse = z.infer<typeof userAccessMutationResponseSchema>;
 
 const claimScalarSchema = z.union([z.string().min(1).max(512), z.number().finite(), z.boolean()]);
 const blockedClaimPathSegments = new Set(["__proto__", "constructor", "prototype"]);
