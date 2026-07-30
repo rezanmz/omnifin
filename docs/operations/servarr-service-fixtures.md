@@ -54,8 +54,15 @@ state change, a fresh read, restoration, and a final read of the original state.
 import, file, quality-profile, tag, path, delete, or media mutation is permitted. Prowlarr exercises
 normalized system health, indexer intelligence, application sync, and failure history against fresh
 empty state, provisions one private Newznab provider with RSS and automatic search disabled, and
-runs the production adapter's exact-provider safe test. Bazarr exercises its normalized library
-lookup and requires the typed empty-library result.
+runs the production adapter's exact-provider safe test. Bazarr first requires the typed
+empty-library result. Its existing pinned service container then generates a two-second
+copyright-free MKV with one English SubRip stream inside the mounted fixture directory. The gate
+enables only Bazarr's built-in `embeddedsubtitles` provider, seeds one bounded local media/profile
+record through a fixed stdin-only program, restarts the same container, and uses Omnifin's
+production adapter to resolve the exact title, search, select, and download that embedded stream.
+The gate passes only when exactly one bounded external SubRip artifact contains the deterministic
+fixture marker. The media, seed program, database, configuration, and resulting subtitle never
+leave the transient directory or enter an artifact.
 
 Successful teardown is part of the gate. The service and sidecar containers, internal network,
 generated database, configuration, API key, short-lived certificates and keys, and transient logs
@@ -67,7 +74,8 @@ version, immutable image reference, fixed check names, and pass status. API keys
 container names, paths, native identifiers, upstream payloads, and logs cannot be represented.
 Failure evidence is limited to a normalized stage code.
 
-These checks are real-service development evidence for bounded monitoring changes and provider safe
-tests. They do not establish a public installation compatibility baseline or prove searches, grabs,
-imports, downloads, file changes, subtitle downloads, timeouts, or recovery against an operator's
+These checks are real-service development evidence for bounded monitoring changes, a provider safe
+test, and one offline embedded-subtitle search/download path. They do not establish a public
+installation compatibility baseline or prove public subtitle-provider compatibility, acquisition
+searches, grabs, imports, general file changes, timeouts, or recovery against an operator's
 deployment. Those claims remain gated by the protected live matrix and its exact-version evidence.

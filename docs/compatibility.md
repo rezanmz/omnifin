@@ -16,7 +16,7 @@ combination is described as supported.
 | Seerr                             | Discovery, routed requests, approvals, issues, user context     | Search/request/routing fixtures ready; live baseline pending    |
 | Radarr                            | Movie monitoring, calendar, search, releases, queue, history    | Isolated reads plus monitoring restore gate ready; live pending |
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history   | Isolated reads plus monitoring restore gate ready; live pending |
-| Bazarr                            | Subtitle status, search, and download                           | Contracts and isolated empty-state gate ready; live pending     |
+| Bazarr                            | Subtitle status, search, and download                           | Isolated embedded search/download gate ready; live pending      |
 | Prowlarr                          | Indexer status, statistics, failures, sync, safe tests          | Isolated reads plus exact safe-test gate ready; live pending    |
 | qBittorrent                       | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.2.0 gate ready; live baseline pending                |
 | SABnzbd                           | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.0.4 gate ready; live baseline pending                |
@@ -87,11 +87,13 @@ public installation support claim.
 Fresh digest-pinned Radarr 6.3.0.10514, Sonarr 4.0.19.2979, Prowlarr 2.5.2.5491, and Bazarr 1.6.0
 instances also run on one private network per service. Omnifin's production adapters must pass
 exact version discovery, authentication, invalid-key rejection, and their service-specific
-normalized empty-state reads before the connector aggregate succeeds. Passing evidence is written
-only after deterministic teardown and cannot contain credentials, URLs, ports, paths, identifiers,
-logs, or upstream payloads. See the
-[isolated service fixture runbook](operations/servarr-service-fixtures.md). This remains read-only
-development evidence; live support and safe mutation claims remain pending.
+normalized reads before the connector aggregate succeeds. Radarr and Sonarr restore one exact
+monitoring change, Prowlarr tests one private provider, and Bazarr resolves a generated
+copyright-free media target, selects its built-in embedded-subtitle result, downloads it, and
+verifies the extracted SubRip artifact. Passing evidence is written only after deterministic
+teardown and cannot contain credentials, URLs, ports, paths, identifiers, media names, logs, or
+upstream payloads. See the [isolated service fixture runbook](operations/servarr-service-fixtures.md).
+These remain isolated development checks; live support claims remain pending.
 
 Scheduled and manual probes run in `.github/workflows/integration-live.yml` only from
 `main` and only through the protected `integration` environment. Until the repository

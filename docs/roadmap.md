@@ -98,8 +98,8 @@ matrix.
   protected live evidence pending)
 - Player issue reporting plus a unified local/Seerr resolve and reopen workbench
   (implemented; protected live evidence pending)
-- Bazarr subtitle search and download (implemented with an isolated real-service empty-state gate;
-  protected live mutation evidence pending)
+- Bazarr subtitle search and download (implemented with an isolated real-service embedded-subtitle
+  search/download gate; protected live compatibility evidence pending)
 - Jellyfin scans, unmatched-media handling, and metadata artwork editing (implemented;
   protected live evidence pending)
 
