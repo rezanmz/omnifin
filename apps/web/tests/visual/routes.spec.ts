@@ -196,7 +196,9 @@ async function openMediaDetails(page: Page) {
   await search.click();
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
-  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
+  const details = page.getByRole("dialog", { name: "The Matrix details" });
+  await expect(details).toBeVisible();
+  await expect(details.getByText("Free your mind.")).toBeVisible();
 }
 
 test("media detail drawer visual baseline", async ({ page }, testInfo) => {
@@ -227,6 +229,7 @@ test("person context drawer visual baseline", async ({ page }, testInfo) => {
   await openMediaDetails(page);
   await page.getByRole("button", { name: /Keanu Reeves/iu }).click();
   await expect(page.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+  await expect(page.getByText(/work spans independent drama/iu)).toBeVisible();
   await expect(page).toHaveScreenshot("dashboard-person-context.png");
 });
 
