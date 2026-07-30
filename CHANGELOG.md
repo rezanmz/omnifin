@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/rezanmz/omnifin/compare/v0.1.0...v0.2.0) (2026-07-30)
+
+
+### Features
+
+* add live discovery dashboard rails ([f7d4712](https://github.com/rezanmz/omnifin/commit/f7d47125f1647c7c741fad88a71a9bf56f59b6d2)), closes [#64](https://github.com/rezanmz/omnifin/issues/64)
+* **auth:** add guarded role mapping updates ([#67](https://github.com/rezanmz/omnifin/issues/67)) ([52e8880](https://github.com/rezanmz/omnifin/commit/52e8880a134849d0c70781a118428590af496899)), closes [#66](https://github.com/rezanmz/omnifin/issues/66)
+* **auth:** add user access controls ([#57](https://github.com/rezanmz/omnifin/issues/57)) ([882116b](https://github.com/rezanmz/omnifin/commit/882116b919a7380c68786e2d725c2bb6a50f2db4)), closes [#55](https://github.com/rezanmz/omnifin/issues/55)
+* **gateway:** stream live provenance updates ([#63](https://github.com/rezanmz/omnifin/issues/63)) ([9db2f87](https://github.com/rezanmz/omnifin/commit/9db2f87f1120d69b12ec5ccaa8d361d2ef35134e)), closes [#62](https://github.com/rezanmz/omnifin/issues/62)
+
+
+### Fixes
+
+* **ci:** allow draft release validation ([#54](https://github.com/rezanmz/omnifin/issues/54)) ([9e5f06d](https://github.com/rezanmz/omnifin/commit/9e5f06d11bd3576ddaf0945dad8c2c9b8c07eb56)), closes [#53](https://github.com/rezanmz/omnifin/issues/53)
+* **ci:** preserve release chain after optional gates ([#59](https://github.com/rezanmz/omnifin/issues/59)) ([e8b3b5f](https://github.com/rezanmz/omnifin/commit/e8b3b5fd09973bc9dd9b8ec448186eb985faded2)), closes [#58](https://github.com/rezanmz/omnifin/issues/58)
+* **ci:** stabilize gateway memory budget ([#71](https://github.com/rezanmz/omnifin/issues/71)) ([8c1c9e2](https://github.com/rezanmz/omnifin/commit/8c1c9e25dd5756d60e84034a13ea5112ba9ee37b)), closes [#70](https://github.com/rezanmz/omnifin/issues/70)
+
 ## 0.1.0 (2026-07-29)
 
 
