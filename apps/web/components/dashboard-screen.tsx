@@ -5,9 +5,9 @@ import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashb
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
+import { DiscoveryDashboard } from "./discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
-import { LazyDiscoveryDashboard } from "./lazy-discovery-dashboard";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MediaRail } from "./media-rail";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
@@ -52,7 +52,7 @@ export function DashboardScreen({
         <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           {liveDiscovery ? (
-            <LazyDiscoveryDashboard
+            <DiscoveryDashboard
               {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
               live={discoveryRefresh}
               showContinueWatching={discoveryShowContinueWatching}
