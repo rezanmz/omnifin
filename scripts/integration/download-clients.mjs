@@ -25,6 +25,11 @@ import {
   readQBittorrentSessionCookie,
 } from "../../packages/connectors/dist/adapters/qbittorrent.js";
 import { SabnzbdAdapter } from "../../packages/connectors/dist/adapters/sabnzbd.js";
+import {
+  acquirePinnedDockerImage,
+  DockerImagePullError,
+  DOCKER_LOCAL_IMAGE_ARGUMENTS,
+} from "./docker-runtime.mjs";
 
 export const DOWNLOAD_CLIENT_IMAGES = Object.freeze({
   qbittorrent:
@@ -402,6 +407,7 @@ function commonContainerArguments(context, image) {
   const gid = process.getgid?.();
   return [
     "run",
+    ...DOCKER_LOCAL_IMAGE_ARGUMENTS,
     "--detach",
     "--name",
     context.containerName,
@@ -428,7 +434,15 @@ function commonContainerArguments(context, image) {
   ];
 }
 
-function startContainer(context) {
+async function startContainer(context) {
+  try {
+    await acquirePinnedDockerImage(DOWNLOAD_CLIENT_IMAGES[context.service]);
+  } catch (error) {
+    if (error instanceof DockerImagePullError) {
+      throw new DownloadFixtureFailure(error.code);
+    }
+    throw error;
+  }
   runDocker(
     ["network", "create", "--driver", "bridge", "--internal", context.networkName],
     30_000,
@@ -871,7 +885,7 @@ async function main(options) {
   const context = await prepareContext(options.service);
   try {
     await verifyTemporaryContext(context);
-    const server = startContainer(context);
+    const server = await startContainer(context);
     const report =
       options.service === "qbittorrent"
         ? await runQBittorrent(context, server)
