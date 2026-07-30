@@ -103,8 +103,9 @@ test("keeps Seerr private and passes credentials through an env file", () => {
 test("runs the metadata sidecar read-only under the exact public hostname on the private network", () => {
   const arguments_ = seerrFixtureServerContainerArguments(context);
   assert.ok(arguments_.includes("--read-only"));
-  assert.ok(arguments_.includes("--network-alias"));
-  assert.ok(arguments_.includes("api.themoviedb.org"));
+  const networkAliasIndex = arguments_.indexOf("--network-alias");
+  assert.notEqual(networkAliasIndex, -1);
+  assert.equal(arguments_[networkAliasIndex + 1], "api.themoviedb.org");
   assert.ok(arguments_.includes(SEERR_FIXTURE_SERVER_IMAGE));
   assert.equal(arguments_.includes("--publish"), false);
   assert.equal(arguments_.includes("-p"), false);
