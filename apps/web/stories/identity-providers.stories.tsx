@@ -100,6 +100,15 @@ export const EditingRoleMapping: Story = {
     await expect(canvas.getByText(/Manual roles remain unchanged/u)).toBeVisible();
   },
 };
+export const EditingRoleMappingLight: Story = {
+  globals: { theme: "light" },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Edit groups mapping" }));
+    await expect(canvas.getByRole("heading", { name: "Edit role mapping" })).toBeVisible();
+    await expect(canvas.getByText(/Manual roles remain unchanged/u)).toBeVisible();
+  },
+};
 export const GuidedAuthentikConnection: Story = {
   args: { initialMappings: {}, initialOutcome: empty },
 };
