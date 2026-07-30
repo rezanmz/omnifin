@@ -453,7 +453,7 @@ async function startFixture(context) {
   context.containerCreated = true;
   await waitForContainer(context, "initial_migration_timeout");
   const stopped = runDocker(
-    ["stop", "--time", "20", context.containerName],
+    ["stop", "--timeout", "20", context.containerName],
     60_000,
     "container_stop_failed",
   ).trim();

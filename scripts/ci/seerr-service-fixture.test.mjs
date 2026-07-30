@@ -137,6 +137,13 @@ test("seeds only a stopped local database with no network or secret arguments", 
   assert.equal(source.includes("fetch("), false);
 });
 
+test("uses the supported Docker stop timeout flag", () => {
+  const source = readFileSync(new URL("../integration/seerr-service.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /\["stop", "--timeout", "20", context\.containerName\]/u);
+  assert.doesNotMatch(source, /\["stop", "--time",/u);
+});
+
 test("serves one bounded copyright-free movie only on the exact TMDB route", () => {
   const movie = seerrMovieFixture();
   assert.equal(movie.id, SEERR_FIXTURE_TMDB_ID);
