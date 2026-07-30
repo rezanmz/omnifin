@@ -324,17 +324,23 @@ export function validateBazarrSubtitleArtifact(entries, content) {
         entry.includes("\\") ||
         /[\p{Cc}\p{Cf}]/u.test(entry),
     ) ||
-    !entries.includes(BAZARR_FIXTURE_MEDIA_NAME) ||
+    !entries.includes(BAZARR_FIXTURE_MEDIA_NAME)
+  ) {
+    throw new ServarrFixtureFailure("subtitle_directory_invalid");
+  }
+  if (
     typeof content !== "string" ||
     Buffer.byteLength(content, "utf8") < 32 ||
-    Buffer.byteLength(content, "utf8") > 64 * 1_024 ||
-    !content.includes(BAZARR_SUBTITLE_MARKER)
+    Buffer.byteLength(content, "utf8") > 64 * 1_024
   ) {
-    throw new ServarrFixtureFailure("subtitle_artifact_invalid");
+    throw new ServarrFixtureFailure("subtitle_content_invalid");
+  }
+  if (!content.includes(BAZARR_SUBTITLE_MARKER)) {
+    throw new ServarrFixtureFailure("subtitle_marker_invalid");
   }
   const subtitles = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
   if (subtitles.length !== 1 || subtitles[0] === BAZARR_FIXTURE_SOURCE_NAME) {
-    throw new ServarrFixtureFailure("subtitle_artifact_invalid");
+    throw new ServarrFixtureFailure("subtitle_artifact_count_invalid");
   }
   return subtitles[0];
 }
@@ -1340,7 +1346,7 @@ async function verifyBazarr(context, adapter) {
   const entries = await readdir(context.dataDirectory);
   const subtitleNames = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
   if (subtitleNames.length !== 1 || !subtitleNames[0]) {
-    throw new ServarrFixtureFailure("subtitle_artifact_invalid");
+    throw new ServarrFixtureFailure("subtitle_artifact_count_invalid");
   }
   const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
   const subtitleMetadata = await lstat(subtitlePath);
@@ -1350,7 +1356,7 @@ async function verifyBazarr(context, adapter) {
     subtitleMetadata.size < 32 ||
     subtitleMetadata.size > 64 * 1_024
   ) {
-    throw new ServarrFixtureFailure("subtitle_artifact_invalid");
+    throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
   }
   validateBazarrSubtitleArtifact(entries, await readFile(subtitlePath, "utf8"));
 }

@@ -254,11 +254,19 @@ test("accepts exactly one extracted SubRip artifact beside the generated media",
         ["fixture-media.mkv", "first.srt", "second.srt"],
         "Deterministic subtitle evidence.",
       ),
-    /subtitle_artifact_invalid/u,
+    /subtitle_directory_invalid/u,
   );
   assert.throws(
     () => validateBazarrSubtitleArtifact(["fixture-media.mkv"], ""),
-    /subtitle_artifact_invalid/u,
+    /subtitle_directory_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateBazarrSubtitleArtifact(
+        ["fixture-media.mkv", "fixture-media.en.srt"],
+        "1\n00:00:00,000 --> 00:00:01,500\nUnexpected text.\n",
+      ),
+    /subtitle_marker_invalid/u,
   );
 });
 
