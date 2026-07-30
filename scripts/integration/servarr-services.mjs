@@ -424,7 +424,7 @@ export function fixtureServerContainerArguments(context) {
     "--network-alias",
     "skyhook.sonarr.tv",
     "--network-alias",
-    "fixture-indexer",
+    "fixture-indexer.omnifin.invalid",
     ...containerIsolationArguments(uid, gid),
     "--cap-drop",
     "ALL",
@@ -680,6 +680,10 @@ function boundedJson(value, failureCode) {
 }
 
 async function fixtureApiJson(context, server, apiKey, path, options = {}) {
+  const stage = options.stage ?? "fixture_api";
+  if (!/^[a-z][a-z0-9_]{0,39}$/u.test(stage)) {
+    throw new ServarrFixtureFailure("fixture_api_stage_invalid");
+  }
   if (!/^\/api\/v[13]\/[A-Za-z0-9?&=/_-]{1,240}$/u.test(path)) {
     throw new ServarrFixtureFailure("fixture_api_path_invalid");
   }
@@ -698,18 +702,21 @@ async function fixtureApiJson(context, server, apiKey, path, options = {}) {
     const url = new URL(path, server.baseUrl);
     response = server.transport ? await server.transport(url, init) : await fetch(url, init);
   } catch (error) {
-    throw new ServarrFixtureFailure("fixture_api_transport_failed", { cause: error });
+    throw new ServarrFixtureFailure(`${stage}_transport_failed`, { cause: error });
   }
-  if (!response.ok) throw new ServarrFixtureFailure("fixture_api_response_failed");
+  if (!response.ok) {
+    const status = Number.isInteger(response.status) ? response.status : 0;
+    throw new ServarrFixtureFailure(`${stage}_http_${status}`);
+  }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_RESPONSE_BYTES) {
-    throw new ServarrFixtureFailure("fixture_api_response_invalid");
+    throw new ServarrFixtureFailure(`${stage}_response_invalid`);
   }
   try {
-    return boundedJson(JSON.parse(new TextDecoder().decode(bytes)), "fixture_api_response_invalid");
+    return boundedJson(JSON.parse(new TextDecoder().decode(bytes)), `${stage}_response_invalid`);
   } catch (error) {
     if (error instanceof ServarrFixtureFailure) throw error;
-    throw new ServarrFixtureFailure("fixture_api_response_invalid", { cause: error });
+    throw new ServarrFixtureFailure(`${stage}_response_invalid`, { cause: error });
   }
 }
 
@@ -743,7 +750,7 @@ export function configureProwlarrFixtureIndexer(templates) {
     }
     if (field.name === "baseUrl") {
       requiredFields.delete(field.name);
-      return { ...field, value: "http://fixture-indexer:8080" };
+      return { ...field, value: "http://fixture-indexer.omnifin.invalid:8080" };
     }
     if (field.name === "apiPath") {
       requiredFields.delete(field.name);
@@ -784,11 +791,14 @@ function validateProvisionedMedia(resource, context) {
 }
 
 async function provisionMediaFixture(context, server, apiKey) {
-  const qualityProfiles = await fixtureApiJson(context, server, apiKey, "/api/v3/qualityprofile");
+  const qualityProfiles = await fixtureApiJson(context, server, apiKey, "/api/v3/qualityprofile", {
+    stage: "quality_profile_read",
+  });
   const qualityProfileId = selectQualityProfileId(qualityProfiles);
   await fixtureApiJson(context, server, apiKey, "/api/v3/rootfolder", {
     body: { path: "/data" },
     method: "POST",
+    stage: "root_folder_provisioning",
   });
   const isMovie = context.service === "radarr";
   const resource = await fixtureApiJson(
@@ -825,17 +835,21 @@ async function provisionMediaFixture(context, server, apiKey) {
             tvdbId: FIXTURE_SERIES_TVDB_ID,
           },
       method: "POST",
+      stage: "fixture_title_create",
     },
   );
   return validateProvisionedMedia(resource, context);
 }
 
 async function provisionProwlarrFixture(context, server, apiKey) {
-  const templates = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer/schema");
+  const templates = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer/schema", {
+    stage: "indexer_schema_read",
+  });
   const configured = configureProwlarrFixtureIndexer(templates);
   const resource = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer?forceSave=true", {
     body: configured,
     method: "POST",
+    stage: "fixture_indexer_create",
   });
   if (
     !resource ||
@@ -944,9 +958,7 @@ async function verifyRadarrOrSonarr(context, server, apiKey, adapter) {
   if (calendar.truncated !== false) throw new ServarrFixtureFailure("calendar_empty_state_invalid");
   const storage = await connectorOperation("storage_read", () => adapter.readStorageCapacity());
   if (!Array.isArray(storage)) throw new ServarrFixtureFailure("storage_read_invalid");
-  const mediaId = await connectorOperation("fixture_title_provisioning", () =>
-    provisionMediaFixture(context, server, apiKey),
-  );
+  const mediaId = await provisionMediaFixture(context, server, apiKey);
   await verifyMonitoringMutation(context, adapter, mediaId);
 }
 
@@ -972,9 +984,7 @@ async function verifyProwlarr(context, server, apiKey, adapter) {
   );
   assertEmptyArray(failures.items, "failure_empty_state_invalid");
   if (failures.hasMore) throw new ServarrFixtureFailure("failure_empty_state_invalid");
-  const indexerId = await connectorOperation("fixture_indexer_provisioning", () =>
-    provisionProwlarrFixture(context, server, apiKey),
-  );
+  const indexerId = await provisionProwlarrFixture(context, server, apiKey);
   const provisioned = await connectorOperation("indexer_provisioned_read", () =>
     adapter.readIndexerIntelligencePage({ limit: 25 }),
   );

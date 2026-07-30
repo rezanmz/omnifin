@@ -105,16 +105,16 @@ export function newznabFixtureFeed() {
   <channel>
     <title>Omnifin Fixture Indexer</title>
     <description>Deterministic fixture feed</description>
-    <link>http://fixture-indexer:8080/</link>
+    <link>http://fixture-indexer.omnifin.invalid:8080/</link>
     <newznab:response offset="0" total="1" />
     <item>
       <title>The.Deterministic.Signal.S01E01.1080p.WEB-DL</title>
-      <guid isPermaLink="true">http://fixture-indexer:8080/details/deterministic-signal-s01e01</guid>
-      <link>http://fixture-indexer:8080/nzb/deterministic-signal-s01e01.nzb</link>
+      <guid isPermaLink="true">http://fixture-indexer.omnifin.invalid:8080/details/deterministic-signal-s01e01</guid>
+      <link>http://fixture-indexer.omnifin.invalid:8080/nzb/deterministic-signal-s01e01.nzb</link>
       <pubDate>Wed, 01 Jan 2025 00:00:00 +0000</pubDate>
       <category>TV &gt; HD</category>
       <description>Deterministic fixture result</description>
-      <enclosure url="http://fixture-indexer:8080/nzb/deterministic-signal-s01e01.nzb" length="1048576" type="application/x-nzb" />
+      <enclosure url="http://fixture-indexer.omnifin.invalid:8080/nzb/deterministic-signal-s01e01.nzb" length="1048576" type="application/x-nzb" />
       <newznab:attr name="category" value="5000" />
       <newznab:attr name="size" value="1048576" />
       <newznab:attr name="guid" value="deterministic-signal-s01e01" />

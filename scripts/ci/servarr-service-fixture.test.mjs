@@ -120,7 +120,7 @@ test("runs the mutation sidecar read-only on the internal network without publis
   assert.ok(arguments_.includes("--network-alias"));
   assert.ok(arguments_.includes("api.radarr.video"));
   assert.ok(arguments_.includes("skyhook.sonarr.tv"));
-  assert.ok(arguments_.includes("fixture-indexer"));
+  assert.ok(arguments_.includes("fixture-indexer.omnifin.invalid"));
   assert.ok(arguments_.includes(SERVARR_FIXTURE_SERVER_IMAGE));
   assert.ok(arguments_.some((argument) => argument.includes("server.crt")));
   assert.ok(arguments_.some((argument) => argument.includes("server.key")));
@@ -209,7 +209,7 @@ test("configures only the private Newznab fixture fields", () => {
   assert.equal(configured.redirect, true);
   assert.equal(
     configured.fields.find((field) => field.name === "baseUrl").value,
-    "http://fixture-indexer:8080",
+    "http://fixture-indexer.omnifin.invalid:8080",
   );
   assert.equal(configured.fields.find((field) => field.name === "apiPath").value, "/api");
   assert.equal(configured.fields.find((field) => field.name === "apiKey").value, "");
