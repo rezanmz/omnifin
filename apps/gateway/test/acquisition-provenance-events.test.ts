@@ -118,6 +118,32 @@ describe("acquisition provenance event broker", () => {
     broker.close();
   });
 
+  it("contains subscriber transport failures without disturbing the broker", async () => {
+    const close = vi.fn(() => {
+      throw new Error("disconnected transport");
+    });
+    const broker = new AcquisitionProvenanceEventBroker(
+      { read: vi.fn(async (target: AcquisitionTargetInput) => provenance(target)) },
+      { wait: waitUntilAbort },
+    );
+
+    const subscription = broker.subscribe({
+      onClose: close,
+      onEvent: () => {
+        throw new Error("closed response");
+      },
+      principal: principal("disconnected-session"),
+      target: movieTarget,
+    });
+
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    if (subscription.accepted) {
+      subscription.unsubscribe();
+      subscription.unsubscribe();
+    }
+    broker.close();
+  });
+
   it("replays a recent target snapshot unless the reconnect presents its exact cursor", async () => {
     const never = new Promise<AcquisitionProvenanceResponse>(() => undefined);
     const read = vi
