@@ -16,6 +16,7 @@ import {
   parseContainerAddress,
   parseContainerState,
   parseServarrApiKey,
+  selectAppProfileId,
   selectQualityProfileId,
   validateSanitizedServarrFailureReport,
   validateSanitizedServarrReport,
@@ -120,6 +121,8 @@ test("runs the mutation sidecar read-only on the internal network without publis
   assert.ok(arguments_.includes("--network-alias"));
   assert.ok(arguments_.includes("api.radarr.video"));
   assert.ok(arguments_.includes("skyhook.sonarr.tv"));
+  assert.ok(arguments_.includes("services.sonarr.tv"));
+  assert.ok(arguments_.includes("thexem.info"));
   assert.ok(arguments_.includes("fixture-indexer.omnifin.invalid"));
   assert.ok(arguments_.includes(SERVARR_FIXTURE_SERVER_IMAGE));
   assert.ok(arguments_.some((argument) => argument.includes("server.crt")));
@@ -187,8 +190,14 @@ test("selects one bounded quality profile without publishing its identifier", ()
   assert.throws(() => selectQualityProfileId([{ id: "1" }]), /quality_profile_invalid/u);
 });
 
+test("selects one existing Prowlarr application profile", () => {
+  assert.equal(selectAppProfileId([{ id: 8 }, { id: 1 }]), 1);
+  assert.throws(() => selectAppProfileId([]), /app_profile_invalid/u);
+  assert.throws(() => selectAppProfileId([{ id: 0 }]), /app_profile_invalid/u);
+});
+
 test("configures only the private Newznab fixture fields", () => {
-  const configured = configureProwlarrFixtureIndexer([
+  const templates = [
     {
       configContract: "NewznabSettings",
       enable: false,
@@ -201,7 +210,9 @@ test("configures only the private Newznab fixture fields", () => {
       implementation: "Newznab",
       name: "Newznab",
     },
-  ]);
+  ];
+  const configured = configureProwlarrFixtureIndexer(templates, 3);
+  assert.equal(configured.appProfileId, 3);
   assert.equal(configured.enable, true);
   assert.equal(configured.enableRss, false);
   assert.equal(configured.enableAutomaticSearch, false);
@@ -218,9 +229,10 @@ test("configures only the private Newznab fixture fields", () => {
     [2000, 5000],
   );
   assert.throws(
-    () => configureProwlarrFixtureIndexer([{ implementation: "Torznab", fields: [] }]),
+    () => configureProwlarrFixtureIndexer([{ implementation: "Torznab", fields: [] }], 3),
     /indexer_schema_invalid/u,
   );
+  assert.throws(() => configureProwlarrFixtureIndexer(templates, 0), /app_profile_invalid/u);
 });
 
 test("accepts only closed reports without identifiers, paths, ports, or credentials", () => {

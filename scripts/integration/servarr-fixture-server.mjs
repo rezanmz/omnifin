@@ -150,6 +150,20 @@ export function handleMetadataRequest(request, response) {
     send(response, 200, JSON_HEADERS, JSON.stringify(sonarrFixtureSeries()));
     return;
   }
+  if (host === "services.sonarr.tv" && url.pathname === "/v1/scenemapping") {
+    send(response, 200, JSON_HEADERS, "[]");
+    return;
+  }
+  if (
+    host === "thexem.info" &&
+    url.pathname === "/map/allNames" &&
+    url.searchParams.size === 2 &&
+    url.searchParams.get("origin") === "tvdb" &&
+    url.searchParams.get("seasonNumbers") === "true"
+  ) {
+    send(response, 200, JSON_HEADERS, JSON.stringify({ data: {}, message: "", result: "success" }));
+    return;
+  }
   send(response, 404, JSON_HEADERS, JSON.stringify({ error: "not_found" }));
 }
 

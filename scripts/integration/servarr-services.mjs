@@ -340,7 +340,7 @@ async function createFixtureCertificates(context) {
       "basicConstraints=critical,CA:FALSE",
       "keyUsage=critical,digitalSignature,keyEncipherment",
       "extendedKeyUsage=serverAuth",
-      "subjectAltName=DNS:api.radarr.video,DNS:skyhook.sonarr.tv",
+      "subjectAltName=DNS:api.radarr.video,DNS:services.sonarr.tv,DNS:skyhook.sonarr.tv,DNS:thexem.info",
       "",
     ].join("\n"),
     { mode: 0o600 },
@@ -423,6 +423,10 @@ export function fixtureServerContainerArguments(context) {
     "api.radarr.video",
     "--network-alias",
     "skyhook.sonarr.tv",
+    "--network-alias",
+    "services.sonarr.tv",
+    "--network-alias",
+    "thexem.info",
     "--network-alias",
     "fixture-indexer.omnifin.invalid",
     ...containerIsolationArguments(uid, gid),
@@ -732,9 +736,24 @@ export function selectQualityProfileId(profiles) {
   return identifiers[0];
 }
 
-export function configureProwlarrFixtureIndexer(templates) {
+export function selectAppProfileId(profiles) {
+  if (!Array.isArray(profiles) || profiles.length < 1 || profiles.length > 256) {
+    throw new ServarrFixtureFailure("app_profile_invalid");
+  }
+  const identifiers = profiles
+    .map((profile) => profile?.id)
+    .filter((identifier) => Number.isInteger(identifier) && identifier > 0)
+    .sort((left, right) => left - right);
+  if (identifiers.length === 0) throw new ServarrFixtureFailure("app_profile_invalid");
+  return identifiers[0];
+}
+
+export function configureProwlarrFixtureIndexer(templates, appProfileId) {
   if (!Array.isArray(templates) || templates.length < 1 || templates.length > 512) {
     throw new ServarrFixtureFailure("indexer_schema_invalid");
+  }
+  if (!Number.isInteger(appProfileId) || appProfileId < 1) {
+    throw new ServarrFixtureFailure("app_profile_invalid");
   }
   const template = templates.find(
     (candidate) =>
@@ -762,6 +781,7 @@ export function configureProwlarrFixtureIndexer(templates) {
   if (requiredFields.size > 0) throw new ServarrFixtureFailure("indexer_schema_invalid");
   return {
     ...structuredClone(template),
+    appProfileId,
     enable: true,
     enableAutomaticSearch: false,
     enableInteractiveSearch: true,
@@ -842,10 +862,15 @@ async function provisionMediaFixture(context, server, apiKey) {
 }
 
 async function provisionProwlarrFixture(context, server, apiKey) {
-  const templates = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer/schema", {
-    stage: "indexer_schema_read",
-  });
-  const configured = configureProwlarrFixtureIndexer(templates);
+  const [templates, profiles] = await Promise.all([
+    fixtureApiJson(context, server, apiKey, "/api/v1/indexer/schema", {
+      stage: "indexer_schema_read",
+    }),
+    fixtureApiJson(context, server, apiKey, "/api/v1/appprofile", {
+      stage: "app_profile_read",
+    }),
+  ]);
+  const configured = configureProwlarrFixtureIndexer(templates, selectAppProfileId(profiles));
   const resource = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer?forceSave=true", {
     body: configured,
     method: "POST",

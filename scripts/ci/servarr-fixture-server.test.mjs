@@ -75,6 +75,34 @@ test("serves only the exact synthetic Sonarr metadata identity", () => {
     }).status,
     404,
   );
+
+  const sceneMappings = capture(handleMetadataRequest, {
+    host: "services.sonarr.tv",
+    url: "/v1/scenemapping",
+  });
+  assert.equal(sceneMappings.status, 200);
+  assert.deepEqual(JSON.parse(sceneMappings.body), []);
+
+  const xemMappings = capture(handleMetadataRequest, {
+    host: "thexem.info",
+    url: "/map/allNames?origin=tvdb&seasonNumbers=true",
+  });
+  assert.equal(xemMappings.status, 200);
+  assert.deepEqual(JSON.parse(xemMappings.body), { data: {}, message: "", result: "success" });
+  assert.equal(
+    capture(handleMetadataRequest, {
+      host: "thexem.info",
+      url: "/map/all",
+    }).status,
+    404,
+  );
+  assert.equal(
+    capture(handleMetadataRequest, {
+      host: "thexem.info",
+      url: "/map/allNames?origin=tvdb",
+    }).status,
+    404,
+  );
 });
 
 test("exposes a deterministic private Newznab capability surface", () => {
