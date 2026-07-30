@@ -34,6 +34,7 @@ export const SEERR_CHECK_NAMES = Object.freeze([
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+const MAX_TRANSPORT_BODY_BYTES = 1 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_READY_TIMEOUT_MS = 120_000;
 const SAFE_CONNECTOR_FAILURE_CODES = new Set([
@@ -514,22 +515,29 @@ export function parseSeerrTransportOutput(output) {
   return { body, headers: parsed.headers, status: parsed.status };
 }
 
+export function serializeSeerrContainerRequest(url, init) {
+  if (init.body !== undefined && !(init.body instanceof Uint8Array)) {
+    throw new SeerrFixtureFailure("fixture_transport_invalid");
+  }
+  if (init.body && init.body.byteLength > MAX_TRANSPORT_BODY_BYTES) {
+    throw new SeerrFixtureFailure("fixture_transport_invalid");
+  }
+  const payload = JSON.stringify({
+    body: init.body === undefined ? null : Buffer.from(init.body).toString("base64"),
+    headers: [...init.headers.entries()],
+    method: init.method,
+    path: `${url.pathname}${url.search}`,
+  });
+  if (Buffer.byteLength(payload, "utf8") > MAX_RESPONSE_BYTES) {
+    throw new SeerrFixtureFailure("fixture_transport_invalid");
+  }
+  return payload;
+}
+
 export function createSeerrContainerTransport(context) {
   return async (url, init) => {
     if (init.signal?.aborted) throw new SeerrFixtureFailure("fixture_transport_aborted");
-    const body = init.body === undefined ? null : init.body;
-    if (body !== null && typeof body !== "string") {
-      throw new SeerrFixtureFailure("fixture_transport_invalid");
-    }
-    const payload = JSON.stringify({
-      body,
-      headers: [...init.headers.entries()],
-      method: init.method,
-      path: `${url.pathname}${url.search}`,
-    });
-    if (Buffer.byteLength(payload, "utf8") > MAX_RESPONSE_BYTES) {
-      throw new SeerrFixtureFailure("fixture_transport_invalid");
-    }
+    const payload = serializeSeerrContainerRequest(url, init);
     const execution = spawnSync(
       "docker",
       [

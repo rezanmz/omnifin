@@ -9,12 +9,14 @@ import {
   SEERR_FIXTURE_SERVER_IMAGE,
   SEERR_SERVICE_IMAGE,
   SEERR_SERVICE_VERSION,
+  createSeerrContainerTransport,
   parseSeerrContainerState,
   parseSeerrTransportOutput,
   seerrContainerIsolationArguments,
   seerrDatabaseSeedArguments,
   seerrFixtureServerContainerArguments,
   seerrServiceContainerArguments,
+  serializeSeerrContainerRequest,
   validateSanitizedSeerrFailureReport,
   validateSanitizedSeerrReport,
 } from "../integration/seerr-service.mjs";
@@ -215,6 +217,24 @@ test("container transport is bounded and reconstructs only a validated response"
   );
   assert.match(source, /http:\/\/127\.0\.0\.1:5055\//u);
   assert.equal(source.includes("https://"), false);
+  assert.match(source, /Buffer\.from\(payload\.body, "base64"\)/u);
+
+  const transportSource = readFileSync(
+    new URL("../integration/seerr-service.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(transportSource, /Buffer\.from\(init\.body\)\.toString\("base64"\)/u);
+  assert.equal(typeof createSeerrContainerTransport, "function");
+
+  const encoded = JSON.parse(
+    serializeSeerrContainerRequest(new URL("http://fixture.invalid/api/v1/request"), {
+      body: Buffer.from('{"mediaId":2147480003}', "utf8"),
+      headers: new Headers({ "content-type": "application/json" }),
+      method: "POST",
+    }),
+  );
+  assert.equal(Buffer.from(encoded.body, "base64").toString("utf8"), '{"mediaId":2147480003}');
+  assert.equal(encoded.path, "/api/v1/request");
 });
 
 test("validates only closed sanitized Seerr reports", () => {

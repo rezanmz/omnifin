@@ -3,6 +3,7 @@
 import process from "node:process";
 
 const MAX_INPUT_BYTES = 2 * 1_024 * 1_024;
+const MAX_BODY_BYTES = 1 * 1_024 * 1_024;
 const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
 const ALLOWED_METHODS = new Set(["GET", "POST"]);
 
@@ -33,7 +34,9 @@ function validatePayload(payload) {
     !ALLOWED_METHODS.has(payload.method) ||
     !Array.isArray(payload.headers) ||
     payload.headers.length > 32 ||
-    (payload.body !== null && typeof payload.body !== "string")
+    (payload.body !== null &&
+      (typeof payload.body !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(payload.body)))
   ) {
     throw new Error("payload_invalid");
   }
@@ -49,16 +52,20 @@ function validatePayload(payload) {
       throw new Error("headers_invalid");
     }
   }
-  if (payload.body !== null && Buffer.byteLength(payload.body, "utf8") > MAX_INPUT_BYTES) {
-    throw new Error("body_too_large");
+  if (payload.body !== null) {
+    const body = Buffer.from(payload.body, "base64");
+    if (body.byteLength > MAX_BODY_BYTES || body.toString("base64") !== payload.body) {
+      throw new Error("body_invalid");
+    }
   }
   return payload;
 }
 
 try {
   const payload = validatePayload(await readInput());
+  const body = payload.body === null ? undefined : Buffer.from(payload.body, "base64");
   const response = await fetch(new URL(payload.path, "http://127.0.0.1:5055/"), {
-    body: payload.body ?? undefined,
+    body,
     headers: new Headers(payload.headers),
     method: payload.method,
     redirect: "error",
