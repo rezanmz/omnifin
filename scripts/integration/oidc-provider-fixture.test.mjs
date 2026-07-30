@@ -143,6 +143,8 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /new Set\(nonces\)\.size === authorizationRequests\.length/u);
   assert.match(browserSource, /values: \["authors"\]/u);
   assert.match(browserSource, /role: "admin"/u);
+  assert.match(browserSource, /SESSION_CONVERGENCE_TIMEOUT_MS = 10_000/u);
+  assert.match(browserSource, /waitForPendingPrincipal/u);
   assert.match(browserSource, /supportsBackChannelLogout === false/u);
   assert.match(browserSource, /supportsRpInitiatedLogout === false/u);
   assert.match(browserSource, /localLogout\.origin === webOrigin/u);

@@ -8,6 +8,7 @@ const { chromium } = requireFromWeb("@playwright/test");
 const providerSlug = "generic";
 const expectedProviderId = `oidc-${providerSlug}`;
 const FLOW_TIMEOUT_MS = 60_000;
+const SESSION_CONVERGENCE_TIMEOUT_MS = 10_000;
 
 class BrowserCheckError extends Error {
   constructor() {
@@ -175,6 +176,33 @@ function assertPendingPrincipal(session, issuer, expectedRole, expectedSubject, 
   return { subject: principal.externalIdentity.subject, userId: principal.userId };
 }
 
+async function waitForPendingPrincipal(
+  request,
+  issuer,
+  expectedRole,
+  expectedSubject,
+  expectedUserId,
+) {
+  const deadline = Date.now() + SESSION_CONVERGENCE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const session = await currentSession(request);
+      const identity = assertPendingPrincipal(
+        session,
+        issuer,
+        expectedRole,
+        expectedSubject,
+        expectedUserId,
+      );
+      return { identity, session };
+    } catch (error) {
+      if (!(error instanceof BrowserCheckError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new BrowserCheckError();
+}
+
 async function run() {
   const webOrigin = required("OMNIFIN_FIXTURE_WEB_ORIGIN");
   const issuer = required("OMNIFIN_FIXTURE_OIDC_ISSUER");
@@ -277,8 +305,8 @@ async function run() {
     currentStage = "viewer_login";
     await completeAuthorization(page, startPath, webOrigin, "viewer_login");
     currentStage = "viewer_session";
-    const viewerIdentity = assertPendingPrincipal(
-      await currentSession(context.request),
+    const { identity: viewerIdentity } = await waitForPendingPrincipal(
+      context.request,
       issuer,
       "viewer",
     );
@@ -305,14 +333,14 @@ async function run() {
     currentStage = "mapped_login";
     await completeAuthorization(page, startPath, webOrigin, "mapped_login");
     currentStage = "mapped_session";
-    const mappedSession = await currentSession(context.request);
-    assertPendingPrincipal(
-      mappedSession,
+    const { identity: mappedIdentity, session: mappedSession } = await waitForPendingPrincipal(
+      context.request,
       issuer,
       "admin",
       viewerIdentity.subject,
       viewerIdentity.userId,
     );
+    assert(mappedIdentity.userId === mappedSession.principal?.userId);
 
     currentStage = "authorization_code_pkce";
     assert(authorizationRequests.length >= 2);
