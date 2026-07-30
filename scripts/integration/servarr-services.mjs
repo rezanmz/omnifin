@@ -17,6 +17,11 @@ import { ProwlarrAdapter } from "../../packages/connectors/dist/adapters/prowlar
 import { RadarrAdapter } from "../../packages/connectors/dist/adapters/radarr.js";
 import { SonarrAdapter } from "../../packages/connectors/dist/adapters/sonarr.js";
 import { parse as parseYaml } from "yaml";
+import {
+  acquirePinnedDockerImage,
+  DockerImagePullError,
+  DOCKER_LOCAL_IMAGE_ARGUMENTS,
+} from "./docker-runtime.mjs";
 
 export const SERVARR_SERVICE_IMAGES = Object.freeze({
   bazarr:
@@ -289,6 +294,7 @@ function commonContainerArguments(context) {
   const gid = process.getgid?.();
   const arguments_ = [
     "run",
+    ...DOCKER_LOCAL_IMAGE_ARGUMENTS,
     "--detach",
     "--name",
     context.containerName,
@@ -316,7 +322,15 @@ function commonContainerArguments(context) {
   return arguments_;
 }
 
-function startContainer(context) {
+async function startContainer(context) {
+  try {
+    await acquirePinnedDockerImage(SERVARR_SERVICE_IMAGES[context.service]);
+  } catch (error) {
+    if (error instanceof DockerImagePullError) {
+      throw new ServarrFixtureFailure(error.code);
+    }
+    throw error;
+  }
   runDocker(
     ["network", "create", "--driver", "bridge", "--internal", context.networkName],
     30_000,
@@ -645,7 +659,7 @@ async function main(options) {
   let failure;
   try {
     await verifyTemporaryContext(context);
-    const server = startContainer(context);
+    const server = await startContainer(context);
     report = await runFixture(context, server);
   } catch (error) {
     failure = error;

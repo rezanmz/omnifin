@@ -6,6 +6,15 @@ multi-architecture index digest. The service receives no repository or environme
 as the runner's unprivileged UID and GID with `no-new-privileges`, and has bounded CPU, memory, and
 process resources.
 
+Before creating the private network, the runner acquires the exact digest in a separate bounded
+step. Only explicit transient registry or network categories can retry, at most twice after the
+initial attempt with fixed 5-second and 15-second delays. Authentication, authorization, missing
+manifest, unsupported-platform, unknown daemon, and policy failures stop immediately. Container
+startup then uses Docker's local-only image policy, so it cannot perform an implicit pull. Raw
+registry and Docker diagnostics remain captured and private; public failure evidence contains only
+`image_pull_failed`, `image_pull_transient_exhausted`, or the existing bounded startup code.
+Adapter, authentication, assertion, and teardown failures are never retried.
+
 The Linux gate attaches each instance to its own internal Docker network without published ports.
 That network has no default route to unrelated containers or the public internet. Docker Desktop
 cannot route its host directly to a Linux bridge, so the local macOS path uses the connector's

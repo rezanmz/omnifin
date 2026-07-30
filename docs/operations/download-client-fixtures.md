@@ -8,6 +8,14 @@ configuration after the check. The runner reaches the Web UI directly through th
 container address; Docker documents that the host retains this access on an internal network while
 the container has no default route to any other network.
 
+Image acquisition is separate from container launch. The runner pulls the exact digest with three
+attempts at most, using fixed 5-second and 15-second delays only for explicit transient registry or
+network categories. Authentication, authorization, missing manifest, unsupported-platform,
+unknown daemon, and policy failures stop immediately. The container then starts with Docker's
+local-only image policy, preventing an implicit pull. Raw registry and Docker diagnostics remain
+private; uploaded failure evidence exposes only a bounded acquisition or startup category. Queue,
+authentication, adapter, assertion, and cleanup failures are never retried.
+
 Both images run as the host runner's unprivileged UID and GID. Their private `/run` tmpfs is owned by
 that identity so the s6 supervisor can initialize while Docker's `no-new-privileges` restriction
 remains enabled. The fixture does not use LinuxServer's root-time `PUID`/`PGID` remapping path.
