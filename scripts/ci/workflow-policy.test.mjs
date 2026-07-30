@@ -316,6 +316,29 @@ test("fixture integration makes real Authentik OIDC behavior a protected aggrega
   assert.ok(gate.needs.includes("authentik"));
 });
 
+test("fixture integration makes standards-generic OIDC behavior a protected aggregate dependency", () => {
+  const document = workflowDocument("integration.yml");
+  const oidc = document.jobs["oidc-provider"];
+  const gate = document.jobs.gate;
+
+  assert.equal(oidc.name, "Standards-generic OIDC integration");
+  assert.equal(oidc["timeout-minutes"], 25);
+  assert.equal(JSON.stringify(oidc).includes("secrets."), false);
+  assert.equal(JSON.stringify(oidc).includes("vars."), false);
+
+  const browser = namedStep(oidc.steps, "Install isolated browser runtime");
+  assert.match(browser.run, /playwright install --with-deps chromium/u);
+  const run = namedStep(oidc.steps, "Run isolated standards-generic authorization-code gate");
+  assert.match(run.run, /pnpm test:oidc-provider/u);
+  assert.match(run.run, /artifacts\/integration\/oidc-provider\/report\.json/u);
+  assert.equal(run["continue-on-error"], undefined);
+
+  const upload = namedStep(oidc.steps, "Upload sanitized generic OIDC report");
+  assert.equal(upload.with.path, "artifacts/integration/oidc-provider/report.json");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.ok(gate.needs.includes("oidc-provider"));
+});
+
 test("edge promotion revalidates protected main immediately before moving aliases", () => {
   const source = workflow("edge.yml");
   const promotionStart = source.indexOf("- name: Preserve immutable SHA identity");

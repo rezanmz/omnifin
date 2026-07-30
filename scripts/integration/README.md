@@ -58,8 +58,11 @@ reviewed increments. The pull request that changes a suite from `pending` to
 `ready` places it in the strict matrix immediately, so that transition cannot
 pass with missing, skipped, or failing tests. A pending-only change still runs
 the established ready fixture baseline. The one-time empty-repository
-foundation PR is limited to the already ready fixture services. The OIDC and
-isolated Authentik fixtures are ready and enforced. Authentik readiness combines
+foundation PR is limited to the already ready fixture services. The OIDC and isolated Authentik
+fixtures are ready and enforced. The protected aggregate also runs a digest-pinned Dex browser
+fixture for generic discovery, PKCE S256, immutable identity, JIT provisioning, explicit role
+mapping, and safe local logout when the provider advertises no logout endpoint. See the
+[standards-generic OIDC fixture runbook](../../docs/operations/oidc-provider-fixture.md). Authentik readiness combines
 the strict harness contract selected by the matrix with the dedicated browser flow
 that starts the pinned upstream provider in the same pull-request workflow.
 
@@ -73,6 +76,18 @@ The aggregate also runs the
 current digest-pinned qBittorrent and SABnzbd images. These checks use synthetic torrent and NZB
 metadata on internal Docker networks, call the production adapters, and upload only a closed,
 identifier-free pass report.
+
+Run the focused generic identity-provider gate with:
+
+```sh
+pnpm build
+pnpm --filter @omnifin/web exec playwright install chromium
+pnpm test:oidc-provider --skip-build --output artifacts/integration/oidc-provider/report.json
+```
+
+The generic and Authentik browser fixtures complement one another: the generic provider proves the
+no-logout-capability fallback, while Authentik proves RP-initiated and back-channel logout when
+advertised. Neither changes the pending protected live support baseline.
 
 Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter

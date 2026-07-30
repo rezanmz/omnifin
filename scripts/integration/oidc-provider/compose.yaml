@@ -1,0 +1,27 @@
+name: omnifin-oidc-provider-fixture
+
+services:
+  provider:
+    image: ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462
+    command:
+      - /usr/local/bin/dex
+      - serve
+      - /etc/dex/config.yaml
+    ports:
+      - "127.0.0.1:${OMNIFIN_OIDC_PROVIDER_HTTP_PORT:?provider port required}:5556"
+    read_only: true
+    restart: "no"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+      - /var/dex:uid=1001,gid=1001,mode=0700
+    volumes:
+      - ${OMNIFIN_OIDC_PROVIDER_CONFIG:?provider config required}:/etc/dex/config.yaml:ro
+    networks:
+      - fixture
+
+networks:
+  fixture: {}

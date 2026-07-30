@@ -12,7 +12,7 @@ combination is described as supported.
 | --------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
 | Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata     | Identity/playback isolated gates ready; live pending         |
 | Authentik                         | OIDC sign-in, group claims, front/back-channel logout           | Isolated gate ready; live baseline pending                   |
-| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised  | Target; verification pending                                 |
+| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised  | Isolated standards gate ready; live baseline pending         |
 | Seerr                             | Discovery, routed requests, approvals, issues, user context     | Search/request/routing fixtures ready; live baseline pending |
 | Radarr                            | Movie monitoring, calendar, search, releases, queue, history    | Contracts and isolated read gate ready; live pending         |
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history   | Contracts and isolated read gate ready; live pending         |
@@ -47,10 +47,16 @@ version. “Latest” without a recorded version and verification date is not su
 Pull requests run the affected deterministic fixture matrix in
 `.github/workflows/integration.yml`; that workflow has no access to live service
 credentials. Its required `Connector integration` gate reflects fixture evidence only.
-All deterministic fixture suites are marked ready. OIDC is covered by protocol and
-gateway contract fixtures; Authentik additionally runs a pinned, isolated upstream
-authorization-code browser harness. Fixture readiness is development evidence and
+All deterministic fixture suites are marked ready. OIDC is covered by protocol and gateway
+contract fixtures plus a pinned Dex browser harness for discovery, PKCE S256, immutable identity,
+JIT provisioning, explicit role mapping, and local logout fallback when optional provider logout is
+not advertised. Authentik separately runs a pinned, isolated upstream authorization-code browser
+harness with advertised RP-initiated and back-channel logout. Fixture readiness is development evidence and
 does not establish a public live-support baseline.
+
+The generic harness uses Dex 2.45.1 as a standards test oracle, not as a public product support
+claim. Its closed report records only the provider version and fixed check names after deterministic
+teardown. See the [standards-generic OIDC fixture runbook](operations/oidc-provider-fixture.md).
 
 The Seerr fixture gate includes normalized request-destination discovery for Radarr and
 Sonarr, standard/4K filtering, partial destination failures, delegated user context, and

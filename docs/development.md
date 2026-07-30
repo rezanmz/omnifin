@@ -48,7 +48,9 @@ telemetry plus exact-item pause, resume, and downloaded-file-preserving removal 
 principals with `downloads.manage`, and a bounded Radarr/Sonarr acquisition calendar
 for principals with `media.view`. Recovery access can inspect and repair Jellyfin connector records
 without seeing or mutating other service configuration. A pinned isolated Authentik gate exercises
-authorization, role mapping, RP logout, and back-channel logout. The browser connector control room
+authorization, role mapping, RP logout, and back-channel logout. A separate digest-pinned Dex gate
+exercises standards-generic discovery, PKCE, identity stability, JIT provisioning, role mapping,
+and safe local logout when optional provider logout is absent. The browser connector control room
 and global discovery, request, acquisition-provenance, manual release, Indexer Intelligence,
 system-health, download-queue, and acquisition-calendar flows are pre-release development
 surfaces. The same is
@@ -89,6 +91,15 @@ and Bazarr services through the production adapters. For a focused local reprodu
 [isolated service fixture runbook](operations/servarr-service-fixtures.md). These checks are
 read-only development evidence and do not advance the protected live-readiness ledger.
 
+For a focused real-browser OIDC interoperability run, follow the
+[standards-generic OIDC fixture runbook](operations/oidc-provider-fixture.md):
+
+```sh
+pnpm build
+pnpm --filter @omnifin/web exec playwright install chromium
+pnpm test:oidc-provider --skip-build --output artifacts/integration/oidc-provider/report.json
+```
+
 `db:generate` must leave the tracked schema and migration files unchanged. Review
 `git status --short` immediately afterward; generated drift is a failing gate, not an
 artifact to accept without a matching, reviewed schema change. `actionlint` is also
@@ -125,8 +136,8 @@ CI environment. A pull request must not waive a failing check merely because it 
 on one workstation.
 
 Connector fixture work must keep `scripts/integration/readiness.json` truthful. A
-strict fixture check succeeds only for a profile reviewed as `ready`. The deterministic
-OIDC and isolated Authentik profiles are enforced; live identity profiles remain
+strict fixture check succeeds only for a profile reviewed as `ready`. The deterministic OIDC
+contracts, standards-generic browser gate, and isolated Authentik profile are enforced; live identity profiles remain
 pending and fail closed:
 
 ```sh
