@@ -28,6 +28,7 @@ const browserSource = readFileSync(
   new URL("./oidc-provider/browser-check.mjs", import.meta.url),
   "utf8",
 );
+const proxySource = readFileSync(new URL("./oidc-provider/tls-proxy.mjs", import.meta.url), "utf8");
 
 test("selects only a non-loopback private fixture host", () => {
   assert.equal(isPrivateIpv4("10.4.5.6"), true);
@@ -147,4 +148,8 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /localLogout\.origin === webOrigin/u);
   assert.match(browserSource, /localLogout\.searchParams\.get\("loggedOut"\) === "1"/u);
   assert.doesNotMatch(browserSource, /console\.(?:debug|log)/u);
+
+  assert.match(proxySource, /forwardedRequestHeaders/u);
+  assert.match(proxySource, /forwardedResponseHeaders/u);
+  assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|forwarded\[name\]/u);
 });
