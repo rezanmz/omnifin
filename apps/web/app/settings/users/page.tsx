@@ -7,7 +7,6 @@ import type { Metadata } from "next";
 
 import { UserAccessControl } from "../../../components/user-access-control";
 import type { UserAccessAdminLoadOutcome } from "../../../lib/user-access-admin";
-import "../../globals.css";
 
 export const metadata: Metadata = { title: "User access" };
 export const dynamic = "force-dynamic";
