@@ -11,6 +11,7 @@ const CHECKS = Object.freeze([
   "immutable_issuer_subject",
   "jit_pending_jellyfin_link",
   "privileged_group_role_mapping",
+  "guarded_role_mapping_update",
   "provider_initiated_backchannel_logout",
   "rp_initiated_logout",
   "secret_leak_inspection",

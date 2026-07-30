@@ -9,6 +9,7 @@ const CHECKS = Object.freeze([
   "immutable_issuer_subject",
   "jit_viewer_pending_jellyfin_link",
   "explicit_group_role_mapping",
+  "guarded_role_mapping_update",
   "optional_logout_capability_negotiation",
   "local_logout_fallback",
   "secret_leak_inspection",

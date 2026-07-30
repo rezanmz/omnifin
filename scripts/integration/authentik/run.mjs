@@ -599,6 +599,7 @@ async function main(options) {
         "public_provider",
         "recovery_session",
         "role_mapping",
+        "role_mapping_update",
         "rp_logout",
         "rp_session_revocation",
         "second_browser_login",

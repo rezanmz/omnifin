@@ -145,6 +145,18 @@ async function mutate(request, webOrigin, path, csrfToken, data) {
   return json(response, 201);
 }
 
+async function updateMapping(request, webOrigin, path, csrfToken, data) {
+  const response = await request.put(path, {
+    data,
+    headers: {
+      origin: webOrigin,
+      "x-omnifin-csrf": csrfToken,
+    },
+    maxRedirects: 0,
+  });
+  return json(response, 200);
+}
+
 async function validateProvider(request, path, webOrigin, csrfToken) {
   const startedAt = Date.now();
   for (let attempt = 0; attempt < PROVIDER_VALIDATION_MAX_ATTEMPTS; attempt += 1) {
@@ -508,10 +520,10 @@ async function assertAuthentikProviderConfiguration(
   return provider.pk;
 }
 
-function assertPrincipal(current, issuer, subject) {
+function assertPrincipal(current, issuer, expectedRole, subject) {
   assert(current?.csrfToken && current.principal);
   assert(current.principal.accountState === "pending_link");
-  assert(current.principal.role === "admin");
+  assert(current.principal.role === expectedRole);
   assert(current.principal.authenticationMethod?.kind === "oidc");
   assert(current.principal.authenticationMethod.providerId === expectedProviderId);
   assert(current.principal.externalIdentity?.providerId === expectedProviderId);
@@ -692,6 +704,24 @@ async function run() {
     );
     assert(mapping.mapping?.providerId === expectedProviderId);
 
+    currentStage = "role_mapping_update";
+    const updatedMapping = await updateMapping(
+      context.request,
+      webOrigin,
+      `/api/admin/auth/oidc/providers/${expectedProviderId}/role-mappings/${mapping.mapping.id}`,
+      csrfToken,
+      {
+        claimPath: ["groups"],
+        enabled: true,
+        operator: "contains_any",
+        priority: 1_000,
+        role: "operator",
+        values: ["authentik Admins"],
+      },
+    );
+    assert(updatedMapping.mapping?.id === mapping.mapping.id);
+    assert(updatedMapping.revokedSessions === 0);
+
     currentStage = "provider_enable";
     const enabled = await enableProvider(
       context.request,
@@ -727,7 +757,7 @@ async function run() {
     );
     currentStage = "first_session";
     const firstSession = await session(context.request);
-    const subject = assertPrincipal(firstSession, issuer);
+    const subject = assertPrincipal(firstSession, issuer, "operator");
 
     currentStage = "backchannel_access_token";
     await assertAuthentikAccessToken(
@@ -784,7 +814,7 @@ async function run() {
     );
     currentStage = "second_session";
     const secondSession = await session(context.request);
-    assertPrincipal(secondSession, issuer, subject);
+    assertPrincipal(secondSession, issuer, "operator", subject);
 
     currentStage = "rp_logout";
     const logout = await context.request.post("/api/auth/oidc/logout", {
