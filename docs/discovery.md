@@ -10,7 +10,8 @@ This is a pre-release development surface, not a public Seerr compatibility clai
 
 ## Request path and authorization
 
-The browser calls the same-origin `GET /api/discovery/search`,
+The browser calls the same-origin `GET /api/discovery/feed`,
+`GET /api/discovery/artwork/{referenceId}`, `GET /api/discovery/search`,
 `GET /api/discovery/details/{kind}/{tmdbId}`, and
 `GET /api/discovery/people/{tmdbId}` routes. The web process forwards those reads to the
 matching `/v1/discovery/*` routes on the private gateway and forwards only the opaque
@@ -24,6 +25,12 @@ The query contract is deliberately bounded:
 | `query`    | Trimmed text between 2 and 200 characters             |
 | `language` | BCP 47-style two-letter language with optional region |
 | `page`     | Integer from 1 through 500                            |
+
+The dashboard feed accepts only `language`. It fans out to Seerr's trending, popular
+movie, popular series, and upcoming discovery reads with a fixed page size. One slow or
+malformed rail cannot delay or erase the other three; each rail carries its own safe
+failure state and the top-level response is `complete`, `degraded`, `empty`, or
+`unavailable`.
 
 Detail reads accept `movie` or `series` as the media kind, a positive 32-bit TMDB
 identifier, and the same optional language format. Person reads accept the same bounded
@@ -53,6 +60,28 @@ Person results may include a bounded `knownFor` summary. Poster paths, backdrop 
 internal media identifiers, request objects, raw service errors, credentials, and unknown
 upstream fields are rejected or discarded before the response crosses the gateway boundary.
 
+## Dashboard feed and protected artwork
+
+The connected dashboard uses the normalized feed rather than development catalog data. A
+trending title becomes the spotlight, followed by Continue Watching and the four fixed Seerr
+rails. Cards and spotlight actions open the normalized detail drawer; requestable media can
+move into the guarded request composer. The browser deliberately omits a `View all` control
+until a real paginated destination exists.
+
+Feed items may contain same-origin artwork references such as
+`/api/discovery/artwork/discovery_art_…`. These are random, encrypted, user-bound references,
+not Seerr or TMDB paths. The gateway stores only the protected upstream image path, the owning
+user, expiry, and bounded media type. Resolution requires the same active user and
+`media.view`; expired, missing, cross-user, or malformed references fail closed before Seerr
+is contacted. Images are streamed through the gateway with an allowlisted raster content type,
+byte limit, timeout, redirect prohibition, and private caching. Revalidation uses an ETag
+without exposing the source URL.
+
+The interface rewrites only the exact gateway artwork-reference grammar to the same-origin web
+proxy. Absolute URLs, upstream image paths, unexpected identifiers, and unknown response fields
+are never rendered. If an image cannot be fetched, the existing artwork-derived fallback stays
+in place without shifting card geometry.
+
 ## Normalized media details
 
 Movie and series detail responses add a bounded synopsis, tagline, genres, production
@@ -72,7 +101,7 @@ birthplace, and up to 24 deduplicated movie or series credits. Cast and crew ent
 media response carry the normalized person identifier needed to open this context. A credit
 can navigate back to a normalized media detail without exposing an upstream record.
 
-The response deliberately excludes artwork paths, Seerr media records, request objects,
+Detail responses deliberately exclude artwork paths, Seerr media records, request objects,
 service URLs, video-provider URLs, and raw TMDB or Seerr payloads. This keeps the browser
 contract stable and prevents upstream implementation details from becoming identifiers
 elsewhere in Omnifin.
@@ -87,15 +116,17 @@ core detail read still fails closed.
 The public API uses the common structured error envelope with a safe code, message, and
 request correlation identifier. The browser maps those responses into deliberate states:
 
-| Condition                              | Browser behavior                            |
-| -------------------------------------- | ------------------------------------------- |
-| Session absent or expired              | Sign-in action without clearing the page    |
-| `media.view` missing                   | Permission explanation                      |
-| No unambiguous enabled Seerr connector | Configuration guidance                      |
-| Upstream rate limit                    | Retryable cooling-down state                |
-| Timeout or unavailable service         | Offline state; current page is preserved    |
-| Invalid normalized response            | Fail-closed rejection; raw data is hidden   |
-| Optional intelligence source fails     | Core detail plus a scoped unavailable state |
+| Condition                              | Browser behavior                             |
+| -------------------------------------- | -------------------------------------------- |
+| Session absent or expired              | Sign-in action without clearing the page     |
+| `media.view` missing                   | Permission explanation                       |
+| No unambiguous enabled Seerr connector | Configuration guidance                       |
+| Upstream rate limit                    | Retryable cooling-down state                 |
+| Timeout or unavailable service         | Offline state; current page is preserved     |
+| Invalid normalized response            | Fail-closed rejection; raw data is hidden    |
+| Optional intelligence source fails     | Core detail plus a scoped unavailable state  |
+| One dashboard rail fails               | Current rails plus an in-place retry state   |
+| All dashboard rails fail               | Continue Watching plus safe offline guidance |
 
 Search requests debounce by default for 240 milliseconds. Revising the query, closing the
 console, changing the selected title, or unmounting the component aborts obsolete work.
@@ -119,8 +150,9 @@ retaining translucency and uses the full viewport without horizontal overflow. R
 and credit rails scroll horizontally without expanding or clipping the drawer's text column.
 
 Reusable stories cover prompt, loading, results, empty, not-configured, rate-limited,
-signed-out, detail-loading, detail-offline, movie-detail, series-detail, degraded
-intelligence, and person-context states.
+signed-out, complete/degraded/unavailable dashboard feeds, detail-loading, detail-offline,
+movie-detail, series-detail, degraded intelligence, and person-context states.
 Route-level tests cover the normalized network boundary, keyboard flow, lower-action
-reachability, automated accessibility checks, reduced motion, and deterministic dark and
-light desktop and mobile visual baselines.
+reachability, protected artwork, hover containment, seamless rail surfaces, automated
+accessibility checks, reduced motion, and deterministic dark and light desktop and mobile
+visual baselines.

@@ -73,6 +73,7 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
         data={showDemoDashboard ? demoDashboard : connectedDashboard}
         displayProfile={displayProfile}
         liveContinueWatching={showLiveDashboard || !showDemoDashboard}
+        liveDiscovery={!showDemoDashboard}
       />
     </ThemeProvider>
   );

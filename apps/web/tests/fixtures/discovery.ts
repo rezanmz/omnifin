@@ -1,5 +1,25 @@
 import type { Page } from "@playwright/test";
 
+import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
+
+export const discoveryFeedFixture = {
+  ...demoDiscoveryFeed,
+  rails: demoDiscoveryFeed.rails.map((rail) => ({
+    ...rail,
+    items: rail.items.map((item) => ({
+      ...item,
+      artwork: {
+        backdropPath:
+          item.artwork.backdropPath?.replace("/api/discovery/artwork/", "/v1/discovery/artwork/") ??
+          null,
+        posterPath:
+          item.artwork.posterPath?.replace("/api/discovery/artwork/", "/v1/discovery/artwork/") ??
+          null,
+      },
+    })),
+  })),
+};
+
 export const discoverySearchFixture = {
   generatedAt: "2026-07-27T08:30:00.000Z",
   items: [
@@ -182,6 +202,65 @@ export async function mockDiscoverySearch(page: Page) {
   });
 }
 
+const discoveryArtworkPalettes = {
+  a: ["#07191f", "#16869a", "#b5f4df"],
+  b: ["#17100d", "#b95835", "#ffd58a"],
+  c: ["#0c170d", "#4b792f", "#d8ff70"],
+  d: ["#100f22", "#5c4ead", "#c9bdff"],
+  e: ["#1d0c12", "#a43a67", "#ffc2cf"],
+  f: ["#061619", "#16786e", "#9df5df"],
+} as const;
+
+function discoveryArtwork(url: string) {
+  const key = url.match(/discovery_art_([a-f])/u)?.[1] as
+    keyof typeof discoveryArtworkPalettes | undefined;
+  const [shadow, color, light] = discoveryArtworkPalettes[key ?? "a"];
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="${color}" />
+          <stop offset="0.52" stop-color="${shadow}" />
+          <stop offset="1" stop-color="#020504" />
+        </linearGradient>
+        <radialGradient id="flare" cx="74%" cy="18%" r="48%">
+          <stop offset="0" stop-color="${light}" stop-opacity="0.88" />
+          <stop offset="0.18" stop-color="${color}" stop-opacity="0.44" />
+          <stop offset="1" stop-color="${shadow}" stop-opacity="0" />
+        </radialGradient>
+        <filter id="soft"><feGaussianBlur stdDeviation="28" /></filter>
+      </defs>
+      <rect width="800" height="1200" fill="url(#field)" />
+      <rect width="800" height="1200" fill="url(#flare)" />
+      <circle cx="610" cy="248" r="176" fill="none" stroke="${light}" stroke-opacity="0.28" stroke-width="2" />
+      <circle cx="610" cy="248" r="118" fill="${color}" fill-opacity="0.3" filter="url(#soft)" />
+      <path d="M-120 870 C150 610 380 620 940 360" fill="none" stroke="${light}" stroke-opacity="0.22" stroke-width="3" />
+      <path d="M-160 940 C210 720 480 760 980 520" fill="none" stroke="${light}" stroke-opacity="0.11" stroke-width="2" />
+      <path d="M110 1200 L360 540 L610 1200 Z" fill="${shadow}" fill-opacity="0.68" />
+      <path d="M260 1200 L520 690 L760 1200 Z" fill="#020504" fill-opacity="0.72" />
+      <circle cx="132" cy="180" r="7" fill="${light}" fill-opacity="0.8" />
+      <circle cx="176" cy="224" r="3" fill="${light}" fill-opacity="0.5" />
+    </svg>`;
+}
+
+export async function mockDiscoveryFeed(page: Page) {
+  await page.route("**/api/discovery/feed?**", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(discoveryFeedFixture),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("**/api/discovery/artwork/discovery_art_*", async (route) => {
+    await route.fulfill({
+      body: discoveryArtwork(route.request().url()),
+      contentType: "image/svg+xml; charset=utf-8",
+      headers: { "cache-control": "private, max-age=3600" },
+      status: 200,
+    });
+  });
+}
+
 export async function mockDiscoveryDetails(page: Page) {
   await page.route("**/api/discovery/details/movie/603?**", async (route) => {
     await route.fulfill({
@@ -193,6 +272,26 @@ export async function mockDiscoveryDetails(page: Page) {
   await page.route("**/api/discovery/people/6384?**", async (route) => {
     await route.fulfill({
       body: JSON.stringify(discoveryPersonDetailFixture),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
+
+export async function mockDiscoveryFeedDetails(page: Page) {
+  await page.route("**/api/discovery/details/movie/603?**", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        ...discoveryMovieDetailFixture,
+        item: {
+          ...discoveryMovieDetailFixture.item,
+          originalTitle: null,
+          overview: "A deep-space survey hears a pattern no instrument was designed to find.",
+          tagline: "Follow the signal.",
+          title: "The Far Meridian",
+          year: 2026,
+        },
+      }),
       contentType: "application/json",
       status: 200,
     });

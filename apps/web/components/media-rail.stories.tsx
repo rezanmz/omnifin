@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { demoDashboard } from "../lib/dashboard-data";
 import { MediaRail } from "./media-rail";
 
 const meta = {
-  args: { items: demoDashboard.continueWatching, title: "Continue watching" },
+  args: { items: demoDashboard.continueWatching, onSelect: fn(), title: "Continue watching" },
   component: MediaRail,
   decorators: [
     (Story) => (
@@ -28,9 +28,9 @@ export const Empty: Story = { args: { items: [], title: "Continue watching" } };
 export const DirectionalKeyboard: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const firstPoster = canvas.getByRole("button", { name: /Open Ember Coast/i });
+    const firstPoster = canvas.getByRole("button", { name: /Resume Ember Coast/i });
     firstPoster.focus();
     await userEvent.keyboard("{ArrowRight}");
-    await expect(canvas.getByRole("button", { name: /Open The Quiet Archive/i })).toHaveFocus();
+    await expect(canvas.getByRole("button", { name: /Resume The Quiet Archive/i })).toHaveFocus();
   },
 };

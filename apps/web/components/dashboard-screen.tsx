@@ -6,6 +6,7 @@ import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
+import { LazyDiscoveryDashboard } from "./lazy-discovery-dashboard";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MediaRail } from "./media-rail";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
@@ -24,10 +25,12 @@ export function DashboardScreen({
   data,
   displayProfile = "standard",
   liveContinueWatching = false,
+  liveDiscovery = false,
 }: {
   data: DashboardModel;
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
+  liveDiscovery?: boolean;
 }) {
   return (
     <div
@@ -41,13 +44,19 @@ export function DashboardScreen({
       <div className="application-shell">
         <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
-          <HeroSpotlight hero={data.hero} />
-          {liveContinueWatching ? (
-            <LazyContinueWatchingRail />
+          {liveDiscovery ? (
+            <LazyDiscoveryDashboard />
           ) : (
-            <MediaRail items={data.continueWatching} title="Continue watching" />
+            <>
+              <HeroSpotlight hero={data.hero} />
+              {liveContinueWatching ? (
+                <LazyContinueWatchingRail />
+              ) : (
+                <MediaRail items={data.continueWatching} title="Continue watching" />
+              )}
+              <MediaRail items={data.discovery} title="Made for tonight" />
+            </>
           )}
-          <MediaRail items={data.discovery} title="Made for tonight" />
           <CalendarStrip items={data.calendar} />
           <OperationsDock operations={data.operations} />
         </main>

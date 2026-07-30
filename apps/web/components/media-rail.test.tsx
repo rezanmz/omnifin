@@ -6,9 +6,15 @@ import { MediaRail } from "./media-rail";
 
 describe("MediaRail", () => {
   it("describes watch progress on each poster control", () => {
-    render(<MediaRail items={demoDashboard.continueWatching} title="Continue watching" />);
+    render(
+      <MediaRail
+        items={demoDashboard.continueWatching}
+        onSelect={vi.fn()}
+        title="Continue watching"
+      />,
+    );
 
-    expect(screen.getByRole("button", { name: "Open Ember Coast" })).toHaveAccessibleDescription(
+    expect(screen.getByRole("button", { name: "Resume Ember Coast" })).toHaveAccessibleDescription(
       "64% watched",
     );
     expect(screen.getByRole("progressbar", { name: "Ember Coast watch progress" })).toHaveAttribute(
@@ -58,10 +64,16 @@ describe("MediaRail", () => {
     const scrollTo = vi.fn();
     HTMLElement.prototype.scrollTo = scrollTo;
     const user = userEvent.setup();
-    render(<MediaRail items={demoDashboard.continueWatching} title="Continue watching" />);
+    render(
+      <MediaRail
+        items={demoDashboard.continueWatching}
+        onSelect={vi.fn()}
+        title="Continue watching"
+      />,
+    );
 
-    const first = screen.getByRole("button", { name: "Open Ember Coast" });
-    const second = screen.getByRole("button", { name: "Open The Quiet Archive" });
+    const first = screen.getByRole("button", { name: "Resume Ember Coast" });
+    const second = screen.getByRole("button", { name: "Resume The Quiet Archive" });
     first.focus();
     await user.keyboard("{ArrowRight}");
 
@@ -74,5 +86,16 @@ describe("MediaRail", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("Start watching something in Jellyfin");
     expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  });
+
+  it("does not expose controls when a rail has no action", () => {
+    render(<MediaRail items={demoDashboard.discovery} title="Made for tonight" />);
+
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByText("View all")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Made for tonight titles" })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
   });
 });

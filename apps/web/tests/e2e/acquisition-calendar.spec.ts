@@ -7,10 +7,14 @@ test("dashboard calendar entry points open the complete release observatory", as
     "href",
     "/calendar",
   );
-  await expect(page.getByRole("link", { name: "Open calendar" })).toHaveAttribute(
-    "href",
-    "/calendar",
-  );
+  await expect(
+    page
+      .getByRole("region", { exact: true, name: "The Far Meridian" })
+      .getByRole("link", { name: "Open calendar" }),
+  ).toHaveAttribute("href", "/calendar");
+  await expect(
+    page.getByRole("region", { name: "This week" }).getByRole("link", { name: "Open calendar" }),
+  ).toHaveAttribute("href", "/calendar");
 });
 
 test("calendar supports focused filtering and contextual event details", async ({ page }) => {

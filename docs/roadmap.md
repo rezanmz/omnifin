@@ -54,7 +54,8 @@ CSRF/session tests, recovery rehearsal, and secret-leak inspection all pass.
 - Cinematic token system, editorial typography, artwork-derived palettes, and
   production interface primitives
 - Application shell, dashboard, exact skeletons, authentication and account-linking
-  screens, and responsive navigation
+  screens, responsive navigation, adaptive light/dark/system themes, and a connected
+  Liquid Glass discovery surface with protected artwork
 - Storybook state coverage and interaction tests before route assembly
 
 **Gate:** visual regression, WCAG 2.2 AA checks, keyboard and directional navigation,
@@ -65,7 +66,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
 
 **Status: In development**
 
-- Seerr and metadata discovery, global search, normalized movie and series details,
+- Seerr and metadata discovery, live trending/popular/upcoming dashboard rails with
+  partial-failure isolation and protected artwork, global search, normalized movie and series details,
   best-effort rating/trailer/recommendation intelligence, person context, granular requests
   with opaque destination/profile/root/language routing, and operator approvals (implemented
   with deterministic contracts; protected live evidence pending)

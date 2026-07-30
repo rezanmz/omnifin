@@ -35,11 +35,11 @@ describe("directional navigation", () => {
     const user = userEvent.setup();
     render(<HeroSpotlight hero={demoDashboard.hero} />);
 
-    const play = screen.getByRole("button", { name: "Play now" });
-    play.focus();
+    const library = screen.getByRole("link", { name: "Browse library" });
+    library.focus();
     await user.keyboard("{ArrowRight}");
 
-    expect(screen.getByRole("button", { name: "Details" })).toHaveFocus();
+    expect(screen.getByRole("link", { name: "Open calendar" })).toHaveFocus();
   });
 
   it("moves from search to service status without stealing text-editing arrows", async () => {

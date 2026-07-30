@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
+import { emptyContinueWatchingFeed } from "../../lib/continue-watching-demo";
+import {
+  mockDiscoveryDetails,
+  mockDiscoveryFeed,
+  mockDiscoverySearch,
+} from "../fixtures/discovery";
 import { mockMediaRequestRouting, mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -84,6 +89,16 @@ async function removeDevelopmentIndicator(page: Page) {
   });
 }
 
+async function mockQuietContinueWatching(page: Page) {
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(emptyContinueWatchingFeed),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
+
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -92,6 +107,34 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
   await page.goto(routeForProject("/", testInfo.project.name));
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
+});
+
+test("connected discovery dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Connected discovery covers representative desktop and phone geometry",
+  );
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
+});
+
+test("light connected discovery dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Light connected discovery covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-live-discovery-light.png", { fullPage: true });
 });
 
 test("light dashboard visual baseline", async ({ page }, testInfo) => {
@@ -1015,7 +1058,7 @@ test("focus-visible visual baseline", async ({ page }, testInfo) => {
     "Focus treatment covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "Play now" }).focus();
-  await expect(page.getByRole("button", { name: "Play now" })).toBeFocused();
+  await page.getByRole("link", { name: "Browse library" }).focus();
+  await expect(page.getByRole("link", { name: "Browse library" })).toBeFocused();
   await expect(page).toHaveScreenshot("dashboard-focus-visible.png", { fullPage: true });
 });
