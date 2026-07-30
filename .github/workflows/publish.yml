@@ -343,6 +343,7 @@ jobs:
 
   build-candidate:
     name: Build unprivileged candidate archive
+    if: ${{ always() && needs.release-coverage.result == 'success' && needs.source-gate.result == 'success' }}
     needs:
       - release-coverage
       - source-gate
@@ -435,6 +436,7 @@ jobs:
 
   publish-candidate:
     name: Publish immutable candidate digest
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.source-gate.result == 'success' && needs.build-candidate.result == 'success' }}
     needs:
       - validate-release-metadata
       - source-gate
@@ -517,6 +519,7 @@ jobs:
 
   attest-candidate:
     name: Sign and attest candidate digest
+    if: ${{ always() && needs.build-candidate.result == 'success' && needs.publish-candidate.result == 'success' }}
     needs:
       - build-candidate
       - publish-candidate
@@ -573,6 +576,7 @@ jobs:
 
   scan-candidate:
     name: Scan public release candidate (${{ matrix.target.platform }})
+    if: ${{ always() && needs.publish-candidate.result == 'success' }}
     needs: publish-candidate
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -654,6 +658,7 @@ jobs:
 
   verify-candidate:
     name: Verify public candidate by digest
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.attest-candidate.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
@@ -705,6 +710,7 @@ jobs:
 
   promote-stable:
     name: Promote verified digest to stable tags
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
@@ -841,6 +847,7 @@ jobs:
 
   verify-stable:
     name: Verify public stable tags
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.promote-stable.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
@@ -874,6 +881,7 @@ jobs:
 
   finalize:
     name: Publish verified GitHub release
+    if: ${{ always() && needs.publish-candidate.result == 'success' && needs.release-coverage.result == 'success' && needs.verify-stable.result == 'success' }}
     needs:
       - publish-candidate
       - release-coverage
