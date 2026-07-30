@@ -70,7 +70,8 @@ desktop, tablet, mobile, and 10-foot layouts pass.
   partial-failure isolation and protected artwork, global search, normalized movie and series details,
   best-effort rating/trailer/recommendation intelligence, person context, granular requests
   with opaque destination/profile/root/language routing, and operator approvals (implemented
-  with deterministic contracts; protected live evidence pending)
+  with deterministic contracts plus an isolated real-Seerr pending-request/review gate; protected
+  live evidence pending)
 - Radarr and Sonarr read-only calendar, exact whole-title monitoring, searches, and manual releases
   (implemented with isolated monitoring/restoration evidence; protected live evidence pending),
   plus broader queue mutations

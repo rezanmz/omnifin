@@ -93,6 +93,11 @@ development evidence for reads, bounded monitoring restoration, provider safe te
 offline Bazarr embedded-subtitle search/download; they do not advance the protected live-readiness
 ledger.
 
+The aggregate also verifies pending-request creation and review against a fresh digest-pinned Seerr
+instance without exposing a port or contacting public metadata services. Prefer the protected runner
+for the container work; the focused reproduction is documented in the
+[isolated Seerr request runbook](operations/seerr-service-fixture.md).
+
 For a focused real-browser OIDC interoperability run, follow the
 [standards-generic OIDC fixture runbook](operations/oidc-provider-fixture.md):
 
