@@ -25,7 +25,7 @@ import {
 import { FIXTURE_MOVIE_TMDB_ID, FIXTURE_SERIES_TVDB_ID } from "./servarr-fixture-server.mjs";
 
 export const SERVARR_FIXTURE_SERVER_IMAGE =
-  "node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
+  "docker.io/library/node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
 
 export const SERVARR_SERVICE_IMAGES = Object.freeze({
   bazarr:
@@ -474,10 +474,7 @@ function commonContainerArguments(context) {
     "--env",
     "DOCKER_MODS=",
   ];
-  arguments_.push(
-    "--mount",
-    `type=bind,src=${context.configDirectory},dst=/config`,
-  );
+  arguments_.push("--mount", `type=bind,src=${context.configDirectory},dst=/config`);
   if (context.service === "radarr" || context.service === "sonarr") {
     arguments_.push(
       "--env",

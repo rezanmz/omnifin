@@ -88,7 +88,10 @@ test("pins exact current service images by immutable index digest", () => {
   for (const [service, image] of Object.entries(SERVARR_SERVICE_IMAGES)) {
     assert.match(image, EXPECTED_IMAGE_PATTERNS[service]);
   }
-  assert.match(SERVARR_FIXTURE_SERVER_IMAGE, /^node:24\.18\.0-trixie-slim@sha256:[a-f0-9]{64}$/u);
+  assert.match(
+    SERVARR_FIXTURE_SERVER_IMAGE,
+    /^docker\.io\/library\/node:24\.18\.0-trixie-slim@sha256:[a-f0-9]{64}$/u,
+  );
 });
 
 test("runs LinuxServer fixtures as the host user with a private writable runtime", () => {
@@ -110,10 +113,10 @@ test("runs the mutation sidecar read-only on the internal network without publis
     tlsDirectory: "/tmp/fixture-tls",
   });
   assert.ok(arguments_.includes("--read-only"));
-  assert.deepEqual(arguments_.slice(arguments_.indexOf("--cap-drop"), arguments_.indexOf("--cap-drop") + 2), [
-    "--cap-drop",
-    "ALL",
-  ]);
+  assert.deepEqual(
+    arguments_.slice(arguments_.indexOf("--cap-drop"), arguments_.indexOf("--cap-drop") + 2),
+    ["--cap-drop", "ALL"],
+  );
   assert.ok(arguments_.includes("--network-alias"));
   assert.ok(arguments_.includes("api.radarr.video"));
   assert.ok(arguments_.includes("skyhook.sonarr.tv"));
@@ -121,7 +124,10 @@ test("runs the mutation sidecar read-only on the internal network without publis
   assert.ok(arguments_.includes(SERVARR_FIXTURE_SERVER_IMAGE));
   assert.ok(arguments_.some((argument) => argument.includes("server.crt")));
   assert.ok(arguments_.some((argument) => argument.includes("server.key")));
-  assert.equal(arguments_.some((argument) => argument.includes("ca.key")), false);
+  assert.equal(
+    arguments_.some((argument) => argument.includes("ca.key")),
+    false,
+  );
   assert.equal(arguments_.includes("--publish"), false);
   assert.equal(arguments_.includes("-p"), false);
   assert.deepEqual(arguments_.slice(1, 3), ["--pull", "never"]);
