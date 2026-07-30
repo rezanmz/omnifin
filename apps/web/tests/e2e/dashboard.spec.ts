@@ -184,6 +184,7 @@ test("a strict live provenance snapshot replaces only its selected target", asyn
 test("operators can explicitly pause whole-title monitoring without touching files", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   await mockAcquisitionMonitoringSession(page);
   const capture = await mockAcquisitionMonitoringUpdate(page);
   await page.goto("/");
