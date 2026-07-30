@@ -30,8 +30,13 @@ runner:
 - at least 250 requests per second;
 - p95 latency at or below 150 milliseconds, p99 at or below 400 milliseconds, and no
   request above one second;
-- gateway resident memory at or below 384 MiB; and
+- gateway resident memory at or below 512 MiB; and
 - no more than 192 MiB of resident-memory growth during the measured interval.
+
+The absolute ceiling reserves 320 MiB for the hosted runner's production-process
+baseline and then adds the independently enforced 192 MiB growth allowance. Keeping
+those values additive prevents normal baseline variation from silently reducing the
+growth budget, while the relative guard continues to catch workload-driven leaks.
 
 The JSON artifact records the profile, budgets, status counts, latency distribution,
 throughput, and memory observations. It contains no database path, encryption key,

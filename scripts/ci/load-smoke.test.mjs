@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { parse } from "yaml";
-import { evaluateBudgets, percentile, workloadRoute } from "../load/gateway-smoke.mjs";
+import {
+  BUDGETS,
+  evaluateBudgets,
+  HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB,
+  percentile,
+  workloadRoute,
+} from "../load/gateway-smoke.mjs";
 
 test("load percentiles select the upper observation at each boundary", () => {
   assert.equal(percentile([], 0.95), 0);
@@ -39,6 +45,16 @@ test("load budgets report every exceeded resource dimension", () => {
     "memory_peak",
     "memory_growth",
   ]);
+});
+
+test("the absolute memory ceiling preserves the hosted baseline and growth guards", () => {
+  assert.equal(HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB, 320);
+  assert.equal(
+    BUDGETS.peakMemoryMiB,
+    HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB + BUDGETS.memoryGrowthMiB,
+  );
+  assert.equal(BUDGETS.peakMemoryMiB, 512);
+  assert.equal(BUDGETS.memoryGrowthMiB, 192);
 });
 
 test("the workload stays below route and global limits for every modeled client", () => {

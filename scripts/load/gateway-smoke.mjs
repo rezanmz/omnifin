@@ -17,11 +17,13 @@ const PROFILE = Object.freeze({
   requestCount: 20_000,
   warmupCount: 1_600,
 });
-const BUDGETS = Object.freeze({
+export const HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB = 320;
+const MEMORY_GROWTH_BUDGET_MIB = 192;
+export const BUDGETS = Object.freeze({
   errorRate: 0,
   maxLatencyMs: 1_000,
-  memoryGrowthMiB: 192,
-  peakMemoryMiB: 384,
+  memoryGrowthMiB: MEMORY_GROWTH_BUDGET_MIB,
+  peakMemoryMiB: HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB + MEMORY_GROWTH_BUDGET_MIB,
   p95LatencyMs: 150,
   p99LatencyMs: 400,
   throughputRequestsPerSecond: 250,
