@@ -1,6 +1,7 @@
 import type { AcquisitionCalendarResponse } from "@omnifin/contracts/calendar";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -37,6 +38,16 @@ function renderCalendar(
 }
 
 describe("AcquisitionCalendar", () => {
+  it("keeps the server-rendered calendar search inert until hydration", () => {
+    const markup = renderToString(
+      <ThemeProvider initialPreference="system">
+        <AcquisitionCalendar initialOutcome={ready} live={false} />
+      </ThemeProvider>,
+    );
+
+    expect(markup).toMatch(/<input[^>]*disabled=""[^>]*placeholder="Find a title or source"/u);
+  });
+
   it("renders deterministic UTC verification copy", () => {
     renderCalendar();
 

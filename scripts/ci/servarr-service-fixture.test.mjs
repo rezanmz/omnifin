@@ -8,7 +8,11 @@ import {
   SERVARR_FIXTURE_SERVER_IMAGE,
   SERVARR_SERVICE_IMAGES,
   SERVARR_SERVICE_VERSIONS,
+  bazarrDatabaseSeedArguments,
+  bazarrMediaGenerationArguments,
+  bazarrSeedPayload,
   configureProwlarrFixtureIndexer,
+  configureBazarrFixtureSettings,
   containerIsolationArguments,
   createCurlHeaderConfiguration,
   fixtureServerContainerArguments,
@@ -18,6 +22,8 @@ import {
   parseServarrApiKey,
   selectAppProfileId,
   selectQualityProfileId,
+  serviceContainerArguments,
+  validateBazarrSubtitleArtifact,
   validateSanitizedServarrFailureReport,
   validateSanitizedServarrReport,
 } from "../integration/servarr-services.mjs";
@@ -30,7 +36,16 @@ const EXPECTED_IMAGE_PATTERNS = Object.freeze({
 });
 
 const EXPECTED_CHECKS = Object.freeze({
-  bazarr: ["authentication", "credentialRejection", "emptyLibraryRead", "versionDiscovery"],
+  bazarr: [
+    "authentication",
+    "credentialRejection",
+    "emptyLibraryRead",
+    "fixtureMediaProvisioning",
+    "subtitleArtifact",
+    "subtitleDownload",
+    "subtitleSearch",
+    "versionDiscovery",
+  ],
   prowlarr: [
     "applicationRead",
     "authentication",
@@ -141,6 +156,118 @@ test("runs the mutation sidecar read-only on the internal network without publis
   );
   assert.equal(source.includes("fetch("), false);
   assert.equal(source.includes("request("), false);
+});
+
+test("generates Bazarr media inside the pinned service container and mounts only fixture data", () => {
+  const containerArguments = serviceContainerArguments({
+    configDirectory: "/tmp/bazarr-config",
+    containerName: "bazarr-fixture",
+    dataDirectory: "/tmp/bazarr-data",
+    networkName: "bazarr-network",
+    service: "bazarr",
+    tlsDirectory: "/tmp/bazarr-tls",
+  });
+  assert.ok(containerArguments.includes("type=bind,src=/tmp/bazarr-data,dst=/data"));
+  assert.equal(containerArguments.includes("--publish"), false);
+  assert.equal(containerArguments.includes("-p"), false);
+
+  const mediaArguments = bazarrMediaGenerationArguments("bazarr-fixture");
+  assert.deepEqual(mediaArguments.slice(0, 3), ["exec", "bazarr-fixture", "ffmpeg"]);
+  assert.ok(mediaArguments.includes("/data/fixture-source.srt"));
+  assert.equal(mediaArguments.at(-1), "/data/fixture-media.mkv");
+  assert.equal(mediaArguments.includes("sh"), false);
+  assert.equal(mediaArguments.includes("-c"), false);
+  assert.equal(
+    mediaArguments.some((argument) => /https?:\/\//u.test(argument)),
+    false,
+  );
+});
+
+test("enables only Bazarr's offline embedded-subtitle provider", () => {
+  const apiKey = "0123456789abcdef0123456789abcdef";
+  const configured = parse(
+    configureBazarrFixtureSettings(`
+auth:
+  apikey: ${apiKey}
+general:
+  enabled_providers: []
+  use_radarr: false
+embeddedsubtitles:
+  included_codecs: []
+  timeout: 600
+`),
+  );
+  assert.equal(configured.auth.apikey, apiKey);
+  assert.equal(configured.general.use_radarr, true);
+  assert.deepEqual(configured.general.enabled_providers, ["embeddedsubtitles"]);
+  assert.deepEqual(configured.embeddedsubtitles.included_codecs, ["subrip"]);
+  assert.equal(configured.embeddedsubtitles.timeout, 30);
+  assert.equal(JSON.stringify(configured).includes("http://"), false);
+  assert.equal(JSON.stringify(configured).includes("https://"), false);
+  assert.throws(
+    () => configureBazarrFixtureSettings("general: []\n"),
+    /credential_config_invalid/u,
+  );
+});
+
+test("seeds one bounded Bazarr target without a provider or credential reference", () => {
+  const payload = bazarrSeedPayload();
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "mediaPath",
+    "profileItems",
+    "profileName",
+    "title",
+    "year",
+  ]);
+  assert.equal(payload.mediaPath, "/data/fixture-media.mkv");
+  assert.equal(payload.year, 2026);
+  assert.deepEqual(JSON.parse(payload.profileItems), [
+    {
+      audio_exclude: "False",
+      audio_only_include: "False",
+      forced: "False",
+      hi: "False",
+      id: 1,
+      language: "en",
+    },
+  ]);
+  assert.ok(JSON.stringify(payload).length < 1_024);
+  assert.equal(/api[_-]?key|credential|https?:\/\//iu.test(JSON.stringify(payload)), false);
+  const arguments_ = bazarrDatabaseSeedArguments("bazarr-fixture");
+  assert.deepEqual(arguments_, ["exec", "--interactive", "bazarr-fixture", "python3", "-"]);
+  assert.equal(arguments_.includes(payload.mediaPath), false);
+  assert.equal(arguments_.includes(payload.title), false);
+  assert.equal(arguments_.includes("-c"), false);
+});
+
+test("accepts exactly one extracted SubRip artifact beside the generated media", () => {
+  assert.equal(
+    validateBazarrSubtitleArtifact(
+      ["fixture-media.mkv", "fixture-media.en.srt"],
+      "1\r\n00:00:00,000 --> 00:00:01,500\r\nDeterministic subtitle evidence.\r\n",
+    ),
+    "fixture-media.en.srt",
+  );
+  assert.throws(
+    () =>
+      validateBazarrSubtitleArtifact(
+        ["fixture-media.mkv", "first.srt", "second.srt"],
+        "Deterministic subtitle evidence.",
+      ),
+    /subtitle_directory_invalid/u,
+  );
+  assert.throws(
+    () => validateBazarrSubtitleArtifact(["fixture-media.mkv"], ""),
+    /subtitle_directory_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateBazarrSubtitleArtifact(
+        ["fixture-media.mkv", "fixture-media.en.srt"],
+        "1\n00:00:00,000 --> 00:00:01,500\nUnexpected text.\n",
+      ),
+    /subtitle_marker_invalid/u,
+  );
 });
 
 test("accepts only one running state and one private fixture address", () => {

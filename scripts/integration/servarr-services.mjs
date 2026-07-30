@@ -2,7 +2,19 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { constants as fileSystemConstants } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -16,7 +28,7 @@ import {
 import { ProwlarrAdapter } from "../../packages/connectors/dist/adapters/prowlarr.js";
 import { RadarrAdapter } from "../../packages/connectors/dist/adapters/radarr.js";
 import { SonarrAdapter } from "../../packages/connectors/dist/adapters/sonarr.js";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   acquirePinnedDockerImage,
   DockerImagePullError,
@@ -47,7 +59,16 @@ export const SERVARR_SERVICE_VERSIONS = Object.freeze({
 
 const SERVICE_PORTS = Object.freeze({ bazarr: 6767, prowlarr: 9696, radarr: 7878, sonarr: 8989 });
 const SERVICE_CHECKS = Object.freeze({
-  bazarr: ["authentication", "credentialRejection", "emptyLibraryRead", "versionDiscovery"],
+  bazarr: [
+    "authentication",
+    "credentialRejection",
+    "emptyLibraryRead",
+    "fixtureMediaProvisioning",
+    "subtitleArtifact",
+    "subtitleDownload",
+    "subtitleSearch",
+    "versionDiscovery",
+  ],
   prowlarr: [
     "applicationRead",
     "authentication",
@@ -100,9 +121,49 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_READY_TIMEOUT_MS = 120_000;
+const BAZARR_ARTIFACT_TIMEOUT_MS = 30_000;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const API_KEY_PATTERN = /^[a-f0-9]{32}$/u;
-const MUTATION_FIXTURE_SERVICES = new Set(["prowlarr", "radarr", "sonarr"]);
+const SIDECAR_FIXTURE_SERVICES = new Set(["prowlarr", "radarr", "sonarr"]);
+const BAZARR_FIXTURE_MEDIA_NAME = "fixture-media.mkv";
+const BAZARR_FIXTURE_SOURCE_NAME = "fixture-source.srt";
+const BAZARR_FIXTURE_TITLE = "The Deterministic Meridian";
+const BAZARR_FIXTURE_YEAR = 2026;
+const BAZARR_SUBTITLE_MARKER = "Deterministic subtitle evidence.";
+const BAZARR_SUBTITLE_SOURCE = `1
+00:00:00,000 --> 00:00:01,500
+${BAZARR_SUBTITLE_MARKER}
+`;
+const BAZARR_SEED_SCRIPT = `
+import sqlite3
+
+payload = __OMNIFIN_BAZARR_FIXTURE_PAYLOAD__
+expected_keys = ["mediaPath", "profileItems", "profileName", "title", "year"]
+if sorted(payload.keys()) != expected_keys:
+    raise ValueError("payload_invalid")
+if payload["mediaPath"] != "/data/fixture-media.mkv" or payload["year"] != 2026:
+    raise ValueError("payload_invalid")
+
+database = sqlite3.connect("/config/db/bazarr.db", timeout=10)
+database.execute("PRAGMA busy_timeout = 10000")
+with database:
+    database.execute("DELETE FROM table_movies")
+    database.execute("DELETE FROM table_languages_profiles")
+    database.execute(
+        """INSERT INTO table_languages_profiles
+        (profileId, cutoff, originalFormat, items, name, mustContain, mustNotContain, tag)
+        VALUES (1, NULL, 0, ?, ?, '[]', '[]', NULL)""",
+        (payload["profileItems"], payload["profileName"]),
+    )
+    database.execute(
+        """INSERT INTO table_movies
+        (radarrId, path, profileId, title, sortTitle, tmdbId, year, monitored,
+         audio_language, alternativeTitles, tags, sceneName, movie_file_id)
+        VALUES (1, ?, 1, ?, ?, '9000001', ?, 'True', '[]', '[]', '[]', NULL, 1)""",
+        (payload["mediaPath"], payload["title"], payload["title"], str(payload["year"])),
+    )
+database.close()
+`;
 
 class ServarrFixtureFailure extends Error {
   constructor(code, options) {
@@ -188,6 +249,105 @@ export function parseBazarrApiKey(configuration) {
   return apiKey.toLowerCase();
 }
 
+export function configureBazarrFixtureSettings(configuration) {
+  parseBazarrApiKey(configuration);
+  let parsed;
+  try {
+    parsed = parseYaml(configuration, { maxAliasCount: 0, prettyErrors: false });
+  } catch (error) {
+    throw new ServarrFixtureFailure("credential_config_invalid", { cause: error });
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    !parsed.general ||
+    typeof parsed.general !== "object" ||
+    Array.isArray(parsed.general) ||
+    !parsed.embeddedsubtitles ||
+    typeof parsed.embeddedsubtitles !== "object" ||
+    Array.isArray(parsed.embeddedsubtitles)
+  ) {
+    throw new ServarrFixtureFailure("credential_config_invalid");
+  }
+  parsed.general.enabled_providers = ["embeddedsubtitles"];
+  parsed.general.use_radarr = true;
+  parsed.embeddedsubtitles.included_codecs = ["subrip"];
+  parsed.embeddedsubtitles.timeout = 30;
+  const output = stringifyYaml(parsed, { lineWidth: 0 });
+  if (Buffer.byteLength(output, "utf8") > MAX_RESPONSE_BYTES) {
+    throw new ServarrFixtureFailure("credential_config_invalid");
+  }
+  return output;
+}
+
+export function bazarrSeedPayload() {
+  return {
+    mediaPath: `/data/${BAZARR_FIXTURE_MEDIA_NAME}`,
+    profileItems: JSON.stringify([
+      {
+        audio_exclude: "False",
+        audio_only_include: "False",
+        forced: "False",
+        hi: "False",
+        id: 1,
+        language: "en",
+      },
+    ]),
+    profileName: "Deterministic English fixture",
+    title: BAZARR_FIXTURE_TITLE,
+    year: BAZARR_FIXTURE_YEAR,
+  };
+}
+
+export function bazarrDatabaseSeedArguments(containerName) {
+  if (typeof containerName !== "string" || !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(containerName)) {
+    throw new ServarrFixtureFailure("container_name_invalid");
+  }
+  return ["exec", "--interactive", containerName, "python3", "-"];
+}
+
+function bazarrDatabaseSeedProgram() {
+  return BAZARR_SEED_SCRIPT.replace(
+    "__OMNIFIN_BAZARR_FIXTURE_PAYLOAD__",
+    JSON.stringify(bazarrSeedPayload()),
+  );
+}
+
+export function validateBazarrSubtitleArtifact(entries, content) {
+  if (
+    !Array.isArray(entries) ||
+    entries.length !== 2 ||
+    entries.some(
+      (entry) =>
+        typeof entry !== "string" ||
+        entry.length < 1 ||
+        entry.length > 180 ||
+        entry.includes("/") ||
+        entry.includes("\\") ||
+        /[\p{Cc}\p{Cf}]/u.test(entry),
+    ) ||
+    !entries.includes(BAZARR_FIXTURE_MEDIA_NAME)
+  ) {
+    throw new ServarrFixtureFailure("subtitle_directory_invalid");
+  }
+  if (
+    typeof content !== "string" ||
+    Buffer.byteLength(content, "utf8") < 32 ||
+    Buffer.byteLength(content, "utf8") > 64 * 1_024
+  ) {
+    throw new ServarrFixtureFailure("subtitle_content_invalid");
+  }
+  if (!content.includes(BAZARR_SUBTITLE_MARKER)) {
+    throw new ServarrFixtureFailure("subtitle_marker_invalid");
+  }
+  const subtitles = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
+  if (subtitles.length !== 1 || subtitles[0] === BAZARR_FIXTURE_SOURCE_NAME) {
+    throw new ServarrFixtureFailure("subtitle_artifact_count_invalid");
+  }
+  return subtitles[0];
+}
+
 export function parseContainerState(output) {
   const state = typeof output === "string" ? output.trim() : "";
   if (state === "true:0") return true;
@@ -256,6 +416,27 @@ function runDocker(arguments_, timeout = 180_000, failureCode = "container_faile
     throw new ServarrFixtureFailure(failureCode, { cause: execution.error });
   }
   return `${execution.stdout ?? ""}\n${execution.stderr ?? ""}`;
+}
+
+function runDockerWithInput(arguments_, input, timeout, failureCode) {
+  if (
+    typeof input !== "string" ||
+    Buffer.byteLength(input, "utf8") < 1 ||
+    Buffer.byteLength(input, "utf8") > 8 * 1_024
+  ) {
+    throw new ServarrFixtureFailure("fixture_input_invalid");
+  }
+  const execution = spawnSync("docker", arguments_, {
+    cwd: REPOSITORY_ROOT,
+    encoding: "utf8",
+    input,
+    maxBuffer: 256 * 1_024,
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout,
+  });
+  if (execution.status !== 0 || execution.error) {
+    throw new ServarrFixtureFailure(failureCode, { cause: execution.error });
+  }
 }
 
 function bestEffortDocker(arguments_, timeout = 30_000) {
@@ -453,7 +634,7 @@ export function fixtureServerContainerArguments(context) {
   ];
 }
 
-function commonContainerArguments(context) {
+export function serviceContainerArguments(context) {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
   const arguments_ = [
@@ -479,14 +660,15 @@ function commonContainerArguments(context) {
     "DOCKER_MODS=",
   ];
   arguments_.push("--mount", `type=bind,src=${context.configDirectory},dst=/config`);
+  if (["bazarr", "radarr", "sonarr"].includes(context.service)) {
+    arguments_.push("--mount", `type=bind,src=${context.dataDirectory},dst=/data`);
+  }
   if (context.service === "radarr" || context.service === "sonarr") {
     arguments_.push(
       "--env",
       "SSL_CERT_FILE=/fixture-tls/ca.crt",
       "--mount",
       `type=bind,src=${resolve(context.tlsDirectory, "ca.crt")},dst=/fixture-tls/ca.crt,readonly`,
-      "--mount",
-      `type=bind,src=${context.dataDirectory},dst=/data`,
     );
   }
   arguments_.push(SERVARR_SERVICE_IMAGES[context.service]);
@@ -506,7 +688,7 @@ async function acquireFixtureImage(image) {
 
 async function startContainer(context) {
   await acquireFixtureImage(SERVARR_SERVICE_IMAGES[context.service]);
-  if (MUTATION_FIXTURE_SERVICES.has(context.service)) {
+  if (SIDECAR_FIXTURE_SERVICES.has(context.service)) {
     await acquireFixtureImage(SERVARR_FIXTURE_SERVER_IMAGE);
     await createFixtureCertificates(context);
   }
@@ -516,7 +698,7 @@ async function startContainer(context) {
     "network_create_failed",
   );
   context.networkCreated = true;
-  if (MUTATION_FIXTURE_SERVICES.has(context.service)) {
+  if (SIDECAR_FIXTURE_SERVICES.has(context.service)) {
     runDocker(fixtureServerContainerArguments(context), 60_000, "fixture_server_start_failed");
     context.fixtureServerCreated = true;
     parseContainerState(
@@ -532,7 +714,7 @@ async function startContainer(context) {
       ),
     );
   }
-  runDocker(commonContainerArguments(context), 180_000, "container_start_failed");
+  runDocker(serviceContainerArguments(context), 180_000, "container_start_failed");
   context.containerCreated = true;
   parseContainerState(
     runDocker(
@@ -561,6 +743,104 @@ async function startContainer(context) {
     ),
   );
   return { baseUrl: `http://${address}:${SERVICE_PORTS[context.service]}/` };
+}
+
+export function bazarrMediaGenerationArguments(containerName) {
+  if (typeof containerName !== "string" || !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(containerName)) {
+    throw new ServarrFixtureFailure("container_name_invalid");
+  }
+  return [
+    "exec",
+    containerName,
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=160x90:r=24:d=2",
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=channel_layout=mono:sample_rate=48000",
+    "-i",
+    `/data/${BAZARR_FIXTURE_SOURCE_NAME}`,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-map",
+    "2:s:0",
+    "-c:v",
+    "mpeg4",
+    "-q:v",
+    "31",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "32k",
+    "-c:s",
+    "srt",
+    "-metadata:s:s:0",
+    "language=eng",
+    "-shortest",
+    `/data/${BAZARR_FIXTURE_MEDIA_NAME}`,
+  ];
+}
+
+async function provisionBazarrFixture(context) {
+  const sourcePath = resolve(context.dataDirectory, BAZARR_FIXTURE_SOURCE_NAME);
+  const mediaPath = resolve(context.dataDirectory, BAZARR_FIXTURE_MEDIA_NAME);
+  await writeFile(sourcePath, BAZARR_SUBTITLE_SOURCE, { flag: "wx", mode: 0o600 });
+  runDocker(
+    bazarrMediaGenerationArguments(context.containerName),
+    180_000,
+    "bazarr_media_generation_failed",
+  );
+  await rm(sourcePath);
+  const mediaMetadata = await lstat(mediaPath);
+  if (
+    !mediaMetadata.isFile() ||
+    mediaMetadata.isSymbolicLink() ||
+    mediaMetadata.size < 1_024 ||
+    mediaMetadata.size > 8 * 1_024 * 1_024
+  ) {
+    throw new ServarrFixtureFailure("bazarr_media_generation_invalid");
+  }
+
+  const configurationPath = resolve(context.configDirectory, "config/config.yaml");
+  const configuration = configureBazarrFixtureSettings(await readFile(configurationPath, "utf8"));
+  const temporaryConfigurationPath = resolve(
+    dirname(configurationPath),
+    ".config.yaml.omnifin-fixture",
+  );
+  await writeFile(temporaryConfigurationPath, configuration, { flag: "wx", mode: 0o600 });
+  await rename(temporaryConfigurationPath, configurationPath);
+
+  runDockerWithInput(
+    bazarrDatabaseSeedArguments(context.containerName),
+    bazarrDatabaseSeedProgram(),
+    30_000,
+    "bazarr_database_seed_failed",
+  );
+  const restartedContainer = runDocker(
+    ["restart", context.containerName],
+    180_000,
+    "bazarr_container_restart_failed",
+  ).trim();
+  if (restartedContainer !== context.containerName) {
+    throw new ServarrFixtureFailure("bazarr_container_restart_failed");
+  }
+  parseContainerState(
+    runDocker(
+      ["inspect", "--format", "{{.State.Running}}:{{.State.ExitCode}}", context.containerName],
+      30_000,
+      "container_state_failed",
+    ),
+  );
 }
 
 function createContainerLocalTransport(context) {
@@ -1028,14 +1308,87 @@ async function verifyProwlarr(context, server, apiKey, adapter) {
   }
 }
 
-async function verifyBazarr(adapter) {
+async function waitForBazarrSubtitleArtifact(context) {
+  const deadline = Date.now() + BAZARR_ARTIFACT_TIMEOUT_MS;
+  let failureCode = "subtitle_artifact_missing";
+  while (Date.now() < deadline) {
+    const entries = await readdir(context.dataDirectory);
+    const subtitleNames = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
+    if (subtitleNames.length === 0) {
+      failureCode = "subtitle_artifact_missing";
+      await sleep(250);
+      continue;
+    }
+    if (subtitleNames.length !== 1 || !subtitleNames[0]) {
+      failureCode = "subtitle_artifact_count_invalid";
+      await sleep(250);
+      continue;
+    }
+    let subtitleFile;
+    try {
+      const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
+      subtitleFile = await open(
+        subtitlePath,
+        fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW,
+      );
+      const subtitleMetadata = await subtitleFile.stat();
+      if (!subtitleMetadata.isFile() || subtitleMetadata.size > 64 * 1_024) {
+        throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
+      }
+      if (subtitleMetadata.size < 32) {
+        throw new ServarrFixtureFailure("subtitle_content_invalid");
+      }
+      validateBazarrSubtitleArtifact(entries, await subtitleFile.readFile("utf8"));
+      return;
+    } catch (error) {
+      failureCode =
+        error instanceof ServarrFixtureFailure ? error.code : "subtitle_artifact_read_invalid";
+      await sleep(250);
+    } finally {
+      await subtitleFile?.close();
+    }
+  }
+  throw new ServarrFixtureFailure(failureCode);
+}
+
+async function verifyBazarr(context, adapter) {
   const emptyLibrary = await adapter
-    .searchSubtitles({ kind: "movie", title: "Fixture Title", year: 2026 })
+    .searchSubtitles({ kind: "movie", title: BAZARR_FIXTURE_TITLE, year: BAZARR_FIXTURE_YEAR })
     .then(
       () => false,
       (error) => error instanceof BazarrTargetError && error.reason === "not_found",
     );
   if (!emptyLibrary) throw new ServarrFixtureFailure("empty_library_read_invalid");
+
+  await connectorOperation("fixture_media_provisioning", () => provisionBazarrFixture(context));
+  await waitForResult(async () => {
+    const health = await adapter.probe();
+    return health.status === "healthy" ? health : null;
+  }, "bazarr_restart_timeout");
+  const result = await connectorOperation("subtitle_search", () =>
+    adapter.searchSubtitles({
+      kind: "movie",
+      title: BAZARR_FIXTURE_TITLE,
+      year: BAZARR_FIXTURE_YEAR,
+    }),
+  );
+  const candidate = result.candidates[0];
+  if (result.target.kind !== "movie" || result.target.radarrId !== 1) {
+    throw new ServarrFixtureFailure("subtitle_target_invalid");
+  }
+  if (result.candidates.length !== 1 || !candidate) {
+    throw new ServarrFixtureFailure("subtitle_candidate_count_invalid");
+  }
+  if (candidate.provider !== "embeddedsubtitles") {
+    throw new ServarrFixtureFailure("subtitle_provider_invalid");
+  }
+  if (!new Set(["en", "eng", "english"]).has(candidate.language.toLocaleLowerCase("en-US"))) {
+    throw new ServarrFixtureFailure("subtitle_language_invalid");
+  }
+  await connectorOperation("subtitle_download", () =>
+    adapter.downloadSubtitle(result.target, candidate),
+  );
+  await waitForBazarrSubtitleArtifact(context);
 }
 
 async function runFixture(context, server) {
@@ -1053,7 +1406,7 @@ async function runFixture(context, server) {
     verifyCredentialRejection(context, server, apiKey),
   );
   if (context.service === "bazarr") {
-    await connectorOperation("empty_library_read", () => verifyBazarr(adapter));
+    await verifyBazarr(context, adapter);
   } else if (context.service === "prowlarr") {
     await verifyProwlarr(context, server, apiKey, adapter);
   } else {
