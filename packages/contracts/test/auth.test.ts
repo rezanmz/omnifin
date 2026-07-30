@@ -22,6 +22,7 @@ import {
   oidcRoleMappingCreateRequestSchema,
   oidcRoleMappingDeleteResponseSchema,
   oidcRoleMappingMutationResponseSchema,
+  oidcRoleMappingUpdateRequestSchema,
   oidcRoleMappingsAdminResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
@@ -473,6 +474,14 @@ describe("authentication contracts", () => {
     ).toBe(false);
     expect(
       oidcRoleMappingCreateRequestSchema.safeParse({ ...create, providerId: "forged" }).success,
+    ).toBe(false);
+    expect(oidcRoleMappingUpdateRequestSchema.parse(create)).toEqual(create);
+    expect(
+      oidcRoleMappingUpdateRequestSchema.safeParse({ ...create, id: mapping.id }).success,
+    ).toBe(false);
+    expect(
+      oidcRoleMappingUpdateRequestSchema.safeParse({ ...create, providerId: mapping.providerId })
+        .success,
     ).toBe(false);
   });
 

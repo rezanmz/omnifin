@@ -40,15 +40,17 @@ also migrates SQLite, validates public configuration, redacts structured logs, a
 provides isolated connector fixture and probe tooling.
 
 The provider-administration boundary can create, list, replace, freshly validate, and safely delete
-encrypted, audited OIDC records and can list, create, and delete exact role mappings. Its browser
-control room exposes only normalized secret-free records, reserves exact provider endpoints before
-creation, and requires validation before offering enablement.
+encrypted, audited OIDC records and can list, create, update, and delete exact role mappings. Its
+browser control room exposes only normalized secret-free records, preserves mixed typed claim
+values while editing, reserves exact provider endpoints before creation, and requires validation
+before offering enablement. Mapping updates are atomic with affected role-derived session
+revocation and reject equivalent configurations without side effects.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented.
 Encrypted connector administration is available through a versioned, permission-checked API;
 recovery sessions see and repair only Jellyfin connector records. A pinned isolated Authentik
-environment verifies authorization, role mapping, RP logout, and back-channel logout, while a
+environment verifies authorization, guarded role-mapping updates, RP logout, and back-channel logout, while a
 protected public compatibility baseline remains pending. The connector browser control room,
 normalized Seerr search and media details, media-request creation, operator request review,
 issue lifecycle, and title-level Radarr/Sonarr provenance are

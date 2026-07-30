@@ -63,8 +63,18 @@ const principal = {
   sessionId: "e2e-admin-session",
   userId: "e2e-admin-user",
 } as const;
+const roleMapping = {
+  claimPath: ["groups"],
+  enabled: true,
+  id: "mapping-operators",
+  operator: "contains_any",
+  priority: 500,
+  providerId: provider.id,
+  role: "operator",
+  values: ["media-operators"],
+} as const;
 
-async function mockAdministrationReads(page: Page) {
+async function mockAdministrationReads(page: Page, mappings: readonly object[] = []) {
   await page.route("**/api/auth/session", async (route) => {
     await route.fulfill({
       body: JSON.stringify({ csrfToken, principal }),
@@ -83,7 +93,7 @@ async function mockAdministrationReads(page: Page) {
     `**/api/admin/auth/oidc/providers/${provider.id}/role-mappings`,
     async (route) => {
       await route.fulfill({
-        body: JSON.stringify({ mappings: [] }),
+        body: JSON.stringify({ mappings }),
         contentType: "application/json",
         status: 200,
       });
@@ -164,4 +174,50 @@ test("retains the sealed client secret while editing public provider fields", as
   expect(updateCsrf).toBe(csrfToken);
   expect(updateBody).toMatchObject({ displayName: "Authentik Home", enabled: false });
   expect(updateBody).not.toHaveProperty("clientSecret");
+});
+
+test("updates an exact role mapping with same-origin CSRF proof", async ({ page }) => {
+  await mockAdministrationReads(page, [roleMapping]);
+  let updateRequest: { body: Record<string, unknown>; csrf: string; method: string } | undefined;
+  await page.route(
+    `**/api/admin/auth/oidc/providers/${provider.id}/role-mappings/${roleMapping.id}`,
+    async (route) => {
+      const request = route.request();
+      const body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
+      updateRequest = {
+        body,
+        csrf: request.headers()["x-omnifin-csrf"] ?? "",
+        method: request.method(),
+      };
+      await route.fulfill({
+        body: JSON.stringify({
+          mapping: { ...roleMapping, ...body },
+          revokedSessions: 2,
+        }),
+        contentType: "application/json",
+        status: 200,
+      });
+    },
+  );
+
+  await page.goto("/settings/identity-providers");
+  await page.getByRole("button", { name: "Edit groups mapping" }).click();
+  await expect(page.getByRole("heading", { name: "Edit role mapping" })).toBeFocused();
+  await page.getByLabel("Omnifin role").selectOption("requester");
+  await page.getByLabel("Priority").fill("640");
+  await page.getByRole("button", { name: "Save mapping" }).click();
+
+  await expect(page.getByRole("status")).toContainText("2 role-derived sessions closed");
+  expect(updateRequest).toEqual({
+    body: {
+      claimPath: ["groups"],
+      enabled: true,
+      operator: "contains_any",
+      priority: 640,
+      role: "requester",
+      values: ["media-operators"],
+    },
+    csrf: csrfToken,
+    method: "PUT",
+  });
 });

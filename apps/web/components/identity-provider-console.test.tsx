@@ -111,6 +111,10 @@ function client(overrides: Partial<IdentityProviderAdminClient> = {}): IdentityP
       provider: { ...provider, ...input },
       revokedSessions: 0,
     })),
+    updateRoleMapping: vi.fn(async (_providerId, _mappingId, input) => ({
+      mapping: { ...mapping, ...input },
+      revokedSessions: 0,
+    })),
     validateProvider: vi.fn(async () => ({ capabilities, provider })),
     ...overrides,
   };
@@ -284,7 +288,7 @@ describe("IdentityProviderConsole", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("creates and deliberately removes exact typed role mappings", async () => {
+  it("creates, edits, and deliberately removes exact typed role mappings", async () => {
     const user = userEvent.setup();
     const booleanMapping: RoleMapping = {
       ...mapping,
@@ -300,9 +304,13 @@ describe("IdentityProviderConsole", () => {
       deletedMappingId: booleanMapping.id,
       revokedSessions: 1,
     }));
+    const updateRoleMapping = vi.fn(async (_providerId, _mappingId, input) => ({
+      mapping: { ...booleanMapping, ...input, priority: 720 },
+      revokedSessions: 2,
+    }));
     render(
       <IdentityProviderConsole
-        client={client({ createRoleMapping, deleteRoleMapping })}
+        client={client({ createRoleMapping, deleteRoleMapping, updateRoleMapping })}
         initialMappings={{ [provider.id]: [] }}
         initialOutcome={ready()}
         publicBaseUrl="https://omnifin.example.test"
@@ -322,12 +330,92 @@ describe("IdentityProviderConsole", () => {
       expect.objectContaining({ role: "requester", values: [true] }),
       csrfToken,
     );
+    await user.click(screen.getByRole("button", { name: "Edit groups mapping" }));
+    expect(screen.getByRole("heading", { name: "Edit role mapping" })).toHaveFocus();
+    await user.clear(screen.getByLabelText("Priority"));
+    await user.type(screen.getByLabelText("Priority"), "720");
+    await user.click(screen.getByRole("button", { name: "Save mapping" }));
+    await waitFor(() =>
+      expect(updateRoleMapping).toHaveBeenCalledWith(
+        provider.id,
+        booleanMapping.id,
+        expect.objectContaining({ priority: 720, role: "requester", values: [true] }),
+        csrfToken,
+      ),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("2 role-derived sessions closed");
     await user.click(screen.getByRole("button", { name: "Remove groups mapping" }));
     expect(screen.getByRole("group", { name: /Remove/ })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
       expect(deleteRoleMapping).toHaveBeenCalledWith(provider.id, booleanMapping.id, csrfToken),
     );
+  });
+
+  it("preserves mixed scalar claim values while editing", async () => {
+    const user = userEvent.setup();
+    const mixedMapping: RoleMapping = {
+      ...mapping,
+      id: "mapping-mixed-entitlements",
+      values: ["media-staff", 7, true],
+    };
+    const updateRoleMapping = vi.fn(async (_providerId, _mappingId, input) => ({
+      mapping: { ...mixedMapping, ...input },
+      revokedSessions: 1,
+    }));
+    render(
+      <IdentityProviderConsole
+        client={client({ updateRoleMapping })}
+        initialMappings={{ [provider.id]: [mixedMapping] }}
+        initialOutcome={ready()}
+        publicBaseUrl="https://omnifin.example.test"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit groups mapping" }));
+    expect(screen.getByLabelText("Value type")).toHaveValue("mixed");
+    expect(screen.getByLabelText(/Matching values/)).toHaveValue(
+      "string:media-staff\nnumber:7\nboolean:true",
+    );
+    await user.clear(screen.getByLabelText("Priority"));
+    await user.type(screen.getByLabelText("Priority"), "501");
+    await user.click(screen.getByRole("button", { name: "Save mapping" }));
+
+    await waitFor(() =>
+      expect(updateRoleMapping).toHaveBeenCalledWith(
+        provider.id,
+        mixedMapping.id,
+        expect.objectContaining({ priority: 501, values: ["media-staff", 7, true] }),
+        csrfToken,
+      ),
+    );
+  });
+
+  it("keeps the editor open when an equivalent mapping conflicts", async () => {
+    const user = userEvent.setup();
+    const updateRoleMapping = vi.fn(async () => {
+      throw new IdentityProviderAdminClientError(
+        "rejected",
+        "oidc_role_mapping_conflict",
+        "An equivalent role mapping already exists.",
+      );
+    });
+    render(
+      <IdentityProviderConsole
+        client={client({ updateRoleMapping })}
+        initialMappings={{ [provider.id]: [mapping] }}
+        initialOutcome={ready()}
+        publicBaseUrl="https://omnifin.example.test"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit groups mapping" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An equivalent role mapping already exists.",
+    );
+    expect(screen.getByRole("heading", { name: "Edit role mapping" })).toBeVisible();
   });
 
   it("requires confirmation before deleting a disabled, unbound provider", async () => {

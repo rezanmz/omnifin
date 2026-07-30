@@ -671,6 +671,9 @@ export const oidcRoleMappingCreateRequestSchema = z
   });
 export type OidcRoleMappingCreateRequest = z.infer<typeof oidcRoleMappingCreateRequestSchema>;
 
+export const oidcRoleMappingUpdateRequestSchema = oidcRoleMappingCreateRequestSchema;
+export type OidcRoleMappingUpdateRequest = z.infer<typeof oidcRoleMappingUpdateRequestSchema>;
+
 export const oidcRoleMappingsAdminParamsSchema = z.strictObject({
   providerId: identifierSchema,
 });

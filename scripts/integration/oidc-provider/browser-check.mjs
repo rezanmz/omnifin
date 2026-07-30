@@ -396,7 +396,7 @@ async function run() {
     currentStage = "mapped_login";
     await completeAuthorization(page, startPath, webOrigin, "mapped_login");
     currentStage = "mapped_cookie";
-    await waitForSessionCookie(context, webOrigin, viewerSessionCookie);
+    const mappedSessionCookie = await waitForSessionCookie(context, webOrigin, viewerSessionCookie);
     currentStage = "mapped_session";
     const { identity: mappedIdentity, session: mappedSession } = await waitForPendingPrincipal(
       context.request,
@@ -407,8 +407,41 @@ async function run() {
     );
     assert(mappedIdentity.userId === mappedSession.principal?.userId);
 
+    currentStage = "role_mapping_update";
+    const updatedMapping = await update(
+      administrationContext.request,
+      webOrigin,
+      `/api/admin/auth/oidc/providers/${expectedProviderId}/role-mappings/${mapping.mapping.id}`,
+      mappingRecovery.csrfToken,
+      {
+        claimPath: ["groups"],
+        enabled: true,
+        operator: "contains_any",
+        priority: 1_000,
+        role: "operator",
+        values: ["authors"],
+      },
+    );
+    assert(updatedMapping.mapping?.id === mapping.mapping.id);
+    assert(updatedMapping.revokedSessions === 1);
+    currentStage = "role_mapping_revocation";
+    await waitForLocalRevocation(context.request);
+
+    currentStage = "remapped_login";
+    await completeAuthorization(page, startPath, webOrigin, "remapped_login");
+    currentStage = "remapped_cookie";
+    await waitForSessionCookie(context, webOrigin, mappedSessionCookie);
+    currentStage = "remapped_session";
+    const { session: remappedSession } = await waitForPendingPrincipal(
+      context.request,
+      issuer,
+      "operator",
+      mappedIdentity.subject,
+      mappedIdentity.userId,
+    );
+
     currentStage = "authorization_code_pkce";
-    assert(authorizationRequests.length >= 2);
+    assert(authorizationRequests.length >= 3);
     assert(
       authorizationRequests.every(
         (request) =>
@@ -439,7 +472,7 @@ async function run() {
 
     currentStage = "local_logout_fallback";
     const logout = await context.request.post("/api/auth/oidc/logout", {
-      form: { csrfToken: mappedSession.csrfToken },
+      form: { csrfToken: remappedSession.csrfToken },
       headers: { origin: webOrigin },
       maxRedirects: 0,
     });

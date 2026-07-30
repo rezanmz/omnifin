@@ -8,6 +8,7 @@ import type {
   OidcRoleMappingCreateRequest,
   OidcRoleMappingDeleteResponse,
   OidcRoleMappingMutationResponse,
+  OidcRoleMappingUpdateRequest,
   RoleMapping,
   SessionPrincipal,
 } from "@omnifin/contracts/auth";
@@ -196,6 +197,12 @@ export interface IdentityProviderAdminClient {
   ): Promise<OidcRoleMappingDeleteResponse>;
   listRoleMappings(providerId: string): Promise<readonly RoleMapping[]>;
   load(): Promise<IdentityProviderAdminLoadOutcome>;
+  updateRoleMapping(
+    providerId: string,
+    mappingId: string,
+    input: OidcRoleMappingUpdateRequest,
+    csrfToken: string,
+  ): Promise<OidcRoleMappingMutationResponse>;
   updateProvider(
     providerId: string,
     input: OidcProviderUpdateRequest,
@@ -277,6 +284,18 @@ export const identityProviderAdminClient: IdentityProviderAdminClient = {
       csrfToken,
       "PUT",
       schemas.oidcProviderMutationResponseSchema,
+      body,
+    );
+  },
+
+  async updateRoleMapping(providerId, mappingId, input, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
+    const body = schemas.oidcRoleMappingUpdateRequestSchema.parse(input);
+    return mutationRequest(
+      `/api/admin/auth/oidc/providers/${encodeURIComponent(providerId)}/role-mappings/${encodeURIComponent(mappingId)}`,
+      csrfToken,
+      "PUT",
+      schemas.oidcRoleMappingMutationResponseSchema,
       body,
     );
   },

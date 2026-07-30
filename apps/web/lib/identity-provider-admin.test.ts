@@ -187,6 +187,7 @@ describe("identity provider administration client", () => {
       .mockResolvedValueOnce(jsonResponse({ capabilities, provider }))
       .mockResolvedValueOnce(jsonResponse({ mappings: [mapping] }))
       .mockResolvedValueOnce(jsonResponse({ mapping, revokedSessions: 1 }, 201))
+      .mockResolvedValueOnce(jsonResponse({ mapping, revokedSessions: 2 }))
       .mockResolvedValueOnce(jsonResponse({ deletedMappingId: mapping.id, revokedSessions: 1 }))
       .mockResolvedValueOnce(
         jsonResponse({
@@ -230,6 +231,14 @@ describe("identity provider administration client", () => {
       identityProviderAdminClient.createRoleMapping(provider.id, mappingInput, csrfToken),
     ).resolves.toEqual({ mapping, revokedSessions: 1 });
     await expect(
+      identityProviderAdminClient.updateRoleMapping(
+        provider.id,
+        mapping.id,
+        mappingInput,
+        csrfToken,
+      ),
+    ).resolves.toEqual({ mapping, revokedSessions: 2 });
+    await expect(
       identityProviderAdminClient.deleteRoleMapping(provider.id, mapping.id, csrfToken),
     ).resolves.toEqual({ deletedMappingId: mapping.id, revokedSessions: 1 });
     await expect(
@@ -246,6 +255,7 @@ describe("identity provider administration client", () => {
       `/api/admin/auth/oidc/providers/${provider.id}/role-mappings`,
       `/api/admin/auth/oidc/providers/${provider.id}/role-mappings`,
       `/api/admin/auth/oidc/providers/${provider.id}/role-mappings/${mapping.id}`,
+      `/api/admin/auth/oidc/providers/${provider.id}/role-mappings/${mapping.id}`,
       `/api/admin/auth/oidc/providers/${provider.id}`,
     ]);
     expect(fetchMock.mock.calls.map(([, request]) => request?.method ?? "GET")).toEqual([
@@ -253,6 +263,7 @@ describe("identity provider administration client", () => {
       "POST",
       "GET",
       "POST",
+      "PUT",
       "DELETE",
       "DELETE",
     ]);
