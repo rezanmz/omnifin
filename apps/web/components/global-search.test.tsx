@@ -4,6 +4,7 @@ import type {
 } from "@omnifin/contracts/discovery";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
@@ -90,6 +91,12 @@ function client(
 }
 
 describe("global search", () => {
+  it("keeps the server-rendered search field inert until hydration", () => {
+    expect(renderToString(<GlobalSearchLoader client={client()} debounceMs={0} />)).toContain(
+      'disabled=""',
+    );
+  });
+
   it("opens a query transferred while the lazy search implementation loads", async () => {
     const search = vi.fn(async () => searchResponse);
     render(<GlobalSearchLoader client={client(search)} debounceMs={0} />);

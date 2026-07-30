@@ -19,7 +19,10 @@ let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
 
 function contractSchemas() {
   contractSchemasPromise ??= loadContractSchemas();
-  return contractSchemasPromise;
+  return contractSchemasPromise.catch((error: unknown) => {
+    contractSchemasPromise = undefined;
+    throw error;
+  });
 }
 
 export type AcquisitionMonitoringClientErrorKind =
@@ -129,6 +132,7 @@ async function monitoringResponse(response: Response, expected: AcquisitionMonit
 }
 
 export interface AcquisitionMonitoringClient {
+  prepare?(): Promise<void>;
   read(
     input: AcquisitionMonitoringTargetInput,
     signal?: AbortSignal,
@@ -140,6 +144,10 @@ export interface AcquisitionMonitoringClient {
 }
 
 export const acquisitionMonitoringClient: AcquisitionMonitoringClient = {
+  async prepare() {
+    await contractSchemas();
+  },
+
   async read(input, signal) {
     const schemas = await contractSchemas();
     const target = schemas.acquisition.acquisitionMonitoringTargetInputSchema.parse(input);

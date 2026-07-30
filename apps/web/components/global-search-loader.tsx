@@ -2,7 +2,7 @@
 
 import { Command, Search } from "lucide-react";
 import type { ComponentType, RefObject } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { GlobalSearchProperties } from "./global-search";
 
@@ -10,6 +10,7 @@ function GlobalSearchPlaceholder({
   activate,
   busy,
   inputReference,
+  interactive,
   preload,
   query,
   setQuery,
@@ -17,6 +18,7 @@ function GlobalSearchPlaceholder({
   activate?: () => void;
   busy?: boolean;
   inputReference?: RefObject<HTMLInputElement | null>;
+  interactive?: boolean;
   preload?: () => void;
   query?: string;
   setQuery?: (query: string) => void;
@@ -35,6 +37,7 @@ function GlobalSearchPlaceholder({
         aria-haspopup="listbox"
         autoComplete="off"
         data-directional-item
+        disabled={!interactive}
         id="global-search-placeholder"
         onClick={activate}
         onChange={(event) => {
@@ -61,10 +64,15 @@ function GlobalSearchPlaceholder({
 
 const loadGlobalSearch = () => import("./global-search").then((module_) => module_.GlobalSearch);
 
+const subscribeToHydration = () => () => undefined;
+const clientHydrated = () => true;
+const serverHydrated = () => false;
+
 export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const [SearchComponent, setSearchComponent] =
     useState<ComponentType<GlobalSearchProperties> | null>(null);
   const [loading, setLoading] = useState(false);
+  const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
   const [pendingQuery, setPendingQuery] = useState(properties.initialQuery ?? "");
   const [restoreFocus, setRestoreFocus] = useState(false);
   const [shortcutRequested, setShortcutRequested] = useState(false);
@@ -98,6 +106,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
         activate={() => activate()}
         busy={loading}
         inputReference={placeholderReference}
+        interactive={hydrated}
         preload={() => void loadGlobalSearch()}
         query={pendingQuery}
         setQuery={setPendingQuery}
