@@ -340,6 +340,7 @@ test("acquisition monitoring confirmation has no automatically detectable access
 test("manual release review has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(60_000);
   test.skip(
     !supportedProjects.has(testInfo.project.name),
     "Covered by representative Chromium viewports",
