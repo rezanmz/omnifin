@@ -20,7 +20,14 @@ import {
   Smartphone,
   TriangleAlert,
 } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
 import { BrandMark } from "./brand-mark";
@@ -318,6 +325,18 @@ function formattedRemainingTime(expiresAt: string, now: number | null) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function subscribeToHydration() {
+  return () => undefined;
+}
+
+function hydratedClientSnapshot() {
+  return true;
+}
+
+function hydratedServerSnapshot() {
+  return false;
+}
+
 export function JellyfinCredentialScreen({
   autoPollQuickConnect = true,
   displayProfile = "standard",
@@ -335,6 +354,11 @@ export function JellyfinCredentialScreen({
   submitCredentials,
 }: JellyfinCredentialScreenProperties) {
   const [method, setMethod] = useState<AuthenticationMethod>(initialMethod);
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    hydratedClientSnapshot,
+    hydratedServerSnapshot,
+  );
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [quickConnectState, setQuickConnectState] = useState<QuickConnectState>(
@@ -602,6 +626,7 @@ export function JellyfinCredentialScreen({
               ) : pairingState === "unavailable" ? (
                 <button
                   className="jellyfin-login-form__submit"
+                  disabled={!hydrated}
                   onClick={() => setPairingSession(null)}
                   type="button"
                 >
@@ -621,6 +646,7 @@ export function JellyfinCredentialScreen({
                   aria-controls="jellyfin-password-panel"
                   aria-label="Password sign in"
                   aria-selected={method === "password"}
+                  disabled={!hydrated}
                   id="jellyfin-password-tab"
                   onClick={() => selectMethod("password")}
                   onKeyDown={handleTabKey}
@@ -635,6 +661,7 @@ export function JellyfinCredentialScreen({
                   aria-controls="jellyfin-quick-connect-panel"
                   aria-label="Quick Connect"
                   aria-selected={method === "quick-connect"}
+                  disabled={!hydrated}
                   id="jellyfin-quick-connect-tab"
                   onClick={() => selectMethod("quick-connect")}
                   onKeyDown={handleTabKey}
@@ -653,13 +680,17 @@ export function JellyfinCredentialScreen({
                   id="jellyfin-password-panel"
                   role="tabpanel"
                 >
-                  <form aria-busy={submitting} className="jellyfin-login-form" onSubmit={submit}>
+                  <form
+                    aria-busy={!hydrated || submitting}
+                    className="jellyfin-login-form"
+                    onSubmit={submit}
+                  >
                     <label className="jellyfin-login-field">
                       <span>Username</span>
                       <input
                         autoCapitalize="none"
                         autoComplete="username"
-                        disabled={submitting}
+                        disabled={!hydrated || submitting}
                         maxLength={160}
                         name="username"
                         onChange={(event) => setUsername(event.currentTarget.value)}
@@ -675,7 +706,7 @@ export function JellyfinCredentialScreen({
                       <span className="jellyfin-login-field__password">
                         <input
                           autoComplete="current-password"
-                          disabled={submitting}
+                          disabled={!hydrated || submitting}
                           id="jellyfin-password"
                           maxLength={1_024}
                           name="password"
@@ -688,7 +719,7 @@ export function JellyfinCredentialScreen({
                         <button
                           aria-label={passwordVisible ? "Hide password" : "Show password"}
                           className="jellyfin-login-field__reveal"
-                          disabled={submitting}
+                          disabled={!hydrated || submitting}
                           onClick={() => setPasswordVisible((visible) => !visible)}
                           tabIndex={0}
                           type="button"
@@ -714,7 +745,7 @@ export function JellyfinCredentialScreen({
 
                     <button
                       className="jellyfin-login-form__submit"
-                      disabled={submitting}
+                      disabled={!hydrated || submitting}
                       type="submit"
                     >
                       {submitting ? (
@@ -753,6 +784,7 @@ export function JellyfinCredentialScreen({
                         </div>
                         <button
                           aria-label="Copy Quick Connect code"
+                          disabled={!hydrated}
                           onClick={copyCode}
                           type="button"
                         >
@@ -804,7 +836,7 @@ export function JellyfinCredentialScreen({
                       ) : null}
                       <button
                         className="jellyfin-login-form__submit"
-                        disabled={quickConnectState.status === "starting"}
+                        disabled={!hydrated || quickConnectState.status === "starting"}
                         onClick={start}
                         type="button"
                       >
