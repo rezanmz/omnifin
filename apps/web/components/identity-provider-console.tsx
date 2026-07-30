@@ -6,6 +6,7 @@ import type {
   OidcProviderCreateRequest,
   OidcProviderUpdateRequest,
   OidcRoleMappingCreateRequest,
+  OidcRoleMappingUpdateRequest,
   RoleMapping,
 } from "@omnifin/contracts/auth";
 import {
@@ -30,6 +31,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -41,7 +43,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
 import {
@@ -102,9 +104,13 @@ interface ProviderFormProperties {
 
 interface MappingFormProperties {
   busy: boolean;
+  mapping?: RoleMapping | undefined;
+  mode: "create" | "edit";
   onCancel: () => void;
-  onSubmit: (input: OidcRoleMappingCreateRequest) => Promise<void>;
+  onSubmit: (input: OidcRoleMappingCreateRequest | OidcRoleMappingUpdateRequest) => Promise<void>;
 }
+
+type MappingValueType = "boolean" | "mixed" | "number" | "string";
 
 type ProviderFormFields = {
   allowJitProvisioning: boolean;
@@ -592,31 +598,95 @@ function ProviderForm({
   );
 }
 
-function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
+function mappingValueType(values: RoleMapping["values"]): MappingValueType {
+  const types = new Set(values.map((value) => typeof value));
+  return types.size === 1 ? ([...types][0] as Exclude<MappingValueType, "mixed">) : "mixed";
+}
+
+function formatMappingValues(values: RoleMapping["values"], type: MappingValueType) {
+  return values
+    .map((value) => (type === "mixed" ? `${typeof value}:${String(value)}` : String(value)))
+    .join("\n");
+}
+
+function parseMappingValues(
+  values: string,
+  type: MappingValueType,
+): { data: RoleMapping["values"]; success: true } | { message: string; success: false } {
+  const lines = values
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return { message: "Enter at least one matching value.", success: false };
+
+  const parsed: Array<boolean | number | string> = [];
+  for (const line of lines) {
+    let valueType: Exclude<MappingValueType, "mixed"> = type === "mixed" ? "string" : type;
+    let value = line;
+    if (type === "mixed") {
+      const match = /^(boolean|number|string):(.*)$/u.exec(line);
+      if (!match) {
+        return {
+          message: "Mixed values must start with string:, number:, or boolean:.",
+          success: false,
+        };
+      }
+      valueType = match[1] as typeof valueType;
+      value = match[2]!.trim();
+    }
+    if (valueType === "number") {
+      const numberValue = Number(value);
+      if (value === "" || !Number.isFinite(numberValue)) {
+        return { message: `“${value || "empty"}” is not a finite number.`, success: false };
+      }
+      parsed.push(numberValue);
+    } else if (valueType === "boolean") {
+      if (value !== "true" && value !== "false") {
+        return { message: "Boolean values must be exactly true or false.", success: false };
+      }
+      parsed.push(value === "true");
+    } else {
+      if (value === "") return { message: "String values cannot be empty.", success: false };
+      parsed.push(value);
+    }
+  }
+  return { data: parsed, success: true };
+}
+
+function MappingForm({ busy, mapping, mode, onCancel, onSubmit }: MappingFormProperties) {
   const formId = useId();
-  const [claimPath, setClaimPath] = useState("groups");
-  const [enabled, setEnabled] = useState(true);
-  const [operator, setOperator] = useState<(typeof mappingOperators)[number]>("contains_any");
-  const [priority, setPriority] = useState(500);
-  const [role, setRole] = useState<(typeof roles)[number]>("operator");
-  const [valueType, setValueType] = useState<"boolean" | "number" | "string">("string");
-  const [values, setValues] = useState("media-operators");
+  const headingReference = useRef<HTMLHeadingElement>(null);
+  const initialValueType = mapping ? mappingValueType(mapping.values) : "string";
+  const [claimPath, setClaimPath] = useState(mapping?.claimPath.join(".") ?? "groups");
+  const [enabled, setEnabled] = useState(mapping?.enabled ?? true);
+  const [operator, setOperator] = useState<(typeof mappingOperators)[number]>(
+    mapping?.operator ?? "contains_any",
+  );
+  const [priority, setPriority] = useState(mapping?.priority ?? 500);
+  const [role, setRole] = useState<(typeof roles)[number]>(mapping?.role ?? "operator");
+  const [valueType, setValueType] = useState<MappingValueType>(initialValueType);
+  const [values, setValues] = useState(
+    mapping ? formatMappingValues(mapping.values, initialValueType) : "media-operators",
+  );
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    headingReference.current?.focus();
+  }, []);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const rawValues = values
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const typedValues = rawValues.map((value) => {
-      if (valueType === "number") return Number(value);
-      if (valueType === "boolean")
-        return value === "true" ? true : value === "false" ? false : value;
-      return value;
-    });
+    const typedValues = parseMappingValues(values, valueType);
+    if (!typedValues.success) {
+      setError(typedValues.message);
+      return;
+    }
     const schemas = await contractSchemas();
-    const parsed = schemas.oidcRoleMappingCreateRequestSchema.safeParse({
+    const schema =
+      mode === "edit"
+        ? schemas.oidcRoleMappingUpdateRequestSchema
+        : schemas.oidcRoleMappingCreateRequestSchema;
+    const parsed = schema.safeParse({
       claimPath: claimPath
         .split(".")
         .map((segment) => segment.trim())
@@ -625,7 +695,7 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
       operator,
       priority,
       role,
-      values: typedValues,
+      values: typedValues.data,
     });
     if (!parsed.success) {
       setError(parsed.error.issues[0]?.message ?? "Review the mapping values.");
@@ -636,15 +706,18 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
   };
 
   return (
-    <form className={styles.mappingForm} onSubmit={submit}>
+    <form aria-busy={busy} className={styles.mappingForm} onSubmit={submit}>
       <div className={styles.mappingFormHeading}>
         <div>
           <p className="section-kicker">Exact claim rule</p>
-          <h4>Add role mapping</h4>
+          <h4 ref={headingReference} tabIndex={-1}>
+            {mode === "edit" ? "Edit role mapping" : "Add role mapping"}
+          </h4>
         </div>
         <button
           className={styles.iconButton}
-          aria-label="Close role mapping form"
+          aria-label={`${mode === "edit" ? "Close role mapping editor" : "Close role mapping form"}`}
+          disabled={busy}
           onClick={onCancel}
           type="button"
         >
@@ -658,6 +731,7 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
           name={`${formId}-claim`}
         >
           <input
+            disabled={busy}
             id={`${formId}-claim`}
             onChange={(event) => setClaimPath(event.target.value)}
             value={claimPath}
@@ -665,6 +739,7 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
         </Field>
         <Field label="Operator" name={`${formId}-operator`}>
           <select
+            disabled={busy}
             id={`${formId}-operator`}
             onChange={(event) => setOperator(event.target.value as typeof operator)}
             value={operator}
@@ -678,6 +753,7 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
         </Field>
         <Field label="Omnifin role" name={`${formId}-role`}>
           <select
+            disabled={busy}
             id={`${formId}-role`}
             onChange={(event) => setRole(event.target.value as typeof role)}
             value={role}
@@ -691,6 +767,7 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
         </Field>
         <Field label="Priority" name={`${formId}-priority`}>
           <input
+            disabled={busy}
             id={`${formId}-priority`}
             max={10_000}
             min={0}
@@ -701,22 +778,36 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
         </Field>
         <Field label="Value type" name={`${formId}-value-type`}>
           <select
+            disabled={busy}
             id={`${formId}-value-type`}
-            onChange={(event) => setValueType(event.target.value as typeof valueType)}
+            onChange={(event) => {
+              const nextType = event.target.value as MappingValueType;
+              const currentValues = parseMappingValues(values, valueType);
+              if (currentValues.success)
+                setValues(formatMappingValues(currentValues.data, nextType));
+              setValueType(nextType);
+              setError(null);
+            }}
             value={valueType}
           >
             <option value="string">string</option>
             <option value="number">number</option>
             <option value="boolean">boolean</option>
+            <option value="mixed">mixed · typed lines</option>
           </select>
         </Field>
       </div>
       <Field
-        description="One exact value per line. Values are never coerced by the gateway."
+        description={
+          valueType === "mixed"
+            ? "One typed value per line, for example string:staff, number:7, or boolean:true."
+            : "One exact value per line. Values are never coerced by the gateway."
+        }
         label="Matching values"
         name={`${formId}-values`}
       >
         <textarea
+          disabled={busy}
           id={`${formId}-values`}
           onChange={(event) => setValues(event.target.value)}
           rows={3}
@@ -726,27 +817,36 @@ function MappingForm({ busy, onCancel, onSubmit }: MappingFormProperties) {
       <label className={styles.inlineChoice}>
         <input
           checked={enabled}
+          disabled={busy}
           onChange={(event) => setEnabled(event.target.checked)}
           type="checkbox"
         />{" "}
         Enable this mapping immediately
       </label>
+      {mode === "edit" ? (
+        <p className={styles.mappingRisk}>
+          Saving closes this provider’s role-derived sessions so claims are re-evaluated. Manual
+          roles remain unchanged.
+        </p>
+      ) : null}
       {error ? (
         <p className={styles.formError} role="alert">
           {error}
         </p>
       ) : null}
       <div className={styles.formActions}>
-        <button className={styles.secondaryButton} onClick={onCancel} type="button">
+        <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">
           Cancel
         </button>
         <button className={styles.primaryButton} disabled={busy} type="submit">
           {busy ? (
             <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+          ) : mode === "edit" ? (
+            <Save aria-hidden="true" size={16} />
           ) : (
             <Plus aria-hidden="true" size={16} />
           )}{" "}
-          Add mapping
+          {mode === "edit" ? "Save mapping" : "Add mapping"}
         </button>
       </div>
     </form>
@@ -776,6 +876,7 @@ function IdentityProviderConsoleContent({
   );
   const [view, setView] = useState<"create" | "detail" | "edit">("detail");
   const [mappingComposer, setMappingComposer] = useState(false);
+  const [editingMappingId, setEditingMappingId] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState(false);
   const [deletingMappingId, setDeletingMappingId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -805,6 +906,9 @@ function IdentityProviderConsoleContent({
         ? Number.POSITIVE_INFINITY
         : 15_000,
   });
+  const editingMapping = editingMappingId
+    ? mappingsQuery.data?.find((mapping) => mapping.id === editingMappingId)
+    : undefined;
 
   const updateProviders = (
     transform: (current: readonly OidcProviderAdmin[]) => readonly OidcProviderAdmin[],
@@ -851,6 +955,7 @@ function IdentityProviderConsoleContent({
       );
       setSelectedId(created.id);
       setView("detail");
+      setEditingMappingId(null);
       setNotice(
         `${created.displayName} was saved disabled. Validate discovery before enabling sign-in.`,
       );
@@ -932,6 +1037,7 @@ function IdentityProviderConsoleContent({
       queryClient.removeQueries({ queryKey: ["oidc-role-mappings", selected.id] });
       setSelectedId(null);
       setDeleteConfirmation(false);
+      setEditingMappingId(null);
       setCapabilities(null);
       setNotice(
         `Provider deleted with ${result.deletedRoleMappings} unbound role mapping${result.deletedRoleMappings === 1 ? "" : "s"}.`,
@@ -968,6 +1074,34 @@ function IdentityProviderConsoleContent({
       setDeletingMappingId(null);
       setNotice(
         `Role mapping removed. ${result.revokedSessions} role-derived session${result.revokedSessions === 1 ? "" : "s"} closed for reevaluation.`,
+      );
+    });
+  };
+
+  const updateMapping = async (
+    mappingId: string,
+    input: OidcRoleMappingCreateRequest | OidcRoleMappingUpdateRequest,
+  ) => {
+    if (!snapshot || !selected) return;
+    await run(`mapping-update-${mappingId}`, async () => {
+      const result = await client.updateRoleMapping(
+        selected.id,
+        mappingId,
+        input,
+        snapshot.csrfToken,
+      );
+      queryClient.setQueryData<readonly RoleMapping[]>(
+        ["oidc-role-mappings", selected.id],
+        (current = []) =>
+          current
+            .map((mapping) => (mapping.id === result.mapping.id ? result.mapping : mapping))
+            .sort(
+              (left, right) => right.priority - left.priority || left.id.localeCompare(right.id),
+            ),
+      );
+      setEditingMappingId(null);
+      setNotice(
+        `Role mapping saved. ${result.revokedSessions} role-derived session${result.revokedSessions === 1 ? "" : "s"} closed for reevaluation.`,
       );
     });
   };
@@ -1093,6 +1227,8 @@ function IdentityProviderConsoleContent({
                           setView("detail");
                           setCapabilities(null);
                           setMappingComposer(false);
+                          setEditingMappingId(null);
+                          setDeletingMappingId(null);
                           setDeleteConfirmation(false);
                         }}
                         type="button"
@@ -1297,7 +1433,11 @@ function IdentityProviderConsoleContent({
                       </div>
                       <button
                         className={styles.addButton}
-                        onClick={() => setMappingComposer(true)}
+                        onClick={() => {
+                          setMappingComposer(true);
+                          setEditingMappingId(null);
+                          setDeletingMappingId(null);
+                        }}
                         type="button"
                       >
                         <Plus aria-hidden="true" size={16} /> Add rule
@@ -1306,8 +1446,19 @@ function IdentityProviderConsoleContent({
                     {mappingComposer ? (
                       <MappingForm
                         busy={busyAction === "mapping-create"}
+                        mode="create"
                         onCancel={() => setMappingComposer(false)}
                         onSubmit={createMapping}
+                      />
+                    ) : null}
+                    {editingMappingId && editingMapping ? (
+                      <MappingForm
+                        busy={busyAction === `mapping-update-${editingMappingId}`}
+                        key={editingMappingId}
+                        mapping={editingMapping}
+                        mode="edit"
+                        onCancel={() => setEditingMappingId(null)}
+                        onSubmit={(input) => updateMapping(editingMappingId, input)}
                       />
                     ) : null}
                     {mappingsQuery.isPending ? (
@@ -1357,14 +1508,33 @@ function IdentityProviderConsoleContent({
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                className={styles.iconButton}
-                                aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
-                                onClick={() => setDeletingMappingId(mapping.id)}
-                                type="button"
-                              >
-                                <Trash2 aria-hidden="true" size={16} />
-                              </button>
+                              <div className={styles.mappingActions}>
+                                <button
+                                  className={styles.iconButton}
+                                  aria-label={`Edit ${mapping.claimPath.join(".")} mapping`}
+                                  disabled={busyAction !== null}
+                                  onClick={() => {
+                                    setEditingMappingId(mapping.id);
+                                    setMappingComposer(false);
+                                    setDeletingMappingId(null);
+                                  }}
+                                  type="button"
+                                >
+                                  <Pencil aria-hidden="true" size={16} />
+                                </button>
+                                <button
+                                  className={styles.iconButton}
+                                  aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
+                                  disabled={busyAction !== null}
+                                  onClick={() => {
+                                    setDeletingMappingId(mapping.id);
+                                    setEditingMappingId(null);
+                                  }}
+                                  type="button"
+                                >
+                                  <Trash2 aria-hidden="true" size={16} />
+                                </button>
+                              </div>
                             )}
                           </li>
                         ))}

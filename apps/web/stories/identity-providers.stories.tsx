@@ -5,6 +5,7 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { expect, within } from "storybook/test";
 
 import { IdentityProviderConsole } from "../components/identity-provider-console";
 import type { IdentityProviderAdminLoadOutcome } from "../lib/identity-provider-admin";
@@ -91,6 +92,14 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Ready: Story = {};
+export const EditingRoleMapping: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Edit groups mapping" }));
+    await expect(canvas.getByRole("heading", { name: "Edit role mapping" })).toBeVisible();
+    await expect(canvas.getByText(/Manual roles remain unchanged/u)).toBeVisible();
+  },
+};
 export const GuidedAuthentikConnection: Story = {
   args: { initialMappings: {}, initialOutcome: empty },
 };
