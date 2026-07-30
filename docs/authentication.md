@@ -11,9 +11,9 @@ and contributors changing a security-sensitive flow.
 > front-channel logout, opaque sessions, and break-glass
 > recovery. The permission-checked identity control room and API can create, list, and validate
 > encrypted configurations and administer provider lifecycles and explicit role mappings. A pinned,
-> isolated Authentik environment exercises real authorization, role mapping, RP logout, and
+> isolated Authentik environment exercises real authorization, guarded role-mapping updates, RP logout, and
 > back-channel logout. A separate digest-pinned Dex environment exercises generic discovery, S256
-> PKCE, immutable identity reuse, viewer JIT provisioning, explicit group mapping, and safe local
+> PKCE, immutable identity reuse, viewer JIT provisioning, active-session role remapping, and safe local
 > logout fallback when the issuer advertises no logout endpoint. These fixtures are development
 > evidence rather than a public provider support baseline. An administrator-only user access
 > directory now exposes normalized account
@@ -52,21 +52,25 @@ OIDC sessions attributed to that provider. Issuers with linked identities cannot
 Deletion requires a disabled provider and is rejected while any external identity still depends on
 it; only then are unbound role mappings and transient protocol records removed transactionally.
 
-Provider role mappings can be listed, created, and deleted through the same administrative
+Provider role mappings can be listed, created, updated, and deleted through the same administrative
 boundary. Mapping inputs use bounded, prototype-safe claim paths and exact typed scalar values;
 string, numeric, and boolean values are never coerced. Higher numeric priority wins, while
 conflicting roles at the same highest matching priority deny sign-in. Successful mapping changes
 write sanitized audit records and immediately revoke active sessions for users whose authority
 came from that provider's default or mapped role. Claim paths and expected values are deliberately
-excluded from audit metadata.
+excluded from audit metadata. Updates preserve the mapping and provider identities, reject no-op or
+equivalent rules without a storage, audit, or session side effect, and leave manually assigned
+Jellyfin-only authority unchanged.
 
 The browser control room is available only when the current principal holds
 `recovery.oidc.manage`. It uses the same normalized contracts and CSRF boundary as the API, never
 receives stored client-secret values, and converts a changed administrative session into a
 signed-out state. Its guided Authentik path reserves `oidc-{slug}` before creation so the exact
 callback and logout URLs can be registered without a temporary provider or wildcard redirect.
-Empty, loading, offline, permission-denied, validation-failure, and destructive-confirmation states
-are explicit.
+Empty, loading, offline, permission-denied, validation-failure, conflict, session-expired, and
+destructive-confirmation states are explicit. Its role editor preserves mixed typed claim values,
+announces the session impact before saving, and returns only the normalized updated rule and a
+revocation count.
 
 The browser user access directory requires a normal session with `roles.manage`; break-glass
 recovery is deliberately excluded. It lists only normalized display identity, authentication
@@ -161,6 +165,7 @@ gateway directly.
 | `POST /api/admin/auth/oidc/providers/{providerId}/validate`                    | Freshly validate discovery and return only safe capability information.     |
 | `GET /api/admin/auth/oidc/providers/{providerId}/role-mappings`                | List exact claim-to-role rules for an authorized administrator.             |
 | `POST /api/admin/auth/oidc/providers/{providerId}/role-mappings`               | Create an audited rule and revoke affected role-derived sessions.           |
+| `PUT /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}`    | Atomically update a rule and revoke only affected role-derived sessions.    |
 | `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}` | Delete a rule and revoke affected role-derived sessions.                    |
 | `GET /api/admin/users`                                                         | List bounded, browser-safe account authority and activity summaries.        |
 | `PATCH /api/admin/users/{userId}`                                              | Apply a revision-bound role or local-state change and revoke sessions.      |

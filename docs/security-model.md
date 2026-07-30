@@ -364,7 +364,9 @@ diagnostic.
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token
 erasure, revocation, relinking, and secret-preservation tests. The pinned isolated Authentik gate
-exercises authorization, role mapping, RP logout, and provider-initiated back-channel revocation.
+exercises authorization, a guarded role-mapping update, RP logout, and provider-initiated
+back-channel revocation. The standards-generic gate additionally proves that an update revokes the
+active mapped session and that fresh sign-in reuses the immutable identity with its new role.
 Protected live compatibility evidence remains separate from this development gate and is required
 before a public support claim.
 
