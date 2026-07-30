@@ -1,0 +1,41 @@
+issuer: __ISSUER__
+
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+
+logger:
+  level: info
+  format: json
+
+expiry:
+  signingKeys: 6h
+  idTokens: 10m
+
+oauth2:
+  grantTypes:
+    - authorization_code
+  responseTypes:
+    - code
+  skipApprovalScreen: true
+  alwaysShowLoginScreen: false
+  pkce:
+    enforce: true
+    codeChallengeMethodsSupported:
+      - S256
+
+staticClients:
+  - id: __CLIENT_ID__
+    name: Omnifin isolated generic OIDC fixture
+    secret: __CLIENT_SECRET__
+    redirectURIs:
+      - __CALLBACK_URL__
+
+connectors:
+  - type: mockCallback
+    id: generic
+    name: Generic identity

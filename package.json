@@ -35,6 +35,7 @@
     "test:authentik": "node scripts/integration/authentik/run.mjs",
     "test:contracts": "pnpm --filter @omnifin/contracts build && pnpm --filter @omnifin/contracts test && pnpm --filter @omnifin/connectors test",
     "test:e2e": "pnpm --filter @omnifin/web test:e2e",
+    "test:oidc-provider": "node scripts/integration/oidc-provider/run.mjs",
     "test:oidc-rewrite": "pnpm --filter @omnifin/web test:oidc-rewrite",
     "test:storybook": "pnpm --filter @omnifin/web test:storybook",
     "test:compatibility": "node scripts/integration/compatibility.mjs",

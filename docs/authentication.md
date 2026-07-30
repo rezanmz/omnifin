@@ -12,7 +12,11 @@ and contributors changing a security-sensitive flow.
 > recovery. The permission-checked identity control room and API can create, list, and validate
 > encrypted configurations and administer provider lifecycles and explicit role mappings. A pinned,
 > isolated Authentik environment exercises real authorization, role mapping, RP logout, and
-> back-channel logout. An administrator-only user access directory now exposes normalized account
+> back-channel logout. A separate digest-pinned Dex environment exercises generic discovery, S256
+> PKCE, immutable identity reuse, viewer JIT provisioning, explicit group mapping, and safe local
+> logout fallback when the issuer advertises no logout endpoint. These fixtures are development
+> evidence rather than a public provider support baseline. An administrator-only user access
+> directory now exposes normalized account
 > state, role provenance, and session activity without external subjects or service credentials;
 > direct roles and local suspension are guarded by optimistic revisions and atomic session
 > revocation. The protected live compatibility baseline remains pending, and Phase 1 has
@@ -260,6 +264,14 @@ public URL rather than request forwarding headers. Only `account_not_authorized`
 browser errors and bounded audit reasons prevent
 provider diagnostics or assertions from leaking through redirects or application
 logs.
+
+Logout capability discovery is optional. Omnifin revokes the local session before attempting any
+provider redirect. If the exact enabled provider advertises a valid end-session endpoint, the
+gateway creates the bounded RP-initiated request described above. If discovery omits the endpoint or
+fresh discovery fails, logout completes at the same-origin `/login?loggedOut=1` fallback without
+constructing an arbitrary provider URL. The
+[standards-generic OIDC fixture](operations/oidc-provider-fixture.md) exercises this negative
+capability path; Authentik exercises the advertised RP-initiated path.
 
 OIDC starts are limited to 20 per minute per client network and 512 per ten minutes
 server-wide. In the bundled topology, the loopback-bound web service trusts the exact

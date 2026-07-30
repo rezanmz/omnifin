@@ -82,7 +82,9 @@ adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces.
 
 All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
-pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate;
+pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate. A
+separate digest-pinned standards-generic provider gate verifies discovery, S256 PKCE, immutable
+identity reuse, JIT provisioning, explicit role mapping, and safe local logout fallback;
 the public compatibility baseline remains pending until protected live evidence records exact
 versions and dates. Permission checks cover every implemented administrative and self-service
 surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
