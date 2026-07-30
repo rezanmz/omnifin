@@ -63,6 +63,11 @@ test("the fixture workflow uses the immutable official Jellyfin image", () => {
   const fixture = workflow.jobs["playback-fixture"];
   assert.equal(fixture.name, "Isolated Jellyfin playback integration");
   assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
+  const imagePull = fixture.steps.find(
+    (step) => step.name === "Pull immutable Jellyfin media runtime",
+  );
+  assert.equal(imagePull["timeout-minutes"], 10);
+  assert.equal(imagePull.run.replace(/\s+/gu, " ").trim(), `docker pull ${JELLYFIN_FIXTURE_IMAGE}`);
   const generation = fixture.steps.find((step) => step.name === "Generate and transcode media");
   assert.equal(generation.run, "pnpm fixture:media --output artifacts/media/playback-fixture");
   const upload = fixture.steps.find((step) => step.name === "Upload sanitized fixture evidence");
