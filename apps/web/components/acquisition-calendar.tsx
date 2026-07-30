@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   acquisitionCalendarClient,
@@ -69,6 +69,9 @@ const EmbeddedLiveCalendar = dynamic(
 );
 
 const UTC_DAY = 24 * 60 * 60 * 1_000;
+const subscribeToHydration = () => () => undefined;
+const clientHydrated = () => true;
+const serverHydrated = () => false;
 
 export interface AcquisitionCalendarProperties {
   client?: AcquisitionCalendarClient;
@@ -294,9 +297,11 @@ function Metric({
 
 function EventCard({
   event,
+  interactive,
   onSelect,
 }: {
   event: AcquisitionCalendarEvent;
+  interactive: boolean;
   onSelect: (trigger: HTMLButtonElement) => void;
 }) {
   return (
@@ -305,6 +310,7 @@ function EventCard({
       className={styles.eventCard}
       data-availability={event.availability}
       data-directional-item
+      disabled={!interactive}
       onFocus={() => void import("./acquisition-calendar-event-detail")}
       onClick={(interaction) => onSelect(interaction.currentTarget)}
       onPointerEnter={() => void import("./acquisition-calendar-event-detail")}
@@ -327,10 +333,12 @@ function EventCard({
 
 function WeekGrid({
   events,
+  interactive,
   onSelect,
   range,
 }: {
   events: AcquisitionCalendarEvent[];
+  interactive: boolean;
   onSelect: (event: AcquisitionCalendarEvent, trigger: HTMLButtonElement) => void;
   range: AcquisitionCalendarRange;
 }) {
@@ -387,6 +395,7 @@ function WeekGrid({
                   items.map((event) => (
                     <EventCard
                       event={event}
+                      interactive={interactive}
                       key={event.id}
                       onSelect={(trigger) => onSelect(event, trigger)}
                     />
@@ -472,6 +481,7 @@ export function ReadyCalendar({
   embedded = false,
   filter,
   hideHero = false,
+  interactive = true,
   isFetching,
   isFetchingNextPage,
   onFilter,
@@ -489,6 +499,7 @@ export function ReadyCalendar({
   embedded?: boolean;
   filter: CalendarFilter;
   hideHero?: boolean;
+  interactive?: boolean;
   isFetching: boolean;
   isFetchingNextPage: boolean;
   onFilter: (filter: CalendarFilter) => void;
@@ -606,6 +617,7 @@ export function ReadyCalendar({
               <Search aria-hidden="true" size={17} />
               <input
                 autoComplete="off"
+                disabled={!interactive}
                 onChange={(event) => onSearch(event.target.value)}
                 placeholder="Find a title or source"
                 type="search"
@@ -618,6 +630,7 @@ export function ReadyCalendar({
                   aria-label={label}
                   aria-pressed={filter === value}
                   data-selected={filter === value || undefined}
+                  disabled={!interactive}
                   key={value}
                   onClick={() => onFilter(value)}
                   type="button"
@@ -708,7 +721,12 @@ export function ReadyCalendar({
           ) : (
             <div className={styles.workspace}>
               <div>
-                <WeekGrid events={visibleEvents} onSelect={selectEvent} range={range} />
+                <WeekGrid
+                  events={visibleEvents}
+                  interactive={interactive}
+                  onSelect={selectEvent}
+                  range={range}
+                />
                 {visibleEvents.length === 0 && filtered ? (
                   <div className={styles.filteredEmpty} role="status">
                     <ListFilter aria-hidden="true" size={19} />
@@ -768,6 +786,7 @@ function StaticCalendarContent({
   );
   const [filter, setFilter] = useState<CalendarFilter>("all");
   const [search, setSearch] = useState("");
+  const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
   if (outcome.status !== "ready")
     return <BoundaryState embedded={embedded} status={outcome.status} />;
 
@@ -778,6 +797,7 @@ function StaticCalendarContent({
       embedded={embedded}
       filter={filter}
       hideHero={hideHero}
+      interactive={hydrated}
       isFetching={false}
       isFetchingNextPage={false}
       onFilter={setFilter}
