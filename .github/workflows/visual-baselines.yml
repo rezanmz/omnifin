@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build web application
-        run: pnpm --filter @omnifin/web build
+        run: pnpm build
       - name: Install Chromium
         run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium
       - name: Generate visual baselines
