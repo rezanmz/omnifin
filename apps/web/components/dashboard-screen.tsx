@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
 import { CalendarStrip } from "./calendar-strip";
@@ -23,11 +24,17 @@ type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 
 export function DashboardScreen({
   data,
+  discoveryInitialFeed,
+  discoveryRefresh = true,
+  discoveryShowContinueWatching = true,
   displayProfile = "standard",
   liveContinueWatching = false,
   liveDiscovery = false,
 }: {
   data: DashboardModel;
+  discoveryInitialFeed?: DiscoveryFeedResponse;
+  discoveryRefresh?: boolean;
+  discoveryShowContinueWatching?: boolean;
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
   liveDiscovery?: boolean;
@@ -45,7 +52,11 @@ export function DashboardScreen({
         <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           {liveDiscovery ? (
-            <LazyDiscoveryDashboard />
+            <LazyDiscoveryDashboard
+              {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
+              live={discoveryRefresh}
+              showContinueWatching={discoveryShowContinueWatching}
+            />
           ) : (
             <>
               <HeroSpotlight hero={data.hero} />

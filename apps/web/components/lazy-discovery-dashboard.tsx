@@ -62,5 +62,5 @@ export const LazyDiscoveryDashboard = dynamic(
     import("./discovery-dashboard").then((module) => ({
       default: module.DiscoveryDashboard,
     })),
-  { loading: DiscoveryDashboardChunkLoader, ssr: false },
+  { loading: DiscoveryDashboardChunkLoader },
 );

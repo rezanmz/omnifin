@@ -2,11 +2,8 @@ import type { DiscoveryFeedQuery, DiscoveryFeedResponse } from "@omnifin/contrac
 
 async function loadContractSchemas() {
   await import("./zod-browser");
-  const [discovery, errors] = await Promise.all([
-    import("@omnifin/contracts/discovery"),
-    import("@omnifin/contracts/errors"),
-  ]);
-  return { discovery, errors };
+  const discovery = await import("@omnifin/contracts/discovery");
+  return { discovery };
 }
 
 let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
@@ -39,19 +36,27 @@ function errorKind(status: number, code: string): DiscoveryFeedClientErrorKind {
 }
 
 async function responseError(response: Response) {
-  const { errors } = await contractSchemas();
   let body: unknown;
   try {
     body = await response.json();
   } catch {
     body = undefined;
   }
-  const parsed = errors.apiErrorSchema.safeParse(body);
-  const code = parsed.success ? parsed.data.error.code : "request_failed";
+  const code =
+    typeof body === "object" &&
+    body !== null &&
+    "error" in body &&
+    typeof body.error === "object" &&
+    body.error !== null &&
+    "code" in body.error &&
+    typeof body.error.code === "string" &&
+    /^[a-z][a-z0-9_]{0,63}$/u.test(body.error.code)
+      ? body.error.code
+      : "request_failed";
   return new DiscoveryFeedClientError(
     errorKind(response.status, code),
     code,
-    parsed.success ? parsed.data.error.message : "Discovery is temporarily unavailable.",
+    "Discovery is temporarily unavailable.",
   );
 }
 
@@ -92,12 +97,17 @@ export interface DiscoveryFeedClient {
 
 export const discoveryFeedClient: DiscoveryFeedClient = {
   async load(input, signal) {
-    const schemas = await contractSchemas();
-    const query = schemas.discovery.discoveryFeedQuerySchema.parse(input);
+    if (!/^[a-z]{2}(?:-[A-Z]{2})?$/u.test(input.language)) {
+      throw new DiscoveryFeedClientError(
+        "invalid_response",
+        "invalid_request",
+        "Discovery received an invalid language preference.",
+      );
+    }
     let response: Response;
     try {
       response = await fetch(
-        `/api/discovery/feed?${new URLSearchParams({ language: query.language }).toString()}`,
+        `/api/discovery/feed?${new URLSearchParams({ language: input.language }).toString()}`,
         {
           cache: "no-store",
           credentials: "same-origin",
@@ -113,6 +123,7 @@ export const discoveryFeedClient: DiscoveryFeedClient = {
       );
     }
     if (!response.ok) throw await responseError(response);
+    const schemas = await contractSchemas();
     let body: unknown;
     try {
       body = await response.json();

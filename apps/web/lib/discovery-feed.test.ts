@@ -76,6 +76,34 @@ describe("discovery feed client", () => {
     });
   });
 
+  it("rejects an invalid language before issuing a browser request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(discoveryFeedClient.load({ language: "EN-us" })).rejects.toMatchObject({
+      code: "invalid_request",
+      kind: "invalid_response",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not trust malformed gateway error codes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: { code: "unsafe-code<script>", message: "Ignored." } },
+          { status: 503 },
+        ),
+      ),
+    );
+
+    await expect(discoveryFeedClient.load({ language: "en" })).rejects.toMatchObject({
+      code: "request_failed",
+      kind: "unavailable",
+    });
+  });
+
   it("rejects malformed successful responses before any artwork is rendered", async () => {
     vi.stubGlobal(
       "fetch",

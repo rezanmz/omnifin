@@ -7,7 +7,7 @@
       "startServerReadyPattern": "Ready",
       "url": [
         "http://127.0.0.1:3101/",
-        "http://127.0.0.1:3101/?test-view=continue-watching-live",
+        "http://127.0.0.1:3101/?test-view=discovery-performance",
         "http://127.0.0.1:3101/?test-view=onboarding",
         "http://127.0.0.1:3101/login",
         "http://127.0.0.1:3101/login?test-view=unconfigured",

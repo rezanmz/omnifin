@@ -2,6 +2,7 @@ import { DashboardScreen, DashboardStateScreen } from "../components/dashboard-s
 import type { DashboardStateKind } from "../components/dashboard-state";
 import { ThemeProvider } from "../components/theme-provider";
 import { connectedDashboard, demoDashboard } from "../lib/dashboard-data";
+import { demoDiscoveryFeed } from "../lib/discovery-feed-demo";
 import { readThemePreference } from "../lib/theme-server";
 import "./globals.css";
 
@@ -31,8 +32,9 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       ? "ten-foot"
       : "standard";
   const showLiveDashboard = requestedTestView === "continue-watching-live";
+  const showDiscoveryPerformanceProfile = requestedTestView === "discovery-performance";
   const showDemoDashboard =
-    requestedTestView === "onboarding" || showLiveDashboard
+    requestedTestView === "onboarding" || showLiveDashboard || showDiscoveryPerformanceProfile
       ? false
       : process.env.OMNIFIN_DEMO_MODE === "true";
 
@@ -71,6 +73,13 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
     <ThemeProvider initialPreference={preference}>
       <DashboardScreen
         data={showDemoDashboard ? demoDashboard : connectedDashboard}
+        {...(showDiscoveryPerformanceProfile
+          ? {
+              discoveryInitialFeed: demoDiscoveryFeed,
+              discoveryRefresh: false,
+              discoveryShowContinueWatching: false,
+            }
+          : {})}
         displayProfile={displayProfile}
         liveContinueWatching={showLiveDashboard || !showDemoDashboard}
         liveDiscovery={!showDemoDashboard}
