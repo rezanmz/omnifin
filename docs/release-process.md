@@ -97,8 +97,12 @@ truthful Phase 0 profile with no live claims does not consume that environment. 
 multi-architecture build, SPDX generation, and SBOM validation then run without
 registry credentials and produce an OCI archive with a recorded digest. Jobs that
 receive GHCR credentials do not check out the repository and never execute repository
-scripts. The metadata preflight is read-only and executes one pinned API action without
-checking out repository code.
+scripts. GitHub exposes drafts only to callers with push access, so the draft-metadata
+preflight and the final pre-promotion recheck receive `contents: write`; both execute a
+pinned API action without checking out repository code, and the preflight contains no
+mutation. All other pre-promotion source, build, scan, and verification jobs retain
+read-only or empty contents permissions unless their stated artifact or registry
+responsibility requires more.
 
 ## Candidate, evidence, and promotion
 
