@@ -88,6 +88,11 @@ interface MonitoringSnapshot {
   state: AcquisitionMonitoringPanelState;
 }
 
+interface MonitoringPreparationSnapshot {
+  operationId: string;
+  status: "error" | "ready";
+}
+
 interface ConnectionSnapshot {
   operationId: string;
   status: AcquisitionProvenanceStreamStatus;
@@ -451,6 +456,8 @@ export function AcquisitionTimeline({
   const operationIdReference = useRef(operation?.id);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>({ kind: "idle" });
   const [monitoringSnapshot, setMonitoringSnapshot] = useState<MonitoringSnapshot | null>(null);
+  const [monitoringPreparation, setMonitoringPreparation] =
+    useState<MonitoringPreparationSnapshot | null>(null);
   const [connectionSnapshot, setConnectionSnapshot] = useState<ConnectionSnapshot | null>(null);
   const [state, setState] = useState<TimelineState>({ kind: "idle" });
 
@@ -553,6 +560,26 @@ export function AcquisitionTimeline({
   }, [attempt, client, open, operation, watchEvents]);
 
   useEffect(() => {
+    if (!open || !operation || (!monitoringClient.prepare && !recoveryClient.prepare)) return;
+    let current = true;
+    const operationId = operation.id;
+    void Promise.all([
+      Promise.resolve().then(() => monitoringClient.prepare?.()),
+      Promise.resolve().then(() => recoveryClient.prepare?.()),
+    ]).then(
+      () => {
+        if (current) setMonitoringPreparation({ operationId, status: "ready" });
+      },
+      () => {
+        if (current) setMonitoringPreparation({ operationId, status: "error" });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [monitoringAttempt, monitoringClient, open, operation, recoveryClient]);
+
+  useEffect(() => {
     if (!open || !operation) return;
     if (operation.monitoring) return;
     const controller = new AbortController();
@@ -617,11 +644,17 @@ export function AcquisitionTimeline({
         ? "Refreshing"
         : "Connecting";
   const visibleMonitoringState: AcquisitionMonitoringPanelState =
-    monitoringSnapshot?.operationId === operation.id
-      ? monitoringSnapshot.state
-      : operation.monitoring
-        ? { data: operation.monitoring, kind: "ready" }
-        : { kind: "loading" };
+    (monitoringClient.prepare || recoveryClient.prepare) &&
+    monitoringPreparation?.operationId !== operation.id
+      ? { kind: "loading" }
+      : monitoringPreparation?.operationId === operation.id &&
+          monitoringPreparation.status === "error"
+        ? { errorKind: "unavailable", kind: "error" }
+        : monitoringSnapshot?.operationId === operation.id
+          ? monitoringSnapshot.state
+          : operation.monitoring
+            ? { data: operation.monitoring, kind: "ready" }
+            : { kind: "loading" };
 
   return (
     <dialog
@@ -784,10 +817,8 @@ export function AcquisitionTimeline({
                     })();
                   }}
                   onRetry={() => {
-                    setMonitoringSnapshot({
-                      operationId: operation.id,
-                      state: { kind: "loading" },
-                    });
+                    setMonitoringPreparation(null);
+                    setMonitoringSnapshot(null);
                     setMonitoringAttempt((value) => value + 1);
                   }}
                   state={visibleMonitoringState}

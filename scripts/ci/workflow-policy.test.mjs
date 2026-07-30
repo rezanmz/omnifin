@@ -109,6 +109,13 @@ test("visual comparisons retain PNG evidence without retry, trace, or video ampl
   assert.equal(generate.env.OMNIFIN_VISUAL_TEST, "true");
 });
 
+test("browser CI rejects retry-hidden flaky tests", () => {
+  const config = repositoryFile("apps/web/playwright.config.ts");
+
+  assert.match(config, /failOnFlakyTests: Boolean\(process\.env\.CI\)/u);
+  assert.match(config, /retries: process\.env\.CI && !visualTestMode \? 2 : 0/u);
+});
+
 test("security workflow creates the SBOM output directory before generation", () => {
   const source = workflow("security.yml");
   const prepare = source.indexOf("- name: Prepare SBOM output directory");

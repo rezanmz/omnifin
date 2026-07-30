@@ -22,7 +22,10 @@ let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
 
 function contractSchemas() {
   contractSchemasPromise ??= loadContractSchemas();
-  return contractSchemasPromise;
+  return contractSchemasPromise.catch((error: unknown) => {
+    contractSchemasPromise = undefined;
+    throw error;
+  });
 }
 
 export interface AcquisitionRecoverySnapshot {
@@ -146,6 +149,7 @@ export function createAcquisitionSearchIdempotencyKey(): AcquisitionSearchIdempo
 }
 
 export interface AcquisitionRecoveryClient {
+  prepare?(): Promise<void>;
   loadEligibility(signal?: AbortSignal): Promise<AcquisitionRecoveryEligibility>;
   queueSearch(
     input: AcquisitionSearchInput,
@@ -154,6 +158,10 @@ export interface AcquisitionRecoveryClient {
 }
 
 export const acquisitionRecoveryClient: AcquisitionRecoveryClient = {
+  async prepare() {
+    await contractSchemas();
+  },
+
   async loadEligibility(signal) {
     try {
       const response = await fetchSameOrigin("/api/auth/session", {

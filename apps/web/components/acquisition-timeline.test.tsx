@@ -57,6 +57,82 @@ function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanc
 afterEach(() => vi.useRealTimers());
 
 describe("acquisition timeline", () => {
+  it("prepares lazy mutation validators before exposing monitoring controls", async () => {
+    let completePreparation: (() => void) | undefined;
+    const preparation = new Promise<void>((resolve) => {
+      completePreparation = resolve;
+    });
+    const monitoringClient: AcquisitionMonitoringClient = {
+      prepare: vi.fn(() => preparation),
+      read: vi.fn(),
+      update: vi.fn(),
+    };
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(),
+      prepare: vi.fn(async () => undefined),
+      queueSearch: vi.fn(),
+    };
+    render(
+      <AcquisitionTimeline
+        monitoringClient={monitoringClient}
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: "Loading monitoring state" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Pause monitoring for The Far Meridian" }),
+    ).not.toBeInTheDocument();
+    completePreparation?.();
+
+    expect(
+      await screen.findByRole("button", { name: "Pause monitoring for The Far Meridian" }),
+    ).toBeVisible();
+    expect(monitoringClient.prepare).toHaveBeenCalledOnce();
+    expect(recoveryClient.prepare).toHaveBeenCalledOnce();
+  });
+
+  it("retries failed lazy mutation validator preparation before restoring controls", async () => {
+    const user = userEvent.setup();
+    const prepare = vi
+      .fn<NonNullable<AcquisitionMonitoringClient["prepare"]>>()
+      .mockRejectedValueOnce(new Error("Chunk unavailable"))
+      .mockResolvedValueOnce();
+    const monitoringClient: AcquisitionMonitoringClient = {
+      prepare,
+      read: vi.fn(),
+      update: vi.fn(),
+    };
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(),
+      prepare: vi.fn(async () => undefined),
+      queueSearch: vi.fn(),
+    };
+    render(
+      <AcquisitionTimeline
+        monitoringClient={monitoringClient}
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    expect(await screen.findByText("Monitoring signal is offline")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Pause monitoring for The Far Meridian" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+
+    expect(
+      await screen.findByRole("button", { name: "Pause monitoring for The Far Meridian" }),
+    ).toBeVisible();
+  });
+
   it("confirms and applies one whole-title monitoring change with current CSRF proof", async () => {
     const user = userEvent.setup();
     const update = vi.fn<AcquisitionMonitoringClient["update"]>(async () => ({
@@ -358,7 +434,9 @@ describe("acquisition timeline", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Partial history");
+    expect(screen.getByText("Partial history").closest('[role="status"]')).toHaveTextContent(
+      "Partial history",
+    );
     expect(screen.getByText("Release grabbed")).toBeVisible();
   });
 
