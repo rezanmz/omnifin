@@ -7,6 +7,7 @@ import { AcquisitionTimeline } from "../components/acquisition-timeline";
 import {
   AcquisitionProvenanceClientError,
   type AcquisitionProvenanceClient,
+  type AcquisitionProvenanceStreamCallbacks,
 } from "../lib/acquisition-provenance";
 import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
 import { demoDashboard, type OperationModel } from "../lib/dashboard-data";
@@ -61,17 +62,37 @@ function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanc
   return { read };
 }
 
+function stream(
+  status: "connecting" | "fallback" | "live",
+  provenance?: AcquisitionProvenanceResponse,
+) {
+  return (_target: OperationModel["target"], callbacks: AcquisitionProvenanceStreamCallbacks) => {
+    callbacks.onStatus("connecting");
+    if (provenance) {
+      callbacks.onSnapshot({
+        cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        provenance,
+      });
+    }
+    if (status !== "connecting") callbacks.onStatus(status);
+    return () => undefined;
+  };
+}
+
 const meta = {
   args: {
     operation: previewOperation,
     onOpenChange: () => undefined,
     open: true,
+    watchEvents: stream("live", previewOperation.provenance),
   },
   argTypes: {
     client: { control: false },
     monitoringClient: { control: false },
     onOpenChange: { control: false },
     recoveryClient: { control: false },
+    watchEvents: { control: false },
   },
   component: AcquisitionTimeline,
   decorators: [
@@ -102,15 +123,27 @@ export const Loading: Story = {
   args: {
     client: client(async () => new Promise<AcquisitionProvenanceResponse>(() => undefined)),
     operation: liveOperation,
+    watchEvents: stream("connecting"),
   },
 };
 
 export const Empty: Story = {
-  args: { client: client(async () => empty), operation: liveOperation },
+  args: {
+    client: client(async () => empty),
+    operation: liveOperation,
+    watchEvents: stream("live", empty),
+  },
 };
 
 export const Degraded: Story = {
-  args: { operation: { ...previewOperation, provenance: degraded } },
+  args: {
+    operation: { ...previewOperation, provenance: degraded },
+    watchEvents: stream("live", degraded),
+  },
+};
+
+export const RefreshingFallback: Story = {
+  args: { watchEvents: stream("fallback") },
 };
 
 export const RecoveryConfirmation: Story = {
@@ -168,6 +201,7 @@ export const PermissionDenied: Story = {
       ),
     ),
     operation: liveOperation,
+    watchEvents: stream("fallback"),
   },
 };
 
@@ -183,5 +217,6 @@ export const Offline: Story = {
       ),
     ),
     operation: liveOperation,
+    watchEvents: stream("fallback"),
   },
 };

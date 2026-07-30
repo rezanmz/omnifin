@@ -414,6 +414,9 @@ describe("acquisition provenance routes", () => {
       expect(response.headers.pragma).toBe("no-cache");
       expect(response.headers.vary).toBe("Cookie");
       expect(response.headers["x-accel-buffering"]).toBe("no");
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+      expect(response.headers["x-frame-options"]).toBe("DENY");
+      expect(response.headers["permissions-policy"]).toContain("camera=()");
       expect(response.body).toContain("retry: 3000\n\n");
       expect(response.body).toContain("id: provenance_event_ABCDEFGHIJKLMNOPQRSTUV\n");
       const dataLine = response.body.split("\n").find((line) => line.startsWith("data: "));

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AcquisitionProvenanceClientError,
   acquisitionProvenanceClient,
+  watchAcquisitionProvenanceEvents,
 } from "./acquisition-provenance";
 
 const response: AcquisitionProvenanceResponse = {
@@ -113,5 +114,160 @@ describe("acquisition provenance client", () => {
     }
     expect(failure).toMatchObject({ code: "service_unavailable", kind: "unavailable" });
     expect(JSON.stringify(failure)).not.toContain("private network details");
+  });
+
+  it("accepts a strict target-bound SSE snapshot before reporting live", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    const factory = vi.fn((url: string) => {
+      expect(url).toBe(
+        "/api/acquisitions/provenance/events?mediaId=77&service=sonarr&seasonNumber=2",
+      );
+      return source;
+    });
+    const stop = watchAcquisitionProvenanceEvents(
+      { mediaId: 77, seasonNumber: 2, service: "sonarr" },
+      { onSnapshot, onStatus },
+      factory,
+    );
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+    expect(onStatus).toHaveBeenCalledWith("connecting");
+    source.onopen?.(new Event("open"));
+    expect(onStatus).not.toHaveBeenCalledWith("live");
+    const event = {
+      cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot",
+      provenance: response,
+    } as const;
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify(event),
+        lastEventId: event.cursor,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledWith(event));
+    expect(onStatus).toHaveBeenLastCalledWith("live");
+    stop();
+    expect(source.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the payload cursor or selected target is untrusted", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchAcquisitionProvenanceEvents(
+      { mediaId: 77, seasonNumber: 2, service: "sonarr" },
+      { onSnapshot, onStatus },
+      () => source,
+    );
+    await vi.waitFor(() => expect(source.onmessage).toBeTypeOf("function"));
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+          kind: "snapshot",
+          provenance: {
+            ...response,
+            target: { kind: "series", mediaId: 78, seasonNumber: 2, service: "sonarr" },
+          },
+        }),
+        lastEventId: "provenance_event_ZYXWVUTSRQPONMLKJIHGFE",
+      }),
+    );
+
+    await vi.waitFor(() => expect(source.close).toHaveBeenCalledOnce());
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("rejects an oversized event before parsing it", async () => {
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchAcquisitionProvenanceEvents(
+      { mediaId: 77, seasonNumber: 2, service: "sonarr" },
+      { onSnapshot: vi.fn(), onStatus },
+      () => source,
+    );
+    await vi.waitFor(() => expect(source.onmessage).toBeTypeOf("function"));
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: "x".repeat(384_001),
+        lastEventId: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+      }),
+    );
+
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("rejects unreadable event JSON and invalid targets before they can update state", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchAcquisitionProvenanceEvents(
+      { mediaId: 77, seasonNumber: 2, service: "sonarr" },
+      { onSnapshot, onStatus },
+      () => source,
+    );
+    await vi.waitFor(() => expect(source.onmessage).toBeTypeOf("function"));
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: "not-json",
+        lastEventId: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+      }),
+    );
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(onSnapshot).not.toHaveBeenCalled();
+
+    const invalidFactory = vi.fn(() => source);
+    watchAcquisitionProvenanceEvents(
+      { mediaId: 42, seasonNumber: 1, service: "radarr" },
+      { onSnapshot, onStatus },
+      invalidFactory,
+    );
+    await vi.waitFor(() => expect(onStatus).toHaveBeenLastCalledWith("fallback"));
+    expect(invalidFactory).not.toHaveBeenCalled();
+  });
+
+  it("allows native reconnect after a transient stream error", async () => {
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchAcquisitionProvenanceEvents(
+      { mediaId: 77, seasonNumber: 2, service: "sonarr" },
+      { onSnapshot: vi.fn(), onStatus },
+      () => source,
+    );
+    await vi.waitFor(() => expect(source.onerror).toBeTypeOf("function"));
+    source.onerror?.(new Event("error"));
+
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(source.close).not.toHaveBeenCalled();
   });
 });

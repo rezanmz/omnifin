@@ -105,6 +105,44 @@ test("operators can inspect a title-level acquisition trace before choosing reco
   await expect(timeline).not.toBeVisible();
 });
 
+test("a strict live provenance snapshot replaces only its selected target", async ({ page }) => {
+  const requestedUrls: string[] = [];
+  await page.route("**/api/acquisitions/provenance/events?*", async (route) => {
+    requestedUrls.push(route.request().url());
+    const cursor = "provenance_event_ABCDEFGHIJKLMNOPQRSTUV";
+    await route.fulfill({
+      body: `id: ${cursor}\ndata: ${JSON.stringify({
+        cursor,
+        kind: "snapshot",
+        provenance: {
+          events: [],
+          failures: [],
+          generatedAt: "2026-07-29T20:00:00.000Z",
+          state: "complete",
+          target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+        },
+      })}\n\n`,
+      contentType: "text/event-stream; charset=utf-8",
+      headers: { "cache-control": "no-store" },
+      status: 200,
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await expect(timeline.getByRole("heading", { name: "No acquisition events yet" })).toBeVisible();
+  const requestedUrl = new URL(requestedUrls[0]!);
+  expect(`${requestedUrl.pathname}${requestedUrl.search}`).toBe(
+    "/api/acquisitions/provenance/events?mediaId=42&service=radarr",
+  );
+  await expect(timeline.getByText("Release grabbed")).toHaveCount(0);
+});
+
 test("operators can explicitly pause whole-title monitoring without touching files", async ({
   page,
 }) => {

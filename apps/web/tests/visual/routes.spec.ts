@@ -930,6 +930,7 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot("acquisition-timeline.png");
 });
@@ -944,6 +945,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
+  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
   await page.getByRole("button", { name: "Review search" }).click();
   await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
@@ -960,6 +962,7 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
+  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
   await page.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
   await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);

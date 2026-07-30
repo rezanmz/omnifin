@@ -149,8 +149,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   normalized mutations, and audits
 - [Media issues](docs/media-issues.md) — normalized player and Seerr issue lifecycle,
   opaque references, partial failure, and idempotent decisions
-- [Acquisition provenance](docs/acquisition-provenance.md) — normalized Radarr and
-  Sonarr title history, partial failure, and operator access
+- [Acquisition provenance](docs/acquisition-provenance.md) — live normalized Radarr
+  and Sonarr title history, bounded fallback, partial failure, and operator access
 - [Acquisition monitoring](docs/acquisition-monitoring.md) — exact-title Radarr and
   Sonarr state controls, safe mutation boundaries, and audits
 - [Indexer Intelligence](docs/indexer-intelligence.md) — normalized Prowlarr
