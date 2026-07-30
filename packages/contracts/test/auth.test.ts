@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTH_USERS_PAGE_MAX_COUNT,
   OIDC_ISSUER_MAX_LENGTH,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -32,6 +33,10 @@ import {
   serviceIdentityLinkSchema,
   sessionPrincipalSchema,
   sessionResponseSchema,
+  userAccessListResponseSchema,
+  userAccessMutationRequestSchema,
+  userAccessMutationResponseSchema,
+  userAccessSummarySchema,
 } from "../src/auth.js";
 
 const sessionTimes = {
@@ -196,6 +201,77 @@ describe("Jellyfin authentication contracts", () => {
         csrfToken: "c".repeat(43),
         principal: activePrincipal,
         status: "paired",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("user access administration contracts", () => {
+  const user = {
+    activeSessions: 2,
+    authenticationMethods: ["jellyfin"] as const,
+    createdAt: "2026-07-25T12:00:00.000Z",
+    displayName: "Riley",
+    id: "user_1",
+    jellyfinLinkHealth: "linked" as const,
+    lastActiveAt: "2026-07-29T12:00:00.000Z",
+    role: "requester" as const,
+    roleSource: "manual" as const,
+    status: "active" as const,
+    updatedAt: "2026-07-28T12:00:00.000Z",
+  };
+
+  it("accepts a bounded browser-safe user page and mutation response", () => {
+    expect(userAccessSummarySchema.parse(user)).toEqual(user);
+    expect(userAccessListResponseSchema.parse({ nextCursor: "user_2", users: [user] })).toEqual({
+      nextCursor: "user_2",
+      users: [user],
+    });
+    expect(userAccessMutationResponseSchema.parse({ revokedSessions: 2, user })).toEqual({
+      revokedSessions: 2,
+      user,
+    });
+    expect(AUTH_USERS_PAGE_MAX_COUNT).toBe(50);
+  });
+
+  it("requires a role or status change and an optimistic revision", () => {
+    expect(
+      userAccessMutationRequestSchema.parse({
+        expectedUpdatedAt: user.updatedAt,
+        role: "operator",
+      }),
+    ).toEqual({ expectedUpdatedAt: user.updatedAt, role: "operator" });
+    expect(
+      userAccessMutationRequestSchema.safeParse({ expectedUpdatedAt: user.updatedAt }).success,
+    ).toBe(false);
+    expect(
+      userAccessMutationRequestSchema.parse({
+        enabled: false,
+        expectedUpdatedAt: user.updatedAt,
+      }),
+    ).toEqual({ enabled: false, expectedUpdatedAt: user.updatedAt });
+  });
+
+  it("rejects inconsistent authentication summaries and unbounded pages", () => {
+    expect(
+      userAccessSummarySchema.safeParse({
+        ...user,
+        authenticationMethods: ["jellyfin", "jellyfin"],
+      }).success,
+    ).toBe(false);
+    expect(userAccessSummarySchema.safeParse({ ...user, jellyfinLinkHealth: null }).success).toBe(
+      false,
+    );
+    expect(
+      userAccessSummarySchema.safeParse({
+        ...user,
+        authenticationMethods: ["oidc"],
+      }).success,
+    ).toBe(false);
+    expect(
+      userAccessListResponseSchema.safeParse({
+        nextCursor: null,
+        users: Array.from({ length: AUTH_USERS_PAGE_MAX_COUNT + 1 }, () => user),
       }).success,
     ).toBe(false);
   });

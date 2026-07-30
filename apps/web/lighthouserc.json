@@ -12,6 +12,7 @@
         "http://127.0.0.1:3101/login?test-view=unconfigured",
         "http://127.0.0.1:3101/settings/identity-providers?test-view=ready",
         "http://127.0.0.1:3101/settings/connectors?test-view=ready",
+        "http://127.0.0.1:3101/settings/users?test-view=ready",
         "http://127.0.0.1:3101/calendar?test-view=ready"
       ]
     },

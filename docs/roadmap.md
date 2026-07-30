@@ -40,7 +40,7 @@ claim live-service compatibility; those profiles remain gated by later phases.
 - Jellyfin credentials and Quick Connect
 - Explicit OIDC-to-Jellyfin account pairing and lifecycle controls
 - Local roles and permissions, recovery access, opaque session rotation, logout, and
-  audit records
+  audit records, including browser-safe administrator role and account-state controls
 - Encrypted connector configuration, capability negotiation, and partial-failure
   contracts
 
