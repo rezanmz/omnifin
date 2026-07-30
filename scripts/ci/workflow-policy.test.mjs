@@ -377,6 +377,39 @@ test("draft-aware release jobs receive narrowly scoped push access", () => {
   assert.deepEqual(contentWriters, ["finalize", "promote-stable", "validate-release-metadata"]);
 });
 
+test("stable publication crosses optional live coverage only through explicit successful gates", () => {
+  const document = workflowDocument("publish.yml");
+  const releaseChain = [
+    "build-candidate",
+    "publish-candidate",
+    "attest-candidate",
+    "scan-candidate",
+    "verify-candidate",
+    "promote-stable",
+    "verify-stable",
+    "finalize",
+  ];
+
+  assert.equal(
+    document.jobs["validate-live-source"].if,
+    "needs.release-coverage.outputs.live_required == 'true'",
+  );
+  assert.equal(document.jobs["source-gate"].if, "always()");
+
+  for (const jobName of releaseChain) {
+    const job = document.jobs[jobName];
+    const dependencies = Array.isArray(job.needs) ? job.needs : [job.needs];
+    assert.match(job.if, /^\$\{\{ always\(\) && /u, `${jobName} must override skip propagation`);
+    for (const dependency of dependencies) {
+      assert.match(
+        job.if,
+        new RegExp(`needs\\.${dependency}\\.result == 'success'`, "u"),
+        `${jobName} must still fail closed when ${dependency} does not succeed`,
+      );
+    }
+  }
+});
+
 test("CI builds Storybook before exercising stories", () => {
   const source = workflow("ci.yml");
   const build = source.indexOf("pnpm --filter @omnifin/web build:storybook");
