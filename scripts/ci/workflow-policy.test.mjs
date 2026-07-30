@@ -417,10 +417,27 @@ test("CI builds Storybook before exercising stories", () => {
   assert.ok(build >= 0 && build < testStories);
 });
 
+test("CI runs Storybook and accessibility as independent protected jobs", () => {
+  const document = workflowDocument("ci.yml");
+  const storybook = document.jobs.storybook;
+  const accessibility = document.jobs.accessibility;
+  const gateDependencies = Array.isArray(document.jobs.gate.needs)
+    ? document.jobs.gate.needs
+    : [document.jobs.gate.needs];
+
+  assert.equal(storybook.name, "Storybook");
+  assert.equal(accessibility.name, "Accessibility");
+  assert.ok(storybook.steps.some((step) => step.run === "pnpm test:storybook"));
+  assert.ok(!storybook.steps.some((step) => step.run === "pnpm test:a11y"));
+  assert.ok(accessibility.steps.some((step) => step.run === "pnpm test:a11y"));
+  assert.ok(gateDependencies.includes("storybook"));
+  assert.ok(gateDependencies.includes("accessibility"));
+});
+
 test("browser-backed CI builds workspace dependencies before the web application", () => {
   const document = workflowDocument("ci.yml");
 
-  for (const jobName of ["browser", "storybook", "visual", "lighthouse"]) {
+  for (const jobName of ["browser", "storybook", "accessibility", "visual", "lighthouse"]) {
     const build = namedStep(document.jobs[jobName].steps, "Build web application");
     assert.equal(build.run, "pnpm build", `${jobName} must use the dependency-aware root build`);
   }
