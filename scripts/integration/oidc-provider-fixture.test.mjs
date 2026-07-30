@@ -130,6 +130,8 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(runnerSource, /clearReport\(options\.output\)/u);
   assert.match(runnerSource, /composeArguments\(project, environmentFile, "logs"/u);
   assert.match(runnerSource, /if \(teardownFailure\) throw teardownFailure/u);
+  assert.match(runnerSource, /allowedChecks/u);
+  assert.match(runnerSource, /browser_flow_failed_\$\{match\[1\]\}_\$\{match\[2\]\}/u);
   assert.ok(
     runnerSource.indexOf("if (teardownFailure) throw teardownFailure") <
       runnerSource.indexOf("writeReport(options.output, completedReport)"),
