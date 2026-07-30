@@ -147,6 +147,9 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /role: "admin"/u);
   assert.match(browserSource, /SESSION_CONVERGENCE_TIMEOUT_MS = 10_000/u);
   assert.match(browserSource, /waitForPendingPrincipal/u);
+  assert.match(browserSource, /waitForSessionCookie/u);
+  assert.match(browserSource, /candidate\.name === SESSION_COOKIE_NAME/u);
+  assert.match(browserSource, /cookie\.value !== previousValue/u);
   assert.match(browserSource, /administrationContext\.request/u);
   assert.match(browserSource, /"principal_role"/u);
   assert.match(browserSource, /failureDetail = \{ check \}/u);

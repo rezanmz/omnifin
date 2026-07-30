@@ -7,6 +7,7 @@ const { chromium } = requireFromWeb("@playwright/test");
 
 const providerSlug = "generic";
 const expectedProviderId = `oidc-${providerSlug}`;
+const SESSION_COOKIE_NAME = "__Host-omnifin_session";
 const FLOW_TIMEOUT_MS = 60_000;
 const SESSION_CONVERGENCE_TIMEOUT_MS = 10_000;
 
@@ -204,6 +205,7 @@ async function waitForPendingPrincipal(
   expectedUserId,
 ) {
   const deadline = Date.now() + SESSION_CONVERGENCE_TIMEOUT_MS;
+  let lastFailureDetail = {};
   while (Date.now() < deadline) {
     try {
       const session = await currentSession(request);
@@ -214,12 +216,36 @@ async function waitForPendingPrincipal(
         expectedSubject,
         expectedUserId,
       );
+      failureDetail = {};
       return { identity, session };
     } catch (error) {
       if (!(error instanceof BrowserCheckError)) throw error;
+      lastFailureDetail = failureDetail;
+      failureDetail = {};
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  failureDetail = lastFailureDetail;
+  throw new BrowserCheckError();
+}
+
+async function waitForSessionCookie(context, webOrigin, previousValue) {
+  const deadline = Date.now() + SESSION_CONVERGENCE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const cookie = (await context.cookies(webOrigin)).find(
+      (candidate) => candidate.name === SESSION_COOKIE_NAME,
+    );
+    if (
+      cookie &&
+      /^[A-Za-z0-9_-]{43}$/u.test(cookie.value) &&
+      (previousValue === undefined || cookie.value !== previousValue)
+    ) {
+      failureDetail = {};
+      return cookie.value;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  failureDetail = { check: "session_cookie_replacement" };
   throw new BrowserCheckError();
 }
 
@@ -341,6 +367,8 @@ async function run() {
       issuer,
       "viewer",
     );
+    currentStage = "viewer_cookie";
+    const viewerSessionCookie = await waitForSessionCookie(context, webOrigin);
 
     currentStage = "mapping_recovery_session";
     const mappingRecovery = await recoverySession(
@@ -367,6 +395,8 @@ async function run() {
 
     currentStage = "mapped_login";
     await completeAuthorization(page, startPath, webOrigin, "mapped_login");
+    currentStage = "mapped_cookie";
+    await waitForSessionCookie(context, webOrigin, viewerSessionCookie);
     currentStage = "mapped_session";
     const { identity: mappedIdentity, session: mappedSession } = await waitForPendingPrincipal(
       context.request,

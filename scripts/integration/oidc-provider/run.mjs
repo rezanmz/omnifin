@@ -346,6 +346,7 @@ function browserFailureCategory(stderr) {
     "discovery_logout",
     "local_logout_fallback",
     "local_session_revocation",
+    "mapped_cookie",
     "mapped_login",
     "mapped_login_approval",
     "mapped_login_callback",
@@ -366,6 +367,7 @@ function browserFailureCategory(stderr) {
     "viewer_login_callback",
     "viewer_login_connector",
     "viewer_login_navigation",
+    "viewer_cookie",
     "viewer_session",
   ]);
   if (!match || !allowedStages.has(match[1])) return "browser_flow_failed";
@@ -387,6 +389,7 @@ function browserFailureCategory(stderr) {
     "principal_role",
     "principal_subject_continuity",
     "principal_user_continuity",
+    "session_cookie_replacement",
   ]);
   return match[2] && allowedChecks.has(match[2])
     ? `browser_flow_failed_${match[1]}_${match[2]}`
