@@ -108,7 +108,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
     <SearchComponent
       {...properties}
       initialFocus={restoreFocus}
-      initialOpen={properties.initialOpen || shortcutRequested}
+      initialOpen={properties.initialOpen || shortcutRequested || pendingQuery.trim().length > 0}
       initialQuery={pendingQuery}
     />
   );
