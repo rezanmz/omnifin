@@ -73,6 +73,7 @@ test("visual baseline refresh is review-only and cannot write to the repository"
   const refresh = document.jobs.refresh;
   const checkout = namedStep(refresh.steps, "Check out repository");
   const build = namedStep(refresh.steps, "Build web application");
+  const installBrowsers = namedStep(refresh.steps, "Install browser runtimes");
   const generate = namedStep(refresh.steps, "Generate visual baselines");
   const upload = namedStep(refresh.steps, "Upload visual baselines for review");
 
@@ -85,6 +86,10 @@ test("visual baseline refresh is review-only and cannot write to the repository"
   ]);
   assert.equal(checkout.with["persist-credentials"], false);
   assert.equal(build.run, "pnpm build");
+  assert.equal(
+    installBrowsers.run,
+    "pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit",
+  );
   assert.match(generate.run, /--update-snapshots/u);
   assert.equal(upload.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
   assert.doesNotMatch(source, /\b(?:git push|git commit|pull-requests: write|contents: write)\b/u);
