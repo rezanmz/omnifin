@@ -288,6 +288,47 @@ describe("OIDC role mapping administration routes", () => {
       });
 
       const affectedAfterCreate = createAffectedSession();
+      const updateRequest = {
+        claimPath: ["realm_access", "roles"],
+        enabled: true,
+        operator: "contains_all",
+        priority: 750,
+        role: "admin",
+        values: ["media-administrators", true],
+      } as const;
+      const updated = await app.inject({
+        body: updateRequest,
+        headers: authenticatedHeaders(admin),
+        method: "PUT",
+        url: `/v1/admin/auth/oidc/providers/${providerId}/role-mappings/${creation.mapping.id}`,
+      });
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(updated.headers["cache-control"]).toBe("no-store");
+      expect(oidcRoleMappingMutationResponseSchema.parse(updated.json())).toEqual({
+        mapping: {
+          ...updateRequest,
+          id: creation.mapping.id,
+          providerId,
+          values: [true, "media-administrators"],
+        },
+        revokedSessions: 1,
+      });
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === affectedAfterCreate.principal.sessionId)?.revokedAt,
+      ).toEqual(now);
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === admin.principal.sessionId)?.revokedAt,
+      ).toBeNull();
+
+      const affectedAfterUpdate = createAffectedSession();
       const deleted = await app.inject({
         headers: authenticatedHeaders(admin),
         method: "DELETE",
@@ -303,7 +344,7 @@ describe("OIDC role mapping administration routes", () => {
           .select()
           .from(sessions)
           .all()
-          .find((row) => row.id === affectedAfterCreate.principal.sessionId)?.revokedAt,
+          .find((row) => row.id === affectedAfterUpdate.principal.sessionId)?.revokedAt,
       ).toEqual(now);
       expect(app.database.db.select().from(roleMappings).all()).toEqual([]);
 
@@ -313,6 +354,7 @@ describe("OIDC role mapping administration routes", () => {
            from audit_events
            where event_type in (
              'auth.oidc.role_mapping.created',
+             'auth.oidc.role_mapping.updated',
              'auth.oidc.role_mapping.deleted'
            )
            order by created_at, id`,
@@ -338,19 +380,40 @@ describe("OIDC role mapping administration routes", () => {
           outcome: "success",
         },
         {
+          eventType: "auth.oidc.role_mapping.updated",
+          metadata: {
+            after: {
+              enabled: true,
+              operator: "contains_all",
+              priority: 750,
+              role: "admin",
+            },
+            before: {
+              enabled: true,
+              operator: "contains_any",
+              priority: 500,
+              role: "operator",
+            },
+            providerId,
+            revokedSessions: 1,
+          },
+          outcome: "success",
+        },
+        {
           eventType: "auth.oidc.role_mapping.deleted",
           metadata: {
             enabled: true,
-            operator: "contains_any",
-            priority: 500,
+            operator: "contains_all",
+            priority: 750,
             providerId,
             revokedSessions: 1,
-            role: "operator",
+            role: "admin",
           },
           outcome: "success",
         },
       ]);
       expect(JSON.stringify(audits)).not.toContain("media-operators");
+      expect(JSON.stringify(audits)).not.toContain("media-administrators");
       expect(JSON.stringify(audits)).not.toContain("claimPath");
     } finally {
       await app.close();
@@ -388,7 +451,7 @@ describe("OIDC role mapping administration routes", () => {
   });
 
   it("requires CSRF and rejects equivalent or missing mapping targets without extra writes", async () => {
-    const { app, recovery } = await harness();
+    const { app, createAffectedSession, recovery } = await harness();
     try {
       const url = `/v1/admin/auth/oidc/providers/${providerId}/role-mappings`;
       const missingCsrf = await app.inject({
@@ -410,6 +473,7 @@ describe("OIDC role mapping administration routes", () => {
         url,
       });
       expect(first.statusCode).toBe(201);
+      const firstMapping = oidcRoleMappingMutationResponseSchema.parse(first.json()).mapping;
       const duplicate = await app.inject({
         body: { ...mappingRequest, values: [true, "media-operators", 7] },
         headers: authenticatedHeaders(recovery),
@@ -422,6 +486,80 @@ describe("OIDC role mapping administration routes", () => {
       });
       expect(app.database.db.select().from(roleMappings).all()).toHaveLength(1);
 
+      const secondRequest = {
+        ...mappingRequest,
+        priority: 700,
+        role: "requester",
+        values: ["media-requesters"],
+      } as const;
+      const second = await app.inject({
+        body: secondRequest,
+        headers: authenticatedHeaders(recovery),
+        method: "POST",
+        url,
+      });
+      expect(second.statusCode, second.body).toBe(201);
+      const affected = createAffectedSession();
+
+      const updateUrl = `${url}/${firstMapping.id}`;
+      const updateWithoutCsrf = await app.inject({
+        body: { ...mappingRequest, priority: 600 },
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}`,
+          origin: baseUrl,
+        },
+        method: "PUT",
+        url: updateUrl,
+      });
+      expect(updateWithoutCsrf.statusCode).toBe(403);
+
+      const unchanged = await app.inject({
+        body: mappingRequest,
+        headers: authenticatedHeaders(recovery),
+        method: "PUT",
+        url: updateUrl,
+      });
+      expect(unchanged.statusCode).toBe(409);
+      expect(unchanged.json()).toMatchObject({
+        error: { code: "oidc_role_mapping_conflict" },
+      });
+
+      const conflictingUpdate = await app.inject({
+        body: secondRequest,
+        headers: authenticatedHeaders(recovery),
+        method: "PUT",
+        url: updateUrl,
+      });
+      expect(conflictingUpdate.statusCode).toBe(409);
+      expect(conflictingUpdate.json()).toMatchObject({
+        error: { code: "oidc_role_mapping_conflict" },
+      });
+
+      const missingUpdate = await app.inject({
+        body: { ...mappingRequest, priority: 600 },
+        headers: authenticatedHeaders(recovery),
+        method: "PUT",
+        url: `${url}/mapping-missing`,
+      });
+      expect(missingUpdate.statusCode).toBe(404);
+      expect(missingUpdate.json()).toMatchObject({
+        error: { code: "oidc_role_mapping_not_found" },
+      });
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((row) => row.id === affected.principal.sessionId)?.revokedAt,
+      ).toBeNull();
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.oidc.role_mapping.updated'",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+
       const missing = await app.inject({
         headers: authenticatedHeaders(recovery),
         method: "DELETE",
@@ -431,7 +569,7 @@ describe("OIDC role mapping administration routes", () => {
       expect(missing.json()).toMatchObject({
         error: { code: "oidc_role_mapping_not_found" },
       });
-      expect(app.database.db.select().from(roleMappings).all()).toHaveLength(1);
+      expect(app.database.db.select().from(roleMappings).all()).toHaveLength(2);
     } finally {
       await app.close();
     }

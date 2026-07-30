@@ -1,8 +1,10 @@
 import {
   OIDC_ROLE_MAPPINGS_MAX_COUNT,
   oidcRoleMappingCreateRequestSchema,
+  oidcRoleMappingUpdateRequestSchema,
   roleMappingSchema,
   type OidcRoleMappingCreateRequest,
+  type OidcRoleMappingUpdateRequest,
   type RoleMapping,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
@@ -59,6 +61,25 @@ function validOptionalText(value: string | undefined, maximumLength: number) {
 
 function scalarKey(value: boolean | number | string): string {
   return `${typeof value}:${JSON.stringify(value)}`;
+}
+
+function canonicalValues(
+  configuration: OidcRoleMappingCreateRequest,
+): readonly (boolean | number | string)[] {
+  return [...configuration.values].sort((left, right) => {
+    const leftKey = scalarKey(left);
+    const rightKey = scalarKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+}
+
+function safeAuditConfiguration(configuration: OidcRoleMappingCreateRequest) {
+  return {
+    enabled: configuration.enabled,
+    operator: configuration.operator,
+    priority: configuration.priority,
+    role: configuration.role,
+  };
 }
 
 function presentMapping(row: typeof roleMappings.$inferSelect): RoleMapping {
@@ -139,13 +160,9 @@ export class OidcRoleMappingAdminService {
     const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
     const configuration = parsed.data;
-    const canonicalValues = [...configuration.values].sort((left, right) => {
-      const leftKey = scalarKey(left);
-      const rightKey = scalarKey(right);
-      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-    });
+    const normalizedValues = canonicalValues(configuration);
     const claimPathJson = JSON.stringify(configuration.claimPath);
-    const valuesJson = JSON.stringify(canonicalValues);
+    const valuesJson = JSON.stringify(normalizedValues);
     let revokedSessions = 0;
 
     try {
@@ -211,6 +228,113 @@ export class OidcRoleMappingAdminService {
             revokedSessions,
             context,
             now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof OidcRoleMappingAdminError) throw error;
+      throw new OidcRoleMappingAdminError("storage_failure", { cause: error });
+    }
+
+    return {
+      mapping: this.#get(providerId, mappingId),
+      revokedSessions,
+    };
+  }
+
+  public update(
+    providerId: string,
+    mappingId: string,
+    input: OidcRoleMappingUpdateRequest,
+    context: OidcRoleMappingAdminContext,
+  ): OidcRoleMappingMutationResult {
+    const parsed = oidcRoleMappingUpdateRequestSchema.safeParse(input);
+    if (
+      !validIdentifier(providerId) ||
+      !validIdentifier(mappingId) ||
+      !parsed.success ||
+      !this.#validContext(context)
+    ) {
+      throw new OidcRoleMappingAdminError("integrity_failure");
+    }
+    const auditId = this.#nextIdentifier("audit");
+    const now = this.#currentTime();
+    const configuration = parsed.data;
+    const claimPathJson = JSON.stringify(configuration.claimPath);
+    const valuesJson = JSON.stringify(canonicalValues(configuration));
+    let revokedSessions = 0;
+
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          if (!this.#providerExists(providerId)) {
+            throw new OidcRoleMappingAdminError("provider_not_found");
+          }
+          const row = this.#database.db
+            .select()
+            .from(roleMappings)
+            .where(and(eq(roleMappings.id, mappingId), eq(roleMappings.providerId, providerId)))
+            .get();
+          if (!row) throw new OidcRoleMappingAdminError("mapping_not_found");
+          const previous = presentMapping(row);
+          const conflict = this.#database.sqlite
+            .prepare(
+              `select id from role_mappings
+               where provider_id = ?
+                 and claim_path_json = ?
+                 and operator = ?
+                 and values_json = ?
+                 and role = ?
+                 and priority = ?
+                 and enabled = ?
+               limit 1`,
+            )
+            .get(
+              providerId,
+              claimPathJson,
+              configuration.operator,
+              valuesJson,
+              configuration.role,
+              configuration.priority,
+              configuration.enabled ? 1 : 0,
+            );
+          if (conflict) throw new OidcRoleMappingAdminError("mapping_conflict");
+
+          const changes = this.#database.sqlite
+            .prepare(
+              `update role_mappings
+               set claim_path_json = ?,
+                   operator = ?,
+                   values_json = ?,
+                   role = ?,
+                   priority = ?,
+                   enabled = ?,
+                   updated_at = ?
+               where id = ? and provider_id = ?`,
+            )
+            .run(
+              claimPathJson,
+              configuration.operator,
+              valuesJson,
+              configuration.role,
+              configuration.priority,
+              configuration.enabled ? 1 : 0,
+              now.getTime(),
+              mappingId,
+              providerId,
+            ).changes;
+          if (changes !== 1) throw new OidcRoleMappingAdminError("integrity_failure");
+          revokedSessions = this.#revokeAffectedSessions(providerId, now);
+          this.#insertAudit(
+            auditId,
+            "auth.oidc.role_mapping.updated",
+            mappingId,
+            providerId,
+            configuration,
+            revokedSessions,
+            context,
+            now,
+            previous,
           );
         })
         .immediate();
@@ -329,13 +453,17 @@ export class OidcRoleMappingAdminService {
 
   #insertAudit(
     auditId: string,
-    eventType: "auth.oidc.role_mapping.created" | "auth.oidc.role_mapping.deleted",
+    eventType:
+      | "auth.oidc.role_mapping.created"
+      | "auth.oidc.role_mapping.deleted"
+      | "auth.oidc.role_mapping.updated",
     mappingId: string,
     providerId: string,
     configuration: OidcRoleMappingCreateRequest,
     revokedSessions: number,
     context: OidcRoleMappingAdminContext,
     now: Date,
+    previous?: OidcRoleMappingCreateRequest,
   ): void {
     this.#database.sqlite
       .prepare(
@@ -364,14 +492,20 @@ export class OidcRoleMappingAdminService {
         eventType,
         mappingId,
         context.requestId ?? null,
-        JSON.stringify({
-          enabled: configuration.enabled,
-          operator: configuration.operator,
-          priority: configuration.priority,
-          providerId,
-          revokedSessions,
-          role: configuration.role,
-        }),
+        JSON.stringify(
+          eventType === "auth.oidc.role_mapping.updated" && previous
+            ? {
+                after: safeAuditConfiguration(configuration),
+                before: safeAuditConfiguration(previous),
+                providerId,
+                revokedSessions,
+              }
+            : {
+                ...safeAuditConfiguration(configuration),
+                providerId,
+                revokedSessions,
+              },
+        ),
         context.ipAddress
           ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
           : null,

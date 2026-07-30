@@ -4,6 +4,7 @@ import {
   oidcRoleMappingCreateRequestSchema,
   oidcRoleMappingDeleteResponseSchema,
   oidcRoleMappingMutationResponseSchema,
+  oidcRoleMappingUpdateRequestSchema,
   oidcRoleMappingsAdminParamsSchema,
   oidcRoleMappingsAdminResponseSchema,
   type SessionPrincipal,
@@ -26,35 +27,39 @@ const identifierJsonSchema = {
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
 } as const;
 
+const roleMappingConfigurationJsonSchema = {
+  claimPath: {
+    type: "array",
+    minItems: 1,
+    maxItems: 12,
+    items: { type: "string", minLength: 1, maxLength: 128 },
+  },
+  enabled: { type: "boolean" },
+  operator: { enum: ["equals", "contains_any", "contains_all"] },
+  priority: { type: "integer", minimum: 0, maximum: 10_000 },
+  role: { enum: ["viewer", "requester", "operator", "admin"] },
+  values: {
+    type: "array",
+    minItems: 1,
+    maxItems: 64,
+    items: {
+      oneOf: [
+        { type: "string", minLength: 1, maxLength: 512 },
+        { type: "number" },
+        { type: "boolean" },
+      ],
+    },
+  },
+} as const;
+
 const roleMappingJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["claimPath", "enabled", "id", "operator", "priority", "providerId", "role", "values"],
   properties: {
-    claimPath: {
-      type: "array",
-      minItems: 1,
-      maxItems: 12,
-      items: { type: "string", minLength: 1, maxLength: 128 },
-    },
-    enabled: { type: "boolean" },
+    ...roleMappingConfigurationJsonSchema,
     id: identifierJsonSchema,
-    operator: { enum: ["equals", "contains_any", "contains_all"] },
-    priority: { type: "integer", minimum: 0, maximum: 10_000 },
     providerId: identifierJsonSchema,
-    role: { enum: ["viewer", "requester", "operator", "admin"] },
-    values: {
-      type: "array",
-      minItems: 1,
-      maxItems: 64,
-      items: {
-        anyOf: [
-          { type: "string", minLength: 1, maxLength: 512 },
-          { type: "number" },
-          { type: "boolean" },
-        ],
-      },
-    },
   },
 } as const;
 
@@ -222,6 +227,45 @@ export const oidcRoleMappingAdminRoutes: FastifyPluginAsync<
         const result = mappings.create(providerId, input, context(request, principal));
         reply.status(201);
         return oidcRoleMappingMutationResponseSchema.parse(result);
+      } catch (error) {
+        if (error instanceof OidcRoleMappingAdminError) throw administrationError(error);
+        throw error;
+      }
+    },
+  );
+
+  app.put(
+    "/v1/admin/auth/oidc/providers/:providerId/role-mappings/:mappingId",
+    {
+      bodyLimit: 16 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["mappingId", "providerId"],
+          properties: {
+            mappingId: identifierJsonSchema,
+            providerId: identifierJsonSchema,
+          },
+        },
+        response: { 200: mutationResponseJsonSchema },
+      },
+    },
+    async (request) => {
+      const principal = requireRoleMappingAdministrator(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+      );
+      const { mappingId, providerId } = oidcRoleMappingAdminParamsSchema.parse(request.params);
+      const input = oidcRoleMappingUpdateRequestSchema.parse(request.body);
+      try {
+        return oidcRoleMappingMutationResponseSchema.parse(
+          mappings.update(providerId, mappingId, input, context(request, principal)),
+        );
       } catch (error) {
         if (error instanceof OidcRoleMappingAdminError) throw administrationError(error);
         throw error;
