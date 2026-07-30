@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarDays, Info, Library, Sparkles } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { DashboardModel } from "../lib/dashboard-data";
@@ -8,7 +9,6 @@ import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
 type AccentStyle = CSSProperties & {
   "--hero-accent": string;
-  "--hero-artwork"?: string;
 };
 
 export interface HeroSpotlightProperties {
@@ -30,7 +30,6 @@ export function HeroSpotlight({
       : null;
   const style = {
     "--hero-accent": hero.accent,
-    ...(safeArtworkPath ? { "--hero-artwork": `url("${safeArtworkPath}")` } : {}),
   } as AccentStyle;
   const hasLiveActions = onDetails !== undefined;
   const hasFallbackActions = !hasLiveActions && hero.actions !== "none";
@@ -43,6 +42,18 @@ export function HeroSpotlight({
       aria-labelledby="hero-title"
     >
       <div className="hero-spotlight__art" aria-hidden="true">
+        {safeArtworkPath ? (
+          <Image
+            alt=""
+            className="hero-spotlight__art-image"
+            fetchPriority="high"
+            fill
+            loading="eager"
+            sizes="100vw"
+            src={safeArtworkPath}
+            unoptimized
+          />
+        ) : null}
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />
         <div className="hero-spotlight__grain" />

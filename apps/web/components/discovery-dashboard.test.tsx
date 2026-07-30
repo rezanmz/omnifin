@@ -45,7 +45,7 @@ describe("DiscoveryDashboard", () => {
   it("turns the live feed into a functional hero and four keyboard-ready rails", async () => {
     const user = userEvent.setup();
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
-    render(
+    const { container } = render(
       <DiscoveryDashboard
         detailClient={{ load }}
         initialFeed={demoDiscoveryFeed}
@@ -65,6 +65,10 @@ describe("DiscoveryDashboard", () => {
     expect(screen.getByRole("region", { name: "The Far Meridian" })).toHaveAttribute(
       "data-artwork-source",
       "remote",
+    );
+    expect(container.querySelector(".hero-spotlight__art-image")).toHaveAttribute(
+      "fetchpriority",
+      "high",
     );
 
     await user.click(
