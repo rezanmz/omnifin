@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
+const visualTestMode = process.env.OMNIFIN_VISUAL_TEST === "true";
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("PLAYWRIGHT_PORT must be an integer between 1 and 65535.");
@@ -15,15 +16,15 @@ export default defineConfig({
   fullyParallel: true,
   outputDir: "test-results",
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI && !visualTestMode ? 2 : 0,
   snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   timeout: 30_000,
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     colorScheme: "dark",
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
-    video: "retain-on-failure",
+    trace: visualTestMode ? "off" : "retain-on-failure",
+    video: visualTestMode ? "off" : "retain-on-failure",
   },
   webServer: {
     command: process.env.CI ? "pnpm start" : "pnpm dev",

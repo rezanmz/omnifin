@@ -58,6 +58,8 @@ jobs:
       - name: Install Chromium
         run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium
       - name: Generate visual baselines
+        env:
+          OMNIFIN_VISUAL_TEST: "true"
         run: >-
           pnpm --filter @omnifin/web exec playwright test tests/visual
           --project=chromium --project=mobile --project=tablet --project=ten-foot
