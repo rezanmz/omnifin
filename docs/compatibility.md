@@ -8,18 +8,18 @@ combination is described as supported.
 > There is no verified public compatibility baseline yet. Every entry below is a
 > target for pre-release integration work, not a support claim.
 
-| Service                           | Intended use                                                    | Current status                                               |
-| --------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata     | Identity/playback isolated gates ready; live pending         |
-| Authentik                         | OIDC sign-in, group claims, front/back-channel logout           | Isolated gate ready; live baseline pending                   |
-| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised  | Isolated standards gate ready; live baseline pending         |
-| Seerr                             | Discovery, routed requests, approvals, issues, user context     | Search/request/routing fixtures ready; live baseline pending |
-| Radarr                            | Movie monitoring, calendar, search, releases, queue, history    | Contracts and isolated read gate ready; live pending         |
-| Sonarr                            | Series monitoring, calendar, search, releases, queue, history   | Contracts and isolated read gate ready; live pending         |
-| Bazarr                            | Subtitle status, search, and download                           | Contracts and isolated empty-state gate ready; live pending  |
-| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests          | Contracts and isolated read gate ready; live pending         |
-| qBittorrent                       | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.2.0 gate ready; live baseline pending             |
-| SABnzbd                           | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.0.4 gate ready; live baseline pending             |
+| Service                           | Intended use                                                    | Current status                                                  |
+| --------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------- |
+| Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata     | Identity/playback isolated gates ready; live pending            |
+| Authentik                         | OIDC sign-in, group claims, front/back-channel logout           | Isolated gate ready; live baseline pending                      |
+| Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised  | Isolated standards gate ready; live baseline pending            |
+| Seerr                             | Discovery, routed requests, approvals, issues, user context     | Search/request/routing fixtures ready; live baseline pending    |
+| Radarr                            | Movie monitoring, calendar, search, releases, queue, history    | Isolated reads plus monitoring restore gate ready; live pending |
+| Sonarr                            | Series monitoring, calendar, search, releases, queue, history   | Isolated reads plus monitoring restore gate ready; live pending |
+| Bazarr                            | Subtitle status, search, and download                           | Contracts and isolated empty-state gate ready; live pending     |
+| Prowlarr                          | Indexer status, statistics, failures, sync, safe tests          | Isolated reads plus exact safe-test gate ready; live pending    |
+| qBittorrent                       | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.2.0 gate ready; live baseline pending                |
+| SABnzbd                           | Queue, rates, exact pause/resume, front promotion, safe removal | Isolated 5.0.4 gate ready; live baseline pending                |
 
 Seerr is the primary request-management target. Compatibility with older Jellyseerr
 and Overseerr installations is capability-based and will be listed only after it is

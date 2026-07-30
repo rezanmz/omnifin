@@ -28,10 +28,12 @@ Radarr, Sonarr, and Prowlarr also receive a pinned, unprivileged Node fixture si
 internal network. The sidecar is read-only, resource-bounded, has no published port, and cannot
 route to the public internet. A short-lived fixture CA is generated inside the temporary directory;
 only its certificate is mounted into Radarr or Sonarr. Docker network aliases direct the exact
-`api.radarr.video` and `skyhook.sonarr.tv` names to the private HTTPS fixture, so title provisioning
-does not depend on TMDB, TVDB, SkyHook, or any other public service. Prowlarr receives a private
-Newznab capability endpoint on the same sidecar. The CA private key, leaf key, fixture databases,
-and all native identifiers are destroyed during teardown.
+`api.radarr.video`, `skyhook.sonarr.tv`, `services.sonarr.tv`, and `thexem.info` names to the private
+HTTPS fixture. The latter two return exact empty scene-mapping responses required by Sonarr's
+first-series event path, so title provisioning does not depend on TMDB, TVDB, SkyHook, XEM, or any
+other public service. Prowlarr receives a private Newznab capability endpoint on the same sidecar.
+The CA private key, leaf key, fixture databases, and all native identifiers are destroyed during
+teardown.
 
 Run a fixture after building the production adapters:
 
