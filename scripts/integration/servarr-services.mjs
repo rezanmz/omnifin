@@ -2,10 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { constants as fileSystemConstants } from "node:fs";
 import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
@@ -1322,27 +1324,28 @@ async function waitForBazarrSubtitleArtifact(context) {
       await sleep(250);
       continue;
     }
-    const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
-    const subtitleMetadata = await lstat(subtitlePath);
-    if (
-      !subtitleMetadata.isFile() ||
-      subtitleMetadata.isSymbolicLink() ||
-      subtitleMetadata.size > 64 * 1_024
-    ) {
-      throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
-    }
-    if (subtitleMetadata.size < 32) {
-      failureCode = "subtitle_content_invalid";
-      await sleep(250);
-      continue;
-    }
+    let subtitleFile;
     try {
-      validateBazarrSubtitleArtifact(entries, await readFile(subtitlePath, "utf8"));
+      const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
+      subtitleFile = await open(
+        subtitlePath,
+        fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW,
+      );
+      const subtitleMetadata = await subtitleFile.stat();
+      if (!subtitleMetadata.isFile() || subtitleMetadata.size > 64 * 1_024) {
+        throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
+      }
+      if (subtitleMetadata.size < 32) {
+        throw new ServarrFixtureFailure("subtitle_content_invalid");
+      }
+      validateBazarrSubtitleArtifact(entries, await subtitleFile.readFile("utf8"));
       return;
     } catch (error) {
       failureCode =
         error instanceof ServarrFixtureFailure ? error.code : "subtitle_artifact_read_invalid";
       await sleep(250);
+    } finally {
+      await subtitleFile?.close();
     }
   }
   throw new ServarrFixtureFailure(failureCode);
