@@ -313,7 +313,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build service connectors
         run: pnpm --filter @omnifin/connectors... build
-      - name: Exercise isolated service reads
+      - name: Exercise isolated service reads and safe mutations
         env:
           OMNIFIN_SERVARR_SERVICE: ${{ matrix.service }}
         run: >-

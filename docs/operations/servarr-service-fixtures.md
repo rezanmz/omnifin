@@ -24,6 +24,15 @@ exercise Omnifin's production DNS-pinned transport directly against the private 
 The macOS transport supplies transient request headers over standard input, so the generated API
 key is not placed in subprocess arguments.
 
+Radarr, Sonarr, and Prowlarr also receive a pinned, unprivileged Node fixture sidecar on that same
+internal network. The sidecar is read-only, resource-bounded, has no published port, and cannot
+route to the public internet. A short-lived fixture CA is generated inside the temporary directory;
+only its certificate is mounted into Radarr or Sonarr. Docker network aliases direct the exact
+`api.radarr.video` and `skyhook.sonarr.tv` names to the private HTTPS fixture, so title provisioning
+does not depend on TMDB, TVDB, SkyHook, or any other public service. Prowlarr receives a private
+Newznab capability endpoint on the same sidecar. The CA private key, leaf key, fixture databases,
+and all native identifiers are destroyed during teardown.
+
 Run a fixture after building the production adapters:
 
 ```sh
@@ -37,20 +46,26 @@ pnpm fixture:servarr-service --service bazarr --output artifacts/integration/ser
 The runner waits for the private first-run configuration, reads the generated API key without
 printing it, and calls the production adapter. Every service must pass exact version discovery,
 successful authentication, and invalid-key rejection. Radarr and Sonarr also exercise normalized
-system-health, empty-calendar, and storage reads. Prowlarr exercises normalized system health,
-indexer intelligence, application sync, and failure history against fresh empty state. Bazarr
-exercises its normalized library lookup and requires the typed empty-library result.
+system-health, empty-calendar, and storage reads. Each then provisions one bounded synthetic title
+with search disabled and verifies monitoring through the production adapter: initial read, one
+state change, a fresh read, restoration, and a final read of the original state. No search, grab,
+import, file, quality-profile, tag, path, delete, or media mutation is permitted. Prowlarr exercises
+normalized system health, indexer intelligence, application sync, and failure history against fresh
+empty state, provisions one private Newznab provider with RSS and automatic search disabled, and
+runs the production adapter's exact-provider safe test. Bazarr exercises its normalized library
+lookup and requires the typed empty-library result.
 
-Successful teardown is part of the gate. The container, internal network, generated database,
-configuration, API key, and transient logs are removed before passing evidence is written. If
-cleanup fails, the fixture fails rather than publishing a passing report.
+Successful teardown is part of the gate. The service and sidecar containers, internal network,
+generated database, configuration, API key, short-lived certificates and keys, and transient logs
+are removed before passing evidence is written. If cleanup fails, the fixture fails rather than
+publishing a passing report.
 
 The uploaded report has a closed schema containing only the service name, exact normalized
 version, immutable image reference, fixed check names, and pass status. API keys, URLs, ports,
 container names, paths, native identifiers, upstream payloads, and logs cannot be represented.
 Failure evidence is limited to a normalized stage code.
 
-These checks are real-service, read-only development evidence. They do not establish a public
-installation compatibility baseline or prove media mutations, indexer tests, subtitle downloads,
-timeouts, or recovery against an operator's deployment. Those claims remain gated by the
-protected live matrix and its exact-version evidence.
+These checks are real-service development evidence for bounded monitoring changes and provider safe
+tests. They do not establish a public installation compatibility baseline or prove searches, grabs,
+imports, downloads, file changes, subtitle downloads, timeouts, or recovery against an operator's
+deployment. Those claims remain gated by the protected live matrix and its exact-version evidence.

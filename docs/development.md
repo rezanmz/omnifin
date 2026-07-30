@@ -89,7 +89,8 @@ pnpm container:smoke --build
 The protected connector aggregate also runs digest-pinned, disposable Radarr, Sonarr, Prowlarr,
 and Bazarr services through the production adapters. For a focused local reproduction, follow the
 [isolated service fixture runbook](operations/servarr-service-fixtures.md). These checks are
-read-only development evidence and do not advance the protected live-readiness ledger.
+development evidence for reads, bounded monitoring restoration, and provider safe tests; they do
+not advance the protected live-readiness ledger.
 
 For a focused real-browser OIDC interoperability run, follow the
 [standards-generic OIDC fixture runbook](operations/oidc-provider-fixture.md):

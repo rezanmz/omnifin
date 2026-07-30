@@ -22,6 +22,10 @@ import {
   DockerImagePullError,
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
+import { FIXTURE_MOVIE_TMDB_ID, FIXTURE_SERIES_TVDB_ID } from "./servarr-fixture-server.mjs";
+
+export const SERVARR_FIXTURE_SERVER_IMAGE =
+  "node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
 
 export const SERVARR_SERVICE_IMAGES = Object.freeze({
   bazarr:
@@ -49,7 +53,9 @@ const SERVICE_CHECKS = Object.freeze({
     "authentication",
     "credentialRejection",
     "failureRead",
+    "fixtureIndexerProvisioning",
     "indexerRead",
+    "indexerSafeTest",
     "systemHealthRead",
     "versionDiscovery",
   ],
@@ -57,6 +63,10 @@ const SERVICE_CHECKS = Object.freeze({
     "authentication",
     "calendarRead",
     "credentialRejection",
+    "fixtureTitleProvisioning",
+    "monitoringRead",
+    "monitoringRestore",
+    "monitoringUpdate",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -65,6 +75,10 @@ const SERVICE_CHECKS = Object.freeze({
     "authentication",
     "calendarRead",
     "credentialRejection",
+    "fixtureTitleProvisioning",
+    "monitoringRead",
+    "monitoringRestore",
+    "monitoringUpdate",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -88,6 +102,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_READY_TIMEOUT_MS = 120_000;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const API_KEY_PATTERN = /^[a-f0-9]{32}$/u;
+const MUTATION_FIXTURE_SERVICES = new Set(["prowlarr", "radarr", "sonarr"]);
 
 class ServarrFixtureFailure extends Error {
   constructor(code, options) {
@@ -277,16 +292,161 @@ async function prepareContext(service) {
   );
   const suffix = `${process.pid}-${randomBytes(4).toString("hex")}`;
   const configDirectory = resolve(temporaryDirectory, "config");
-  await mkdir(configDirectory, { mode: 0o700 });
+  const dataDirectory = resolve(temporaryDirectory, "data");
+  const tlsDirectory = resolve(temporaryDirectory, "tls");
+  await Promise.all(
+    [configDirectory, dataDirectory, tlsDirectory].map((directory) =>
+      mkdir(directory, { mode: 0o700 }),
+    ),
+  );
   return {
     configDirectory,
     containerCreated: false,
     containerName: `omnifin-${service}-service-${suffix}`,
+    dataDirectory,
+    fixtureServerCreated: false,
+    fixtureServerName: `omnifin-${service}-fixture-server-${suffix}`,
     networkCreated: false,
     networkName: `omnifin-${service}-service-network-${suffix}`,
     service,
     temporaryDirectory,
+    tlsDirectory,
   };
+}
+
+function runOpenSsl(arguments_, failureCode) {
+  const execution = spawnSync("openssl", arguments_, {
+    cwd: REPOSITORY_ROOT,
+    encoding: "utf8",
+    maxBuffer: 256 * 1_024,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 30_000,
+  });
+  if (execution.status !== 0 || execution.error) {
+    throw new ServarrFixtureFailure(failureCode, { cause: execution.error });
+  }
+}
+
+async function createFixtureCertificates(context) {
+  const caCertificate = resolve(context.tlsDirectory, "ca.crt");
+  const caKey = resolve(context.tlsDirectory, "ca.key");
+  const serverCertificate = resolve(context.tlsDirectory, "server.crt");
+  const serverRequest = resolve(context.tlsDirectory, "server.csr");
+  const serverExtensions = resolve(context.tlsDirectory, "server.ext");
+  const serverKey = resolve(context.tlsDirectory, "server.key");
+  await writeFile(
+    serverExtensions,
+    [
+      "basicConstraints=critical,CA:FALSE",
+      "keyUsage=critical,digitalSignature,keyEncipherment",
+      "extendedKeyUsage=serverAuth",
+      "subjectAltName=DNS:api.radarr.video,DNS:skyhook.sonarr.tv",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  runOpenSsl(
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-days",
+      "2",
+      "-subj",
+      "/CN=Omnifin isolated fixture CA",
+      "-keyout",
+      caKey,
+      "-out",
+      caCertificate,
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+    ],
+    "fixture_ca_generation_failed",
+  );
+  runOpenSsl(
+    [
+      "req",
+      "-new",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-subj",
+      "/CN=api.radarr.video",
+      "-keyout",
+      serverKey,
+      "-out",
+      serverRequest,
+    ],
+    "fixture_certificate_request_failed",
+  );
+  runOpenSsl(
+    [
+      "x509",
+      "-req",
+      "-in",
+      serverRequest,
+      "-CA",
+      caCertificate,
+      "-CAkey",
+      caKey,
+      "-CAcreateserial",
+      "-out",
+      serverCertificate,
+      "-days",
+      "2",
+      "-sha256",
+      "-extfile",
+      serverExtensions,
+    ],
+    "fixture_certificate_generation_failed",
+  );
+}
+
+export function fixtureServerContainerArguments(context) {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return [
+    "run",
+    ...DOCKER_LOCAL_IMAGE_ARGUMENTS,
+    "--detach",
+    "--name",
+    context.fixtureServerName,
+    "--network",
+    context.networkName,
+    "--network-alias",
+    "api.radarr.video",
+    "--network-alias",
+    "skyhook.sonarr.tv",
+    "--network-alias",
+    "fixture-indexer",
+    ...containerIsolationArguments(uid, gid),
+    "--cap-drop",
+    "ALL",
+    "--read-only",
+    "--pids-limit",
+    "64",
+    "--memory",
+    "192m",
+    "--cpus",
+    "0.5",
+    "--sysctl",
+    "net.ipv4.ip_unprivileged_port_start=0",
+    "--mount",
+    `type=bind,src=${repositoryPath("scripts/integration/servarr-fixture-server.mjs")},dst=/fixture/servarr-fixture-server.mjs,readonly`,
+    "--mount",
+    `type=bind,src=${resolve(context.tlsDirectory, "server.crt")},dst=/fixture-tls/server.crt,readonly`,
+    "--mount",
+    `type=bind,src=${resolve(context.tlsDirectory, "server.key")},dst=/fixture-tls/server.key,readonly`,
+    SERVARR_FIXTURE_SERVER_IMAGE,
+    "node",
+    "/fixture/servarr-fixture-server.mjs",
+  ];
 }
 
 function commonContainerArguments(context) {
@@ -317,19 +477,37 @@ function commonContainerArguments(context) {
   arguments_.push(
     "--mount",
     `type=bind,src=${context.configDirectory},dst=/config`,
-    SERVARR_SERVICE_IMAGES[context.service],
   );
+  if (context.service === "radarr" || context.service === "sonarr") {
+    arguments_.push(
+      "--env",
+      "SSL_CERT_FILE=/fixture-tls/ca.crt",
+      "--mount",
+      `type=bind,src=${resolve(context.tlsDirectory, "ca.crt")},dst=/fixture-tls/ca.crt,readonly`,
+      "--mount",
+      `type=bind,src=${context.dataDirectory},dst=/data`,
+    );
+  }
+  arguments_.push(SERVARR_SERVICE_IMAGES[context.service]);
   return arguments_;
 }
 
-async function startContainer(context) {
+async function acquireFixtureImage(image) {
   try {
-    await acquirePinnedDockerImage(SERVARR_SERVICE_IMAGES[context.service]);
+    await acquirePinnedDockerImage(image);
   } catch (error) {
     if (error instanceof DockerImagePullError) {
       throw new ServarrFixtureFailure(error.code);
     }
     throw error;
+  }
+}
+
+async function startContainer(context) {
+  await acquireFixtureImage(SERVARR_SERVICE_IMAGES[context.service]);
+  if (MUTATION_FIXTURE_SERVICES.has(context.service)) {
+    await acquireFixtureImage(SERVARR_FIXTURE_SERVER_IMAGE);
+    await createFixtureCertificates(context);
   }
   runDocker(
     ["network", "create", "--driver", "bridge", "--internal", context.networkName],
@@ -337,6 +515,22 @@ async function startContainer(context) {
     "network_create_failed",
   );
   context.networkCreated = true;
+  if (MUTATION_FIXTURE_SERVICES.has(context.service)) {
+    runDocker(fixtureServerContainerArguments(context), 60_000, "fixture_server_start_failed");
+    context.fixtureServerCreated = true;
+    parseContainerState(
+      runDocker(
+        [
+          "inspect",
+          "--format",
+          "{{.State.Running}}:{{.State.ExitCode}}",
+          context.fixtureServerName,
+        ],
+        30_000,
+        "fixture_server_state_failed",
+      ),
+    );
+  }
   runDocker(commonContainerArguments(context), 180_000, "container_start_failed");
   context.containerCreated = true;
   parseContainerState(
@@ -370,8 +564,7 @@ async function startContainer(context) {
 
 function createContainerLocalTransport(context) {
   return async (url, init) => {
-    if (init.signal.aborted) throw new ServarrFixtureFailure("fixture_transport_aborted");
-    if (init.body !== undefined) throw new ServarrFixtureFailure("fixture_transport_body_blocked");
+    if (init.signal?.aborted) throw new ServarrFixtureFailure("fixture_transport_aborted");
     const arguments_ = [
       "exec",
       "--interactive",
@@ -394,7 +587,7 @@ function createContainerLocalTransport(context) {
     const execution = spawnSync("docker", arguments_, {
       cwd: REPOSITORY_ROOT,
       encoding: null,
-      input: createCurlHeaderConfiguration(init.headers),
+      input: createCurlHeaderConfiguration(init.headers, init.body),
       maxBuffer: MAX_RESPONSE_BYTES + 1_024,
       stdio: ["pipe", "pipe", "pipe"],
       timeout: REQUEST_TIMEOUT_MS + 5_000,
@@ -413,20 +606,28 @@ function createContainerLocalTransport(context) {
   };
 }
 
-export function createCurlHeaderConfiguration(headers) {
+export function createCurlHeaderConfiguration(headers, body) {
   if (!(headers instanceof Headers)) throw new ServarrFixtureFailure("fixture_headers_invalid");
-  return Buffer.from(
-    [...headers.entries()]
-      .map(([name, value]) => {
-        if (/[^!#$%&'*+.^_`|~0-9A-Za-z-]/u.test(name) || /[\r\n\0]/u.test(value)) {
-          throw new ServarrFixtureFailure("fixture_headers_invalid");
-        }
-        const escaped = `${name}: ${value}`.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-        return `header = "${escaped}"`;
-      })
-      .join("\n") + "\n",
-    "utf8",
-  );
+  if (
+    body !== undefined &&
+    (typeof body !== "string" ||
+      Buffer.byteLength(body, "utf8") > MAX_RESPONSE_BYTES ||
+      /[\r\n\0]/u.test(body))
+  ) {
+    throw new ServarrFixtureFailure("fixture_body_invalid");
+  }
+  const lines = [...headers.entries()].map(([name, value]) => {
+    if (/[^!#$%&'*+.^_`|~0-9A-Za-z-]/u.test(name) || /[\r\n\0]/u.test(value)) {
+      throw new ServarrFixtureFailure("fixture_headers_invalid");
+    }
+    const escaped = `${name}: ${value}`.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+    return `header = "${escaped}"`;
+  });
+  if (body !== undefined) {
+    const escapedBody = body.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+    lines.push(`data-binary = "${escapedBody}"`);
+  }
+  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
 
 async function readApiKey(context) {
@@ -470,6 +671,187 @@ function createAdapter(context, server, apiKey) {
   }
 }
 
+function boundedJson(value, failureCode) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    JSON.stringify(value).length > MAX_RESPONSE_BYTES
+  ) {
+    throw new ServarrFixtureFailure(failureCode);
+  }
+  return value;
+}
+
+async function fixtureApiJson(context, server, apiKey, path, options = {}) {
+  if (!/^\/api\/v[13]\/[A-Za-z0-9?&=/_-]{1,240}$/u.test(path)) {
+    throw new ServarrFixtureFailure("fixture_api_path_invalid");
+  }
+  const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+  const headers = new Headers({ accept: "application/json", "X-Api-Key": apiKey });
+  if (body !== undefined) headers.set("content-type", "application/json");
+  const init = {
+    ...(body === undefined ? {} : { body }),
+    headers,
+    method: options.method ?? "GET",
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  };
+  let response;
+  try {
+    const url = new URL(path, server.baseUrl);
+    response = server.transport ? await server.transport(url, init) : await fetch(url, init);
+  } catch (error) {
+    throw new ServarrFixtureFailure("fixture_api_transport_failed", { cause: error });
+  }
+  if (!response.ok) throw new ServarrFixtureFailure("fixture_api_response_failed");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_RESPONSE_BYTES) {
+    throw new ServarrFixtureFailure("fixture_api_response_invalid");
+  }
+  try {
+    return boundedJson(JSON.parse(new TextDecoder().decode(bytes)), "fixture_api_response_invalid");
+  } catch (error) {
+    if (error instanceof ServarrFixtureFailure) throw error;
+    throw new ServarrFixtureFailure("fixture_api_response_invalid", { cause: error });
+  }
+}
+
+export function selectQualityProfileId(profiles) {
+  if (!Array.isArray(profiles) || profiles.length < 1 || profiles.length > 256) {
+    throw new ServarrFixtureFailure("quality_profile_invalid");
+  }
+  const identifiers = profiles
+    .map((profile) => profile?.id)
+    .filter((identifier) => Number.isInteger(identifier) && identifier > 0)
+    .sort((left, right) => left - right);
+  if (identifiers.length === 0) throw new ServarrFixtureFailure("quality_profile_invalid");
+  return identifiers[0];
+}
+
+export function configureProwlarrFixtureIndexer(templates) {
+  if (!Array.isArray(templates) || templates.length < 1 || templates.length > 512) {
+    throw new ServarrFixtureFailure("indexer_schema_invalid");
+  }
+  const template = templates.find(
+    (candidate) =>
+      candidate?.implementation === "Newznab" && candidate.configContract === "NewznabSettings",
+  );
+  if (!template || !Array.isArray(template.fields) || template.fields.length > 256) {
+    throw new ServarrFixtureFailure("indexer_schema_invalid");
+  }
+  const requiredFields = new Set(["apiPath", "baseUrl"]);
+  const fields = template.fields.map((field) => {
+    if (!field || typeof field !== "object" || typeof field.name !== "string") {
+      throw new ServarrFixtureFailure("indexer_schema_invalid");
+    }
+    if (field.name === "baseUrl") {
+      requiredFields.delete(field.name);
+      return { ...field, value: "http://fixture-indexer:8080" };
+    }
+    if (field.name === "apiPath") {
+      requiredFields.delete(field.name);
+      return { ...field, value: "/api" };
+    }
+    if (field.name === "apiKey") return { ...field, value: "" };
+    return structuredClone(field);
+  });
+  if (requiredFields.size > 0) throw new ServarrFixtureFailure("indexer_schema_invalid");
+  return {
+    ...structuredClone(template),
+    enable: true,
+    enableAutomaticSearch: false,
+    enableInteractiveSearch: true,
+    enableRss: false,
+    fields,
+    id: 0,
+    name: "Omnifin deterministic fixture indexer",
+    redirect: true,
+  };
+}
+
+function validateProvisionedMedia(resource, context) {
+  const upstreamId = context.service === "radarr" ? resource?.tmdbId : resource?.tvdbId;
+  const expectedUpstreamId =
+    context.service === "radarr" ? FIXTURE_MOVIE_TMDB_ID : FIXTURE_SERIES_TVDB_ID;
+  if (
+    !resource ||
+    typeof resource !== "object" ||
+    !Number.isInteger(resource.id) ||
+    resource.id < 1 ||
+    upstreamId !== expectedUpstreamId ||
+    resource.monitored !== true
+  ) {
+    throw new ServarrFixtureFailure("fixture_title_provisioning_invalid");
+  }
+  return resource.id;
+}
+
+async function provisionMediaFixture(context, server, apiKey) {
+  const qualityProfiles = await fixtureApiJson(context, server, apiKey, "/api/v3/qualityprofile");
+  const qualityProfileId = selectQualityProfileId(qualityProfiles);
+  await fixtureApiJson(context, server, apiKey, "/api/v3/rootfolder", {
+    body: { path: "/data" },
+    method: "POST",
+  });
+  const isMovie = context.service === "radarr";
+  const resource = await fixtureApiJson(
+    context,
+    server,
+    apiKey,
+    isMovie ? "/api/v3/movie" : "/api/v3/series",
+    {
+      body: isMovie
+        ? {
+            addOptions: { searchForMovie: false },
+            minimumAvailability: "released",
+            monitored: true,
+            qualityProfileId,
+            rootFolderPath: "/data",
+            tags: [],
+            title: "The Deterministic Meridian",
+            tmdbId: FIXTURE_MOVIE_TMDB_ID,
+          }
+        : {
+            addOptions: {
+              monitor: "all",
+              searchForCutoffUnmetEpisodes: false,
+              searchForMissingEpisodes: false,
+            },
+            monitored: true,
+            monitorNewItems: "all",
+            qualityProfileId,
+            rootFolderPath: "/data",
+            seasonFolder: true,
+            seriesType: "standard",
+            tags: [],
+            title: "The Deterministic Signal",
+            tvdbId: FIXTURE_SERIES_TVDB_ID,
+          },
+      method: "POST",
+    },
+  );
+  return validateProvisionedMedia(resource, context);
+}
+
+async function provisionProwlarrFixture(context, server, apiKey) {
+  const templates = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer/schema");
+  const configured = configureProwlarrFixtureIndexer(templates);
+  const resource = await fixtureApiJson(context, server, apiKey, "/api/v1/indexer?forceSave=true", {
+    body: configured,
+    method: "POST",
+  });
+  if (
+    !resource ||
+    typeof resource !== "object" ||
+    !Number.isInteger(resource.id) ||
+    resource.id < 1 ||
+    resource.name !== configured.name
+  ) {
+    throw new ServarrFixtureFailure("fixture_indexer_provisioning_invalid");
+  }
+  return resource.id;
+}
+
 function connectorFailureCode(stage, error) {
   if (!/^[a-z][a-z0-9_]{0,63}$/u.test(stage)) {
     throw new ServarrFixtureFailure("diagnostic_stage_invalid");
@@ -507,7 +889,51 @@ async function verifyCredentialRejection(context, server, apiKey) {
   }
 }
 
-async function verifyRadarrOrSonarr(context, adapter) {
+function assertMonitoringState(state, context, mediaId, monitored, failureCode) {
+  const expectedKind = context.service === "radarr" ? "movie" : "series";
+  if (
+    state?.monitored !== monitored ||
+    state?.target?.kind !== expectedKind ||
+    state.target.mediaId !== mediaId ||
+    state.target.service !== context.service
+  ) {
+    throw new ServarrFixtureFailure(failureCode);
+  }
+}
+
+async function verifyMonitoringMutation(context, adapter, mediaId) {
+  const target = { mediaId, service: context.service };
+  const initial = await connectorOperation("monitoring_read", () =>
+    adapter.readAcquisitionMonitoring(target),
+  );
+  assertMonitoringState(initial, context, mediaId, true, "monitoring_read_invalid");
+  const updated = await connectorOperation("monitoring_update", () =>
+    adapter.updateAcquisitionMonitoring({
+      ...target,
+      expectedMonitored: true,
+      monitored: false,
+    }),
+  );
+  assertMonitoringState(updated, context, mediaId, false, "monitoring_update_invalid");
+  const fresh = await connectorOperation("monitoring_fresh_read", () =>
+    adapter.readAcquisitionMonitoring(target),
+  );
+  assertMonitoringState(fresh, context, mediaId, false, "monitoring_fresh_read_invalid");
+  const restored = await connectorOperation("monitoring_restore", () =>
+    adapter.updateAcquisitionMonitoring({
+      ...target,
+      expectedMonitored: false,
+      monitored: true,
+    }),
+  );
+  assertMonitoringState(restored, context, mediaId, true, "monitoring_restore_invalid");
+  const finalState = await connectorOperation("monitoring_restore_read", () =>
+    adapter.readAcquisitionMonitoring(target),
+  );
+  assertMonitoringState(finalState, context, mediaId, true, "monitoring_restore_read_invalid");
+}
+
+async function verifyRadarrOrSonarr(context, server, apiKey, adapter) {
   const systemHealth = await connectorOperation("system_health_read", () =>
     adapter.readSystemHealth(),
   );
@@ -521,9 +947,13 @@ async function verifyRadarrOrSonarr(context, adapter) {
   if (calendar.truncated !== false) throw new ServarrFixtureFailure("calendar_empty_state_invalid");
   const storage = await connectorOperation("storage_read", () => adapter.readStorageCapacity());
   if (!Array.isArray(storage)) throw new ServarrFixtureFailure("storage_read_invalid");
+  const mediaId = await connectorOperation("fixture_title_provisioning", () =>
+    provisionMediaFixture(context, server, apiKey),
+  );
+  await verifyMonitoringMutation(context, adapter, mediaId);
 }
 
-async function verifyProwlarr(adapter) {
+async function verifyProwlarr(context, server, apiKey, adapter) {
   const systemHealth = await connectorOperation("system_health_read", () =>
     adapter.readSystemHealth(),
   );
@@ -545,6 +975,25 @@ async function verifyProwlarr(adapter) {
   );
   assertEmptyArray(failures.items, "failure_empty_state_invalid");
   if (failures.hasMore) throw new ServarrFixtureFailure("failure_empty_state_invalid");
+  const indexerId = await connectorOperation("fixture_indexer_provisioning", () =>
+    provisionProwlarrFixture(context, server, apiKey),
+  );
+  const provisioned = await connectorOperation("indexer_provisioned_read", () =>
+    adapter.readIndexerIntelligencePage({ limit: 25 }),
+  );
+  if (
+    provisioned.items.length !== 1 ||
+    provisioned.items[0]?.id !== indexerId ||
+    provisioned.summary.total !== 1
+  ) {
+    throw new ServarrFixtureFailure("indexer_provisioned_read_invalid");
+  }
+  const result = await connectorOperation("indexer_safe_test", () =>
+    adapter.testIndexer(indexerId),
+  );
+  if (result.indexerId !== indexerId || result.outcome !== "passed") {
+    throw new ServarrFixtureFailure("indexer_safe_test_invalid");
+  }
 }
 
 async function verifyBazarr(adapter) {
@@ -574,9 +1023,9 @@ async function runFixture(context, server) {
   if (context.service === "bazarr") {
     await connectorOperation("empty_library_read", () => verifyBazarr(adapter));
   } else if (context.service === "prowlarr") {
-    await verifyProwlarr(adapter);
+    await verifyProwlarr(context, server, apiKey, adapter);
   } else {
-    await verifyRadarrOrSonarr(context, adapter);
+    await verifyRadarrOrSonarr(context, server, apiKey, adapter);
   }
   return validateSanitizedServarrReport({
     checks: Object.fromEntries(SERVICE_CHECKS[context.service].map((name) => [name, "passed"])),
@@ -638,6 +1087,21 @@ async function teardownContext(context, strict) {
     }
   } else {
     bestEffortDocker(["rm", "--force", context.containerName]);
+  }
+  if (context.fixtureServerCreated) {
+    try {
+      runDocker(
+        ["rm", "--force", context.fixtureServerName],
+        30_000,
+        "fixture_server_teardown_failed",
+      );
+      context.fixtureServerCreated = false;
+    } catch (error) {
+      failure ??= error;
+      bestEffortDocker(["rm", "--force", context.fixtureServerName]);
+    }
+  } else {
+    bestEffortDocker(["rm", "--force", context.fixtureServerName]);
   }
   if (context.networkCreated) {
     try {

@@ -5,14 +5,18 @@ import test from "node:test";
 import { parse } from "yaml";
 
 import {
+  SERVARR_FIXTURE_SERVER_IMAGE,
   SERVARR_SERVICE_IMAGES,
   SERVARR_SERVICE_VERSIONS,
+  configureProwlarrFixtureIndexer,
   containerIsolationArguments,
   createCurlHeaderConfiguration,
+  fixtureServerContainerArguments,
   parseBazarrApiKey,
   parseContainerAddress,
   parseContainerState,
   parseServarrApiKey,
+  selectQualityProfileId,
   validateSanitizedServarrFailureReport,
   validateSanitizedServarrReport,
 } from "../integration/servarr-services.mjs";
@@ -31,7 +35,9 @@ const EXPECTED_CHECKS = Object.freeze({
     "authentication",
     "credentialRejection",
     "failureRead",
+    "fixtureIndexerProvisioning",
     "indexerRead",
+    "indexerSafeTest",
     "systemHealthRead",
     "versionDiscovery",
   ],
@@ -39,6 +45,10 @@ const EXPECTED_CHECKS = Object.freeze({
     "authentication",
     "calendarRead",
     "credentialRejection",
+    "fixtureTitleProvisioning",
+    "monitoringRead",
+    "monitoringRestore",
+    "monitoringUpdate",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -47,6 +57,10 @@ const EXPECTED_CHECKS = Object.freeze({
     "authentication",
     "calendarRead",
     "credentialRejection",
+    "fixtureTitleProvisioning",
+    "monitoringRead",
+    "monitoringRestore",
+    "monitoringUpdate",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -74,6 +88,7 @@ test("pins exact current service images by immutable index digest", () => {
   for (const [service, image] of Object.entries(SERVARR_SERVICE_IMAGES)) {
     assert.match(image, EXPECTED_IMAGE_PATTERNS[service]);
   }
+  assert.match(SERVARR_FIXTURE_SERVER_IMAGE, /^node:24\.18\.0-trixie-slim@sha256:[a-f0-9]{64}$/u);
 });
 
 test("runs LinuxServer fixtures as the host user with a private writable runtime", () => {
@@ -86,6 +101,37 @@ test("runs LinuxServer fixtures as the host user with a private writable runtime
     "/run:uid=1001,gid=127,exec",
   ]);
   assert.throws(() => containerIsolationArguments(-1, 127), /host_identity_unavailable/u);
+});
+
+test("runs the mutation sidecar read-only on the internal network without published ports", () => {
+  const arguments_ = fixtureServerContainerArguments({
+    fixtureServerName: "fixture-server",
+    networkName: "fixture-network",
+    tlsDirectory: "/tmp/fixture-tls",
+  });
+  assert.ok(arguments_.includes("--read-only"));
+  assert.deepEqual(arguments_.slice(arguments_.indexOf("--cap-drop"), arguments_.indexOf("--cap-drop") + 2), [
+    "--cap-drop",
+    "ALL",
+  ]);
+  assert.ok(arguments_.includes("--network-alias"));
+  assert.ok(arguments_.includes("api.radarr.video"));
+  assert.ok(arguments_.includes("skyhook.sonarr.tv"));
+  assert.ok(arguments_.includes("fixture-indexer"));
+  assert.ok(arguments_.includes(SERVARR_FIXTURE_SERVER_IMAGE));
+  assert.ok(arguments_.some((argument) => argument.includes("server.crt")));
+  assert.ok(arguments_.some((argument) => argument.includes("server.key")));
+  assert.equal(arguments_.some((argument) => argument.includes("ca.key")), false);
+  assert.equal(arguments_.includes("--publish"), false);
+  assert.equal(arguments_.includes("-p"), false);
+  assert.deepEqual(arguments_.slice(1, 3), ["--pull", "never"]);
+
+  const source = readFileSync(
+    new URL("../integration/servarr-fixture-server.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("fetch("), false);
+  assert.equal(source.includes("request("), false);
 });
 
 test("accepts only one running state and one private fixture address", () => {
@@ -116,6 +162,59 @@ test("keeps container-local request headers out of subprocess arguments", () => 
   ).toString("utf8");
   assert.equal(configuration, 'header = "x-api-key: private\\"value\\\\suffix"\n');
   assert.equal(configuration.includes("\r"), false);
+  assert.equal(
+    createCurlHeaderConfiguration(
+      new Headers({ "content-type": "application/json" }),
+      '{"monitored":false}',
+    ).toString("utf8"),
+    'header = "content-type: application/json"\ndata-binary = "{\\"monitored\\":false}"\n',
+  );
+  assert.throws(
+    () => createCurlHeaderConfiguration(new Headers(), "unsafe\nbody"),
+    /fixture_body_invalid/u,
+  );
+});
+
+test("selects one bounded quality profile without publishing its identifier", () => {
+  assert.equal(selectQualityProfileId([{ id: 7 }, { id: 2 }]), 2);
+  assert.throws(() => selectQualityProfileId([]), /quality_profile_invalid/u);
+  assert.throws(() => selectQualityProfileId([{ id: "1" }]), /quality_profile_invalid/u);
+});
+
+test("configures only the private Newznab fixture fields", () => {
+  const configured = configureProwlarrFixtureIndexer([
+    {
+      configContract: "NewznabSettings",
+      enable: false,
+      fields: [
+        { name: "baseUrl", value: "https://public.invalid" },
+        { name: "apiPath", value: "/public" },
+        { name: "apiKey", value: "private" },
+        { name: "categories", value: [2000, 5000] },
+      ],
+      implementation: "Newznab",
+      name: "Newznab",
+    },
+  ]);
+  assert.equal(configured.enable, true);
+  assert.equal(configured.enableRss, false);
+  assert.equal(configured.enableAutomaticSearch, false);
+  assert.equal(configured.enableInteractiveSearch, true);
+  assert.equal(configured.redirect, true);
+  assert.equal(
+    configured.fields.find((field) => field.name === "baseUrl").value,
+    "http://fixture-indexer:8080",
+  );
+  assert.equal(configured.fields.find((field) => field.name === "apiPath").value, "/api");
+  assert.equal(configured.fields.find((field) => field.name === "apiKey").value, "");
+  assert.deepEqual(
+    configured.fields.find((field) => field.name === "categories").value,
+    [2000, 5000],
+  );
+  assert.throws(
+    () => configureProwlarrFixtureIndexer([{ implementation: "Torznab", fields: [] }]),
+    /indexer_schema_invalid/u,
+  );
 });
 
 test("accepts only closed reports without identifiers, paths, ports, or credentials", () => {
@@ -181,7 +280,9 @@ test("the protected connector aggregate runs every isolated service", () => {
   assert.equal(JSON.stringify(fixture).includes("secrets."), false);
   const build = fixture.steps.find((step) => step.name === "Build service connectors");
   assert.equal(build.run, "pnpm --filter @omnifin/connectors... build");
-  const exercise = fixture.steps.find((step) => step.name === "Exercise isolated service reads");
+  const exercise = fixture.steps.find(
+    (step) => step.name === "Exercise isolated service reads and safe mutations",
+  );
   assert.match(exercise.run, /--service "\$OMNIFIN_SERVARR_SERVICE"/u);
   assert.match(exercise.run, /servarr-services\/\$OMNIFIN_SERVARR_SERVICE\/report\.json/u);
   const diagnostics = fixture.steps.find(
