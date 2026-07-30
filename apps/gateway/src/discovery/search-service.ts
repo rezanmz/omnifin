@@ -1,7 +1,15 @@
-import { SeerrAdapter } from "@omnifin/connectors/adapters/seerr";
-import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
-import { connectorCredentialInputSchema } from "@omnifin/contracts/connectors";
 import {
+  SeerrAdapter,
+  type SeerrDiscoveryArtwork,
+  type SeerrDiscoveryFeedPage,
+} from "@omnifin/connectors/adapters/seerr";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
+import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
+import {
+  DISCOVERY_FEED_MAX_ITEMS_PER_RAIL,
+  discoveryFeedQuerySchema,
+  discoveryFeedResponseSchema,
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseSchema,
@@ -10,6 +18,9 @@ import {
   discoveryPersonDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
+  type DiscoveryFeedQuery,
+  type DiscoveryFeedRailKind,
+  type DiscoveryFeedResponse,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryMediaDetailResponse,
@@ -20,12 +31,16 @@ import {
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { requirePermission } from "../auth/authorization.js";
 import { EnvelopeCipher } from "../security/crypto.js";
+import {
+  DiscoveryArtworkReferenceError,
+  DiscoveryArtworkReferenceService,
+} from "./artwork-reference-service.js";
 
 interface DiscoveryConnectorRow {
   baseUrl: string;
@@ -47,6 +62,11 @@ export interface DiscoverySearchContext {
 }
 
 export interface DiscoverySearchAdapter {
+  discover?(
+    kind: DiscoveryFeedRailKind,
+    input: DiscoveryFeedQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryFeedPage>;
   detail(
     params: DiscoveryMediaDetailParams,
     query: DiscoveryMediaDetailQuery,
@@ -58,6 +78,11 @@ export interface DiscoverySearchAdapter {
     signal?: AbortSignal,
   ): Promise<DiscoveryPersonDetailResponse>;
   search(input: DiscoverySearchQuery, signal?: AbortSignal): Promise<DiscoverySearchResponse>;
+  readDiscoveryArtwork?(
+    path: string,
+    kind: "backdrop" | "poster",
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryArtwork>;
 }
 
 export interface DiscoverySearchDependencies {
@@ -79,6 +104,60 @@ export class DiscoverySearchError extends Error {
     this.name = "DiscoverySearchError";
     this.reason = reason;
   }
+}
+
+export class DiscoveryArtworkError extends Error {
+  public readonly reason: "not_found" | "unavailable";
+
+  public constructor(reason: "not_found" | "unavailable", options?: ErrorOptions) {
+    super(
+      reason === "not_found"
+        ? "The requested discovery artwork is not available."
+        : "Discovery artwork is temporarily unavailable.",
+      options,
+    );
+    this.name = "DiscoveryArtworkError";
+    this.reason = reason;
+  }
+}
+
+const FEED_KINDS = [
+  "trending",
+  "popular_movies",
+  "popular_series",
+  "upcoming",
+] as const satisfies readonly DiscoveryFeedRailKind[];
+
+function feedFailure(
+  error: unknown,
+  kind: DiscoveryFeedRailKind,
+  occurredAt: Date,
+): PartialFailure {
+  if (error instanceof SafeConnectorError) {
+    return {
+      code: error.code,
+      message: "The discovery rail could not be loaded.",
+      occurredAt: occurredAt.toISOString(),
+      operation: `discovery.feed.${kind}`,
+      retryable: error.retryable,
+      service: "seerr",
+      ...(error.retryAfterSeconds === undefined
+        ? {}
+        : { retryAfterSeconds: error.retryAfterSeconds }),
+    };
+  }
+  return {
+    code: "upstream_error",
+    message: "The discovery rail could not be loaded.",
+    occurredAt: occurredAt.toISOString(),
+    operation: `discovery.feed.${kind}`,
+    retryable: false,
+    service: "seerr",
+  };
+}
+
+function isAbort(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
 }
 
 function credentialContext(connectorId: string) {
@@ -133,6 +212,7 @@ export class DiscoverySearchService {
   readonly #clock: () => Date;
   readonly #createAdapter: (config: OptionalApiKeyConnectorConfig) => DiscoverySearchAdapter;
   readonly #database: DatabaseHandle;
+  readonly #references: DiscoveryArtworkReferenceService;
 
   public constructor(
     database: DatabaseHandle,
@@ -143,6 +223,140 @@ export class DiscoverySearchService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? ((input) => new SeerrAdapter(input));
+    this.#references = new DiscoveryArtworkReferenceService(database, config, this.#clock);
+  }
+
+  public async feed(
+    input: DiscoveryFeedQuery,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryFeedResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
+    const query = discoveryFeedQuerySchema.parse(input);
+    const row = this.#connector();
+    const adapter = this.#adapterFor(row);
+    const discover = adapter.discover?.bind(adapter);
+    if (!discover) throw new DiscoverySearchError("connector_integrity_failure");
+    const occurredAt = this.#clock();
+    const rawRails = await Promise.all(
+      FEED_KINDS.map(async (kind) => {
+        try {
+          return { failure: null, kind, page: await discover(kind, query, signal) } as const;
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          return { failure: feedFailure(error, kind, occurredAt), kind, page: null } as const;
+        }
+      }),
+    );
+    const artworkInputs = rawRails.flatMap((rail) =>
+      rail.page === null
+        ? []
+        : rail.page.items
+            .slice(0, DISCOVERY_FEED_MAX_ITEMS_PER_RAIL)
+            .flatMap(({ artwork }) => [
+              ...(artwork.backdropPath === null
+                ? []
+                : [{ kind: "backdrop" as const, path: artwork.backdropPath }]),
+              ...(artwork.posterPath === null
+                ? []
+                : [{ kind: "poster" as const, path: artwork.posterPath }]),
+            ]),
+    );
+    let artworkReferences: string[];
+    try {
+      artworkReferences = this.#references.create(principal.userId, row.id, artworkInputs);
+    } catch (error) {
+      throw new DiscoverySearchError("storage_failure", { cause: error });
+    }
+    let referenceIndex = 0;
+    const artworkPath = (path: string | null) => {
+      if (path === null) return null;
+      const reference = artworkReferences[referenceIndex++];
+      if (!reference) throw new DiscoverySearchError("storage_failure");
+      return `/v1/discovery/artwork/${reference}`;
+    };
+    const rails = rawRails.map((rail) => {
+      if (rail.page === null) {
+        return {
+          failure: rail.failure,
+          items: [],
+          kind: rail.kind,
+          totalResults: 0,
+          truncated: false,
+        };
+      }
+      const items = rail.page.items
+        .slice(0, DISCOVERY_FEED_MAX_ITEMS_PER_RAIL)
+        .map(({ artwork, media }) => ({
+          ...media,
+          artwork: {
+            backdropPath: artworkPath(artwork.backdropPath),
+            posterPath: artworkPath(artwork.posterPath),
+          },
+        }));
+      return {
+        failure: null,
+        items,
+        kind: rail.kind,
+        totalResults: rail.page.totalResults,
+        truncated: rail.page.totalResults > items.length,
+      };
+    });
+    if (referenceIndex !== artworkReferences.length) {
+      throw new DiscoverySearchError("storage_failure");
+    }
+    const failures = rails.flatMap((rail) => (rail.failure === null ? [] : [rail.failure]));
+    const itemCount = rails.reduce((total, rail) => total + rail.items.length, 0);
+    const state =
+      failures.length === FEED_KINDS.length
+        ? "unavailable"
+        : failures.length > 0
+          ? "degraded"
+          : itemCount === 0
+            ? "empty"
+            : "complete";
+    return discoveryFeedResponseSchema.parse({
+      failures,
+      generatedAt: occurredAt.toISOString(),
+      rails,
+      state,
+    });
+  }
+
+  public async readArtwork(
+    context: DiscoverySearchContext,
+    referenceId: string,
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoveryArtworkError("not_found");
+    let reference;
+    try {
+      reference = this.#references.resolve(principal.userId, referenceId);
+    } catch (error) {
+      if (error instanceof DiscoveryArtworkReferenceError) {
+        throw new DiscoveryArtworkError("not_found", { cause: error });
+      }
+      throw error;
+    }
+    try {
+      const row = this.#connector();
+      if (row.id !== reference.connectorId) throw new DiscoveryArtworkError("not_found");
+      const adapter = this.#adapterFor(row);
+      if (!adapter.readDiscoveryArtwork) throw new DiscoveryArtworkError("unavailable");
+      const image = await adapter.readDiscoveryArtwork(reference.path, reference.kind, signal);
+      const digest = createHash("sha256").update(image.body).digest("base64url").slice(0, 22);
+      return Object.freeze({
+        body: image.body,
+        contentType: image.contentType,
+        etag: `"discovery_artwork_${digest}"`,
+      });
+    } catch (error) {
+      if (error instanceof DiscoveryArtworkError) throw error;
+      if (isAbort(error)) throw error;
+      throw new DiscoveryArtworkError("unavailable", { cause: error });
+    }
   }
 
   public async search(
@@ -185,7 +399,10 @@ export class DiscoverySearchService {
   }
 
   #adapter() {
-    const row = this.#connector();
+    return this.#adapterFor(this.#connector());
+  }
+
+  #adapterFor(row: DiscoveryConnectorRow) {
     const secrets = connectorSecrets(row, this.#cipher);
     const tlsPolicy =
       row.tlsPolicy === "strict" || row.tlsPolicy === "allow_self_signed"

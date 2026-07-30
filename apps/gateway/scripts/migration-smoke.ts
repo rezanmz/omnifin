@@ -18,6 +18,7 @@ const requiredTables = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "discovery_artwork_references",
   "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
@@ -83,6 +84,14 @@ const requiredColumns = {
     "mutation_started_at",
     "response_json",
     "state",
+    "user_id",
+  ],
+  discovery_artwork_references: [
+    "connector_id",
+    "encrypted_payload",
+    "expires_at",
+    "item_digest",
+    "last_used_at",
     "user_id",
   ],
   external_issue_references: [
@@ -246,6 +255,11 @@ const requiredIndexes = {
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
   connector_configs: ["connector_configs_id_type_unique"],
+  discovery_artwork_references: [
+    "discovery_artwork_references_expiry_idx",
+    "discovery_artwork_references_user_item_unique",
+    "discovery_artwork_references_user_last_used_idx",
+  ],
   download_queue_removal_operations: [
     "download_queue_removal_operations_item_idx",
     "download_queue_removal_operations_state_created_idx",
@@ -452,8 +466,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0017_download_queue_removals",
-  "Current migration journal must end at migration 0017_download_queue_removals.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0018_discovery_artwork_references",
+  "Current migration journal must end at migration 0018_discovery_artwork_references.",
 );
 
 try {
@@ -561,6 +576,23 @@ try {
       .map(({ from, to }) => `${from}:${to}`);
     if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
       throw new Error("Migration is missing the user-bound media reference foreign key.");
+    }
+
+    const discoveryArtworkForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(discovery_artwork_references)",
+    ) as { from: string; table: string; to: string }[];
+    for (const [column, table] of [
+      ["user_id", "users"],
+      ["connector_id", "connector_configs"],
+    ] as const) {
+      if (
+        !discoveryArtworkForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the discovery-artwork ${column} foreign key.`);
+      }
     }
 
     const playbackForeignKeys = database.sqlite.pragma("foreign_key_list(playback_sessions)") as {

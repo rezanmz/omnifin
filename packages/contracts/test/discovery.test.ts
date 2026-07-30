@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  discoveryFeedQueryJsonSchema,
+  discoveryFeedQuerySchema,
+  discoveryFeedResponseJsonSchema,
+  discoveryFeedResponseSchema,
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailParamsJsonSchema,
   discoveryMediaDetailQuerySchema,
@@ -32,6 +36,114 @@ const movie = {
 } as const;
 
 describe("discovery contracts", () => {
+  it("normalizes a complete bounded discovery feed with opaque artwork", () => {
+    const item = {
+      ...movie,
+      artwork: {
+        backdropPath: "/v1/discovery/artwork/discovery_art_abcdefghijklmnopqrstuv",
+        posterPath: "/v1/discovery/artwork/discovery_art_zyxwvutsrqponmlkjihgfe",
+      },
+    } as const;
+    const response = discoveryFeedResponseSchema.parse({
+      failures: [],
+      generatedAt: "2026-07-30T05:00:00.000Z",
+      rails: [
+        { failure: null, items: [item], kind: "trending", totalResults: 20, truncated: true },
+        {
+          failure: null,
+          items: [{ ...item, id: "movie:551", tmdbId: 551 }],
+          kind: "popular_movies",
+          totalResults: 1,
+          truncated: false,
+        },
+        {
+          failure: null,
+          items: [
+            {
+              ...item,
+              id: "series:1399",
+              kind: "series",
+              tmdbId: 1399,
+            },
+          ],
+          kind: "popular_series",
+          totalResults: 1,
+          truncated: false,
+        },
+        { failure: null, items: [], kind: "upcoming", totalResults: 0, truncated: false },
+      ],
+      state: "complete",
+    });
+
+    expect(discoveryFeedQuerySchema.parse({ language: "en-CA" })).toEqual({ language: "en-CA" });
+    expect(response.rails[0]?.items[0]?.artwork.posterPath).toMatch(
+      /^\/v1\/discovery\/artwork\/discovery_art_/u,
+    );
+    expect(JSON.stringify(response)).not.toContain("tmdb.org");
+  });
+
+  it("requires feed state and failures to match all four rails", () => {
+    const failure = {
+      code: "timeout",
+      message: "Discovery did not respond before the deadline.",
+      occurredAt: "2026-07-30T05:00:00.000Z",
+      operation: "discovery.feed.trending",
+      retryable: true,
+      service: "seerr",
+    } as const;
+    const rails = [
+      { failure, items: [], kind: "trending", totalResults: 0, truncated: false },
+      { failure: null, items: [], kind: "popular_movies", totalResults: 0, truncated: false },
+      { failure: null, items: [], kind: "popular_series", totalResults: 0, truncated: false },
+      { failure: null, items: [], kind: "upcoming", totalResults: 0, truncated: false },
+    ] as const;
+
+    expect(
+      discoveryFeedResponseSchema.parse({
+        failures: [failure],
+        generatedAt: "2026-07-30T05:00:00.000Z",
+        rails,
+        state: "degraded",
+      }).state,
+    ).toBe("degraded");
+    expect(
+      discoveryFeedResponseSchema.safeParse({
+        failures: [],
+        generatedAt: "2026-07-30T05:00:00.000Z",
+        rails,
+        state: "empty",
+      }).success,
+    ).toBe(false);
+    expect(
+      discoveryFeedResponseSchema.safeParse({
+        failures: [failure],
+        generatedAt: "2026-07-30T05:00:00.000Z",
+        rails: rails.map((rail) => ({ ...rail, kind: "trending" })),
+        state: "degraded",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects raw discovery artwork and inconsistent rail metadata", () => {
+    const item = {
+      ...movie,
+      artwork: { backdropPath: null, posterPath: "https://image.tmdb.org/private.jpg" },
+    };
+    expect(
+      discoveryFeedResponseSchema.safeParse({
+        failures: [],
+        generatedAt: "2026-07-30T05:00:00.000Z",
+        rails: [
+          { failure: null, items: [item], kind: "trending", totalResults: 1, truncated: false },
+          { failure: null, items: [], kind: "popular_movies", totalResults: 0, truncated: false },
+          { failure: null, items: [], kind: "popular_series", totalResults: 0, truncated: false },
+          { failure: null, items: [], kind: "upcoming", totalResults: 0, truncated: false },
+        ],
+        state: "complete",
+      }).success,
+    ).toBe(false);
+  });
+
   it("normalizes and bounds media-detail route input", () => {
     expect(discoveryMediaDetailParamsSchema.parse({ kind: "series", tmdbId: "1399" })).toEqual({
       kind: "series",
@@ -337,6 +449,8 @@ describe("discovery contracts", () => {
   });
 
   it("publishes dialect-neutral route schemas", () => {
+    expect(discoveryFeedQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryFeedResponseJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryMediaDetailParamsJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryMediaDetailQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryMediaDetailResponseJsonSchema).not.toHaveProperty("$schema");

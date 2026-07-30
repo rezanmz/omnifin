@@ -21,6 +21,7 @@ export type PrivacyHashDomain =
   | "acquisition_calendar_event"
   | "acquisition_calendar_source"
   | "download_queue_item"
+  | "discovery_artwork"
   | "external_issue_reference"
   | "ip_address"
   | "library_attention_cursor"

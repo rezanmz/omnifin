@@ -72,6 +72,124 @@ const searchResponse = {
 };
 
 describe("Seerr discovery", () => {
+  it("normalizes documented trending, popular, and upcoming discovery endpoints", async () => {
+    const moviePage = {
+      page: 1,
+      results: [searchResponse.results[0]],
+      totalPages: 2,
+      totalResults: 21,
+    };
+    const seriesPage = {
+      page: 1,
+      results: [searchResponse.results[1]],
+      totalPages: 3,
+      totalResults: 41,
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse(searchResponse),
+      jsonResponse(moviePage),
+      jsonResponse(seriesPage),
+      jsonResponse(moviePage),
+      jsonResponse(seriesPage),
+    ]);
+
+    const trending = await adapter.discover("trending", { language: "en-CA" });
+    const movies = await adapter.discover("popular_movies", { language: "en-CA" });
+    const series = await adapter.discover("popular_series", { language: "en-CA" });
+    const upcoming = await adapter.discover("upcoming", { language: "en-CA" });
+
+    expect(trending.items).toEqual([
+      {
+        artwork: { backdropPath: "/raw-backdrop.jpg", posterPath: "/raw-poster.jpg" },
+        media: expect.objectContaining({ id: "movie:550", kind: "movie" }),
+      },
+      {
+        artwork: { backdropPath: null, posterPath: null },
+        media: expect.objectContaining({ id: "series:1399", kind: "series" }),
+      },
+    ]);
+    expect(movies).toMatchObject({ totalResults: 21, items: [{ media: { id: "movie:550" } }] });
+    expect(series).toMatchObject({ totalResults: 41, items: [{ media: { id: "series:1399" } }] });
+    expect(upcoming.items.map(({ media }) => media.id)).toEqual(["movie:550", "series:1399"]);
+    expect(upcoming.totalResults).toBe(62);
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/api/v1/discover/trending",
+      "/api/v1/discover/movies",
+      "/api/v1/discover/tv",
+      "/api/v1/discover/movies/upcoming",
+      "/api/v1/discover/tv/upcoming",
+    ]);
+    expect(requests[0]?.url.searchParams.get("mediaType")).toBe("all");
+    expect(requests[0]?.url.searchParams.get("timeWindow")).toBe("day");
+    expect(requests[1]?.url.searchParams.get("sortBy")).toBe("popularity.desc");
+    expect(requests.every(({ init }) => init.headers.get("x-api-key") === "fixture-api-key")).toBe(
+      true,
+    );
+  });
+
+  it("deduplicates discovery media without copying person or collection results", async () => {
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        ...searchResponse,
+        results: [
+          searchResponse.results[0],
+          searchResponse.results[0],
+          searchResponse.results[2],
+          searchResponse.results[3],
+        ],
+      }),
+    ]);
+
+    const result = await adapter.discover("trending", { language: "en" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.media.id).toBe("movie:550");
+  });
+
+  it("proxies only validated, bounded discovery artwork from Seerr", async () => {
+    const { adapter, requests } = adapterWithResponses([
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        headers: { "content-type": "image/png" },
+      }),
+      new Response(new Uint8Array([255, 216, 255]), {
+        headers: { "content-type": "image/jpg" },
+      }),
+    ]);
+
+    await expect(adapter.readDiscoveryArtwork("/poster-safe.png", "poster")).resolves.toEqual({
+      body: new Uint8Array([137, 80, 78, 71]),
+      contentType: "image/png",
+    });
+    await expect(adapter.readDiscoveryArtwork("/backdrop-safe.jpg", "backdrop")).resolves.toEqual({
+      body: new Uint8Array([255, 216, 255]),
+      contentType: "image/jpeg",
+    });
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/imageproxy/tmdb/t/p/w600_and_h900_bestv2/poster-safe.png",
+      "/imageproxy/tmdb/t/p/w1920_and_h800_multi_faces/backdrop-safe.jpg",
+    ]);
+    expect(requests.every(({ init }) => init.headers.get("x-api-key") === "fixture-api-key")).toBe(
+      true,
+    );
+  });
+
+  it("rejects unsafe artwork paths and executable image responses", async () => {
+    const { adapter, requests } = adapterWithResponses([
+      new Response("<svg><script>private-upstream-value</script></svg>", {
+        headers: { "content-type": "image/svg+xml" },
+      }),
+    ]);
+
+    await expect(
+      adapter.readDiscoveryArtwork("https://private.invalid/image.jpg", "poster"),
+    ).rejects.toBeTruthy();
+    expect(requests).toHaveLength(0);
+    await expect(adapter.readDiscoveryArtwork("/safe-image.jpg", "poster")).rejects.toMatchObject({
+      code: "response_invalid",
+    });
+    expect(JSON.stringify(requests)).not.toContain("private-upstream-value");
+  });
+
   it("normalizes mixed search results without exposing raw upstream artwork", async () => {
     const { adapter, requests } = adapterWithResponses([jsonResponse(searchResponse)]);
 
