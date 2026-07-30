@@ -150,6 +150,8 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.doesNotMatch(browserSource, /console\.(?:debug|log)/u);
 
   assert.match(proxySource, /forwardedRequestHeaders/u);
-  assert.match(proxySource, /forwardedResponseHeaders/u);
+  assert.match(proxySource, /forwardResponseHeaders/u);
+  assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
+  assert.equal((proxySource.match(/response\.writeHead\(/gu) ?? []).length, 1);
   assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|forwarded\[name\]/u);
 });

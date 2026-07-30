@@ -63,71 +63,71 @@ function forwardedRequestHeaders(headers, host, remote) {
   return forwarded;
 }
 
-function forwardedResponseHeaders(headers) {
-  const forwarded = {};
+function forwardResponseHeaders(response, headers) {
   if (headers["accept-ranges"] !== undefined) {
-    forwarded["accept-ranges"] = headers["accept-ranges"];
+    response.setHeader("accept-ranges", headers["accept-ranges"]);
   }
   if (headers["cache-control"] !== undefined) {
-    forwarded["cache-control"] = headers["cache-control"];
+    response.setHeader("cache-control", headers["cache-control"]);
   }
   if (headers["content-disposition"] !== undefined) {
-    forwarded["content-disposition"] = headers["content-disposition"];
+    response.setHeader("content-disposition", headers["content-disposition"]);
   }
   if (headers["content-encoding"] !== undefined) {
-    forwarded["content-encoding"] = headers["content-encoding"];
+    response.setHeader("content-encoding", headers["content-encoding"]);
   }
   if (headers["content-language"] !== undefined) {
-    forwarded["content-language"] = headers["content-language"];
+    response.setHeader("content-language", headers["content-language"]);
   }
   if (headers["content-length"] !== undefined) {
-    forwarded["content-length"] = headers["content-length"];
+    response.setHeader("content-length", headers["content-length"]);
   }
   if (headers["content-range"] !== undefined) {
-    forwarded["content-range"] = headers["content-range"];
+    response.setHeader("content-range", headers["content-range"]);
   }
   if (headers["content-security-policy"] !== undefined) {
-    forwarded["content-security-policy"] = headers["content-security-policy"];
+    response.setHeader("content-security-policy", headers["content-security-policy"]);
   }
   if (headers["content-type"] !== undefined) {
-    forwarded["content-type"] = headers["content-type"];
+    response.setHeader("content-type", headers["content-type"]);
   }
-  if (headers.date !== undefined) forwarded.date = headers.date;
-  if (headers.etag !== undefined) forwarded.etag = headers.etag;
-  if (headers.expires !== undefined) forwarded.expires = headers.expires;
+  if (headers.date !== undefined) response.setHeader("date", headers.date);
+  if (headers.etag !== undefined) response.setHeader("etag", headers.etag);
+  if (headers.expires !== undefined) response.setHeader("expires", headers.expires);
   if (headers["last-modified"] !== undefined) {
-    forwarded["last-modified"] = headers["last-modified"];
+    response.setHeader("last-modified", headers["last-modified"]);
   }
-  if (headers.link !== undefined) forwarded.link = headers.link;
-  if (headers.location !== undefined) forwarded.location = headers.location;
+  if (headers.link !== undefined) response.setHeader("link", headers.link);
+  if (headers.location !== undefined) response.setHeader("location", headers.location);
   if (headers["permissions-policy"] !== undefined) {
-    forwarded["permissions-policy"] = headers["permissions-policy"];
+    response.setHeader("permissions-policy", headers["permissions-policy"]);
   }
-  if (headers.pragma !== undefined) forwarded.pragma = headers.pragma;
+  if (headers.pragma !== undefined) response.setHeader("pragma", headers.pragma);
   if (headers["referrer-policy"] !== undefined) {
-    forwarded["referrer-policy"] = headers["referrer-policy"];
+    response.setHeader("referrer-policy", headers["referrer-policy"]);
   }
   if (headers["retry-after"] !== undefined) {
-    forwarded["retry-after"] = headers["retry-after"];
+    response.setHeader("retry-after", headers["retry-after"]);
   }
-  if (headers["set-cookie"] !== undefined) forwarded["set-cookie"] = headers["set-cookie"];
+  if (headers["set-cookie"] !== undefined) {
+    response.setHeader("set-cookie", headers["set-cookie"]);
+  }
   if (headers["strict-transport-security"] !== undefined) {
-    forwarded["strict-transport-security"] = headers["strict-transport-security"];
+    response.setHeader("strict-transport-security", headers["strict-transport-security"]);
   }
-  if (headers.vary !== undefined) forwarded.vary = headers.vary;
+  if (headers.vary !== undefined) response.setHeader("vary", headers.vary);
   if (headers["www-authenticate"] !== undefined) {
-    forwarded["www-authenticate"] = headers["www-authenticate"];
+    response.setHeader("www-authenticate", headers["www-authenticate"]);
   }
   if (headers["x-content-type-options"] !== undefined) {
-    forwarded["x-content-type-options"] = headers["x-content-type-options"];
+    response.setHeader("x-content-type-options", headers["x-content-type-options"]);
   }
   if (headers["x-frame-options"] !== undefined) {
-    forwarded["x-frame-options"] = headers["x-frame-options"];
+    response.setHeader("x-frame-options", headers["x-frame-options"]);
   }
   if (headers["x-request-id"] !== undefined) {
-    forwarded["x-request-id"] = headers["x-request-id"];
+    response.setHeader("x-request-id", headers["x-request-id"]);
   }
-  return forwarded;
 }
 
 function forward(targetPort) {
@@ -144,11 +144,10 @@ function forward(targetPort) {
     });
 
     upstream.once("response", (upstreamResponse) => {
-      response.writeHead(
-        upstreamResponse.statusCode ?? 502,
-        upstreamResponse.statusMessage,
-        forwardedResponseHeaders(upstreamResponse.headers),
-      );
+      const status = upstreamResponse.statusCode;
+      response.statusCode =
+        Number.isInteger(status) && status >= 200 && status <= 599 ? status : 502;
+      forwardResponseHeaders(response, upstreamResponse.headers);
       upstreamResponse.pipe(response);
     });
     upstream.once("timeout", () => upstream.destroy());
