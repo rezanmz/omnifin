@@ -60,9 +60,10 @@ copyright-free MKV with one English SubRip stream inside the mounted fixture dir
 enables only Bazarr's built-in `embeddedsubtitles` provider, seeds one bounded local media/profile
 record through a fixed stdin-only program, restarts the same container, and uses Omnifin's
 production adapter to resolve the exact title, search, select, and download that embedded stream.
-The gate passes only when exactly one bounded external SubRip artifact contains the deterministic
-fixture marker. The media, seed program, database, configuration, and resulting subtitle never
-leave the transient directory or enter an artifact.
+Because Bazarr acknowledges manual downloads before its background job finishes, the gate then
+waits for bounded durable completion. It passes only when exactly one external SubRip artifact
+contains the deterministic fixture marker. The media, seed program, database, configuration, and
+resulting subtitle never leave the transient directory or enter an artifact.
 
 Successful teardown is part of the gate. The service and sidecar containers, internal network,
 generated database, configuration, API key, short-lived certificates and keys, and transient logs

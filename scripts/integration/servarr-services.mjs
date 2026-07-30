@@ -119,6 +119,7 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_READY_TIMEOUT_MS = 120_000;
+const BAZARR_ARTIFACT_TIMEOUT_MS = 30_000;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const API_KEY_PATTERN = /^[a-f0-9]{32}$/u;
 const SIDECAR_FIXTURE_SERVICES = new Set(["prowlarr", "radarr", "sonarr"]);
@@ -1305,6 +1306,48 @@ async function verifyProwlarr(context, server, apiKey, adapter) {
   }
 }
 
+async function waitForBazarrSubtitleArtifact(context) {
+  const deadline = Date.now() + BAZARR_ARTIFACT_TIMEOUT_MS;
+  let failureCode = "subtitle_artifact_missing";
+  while (Date.now() < deadline) {
+    const entries = await readdir(context.dataDirectory);
+    const subtitleNames = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
+    if (subtitleNames.length === 0) {
+      failureCode = "subtitle_artifact_missing";
+      await sleep(250);
+      continue;
+    }
+    if (subtitleNames.length !== 1 || !subtitleNames[0]) {
+      failureCode = "subtitle_artifact_count_invalid";
+      await sleep(250);
+      continue;
+    }
+    const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
+    const subtitleMetadata = await lstat(subtitlePath);
+    if (
+      !subtitleMetadata.isFile() ||
+      subtitleMetadata.isSymbolicLink() ||
+      subtitleMetadata.size > 64 * 1_024
+    ) {
+      throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
+    }
+    if (subtitleMetadata.size < 32) {
+      failureCode = "subtitle_content_invalid";
+      await sleep(250);
+      continue;
+    }
+    try {
+      validateBazarrSubtitleArtifact(entries, await readFile(subtitlePath, "utf8"));
+      return;
+    } catch (error) {
+      failureCode =
+        error instanceof ServarrFixtureFailure ? error.code : "subtitle_artifact_read_invalid";
+      await sleep(250);
+    }
+  }
+  throw new ServarrFixtureFailure(failureCode);
+}
+
 async function verifyBazarr(context, adapter) {
   const emptyLibrary = await adapter
     .searchSubtitles({ kind: "movie", title: BAZARR_FIXTURE_TITLE, year: BAZARR_FIXTURE_YEAR })
@@ -1342,23 +1385,7 @@ async function verifyBazarr(context, adapter) {
   await connectorOperation("subtitle_download", () =>
     adapter.downloadSubtitle(result.target, candidate),
   );
-
-  const entries = await readdir(context.dataDirectory);
-  const subtitleNames = entries.filter((entry) => entry.toLowerCase().endsWith(".srt"));
-  if (subtitleNames.length !== 1 || !subtitleNames[0]) {
-    throw new ServarrFixtureFailure("subtitle_artifact_count_invalid");
-  }
-  const subtitlePath = resolve(context.dataDirectory, subtitleNames[0]);
-  const subtitleMetadata = await lstat(subtitlePath);
-  if (
-    !subtitleMetadata.isFile() ||
-    subtitleMetadata.isSymbolicLink() ||
-    subtitleMetadata.size < 32 ||
-    subtitleMetadata.size > 64 * 1_024
-  ) {
-    throw new ServarrFixtureFailure("subtitle_artifact_metadata_invalid");
-  }
-  validateBazarrSubtitleArtifact(entries, await readFile(subtitlePath, "utf8"));
+  await waitForBazarrSubtitleArtifact(context);
 }
 
 async function runFixture(context, server) {
