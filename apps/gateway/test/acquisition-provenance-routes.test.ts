@@ -6,6 +6,7 @@ import type {
 } from "@omnifin/contracts/acquisition";
 import {
   acquisitionMonitoringStateSchema,
+  acquisitionProvenanceSnapshotEventSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchResponseSchema,
 } from "@omnifin/contracts/acquisition";
@@ -122,7 +123,17 @@ function capabilitySnapshot() {
 
 async function harness(
   implementation = vi.fn(async () => normalizedResponse),
-  options: { withConnector?: boolean } = {},
+  options: {
+    eventDependencies?: {
+      connectionLifetimeMs?: number;
+      createCursor?: () => string;
+      heartbeatIntervalMs?: number;
+      maxConnectionsPerSession?: number;
+      pollIntervalMs?: number;
+      reconnectDelayMs?: number;
+    };
+    withConnector?: boolean;
+  } = {},
 ) {
   const config = testConfig();
   const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
@@ -130,6 +141,9 @@ async function harness(
   const updateAcquisitionMonitoring = vi.fn(async () => unmonitoredState);
   let operationIdentifier = 0;
   const app = await createApp({
+    ...(options.eventDependencies === undefined
+      ? {}
+      : { acquisitionProvenanceEventDependencies: options.eventDependencies }),
     acquisitionProvenanceDependencies: {
       clock: () => now,
       createAdapter: () => ({
@@ -372,6 +386,137 @@ describe("acquisition provenance routes", () => {
         { mediaId: 42, service: "radarr" },
         expect.any(AbortSignal),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("streams one strict target snapshot with resumable private SSE headers", async () => {
+    const { app, implementation, operator } = await harness(undefined, {
+      eventDependencies: {
+        connectionLifetimeMs: 30,
+        createCursor: () => "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        heartbeatIntervalMs: 10,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe("no-store, no-transform");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.headers["x-accel-buffering"]).toBe("no");
+      expect(response.body).toContain("retry: 3000\n\n");
+      expect(response.body).toContain("id: provenance_event_ABCDEFGHIJKLMNOPQRSTUV\n");
+      const dataLine = response.body.split("\n").find((line) => line.startsWith("data: "));
+      expect(dataLine).toBeDefined();
+      expect(
+        acquisitionProvenanceSnapshotEventSchema.parse(
+          JSON.parse(dataLine!.slice("data: ".length)),
+        ),
+      ).toMatchObject({
+        cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        provenance: { target: { mediaId: 42, service: "radarr" } },
+      });
+      expect(response.body).not.toContain("route-private-api-key");
+      expect(implementation).toHaveBeenCalledWith(
+        { mediaId: 42, service: "radarr" },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects an untrusted resume cursor before contacting the connector", async () => {
+    const { app, implementation, operator } = await harness();
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "last-event-id": "private-radarr-history-id",
+        },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "acquisition_provenance_event_cursor_invalid",
+      );
+      expect(implementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies non-operators and invalid targets before opening a live stream", async () => {
+    const { app, implementation, operator, viewer } = await harness();
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const denied = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+      expect(denied.statusCode).toBe(403);
+
+      const invalidTarget = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42&seasonNumber=1",
+      });
+      expect(invalidTarget.statusCode).toBe(400);
+      expect(implementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a bounded retry response before opening an excess session stream", async () => {
+    const { app, implementation, operator } = await harness(undefined, {
+      eventDependencies: {
+        connectionLifetimeMs: 40,
+        createCursor: () => "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        heartbeatIntervalMs: 20,
+        maxConnectionsPerSession: 1,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    try {
+      const openStream = app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+      await vi.waitFor(() => expect(implementation).toHaveBeenCalledOnce());
+      const limited = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers["retry-after"]).toBe("3");
+      expect(limited.headers["cache-control"]).toBe("no-store");
+      expect(apiErrorSchema.parse(limited.json()).error.code).toBe(
+        "acquisition_provenance_event_capacity_reached",
+      );
+      await openStream;
     } finally {
       await app.close();
     }

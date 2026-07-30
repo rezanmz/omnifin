@@ -4,6 +4,7 @@ import {
   acquisitionMonitoringStateSchema,
   acquisitionMonitoringTargetInputSchema,
   acquisitionMonitoringUpdateInputSchema,
+  acquisitionProvenanceSnapshotEventSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchResponseSchema,
@@ -103,6 +104,31 @@ describe("acquisition provenance contracts", () => {
     });
 
     expect(result.events).toHaveLength(2);
+  });
+
+  it("binds a live snapshot to one opaque resumable cursor", () => {
+    const provenance = acquisitionProvenanceResponseSchema.parse({
+      events: [],
+      failures: [],
+      generatedAt: "2026-07-27T12:11:00.000Z",
+      state: "complete",
+      target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+    });
+
+    expect(
+      acquisitionProvenanceSnapshotEventSchema.parse({
+        cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        provenance,
+      }),
+    ).toMatchObject({ cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV", provenance });
+    expect(() =>
+      acquisitionProvenanceSnapshotEventSchema.parse({
+        cursor: "radarr-private-history-id",
+        kind: "snapshot",
+        provenance,
+      }),
+    ).toThrow();
   });
 
   it("rejects unsorted, duplicate, mismatched, and raw upstream data", () => {

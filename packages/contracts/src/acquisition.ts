@@ -158,6 +158,19 @@ export const acquisitionProvenanceResponseSchema = z
   });
 export type AcquisitionProvenanceResponse = z.infer<typeof acquisitionProvenanceResponseSchema>;
 
+export const acquisitionProvenanceEventCursorSchema = z
+  .string()
+  .regex(/^provenance_event_[A-Za-z0-9_-]{22}$/u);
+
+export const acquisitionProvenanceSnapshotEventSchema = z.strictObject({
+  cursor: acquisitionProvenanceEventCursorSchema,
+  kind: z.literal("snapshot"),
+  provenance: acquisitionProvenanceResponseSchema,
+});
+export type AcquisitionProvenanceSnapshotEvent = z.infer<
+  typeof acquisitionProvenanceSnapshotEventSchema
+>;
+
 export const acquisitionSearchInputSchema = acquisitionTargetInputSchema;
 export type AcquisitionSearchInput = z.infer<typeof acquisitionSearchInputSchema>;
 
@@ -378,6 +391,9 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 export const acquisitionTargetInputJsonSchema = withoutSchemaDialect(acquisitionTargetInputSchema);
 export const acquisitionProvenanceResponseJsonSchema = withoutSchemaDialect(
   acquisitionProvenanceResponseSchema,
+);
+export const acquisitionProvenanceSnapshotEventJsonSchema = withoutSchemaDialect(
+  acquisitionProvenanceSnapshotEventSchema,
 );
 export const acquisitionSearchInputJsonSchema = withoutSchemaDialect(acquisitionSearchInputSchema);
 export const acquisitionSearchResponseJsonSchema = withoutSchemaDialect(

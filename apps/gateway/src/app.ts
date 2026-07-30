@@ -135,6 +135,7 @@ export interface CreateAppOptions {
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   requestReviewDependencies?: RequestReviewRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
+  acquisitionProvenanceEventDependencies?: AcquisitionProvenanceRoutesOptions["eventDependencies"];
   acquisitionCalendarDependencies?: AcquisitionCalendarRoutesOptions["dependencies"];
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
@@ -489,6 +490,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.acquisitionProvenanceDependencies === undefined
         ? {}
         : { dependencies: options.acquisitionProvenanceDependencies }),
+      ...(options.acquisitionProvenanceEventDependencies === undefined
+        ? {}
+        : { eventDependencies: options.acquisitionProvenanceEventDependencies }),
     });
     await app.register(acquisitionCalendarRoutes, {
       ...(options.acquisitionCalendarDependencies === undefined
