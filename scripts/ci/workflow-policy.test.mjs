@@ -67,6 +67,27 @@ test("CI installs actionlint from a checksum-pinned release", () => {
   assert.doesNotMatch(validation, /latest/u);
 });
 
+test("visual baseline refresh is review-only and cannot write to the repository", () => {
+  const source = workflow("visual-baselines.yml");
+  const document = workflowDocument("visual-baselines.yml");
+  const refresh = document.jobs.refresh;
+  const checkout = namedStep(refresh.steps, "Check out repository");
+  const generate = namedStep(refresh.steps, "Generate visual baselines");
+  const upload = namedStep(refresh.steps, "Upload visual baselines for review");
+
+  assert.deepEqual(document.permissions, { contents: "read" });
+  assert.deepEqual(refresh.permissions, { contents: "read" });
+  assert.equal(refresh.strategy["fail-fast"], false);
+  assert.deepEqual(refresh.strategy.matrix.include, [
+    { platform: "linux", runner: "ubuntu-latest" },
+    { platform: "darwin", runner: "macos-latest" },
+  ]);
+  assert.equal(checkout.with["persist-credentials"], false);
+  assert.match(generate.run, /--update-snapshots/u);
+  assert.equal(upload.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+  assert.doesNotMatch(source, /\b(?:git push|git commit|pull-requests: write|contents: write)\b/u);
+});
+
 test("security workflow creates the SBOM output directory before generation", () => {
   const source = workflow("security.yml");
   const prepare = source.indexOf("- name: Prepare SBOM output directory");
