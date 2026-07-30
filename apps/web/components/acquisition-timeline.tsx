@@ -46,8 +46,10 @@ import {
 import {
   AcquisitionProvenanceClientError,
   acquisitionProvenanceClient,
+  watchAcquisitionProvenanceEvents,
   type AcquisitionProvenanceClient,
   type AcquisitionProvenanceClientErrorKind,
+  type AcquisitionProvenanceStreamStatus,
 } from "../lib/acquisition-provenance";
 import type { OperationModel } from "../lib/dashboard-data";
 
@@ -69,6 +71,7 @@ export interface AcquisitionTimelineProperties {
   open: boolean;
   operation: OperationModel | null;
   recoveryClient?: AcquisitionRecoveryClient;
+  watchEvents?: typeof watchAcquisitionProvenanceEvents;
 }
 
 type RecoveryState =
@@ -82,6 +85,13 @@ interface MonitoringSnapshot {
   operationId: string;
   state: AcquisitionMonitoringPanelState;
 }
+
+interface ConnectionSnapshot {
+  operationId: string;
+  status: AcquisitionProvenanceStreamStatus;
+}
+
+const FALLBACK_POLL_INTERVAL_MS = 15_000;
 
 const EVENT_COPY: Record<AcquisitionEvent["kind"], { label: string; icon: typeof Search }> = {
   download_failed: { icon: CircleAlert, label: "Download failed" },
@@ -428,6 +438,7 @@ export function AcquisitionTimeline({
   open,
   operation,
   recoveryClient = acquisitionRecoveryClient,
+  watchEvents = watchAcquisitionProvenanceEvents,
 }: AcquisitionTimelineProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -438,6 +449,7 @@ export function AcquisitionTimeline({
   const operationIdReference = useRef(operation?.id);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>({ kind: "idle" });
   const [monitoringSnapshot, setMonitoringSnapshot] = useState<MonitoringSnapshot | null>(null);
+  const [connectionSnapshot, setConnectionSnapshot] = useState<ConnectionSnapshot | null>(null);
   const [state, setState] = useState<TimelineState>({ kind: "idle" });
 
   useEffect(() => {
@@ -455,27 +467,88 @@ export function AcquisitionTimeline({
 
   useEffect(() => {
     if (!open || !operation) return;
-    if (operation.provenance) return;
-    const controller = new AbortController();
     let current = true;
-    void client
-      .read(operation.target, controller.signal)
-      .then((data) => {
-        if (current) setState({ data, kind: "ready", operationId: operation.id });
-      })
-      .catch((error: unknown) => {
-        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
-        setState({
-          errorKind: error instanceof AcquisitionProvenanceClientError ? error.kind : "unavailable",
-          kind: "error",
-          operationId: operation.id,
+    let fallbackActive = false;
+    let hasData = operation.provenance !== undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let readController: AbortController | undefined;
+    let refresh: Promise<void> | undefined;
+    const operationId = operation.id;
+
+    const loadSnapshot = () => {
+      if (refresh) return refresh;
+      readController = new AbortController();
+      refresh = client
+        .read(operation.target, readController.signal)
+        .then((data) => {
+          if (!current) return;
+          hasData = true;
+          setState({ data, kind: "ready", operationId });
+        })
+        .catch((error: unknown) => {
+          if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+          if (!hasData) {
+            setState({
+              errorKind:
+                error instanceof AcquisitionProvenanceClientError ? error.kind : "unavailable",
+              kind: "error",
+              operationId,
+            });
+          }
+        })
+        .finally(() => {
+          refresh = undefined;
         });
-      });
+      return refresh;
+    };
+
+    const schedulePoll = () => {
+      if (!current || !fallbackActive) return;
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(() => {
+        if (!current || !fallbackActive) return;
+        if (document.visibilityState === "hidden") {
+          schedulePoll();
+          return;
+        }
+        void loadSnapshot().finally(schedulePoll);
+      }, FALLBACK_POLL_INTERVAL_MS);
+    };
+
+    const beginFallback = () => {
+      if (fallbackActive) return;
+      fallbackActive = true;
+      if (hasData) schedulePoll();
+      else void loadSnapshot().finally(schedulePoll);
+    };
+
+    const stopWatching = watchEvents(operation.target, {
+      onSnapshot: (event) => {
+        if (!current) return;
+        hasData = true;
+        readController?.abort();
+        setState({ data: event.provenance, kind: "ready", operationId });
+      },
+      onStatus: (status) => {
+        if (!current) return;
+        setConnectionSnapshot({ operationId, status });
+        if (status === "fallback") beginFallback();
+        if (status === "live") {
+          fallbackActive = false;
+          if (pollTimer) clearTimeout(pollTimer);
+        }
+      },
+    });
+
+    if (!operation.provenance) void loadSnapshot();
     return () => {
       current = false;
-      controller.abort();
+      fallbackActive = false;
+      if (pollTimer) clearTimeout(pollTimer);
+      readController?.abort();
+      stopWatching();
     };
-  }, [attempt, client, open, operation]);
+  }, [attempt, client, open, operation, watchEvents]);
 
   useEffect(() => {
     if (!open || !operation) return;
@@ -525,11 +598,22 @@ export function AcquisitionTimeline({
     operation.target.service === "sonarr" && operation.target.seasonNumber !== undefined
       ? `${operation.title} season ${operation.target.seasonNumber}`
       : operation.title;
-  const visibleState: TimelineState = operation.provenance
-    ? { data: operation.provenance, kind: "ready", operationId: operation.id }
-    : "operationId" in state && state.operationId === operation.id
+  const visibleState: TimelineState =
+    "operationId" in state && state.operationId === operation.id
       ? state
-      : { kind: "idle" };
+      : operation.provenance
+        ? { data: operation.provenance, kind: "ready", operationId: operation.id }
+        : { kind: "idle" };
+  const connectionStatus =
+    connectionSnapshot?.operationId === operation.id
+      ? connectionSnapshot.status
+      : ("connecting" as const);
+  const connectionLabel =
+    connectionStatus === "live"
+      ? "Live"
+      : connectionStatus === "fallback"
+        ? "Refreshing"
+        : "Connecting";
   const visibleMonitoringState: AcquisitionMonitoringPanelState =
     monitoringSnapshot?.operationId === operation.id
       ? monitoringSnapshot.state
@@ -589,9 +673,15 @@ export function AcquisitionTimeline({
                 Every verified handoff from release discovery through library import.
               </p>
             </div>
-            <i>
-              <span aria-hidden="true" /> Live
-            </i>
+            <span
+              aria-atomic="true"
+              aria-label={`Acquisition updates: ${connectionLabel}`}
+              aria-live="polite"
+              className="acquisition-timeline__connection"
+              data-state={connectionStatus}
+            >
+              <span aria-hidden="true" /> {connectionLabel}
+            </span>
           </section>
 
           {visibleState.kind === "idle" || visibleState.kind === "loading" ? (

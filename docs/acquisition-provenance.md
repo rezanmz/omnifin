@@ -58,6 +58,31 @@ The route uses `Cache-Control: no-store`, `Pragma: no-cache`, and `Vary: Cookie`
 Rate limits, invalid responses, configuration failures, and temporary availability
 failures map to stable public error codes without forwarding upstream messages.
 
+## Live delivery and fallback
+
+While the signal-history drawer is open, the browser connects to
+`GET /v1/acquisitions/provenance/events` with the same exact target query. This is a
+short-lived, authenticated Server-Sent Events stream. The gateway coalesces polling
+only for subscribers inspecting the same target; a Radarr movie, a Sonarr series, and
+each selected Sonarr season remain separate groups. The normalized response is parsed
+again and matched to the requested target before it is published.
+
+Each snapshot has a fresh opaque `provenance_event_*` cursor. The stream sends bounded
+reconnect guidance and heartbeats, retains only a small time- and count-limited replay
+window, closes periodically so the session is revalidated, and enforces global and
+per-session connection limits. Invalid resume cursors are rejected before any
+connector call. Target failures close only the affected group and are logged through
+redacted diagnostics; other targets continue independently.
+
+The browser does not call a transport live merely because a socket opened. It accepts
+an update only after checking the message-size bound, JSON, strict public schema,
+transport cursor, and exact selected target. Invalid data closes the stream without
+replacing the last verified view. A transient disconnect changes the status to
+`Refreshing` and enables bounded 15-second polling while the document is visible;
+native EventSource reconnection can restore the live path after the next valid
+snapshot. Connecting, live, and fallback states are exposed as an assistive live
+region and never rely on color alone.
+
 ## Contextual recovery
 
 `POST /v1/acquisitions/searches` accepts the same exact target contract as the read
@@ -91,8 +116,8 @@ The Liquid Glass surface retains focus containment, Escape dismissal, background
 inertness, keyboard-scrollable history, at least 44-pixel controls, reduced motion,
 and adaptive light, dark, system, phone, tablet, desktop, and 10-foot presentation.
 Storybook covers complete, degraded, empty, loading, offline, permission-denied,
-recovery-confirmation, monitoring, and queued-success states. Component, browser, accessibility,
-and deterministic visual tests cover the assembled interaction. The separate
+connecting, live, polling-fallback, recovery-confirmation, monitoring, and queued-success states.
+Component, browser, accessibility, and deterministic visual tests cover the assembled interaction. The separate
 [acquisition-monitoring boundary](acquisition-monitoring.md) documents the exact whole-title
 mutation available inside the same drawer.
 
@@ -104,7 +129,8 @@ responses, exact Radarr/Sonarr search payloads, and secret/path isolation. Gatew
 tests cover authorization before storage access, CSRF and origin enforcement,
 idempotency conflicts and replay, exact connector selection, capability health,
 encrypted credentials, transactional audit outcomes, safe errors, response headers,
-and abort propagation.
+abort propagation, target-scoped stream coalescing, replay bounds, connection limits,
+failure isolation, teardown, and secret-free SSE output.
 
 Live version support is not inferred from fixture success. It requires the protected
 integration environment to record exact upstream versions and dates according to the

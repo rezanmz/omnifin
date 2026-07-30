@@ -60,7 +60,10 @@ upstream identifiers or credentials. The system-health workspace concurrently re
 Radarr, Sonarr, and Prowlarr health signals plus path-free Radarr/Sonarr capacity, retaining
 verified telemetry when one source or subsection fails. An operator can inspect and explicitly
 change exact whole-movie or whole-series monitoring through a read-before-write, audited control;
-broader acquisition mutations and live operational events remain unavailable. A viewer-accessible
+broader acquisition mutations and system-wide live operational events remain unavailable. The
+operator-only acquisition drawer now receives target-scoped normalized provenance snapshots through
+a bounded SSE channel and visibly falls back to foreground polling when that channel is unavailable.
+A viewer-accessible
 acquisition calendar combines bounded Radarr and Sonarr timing through opaque identifiers and remains
 read-only. Jellyfin playback, progress, and Continue Watching use the
 paired user's permissions through server-held tokens and normalized, opaque media targets. The

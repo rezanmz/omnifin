@@ -1,13 +1,17 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
-import type { AcquisitionProvenanceResponse } from "@omnifin/contracts/acquisition";
-import { render, screen, waitFor } from "@testing-library/react";
+import type {
+  AcquisitionProvenanceResponse,
+  AcquisitionTargetInput,
+} from "@omnifin/contracts/acquisition";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AcquisitionMonitoringClient } from "../lib/acquisition-monitoring";
 import {
   AcquisitionProvenanceClientError,
   type AcquisitionProvenanceClient,
+  type AcquisitionProvenanceStreamCallbacks,
 } from "../lib/acquisition-provenance";
 import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
 import { AcquisitionRecoveryClientError } from "../lib/acquisition-recovery";
@@ -49,6 +53,8 @@ const operator: SessionPrincipal = {
 function client(read: AcquisitionProvenanceClient["read"]): AcquisitionProvenanceClient {
   return { read };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("acquisition timeline", () => {
   it("confirms and applies one whole-title monitoring change with current CSRF proof", async () => {
@@ -236,6 +242,76 @@ describe("acquisition timeline", () => {
 
     await user.click(screen.getByRole("button", { name: "Close acquisition history" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("reports the transport honestly and replaces the timeline only after a valid snapshot", () => {
+    let callbacks: AcquisitionProvenanceStreamCallbacks | undefined;
+    const watchEvents = vi.fn(
+      (_target: AcquisitionTargetInput, nextCallbacks: AcquisitionProvenanceStreamCallbacks) => {
+        callbacks = nextCallbacks;
+        nextCallbacks.onStatus("connecting");
+        return vi.fn();
+      },
+    );
+    render(
+      <AcquisitionTimeline
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        watchEvents={watchEvents}
+      />,
+    );
+
+    expect(screen.getByLabelText("Acquisition updates: Connecting")).toBeVisible();
+    expect(screen.getByText("Release grabbed")).toBeVisible();
+    act(() => callbacks?.onStatus("fallback"));
+    expect(screen.getByLabelText("Acquisition updates: Refreshing")).toBeVisible();
+    expect(screen.getByText("Release grabbed")).toBeVisible();
+
+    act(() => {
+      callbacks?.onSnapshot({
+        cursor: "provenance_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        provenance: {
+          events: [],
+          failures: [],
+          generatedAt: "2026-07-27T19:05:00.000Z",
+          state: "complete",
+          target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+        },
+      });
+      callbacks?.onStatus("live");
+    });
+    expect(screen.getByLabelText("Acquisition updates: Live")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "No acquisition events yet" })).toBeVisible();
+  });
+
+  it("keeps verified data and polls at a bounded interval when streaming falls back", async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => operation.provenance!);
+    const watchEvents = vi.fn(
+      (_target: AcquisitionTargetInput, callbacks: AcquisitionProvenanceStreamCallbacks) => {
+        callbacks.onStatus("fallback");
+        return vi.fn();
+      },
+    );
+    const { unmount } = render(
+      <AcquisitionTimeline
+        client={client(read)}
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        watchEvents={watchEvents}
+      />,
+    );
+
+    expect(screen.getByText("Release grabbed")).toBeVisible();
+    expect(read).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(15_000));
+    expect(read).toHaveBeenCalledOnce();
+
+    unmount();
+    vi.useRealTimers();
   });
 
   it("loads a live target with an abortable client and renders an honest empty state", async () => {

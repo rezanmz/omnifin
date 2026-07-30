@@ -6,6 +6,7 @@ import {
   acquisitionMonitoringTargetInputSchema,
   acquisitionMonitoringUpdateInputJsonSchema,
   acquisitionMonitoringUpdateInputSchema,
+  acquisitionProvenanceEventCursorSchema,
   acquisitionProvenanceResponseJsonSchema,
   acquisitionProvenanceResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
@@ -21,11 +22,20 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import { safeFailureDiagnostics } from "../logger.js";
+import {
+  AcquisitionProvenanceEventBroker,
+  type AcquisitionProvenanceEventBrokerDependencies,
+} from "./provenance-events.js";
 import {
   AcquisitionProvenanceError,
   AcquisitionProvenanceService,
   type AcquisitionProvenanceDependencies,
 } from "./provenance-service.js";
+
+const DEFAULT_EVENT_HEARTBEAT_MS = 15_000;
+const DEFAULT_EVENT_LIFETIME_MS = 45_000;
+const DEFAULT_EVENT_RECONNECT_MS = 3_000;
 
 function configurationError(error: AcquisitionProvenanceError) {
   switch (error.reason) {
@@ -254,8 +264,57 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
   return payload;
 }
 
+function boundedEventTiming(value: number | undefined, fallback: number) {
+  return Number.isInteger(value) && value !== undefined && value > 0 ? value : fallback;
+}
+
+function copySecurityHeaders(reply: FastifyReply) {
+  const contentSecurityPolicy = reply.getHeader("content-security-policy");
+  const crossOriginOpenerPolicy = reply.getHeader("cross-origin-opener-policy");
+  const crossOriginResourcePolicy = reply.getHeader("cross-origin-resource-policy");
+  const originAgentCluster = reply.getHeader("origin-agent-cluster");
+  const permissionsPolicy = reply.getHeader("permissions-policy");
+  const referrerPolicy = reply.getHeader("referrer-policy");
+  const setCookie = reply.getHeader("set-cookie");
+  const strictTransportSecurity = reply.getHeader("strict-transport-security");
+  const xContentTypeOptions = reply.getHeader("x-content-type-options");
+  const xDnsPrefetchControl = reply.getHeader("x-dns-prefetch-control");
+  const xDownloadOptions = reply.getHeader("x-download-options");
+  const xFrameOptions = reply.getHeader("x-frame-options");
+  const xPermittedCrossDomainPolicies = reply.getHeader("x-permitted-cross-domain-policies");
+  const xRequestId = reply.getHeader("x-request-id");
+
+  if (contentSecurityPolicy !== undefined)
+    reply.raw.setHeader("content-security-policy", contentSecurityPolicy);
+  if (crossOriginOpenerPolicy !== undefined)
+    reply.raw.setHeader("cross-origin-opener-policy", crossOriginOpenerPolicy);
+  if (crossOriginResourcePolicy !== undefined)
+    reply.raw.setHeader("cross-origin-resource-policy", crossOriginResourcePolicy);
+  if (originAgentCluster !== undefined)
+    reply.raw.setHeader("origin-agent-cluster", originAgentCluster);
+  if (permissionsPolicy !== undefined) reply.raw.setHeader("permissions-policy", permissionsPolicy);
+  if (referrerPolicy !== undefined) reply.raw.setHeader("referrer-policy", referrerPolicy);
+  if (setCookie !== undefined) reply.raw.setHeader("set-cookie", setCookie);
+  if (strictTransportSecurity !== undefined)
+    reply.raw.setHeader("strict-transport-security", strictTransportSecurity);
+  if (xContentTypeOptions !== undefined)
+    reply.raw.setHeader("x-content-type-options", xContentTypeOptions);
+  if (xDnsPrefetchControl !== undefined)
+    reply.raw.setHeader("x-dns-prefetch-control", xDnsPrefetchControl);
+  if (xDownloadOptions !== undefined) reply.raw.setHeader("x-download-options", xDownloadOptions);
+  if (xFrameOptions !== undefined) reply.raw.setHeader("x-frame-options", xFrameOptions);
+  if (xPermittedCrossDomainPolicies !== undefined)
+    reply.raw.setHeader("x-permitted-cross-domain-policies", xPermittedCrossDomainPolicies);
+  if (xRequestId !== undefined) reply.raw.setHeader("x-request-id", xRequestId);
+}
+
 export interface AcquisitionProvenanceRoutesOptions {
   dependencies?: AcquisitionProvenanceDependencies;
+  eventDependencies?: AcquisitionProvenanceEventBrokerDependencies & {
+    connectionLifetimeMs?: number;
+    heartbeatIntervalMs?: number;
+    reconnectDelayMs?: number;
+  };
 }
 
 export const acquisitionProvenanceRoutes: FastifyPluginAsync<
@@ -266,6 +325,34 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
     app.appConfig,
     options.dependencies,
   );
+  const eventBroker = new AcquisitionProvenanceEventBroker(provenance, {
+    ...options.eventDependencies,
+    onFailure: (error) => {
+      app.log.warn(
+        {
+          ...safeFailureDiagnostics(error),
+          operation: "acquisition.provenance.events.refresh",
+        },
+        "Live acquisition provenance refresh failed",
+      );
+    },
+  });
+  const eventLifetimeMs = boundedEventTiming(
+    options.eventDependencies?.connectionLifetimeMs,
+    DEFAULT_EVENT_LIFETIME_MS,
+  );
+  const eventHeartbeatMs = boundedEventTiming(
+    options.eventDependencies?.heartbeatIntervalMs,
+    DEFAULT_EVENT_HEARTBEAT_MS,
+  );
+  const eventReconnectMs = boundedEventTiming(
+    options.eventDependencies?.reconnectDelayMs,
+    DEFAULT_EVENT_RECONNECT_MS,
+  );
+
+  app.addHook("onClose", async () => {
+    eventBroker.close();
+  });
 
   app.get(
     "/v1/acquisitions/provenance",
@@ -308,6 +395,91 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       } finally {
         request.raw.off("aborted", abort);
       }
+    },
+  );
+
+  app.get(
+    "/v1/acquisitions/provenance/events",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: { querystring: acquisitionTargetInputJsonSchema },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "acquisition.manage");
+      const target = acquisitionTargetInputSchema.parse(request.query);
+      const lastEventIdHeader = request.headers["last-event-id"];
+      let lastEventId: string | undefined;
+      if (lastEventIdHeader !== undefined) {
+        const parsed = acquisitionProvenanceEventCursorSchema.safeParse(lastEventIdHeader);
+        if (!parsed.success) {
+          throw new SafeHttpError({
+            code: "acquisition_provenance_event_cursor_invalid",
+            message: "The acquisition provenance resume cursor is invalid.",
+            statusCode: 400,
+          });
+        }
+        lastEventId = parsed.data;
+      }
+
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(heartbeat);
+        clearTimeout(lifetime);
+        if (subscription.accepted) subscription.unsubscribe();
+        if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+      };
+      const subscription = eventBroker.subscribe({
+        ...(lastEventId === undefined ? {} : { lastEventId }),
+        onClose: close,
+        onEvent: (event) => {
+          if (closed || reply.raw.destroyed || reply.raw.writableEnded) return;
+          reply.raw.write(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`);
+        },
+        principal,
+        target,
+      });
+      if (!subscription.accepted) {
+        reply.header("retry-after", Math.ceil(eventReconnectMs / 1_000));
+        throw new SafeHttpError({
+          code: "acquisition_provenance_event_capacity_reached",
+          message: "Live acquisition provenance is temporarily at capacity.",
+          statusCode: 429,
+        });
+      }
+
+      reply.hijack();
+      copySecurityHeaders(reply);
+      reply.raw.setHeader("cache-control", "no-store, no-transform");
+      reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+      reply.raw.setHeader("pragma", "no-cache");
+      reply.raw.setHeader("vary", "Cookie");
+      reply.raw.setHeader("x-accel-buffering", "no");
+      reply.raw.writeHead(200);
+      reply.raw.write(`retry: ${eventReconnectMs}\n\n`);
+      const heartbeat = setInterval(() => {
+        if (!closed && !reply.raw.destroyed && !reply.raw.writableEnded) {
+          reply.raw.write(": keep-alive\n\n");
+        }
+      }, eventHeartbeatMs);
+      heartbeat.unref();
+      const lifetime = setTimeout(close, eventLifetimeMs);
+      lifetime.unref();
+      request.raw.once("aborted", close);
+      reply.raw.once("close", close);
     },
   );
 

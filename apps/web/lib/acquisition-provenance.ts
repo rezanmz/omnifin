@@ -1,7 +1,10 @@
 import type {
   AcquisitionProvenanceResponse,
+  AcquisitionProvenanceSnapshotEvent,
   AcquisitionTargetInput,
 } from "@omnifin/contracts/acquisition";
+
+const MAX_ACQUISITION_PROVENANCE_EVENT_CHARACTERS = 384_000;
 
 async function loadContractSchemas() {
   await import("./zod-browser");
@@ -79,6 +82,115 @@ async function safeJson(response: Response): Promise<unknown> {
 
 export interface AcquisitionProvenanceClient {
   read(input: AcquisitionTargetInput, signal?: AbortSignal): Promise<AcquisitionProvenanceResponse>;
+}
+
+export type AcquisitionProvenanceStreamStatus = "connecting" | "fallback" | "live";
+
+export interface AcquisitionProvenanceStreamCallbacks {
+  onSnapshot(event: AcquisitionProvenanceSnapshotEvent): void;
+  onStatus(status: AcquisitionProvenanceStreamStatus): void;
+}
+
+interface AcquisitionProvenanceEventSource {
+  close(): void;
+  onerror: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  onopen: ((event: Event) => void) | null;
+}
+
+type AcquisitionProvenanceEventSourceFactory = (url: string) => AcquisitionProvenanceEventSource;
+
+function targetMatches(provenance: AcquisitionProvenanceResponse, target: AcquisitionTargetInput) {
+  return (
+    provenance.target.service === target.service &&
+    provenance.target.mediaId === target.mediaId &&
+    provenance.target.seasonNumber === (target.seasonNumber ?? null)
+  );
+}
+
+export function watchAcquisitionProvenanceEvents(
+  input: AcquisitionTargetInput,
+  callbacks: AcquisitionProvenanceStreamCallbacks,
+  createEventSource: AcquisitionProvenanceEventSourceFactory = (url) => new EventSource(url),
+) {
+  let active = true;
+  let failedClosed = false;
+  let source: AcquisitionProvenanceEventSource | undefined;
+  queueMicrotask(() => {
+    if (active) callbacks.onStatus("connecting");
+  });
+
+  const failClosed = () => {
+    if (!active || failedClosed) return;
+    failedClosed = true;
+    source?.close();
+    callbacks.onStatus("fallback");
+  };
+
+  void (async () => {
+    const schemas = await contractSchemas();
+    if (!active) return;
+    const parsedTarget = schemas.acquisition.acquisitionTargetInputSchema.safeParse(input);
+    if (!parsedTarget.success) {
+      failClosed();
+      return;
+    }
+    const target = parsedTarget.data;
+    const parameters = new URLSearchParams({
+      mediaId: String(target.mediaId),
+      service: target.service,
+    });
+    if (target.seasonNumber !== undefined) {
+      parameters.set("seasonNumber", String(target.seasonNumber));
+    }
+    try {
+      source = createEventSource(`/api/acquisitions/provenance/events?${parameters.toString()}`);
+    } catch {
+      failClosed();
+      return;
+    }
+    source.onopen = () => {
+      if (active && !failedClosed) callbacks.onStatus("connecting");
+    };
+    source.onerror = () => {
+      if (active && !failedClosed) callbacks.onStatus("fallback");
+    };
+    source.onmessage = (message) => {
+      void (async () => {
+        if (message.data.length > MAX_ACQUISITION_PROVENANCE_EVENT_CHARACTERS) {
+          failClosed();
+          return;
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(message.data);
+        } catch {
+          failClosed();
+          return;
+        }
+        const currentSchemas = await contractSchemas();
+        if (!active || failedClosed) return;
+        const parsed =
+          currentSchemas.acquisition.acquisitionProvenanceSnapshotEventSchema.safeParse(body);
+        if (
+          !parsed.success ||
+          message.lastEventId !== parsed.data.cursor ||
+          !targetMatches(parsed.data.provenance, target)
+        ) {
+          failClosed();
+          return;
+        }
+        callbacks.onSnapshot(parsed.data);
+        callbacks.onStatus("live");
+      })();
+    };
+  })().catch(failClosed);
+
+  return () => {
+    if (!active) return;
+    active = false;
+    source?.close();
+  };
 }
 
 export const acquisitionProvenanceClient: AcquisitionProvenanceClient = {

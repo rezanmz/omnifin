@@ -142,6 +142,10 @@ application boundary; operators must still patch and isolate the host.
 - History and queue reads are independently bounded and parsed. Safe partial results survive one
   upstream failure; raw history data, queue statuses, download hashes, paths, and private errors do
   not cross the gateway boundary.
+- Live provenance uses a short-lived, target-scoped SSE connection with opaque cursors, bounded
+  replay, heartbeats, global and per-session capacity limits, and periodic session revalidation.
+  The browser accepts a snapshot only when its schema, cursor, size, and exact selected target all
+  match; otherwise it preserves the last verified view and falls back to bounded foreground polling.
 
 ## Acquisition-search mutation controls
 

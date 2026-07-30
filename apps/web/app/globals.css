@@ -2197,7 +2197,7 @@
   text-wrap: pretty;
 }
 
-.acquisition-timeline__title > i {
+.acquisition-timeline__connection {
   align-items: center;
   background: color-mix(in srgb, var(--success) 9%, var(--fill-soft));
   border: 1px solid color-mix(in srgb, var(--success) 22%, var(--line-soft));
@@ -2211,14 +2211,54 @@
   min-height: 30px;
   padding: 0 10px;
   text-transform: uppercase;
+  transition:
+    background-color 180ms ease-out,
+    border-color 180ms ease-out,
+    color 180ms ease-out;
 }
 
-.acquisition-timeline__title > i span {
+.acquisition-timeline__connection > span {
   background: var(--success);
   border-radius: 50%;
   box-shadow: 0 0 9px color-mix(in srgb, var(--success) 55%, transparent);
   height: 6px;
   width: 6px;
+}
+
+.acquisition-timeline__connection[data-state="connecting"] {
+  background: color-mix(in srgb, var(--acid) 7%, var(--fill-soft));
+  border-color: color-mix(in srgb, var(--acid) 18%, var(--line-soft));
+  color: color-mix(in srgb, var(--acid) 64%, var(--paper-2));
+}
+
+.acquisition-timeline__connection[data-state="connecting"] > span {
+  animation: acquisition-connection-pulse 1.4s ease-in-out infinite;
+  background: var(--acid);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--acid) 45%, transparent);
+}
+
+.acquisition-timeline__connection[data-state="fallback"] {
+  background: color-mix(in srgb, var(--warning) 8%, var(--fill-soft));
+  border-color: color-mix(in srgb, var(--warning) 20%, var(--line-soft));
+  color: color-mix(in srgb, var(--warning) 72%, var(--paper-1));
+}
+
+.acquisition-timeline__connection[data-state="fallback"] > span {
+  background: var(--warning);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--warning) 45%, transparent);
+}
+
+@keyframes acquisition-connection-pulse {
+  0%,
+  100% {
+    opacity: 0.48;
+    transform: scale(0.82);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .acquisition-timeline__stats,
@@ -7841,8 +7881,9 @@
     font-size: 1.28rem;
   }
 
-  .acquisition-timeline__title > i {
-    display: none;
+  .acquisition-timeline__connection {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .acquisition-timeline__stats > div {
