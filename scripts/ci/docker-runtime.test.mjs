@@ -23,8 +23,8 @@ test("keeps immutable image acquisition bounded and container launch local-only"
   assert.deepEqual(DOCKER_LOCAL_IMAGE_ARGUMENTS, ["--pull", "never"]);
 });
 
-test("both disposable fixture families acquire before creating an isolated network", () => {
-  for (const fixture of ["download-clients.mjs", "servarr-services.mjs"]) {
+test("all disposable fixture families acquire before creating an isolated network", () => {
+  for (const fixture of ["download-clients.mjs", "seerr-service.mjs", "servarr-services.mjs"]) {
     const source = readFileSync(new URL(`../integration/${fixture}`, import.meta.url), "utf8");
     const acquisition = source.indexOf("await acquirePinnedDockerImage(");
     const networkCreation = source.indexOf('["network", "create"', acquisition);
