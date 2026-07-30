@@ -205,7 +205,8 @@ empty, quiet, offline, terminal-error, expanded-operation, and focus-visible sta
 desktop and phone geometry. The 10-foot profile remains covered by its configured,
 first-run, and authentication routes together with directional interaction assertions.
 
-Darwin baselines are reviewed and committed with the foundation slice. Linux baselines
-remain an explicit CI follow-up: the first Linux run uploads actual renderings for
-manual inspection, and only reviewed images are committed. CI never auto-accepts a
-cross-platform screenshot change.
+Darwin and Linux baselines are reviewed and committed together. The read-only
+**Visual baseline refresh** workflow generates each platform on its matching hosted
+runner and uploads the results as separate artifacts. It never commits or accepts a
+cross-platform screenshot change automatically; a maintainer inspects the rendered
+difference before copying accepted images into the pull request.

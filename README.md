@@ -71,7 +71,8 @@ snapshots, optimistic revisions, and audited lifecycle changes.
 The user access directory adds normalized role provenance and session visibility, provider-owned
 OIDC authority, review-before-apply role and suspension controls, final-admin protection, and
 atomic session revocation without exposing immutable external identities or Jellyfin credentials.
-Phase 3 adds permission-checked Seerr discovery, requests, acquisition recovery,
+Phase 3 adds a permission-checked live Seerr dashboard with partial-failure rails and
+user-bound protected artwork, discovery search and details, requests, acquisition recovery,
 Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
 and qBittorrent/SABnzbd queue reads with exact-item pause/resume and downloaded-file-preserving
 removal through normalized, browser-safe contracts and responsive operational workspaces. An

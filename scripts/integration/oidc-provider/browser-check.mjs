@@ -7,7 +7,9 @@ const { chromium } = requireFromWeb("@playwright/test");
 
 const providerSlug = "generic";
 const expectedProviderId = `oidc-${providerSlug}`;
+const SESSION_COOKIE_NAME = "__Host-omnifin_session";
 const FLOW_TIMEOUT_MS = 60_000;
+const SESSION_CONVERGENCE_TIMEOUT_MS = 10_000;
 
 class BrowserCheckError extends Error {
   constructor() {
@@ -25,8 +27,10 @@ function required(name) {
   return value;
 }
 
-function assert(condition) {
-  if (!condition) throw new BrowserCheckError();
+function assert(condition, check = "assertion") {
+  if (condition) return;
+  if (/^[a-z][a-z0-9_]{2,63}$/u.test(check)) failureDetail = { check };
+  throw new BrowserCheckError();
 }
 
 async function json(response, expectedStatus) {
@@ -150,29 +154,99 @@ async function completeAuthorization(page, startPath, webOrigin, attempt) {
 }
 
 function assertPendingPrincipal(session, issuer, expectedRole, expectedSubject, expectedUserId) {
-  assert(session?.csrfToken && session.principal);
+  assert(session?.csrfToken && session.principal, "principal_available");
   const principal = session.principal;
-  assert(principal.accountState === "pending_link");
-  assert(principal.role === expectedRole);
-  assert(principal.authenticationMethod?.kind === "oidc");
-  assert(principal.authenticationMethod.providerId === expectedProviderId);
-  assert(principal.linkedServices?.length === 0);
+  assert(principal.accountState === "pending_link", "principal_account_state");
+  assert(principal.role === expectedRole, "principal_role");
+  assert(principal.authenticationMethod?.kind === "oidc", "principal_authentication_method");
+  assert(
+    principal.authenticationMethod.providerId === expectedProviderId,
+    "principal_authentication_provider",
+  );
+  assert(principal.linkedServices?.length === 0, "principal_link_state");
   assert(
     JSON.stringify([...principal.permissions].sort()) ===
       JSON.stringify(["identities.self.manage", "sessions.self.revoke"]),
+    "principal_permissions",
   );
-  assert(principal.externalIdentity?.providerId === expectedProviderId);
-  assert(principal.externalIdentity.issuer === issuer);
-  assert(typeof principal.externalIdentity.subject === "string");
-  assert(principal.externalIdentity.subject.length > 0);
-  assert(principal.externalIdentity.displayClaims?.displayName === "Kilgore Trout");
-  assert(principal.externalIdentity.displayClaims?.email === "kilgore@kilgore.trout");
-  assert(principal.externalIdentity.displayClaims?.emailVerified === true);
+  assert(
+    principal.externalIdentity?.providerId === expectedProviderId,
+    "principal_external_provider",
+  );
+  assert(principal.externalIdentity.issuer === issuer, "principal_external_issuer");
+  assert(typeof principal.externalIdentity.subject === "string", "principal_external_subject");
+  assert(principal.externalIdentity.subject.length > 0, "principal_external_subject");
+  assert(
+    principal.externalIdentity.displayClaims?.displayName === "Kilgore Trout",
+    "principal_display_name",
+  );
+  assert(
+    principal.externalIdentity.displayClaims?.email === "kilgore@kilgore.trout",
+    "principal_email",
+  );
+  assert(
+    principal.externalIdentity.displayClaims?.emailVerified === true,
+    "principal_email_verified",
+  );
   if (expectedSubject !== undefined) {
-    assert(principal.externalIdentity.subject === expectedSubject);
+    assert(principal.externalIdentity.subject === expectedSubject, "principal_subject_continuity");
   }
-  if (expectedUserId !== undefined) assert(principal.userId === expectedUserId);
+  if (expectedUserId !== undefined) {
+    assert(principal.userId === expectedUserId, "principal_user_continuity");
+  }
   return { subject: principal.externalIdentity.subject, userId: principal.userId };
+}
+
+async function waitForPendingPrincipal(
+  request,
+  issuer,
+  expectedRole,
+  expectedSubject,
+  expectedUserId,
+) {
+  const deadline = Date.now() + SESSION_CONVERGENCE_TIMEOUT_MS;
+  let lastFailureDetail = {};
+  while (Date.now() < deadline) {
+    try {
+      const session = await currentSession(request);
+      const identity = assertPendingPrincipal(
+        session,
+        issuer,
+        expectedRole,
+        expectedSubject,
+        expectedUserId,
+      );
+      failureDetail = {};
+      return { identity, session };
+    } catch (error) {
+      if (!(error instanceof BrowserCheckError)) throw error;
+      lastFailureDetail = failureDetail;
+      failureDetail = {};
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  failureDetail = lastFailureDetail;
+  throw new BrowserCheckError();
+}
+
+async function waitForSessionCookie(context, webOrigin, previousValue) {
+  const deadline = Date.now() + SESSION_CONVERGENCE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const cookie = (await context.cookies(webOrigin)).find(
+      (candidate) => candidate.name === SESSION_COOKIE_NAME,
+    );
+    if (
+      cookie &&
+      /^[A-Za-z0-9_-]{43}$/u.test(cookie.value) &&
+      (previousValue === undefined || cookie.value !== previousValue)
+    ) {
+      failureDetail = {};
+      return cookie.value;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  failureDetail = { check: "session_cookie_replacement" };
+  throw new BrowserCheckError();
 }
 
 async function run() {
@@ -191,6 +265,10 @@ async function run() {
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ baseURL: webOrigin, ignoreHTTPSErrors: true });
+    const administrationContext = await browser.newContext({
+      baseURL: webOrigin,
+      ignoreHTTPSErrors: true,
+    });
     const page = await context.newPage();
     page.on("console", (message) => observedBrowserText.push(message.text()));
     page.on("pageerror", () => observedBrowserText.push("browser_page_error"));
@@ -212,7 +290,11 @@ async function run() {
     });
 
     currentStage = "recovery_session";
-    const recovery = await recoverySession(context.request, webOrigin, recoverySecret);
+    const recovery = await recoverySession(
+      administrationContext.request,
+      webOrigin,
+      recoverySecret,
+    );
     const providerInput = {
       allowJitProvisioning: true,
       approvedEndpointOrigins: [issuerOrigin],
@@ -229,7 +311,7 @@ async function run() {
 
     currentStage = "provider_create";
     const created = await create(
-      context.request,
+      administrationContext.request,
       webOrigin,
       "/api/admin/auth/oidc/providers",
       recovery.csrfToken,
@@ -240,10 +322,13 @@ async function run() {
 
     currentStage = "provider_validate";
     const validation = await json(
-      await context.request.post(`/api/admin/auth/oidc/providers/${expectedProviderId}/validate`, {
-        headers: { origin: webOrigin, "x-omnifin-csrf": recovery.csrfToken },
-        maxRedirects: 0,
-      }),
+      await administrationContext.request.post(
+        `/api/admin/auth/oidc/providers/${expectedProviderId}/validate`,
+        {
+          headers: { origin: webOrigin, "x-omnifin-csrf": recovery.csrfToken },
+          maxRedirects: 0,
+        },
+      ),
       200,
     );
     assert(validation.capabilities?.authorizationCodeFlow === true);
@@ -253,7 +338,7 @@ async function run() {
 
     currentStage = "provider_enable";
     const enabled = await update(
-      context.request,
+      administrationContext.request,
       webOrigin,
       `/api/admin/auth/oidc/providers/${expectedProviderId}`,
       recovery.csrfToken,
@@ -263,7 +348,7 @@ async function run() {
 
     currentStage = "public_provider";
     const providers = await json(
-      await context.request.get("/api/auth/providers", { maxRedirects: 0 }),
+      await administrationContext.request.get("/api/auth/providers", { maxRedirects: 0 }),
       200,
     );
     const publicProvider = providers.providers?.find(
@@ -277,17 +362,23 @@ async function run() {
     currentStage = "viewer_login";
     await completeAuthorization(page, startPath, webOrigin, "viewer_login");
     currentStage = "viewer_session";
-    const viewerIdentity = assertPendingPrincipal(
-      await currentSession(context.request),
+    const { identity: viewerIdentity } = await waitForPendingPrincipal(
+      context.request,
       issuer,
       "viewer",
     );
+    currentStage = "viewer_cookie";
+    const viewerSessionCookie = await waitForSessionCookie(context, webOrigin);
 
     currentStage = "mapping_recovery_session";
-    const mappingRecovery = await recoverySession(context.request, webOrigin, recoverySecret);
+    const mappingRecovery = await recoverySession(
+      administrationContext.request,
+      webOrigin,
+      recoverySecret,
+    );
     currentStage = "role_mapping";
     const mapping = await create(
-      context.request,
+      administrationContext.request,
       webOrigin,
       `/api/admin/auth/oidc/providers/${expectedProviderId}/role-mappings`,
       mappingRecovery.csrfToken,
@@ -304,15 +395,17 @@ async function run() {
 
     currentStage = "mapped_login";
     await completeAuthorization(page, startPath, webOrigin, "mapped_login");
+    currentStage = "mapped_cookie";
+    await waitForSessionCookie(context, webOrigin, viewerSessionCookie);
     currentStage = "mapped_session";
-    const mappedSession = await currentSession(context.request);
-    assertPendingPrincipal(
-      mappedSession,
+    const { identity: mappedIdentity, session: mappedSession } = await waitForPendingPrincipal(
+      context.request,
       issuer,
       "admin",
       viewerIdentity.subject,
       viewerIdentity.userId,
     );
+    assert(mappedIdentity.userId === mappedSession.principal?.userId);
 
     currentStage = "authorization_code_pkce";
     assert(authorizationRequests.length >= 2);
@@ -367,7 +460,7 @@ async function run() {
         observedBrowserText.some((observation) => observation.includes(secret)),
       ),
     );
-    await context.close();
+    await Promise.all([context.close(), administrationContext.close()]);
   } finally {
     await browser.close();
   }

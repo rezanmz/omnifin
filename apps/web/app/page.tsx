@@ -1,9 +1,9 @@
 import { DashboardScreen, DashboardStateScreen } from "../components/dashboard-screen";
 import type { DashboardStateKind } from "../components/dashboard-state";
-import { ThemeProvider } from "../components/theme-provider";
 import { connectedDashboard, demoDashboard } from "../lib/dashboard-data";
+import { demoDiscoveryFeed } from "../lib/discovery-feed-demo";
 import { readThemePreference } from "../lib/theme-server";
-import "./globals.css";
+import "./dashboard.css";
 
 export const dynamic = "force-dynamic";
 
@@ -31,49 +31,55 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       ? "ten-foot"
       : "standard";
   const showLiveDashboard = requestedTestView === "continue-watching-live";
+  const showDiscoveryPerformanceProfile = requestedTestView === "discovery-performance";
   const showDemoDashboard =
-    requestedTestView === "onboarding" || showLiveDashboard
+    requestedTestView === "onboarding" || showLiveDashboard || showDiscoveryPerformanceProfile
       ? false
       : process.env.OMNIFIN_DEMO_MODE === "true";
 
   if (requestedTestView && dashboardStateKinds.has(requestedTestView as DashboardStateKind)) {
     const preference = await readThemePreference();
     return (
-      <ThemeProvider initialPreference={preference}>
-        <DashboardStateScreen
-          displayProfile={displayProfile}
-          kind={requestedTestView as DashboardStateKind}
-        />
-      </ThemeProvider>
+      <DashboardStateScreen
+        displayProfile={displayProfile}
+        kind={requestedTestView as DashboardStateKind}
+        themePreference={preference}
+      />
     );
   }
 
   if (requestedTestView === "quiet") {
     const preference = await readThemePreference();
     return (
-      <ThemeProvider initialPreference={preference}>
-        <DashboardScreen
-          data={{
-            ...demoDashboard,
-            calendar: [],
-            continueWatching: [],
-            discovery: [],
-            operations: [],
-          }}
-          displayProfile={displayProfile}
-        />
-      </ThemeProvider>
+      <DashboardScreen
+        data={{
+          ...demoDashboard,
+          calendar: [],
+          continueWatching: [],
+          discovery: [],
+          operations: [],
+        }}
+        displayProfile={displayProfile}
+        themePreference={preference}
+      />
     );
   }
 
   const preference = await readThemePreference();
   return (
-    <ThemeProvider initialPreference={preference}>
-      <DashboardScreen
-        data={showDemoDashboard ? demoDashboard : connectedDashboard}
-        displayProfile={displayProfile}
-        liveContinueWatching={showLiveDashboard || !showDemoDashboard}
-      />
-    </ThemeProvider>
+    <DashboardScreen
+      data={showDemoDashboard ? demoDashboard : connectedDashboard}
+      {...(showDiscoveryPerformanceProfile
+        ? {
+            discoveryInitialFeed: demoDiscoveryFeed,
+            discoveryRefresh: false,
+            discoveryShowContinueWatching: false,
+          }
+        : {})}
+      displayProfile={displayProfile}
+      liveContinueWatching={showLiveDashboard || !showDemoDashboard}
+      liveDiscovery={!showDemoDashboard}
+      themePreference={preference}
+    />
   );
 }

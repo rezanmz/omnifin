@@ -114,6 +114,23 @@ application boundary; operators must still patch and isolate the host.
   record commit atomically. Audit metadata contains only previous/new role and state plus the
   revoked-session count; client addresses are privacy-hashed.
 
+## Discovery-feed and artwork controls
+
+- Feed reads require `media.view` before connector selection or credential decryption. Exactly one
+  enabled, healthy Seerr connector with the required capability is accepted; ambiguity fails closed.
+- The four fixed discovery reads execute concurrently with bounded per-rail timeouts and strict
+  schemas. Partial results preserve safe rails, while raw payloads, service URLs, request records,
+  internal identifiers, image paths, and private errors remain behind the gateway.
+- Artwork paths are converted into random, encrypted, expiring references bound to the requesting
+  user. A reference cannot be replayed by another account, used after expiry, or changed into an
+  arbitrary connector destination.
+- Artwork resolution repeats session, permission, owner, expiry, connector, and path checks before
+  an upstream request. Redirects are blocked; response type, length, and transfer size are bounded;
+  logging and errors exclude the protected path and response body.
+- The browser receives only same-origin artwork-reference URLs and accepts only their exact grammar.
+  Images are privately cacheable with a gateway ETag and `nosniff`; normalized feed responses are
+  private, short-lived, and vary on the session cookie.
+
 ## Media-request mutation controls
 
 - Request creation requires `request.create` at both the session route and service boundary,

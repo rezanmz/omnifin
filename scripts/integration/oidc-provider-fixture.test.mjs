@@ -130,6 +130,8 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(runnerSource, /clearReport\(options\.output\)/u);
   assert.match(runnerSource, /composeArguments\(project, environmentFile, "logs"/u);
   assert.match(runnerSource, /if \(teardownFailure\) throw teardownFailure/u);
+  assert.match(runnerSource, /allowedChecks/u);
+  assert.match(runnerSource, /browser_flow_failed_\$\{match\[1\]\}_\$\{match\[2\]\}/u);
   assert.ok(
     runnerSource.indexOf("if (teardownFailure) throw teardownFailure") <
       runnerSource.indexOf("writeReport(options.output, completedReport)"),
@@ -143,6 +145,14 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /new Set\(nonces\)\.size === authorizationRequests\.length/u);
   assert.match(browserSource, /values: \["authors"\]/u);
   assert.match(browserSource, /role: "admin"/u);
+  assert.match(browserSource, /SESSION_CONVERGENCE_TIMEOUT_MS = 10_000/u);
+  assert.match(browserSource, /waitForPendingPrincipal/u);
+  assert.match(browserSource, /waitForSessionCookie/u);
+  assert.match(browserSource, /candidate\.name === SESSION_COOKIE_NAME/u);
+  assert.match(browserSource, /cookie\.value !== previousValue/u);
+  assert.match(browserSource, /administrationContext\.request/u);
+  assert.match(browserSource, /"principal_role"/u);
+  assert.match(browserSource, /failureDetail = \{ check \}/u);
   assert.match(browserSource, /supportsBackChannelLogout === false/u);
   assert.match(browserSource, /supportsRpInitiatedLogout === false/u);
   assert.match(browserSource, /localLogout\.origin === webOrigin/u);

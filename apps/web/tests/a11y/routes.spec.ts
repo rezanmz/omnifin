@@ -1,6 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
+import { emptyContinueWatchingFeed } from "../../lib/continue-watching-demo";
+import {
+  mockDiscoveryDetails,
+  mockDiscoveryFeed,
+  mockDiscoverySearch,
+} from "../fixtures/discovery";
 import { mockMediaRequestRouting, mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -201,11 +206,35 @@ for (const route of routes) {
     await page.goto(route.path);
     await expect(page.locator("main")).toHaveCount(1);
     await expect(page.locator("main")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);
   });
 }
+
+test("connected discovery dashboard has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockDiscoveryFeed(page);
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(emptyContinueWatchingFeed),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.goto("/?test-view=continue-watching-live");
+  await expect(page.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
 
 test("open discovery search has no automatically detectable accessibility violations", async ({
   page,

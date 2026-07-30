@@ -1,5 +1,7 @@
 "use client";
 
+import "./acquisition-timeline.css";
+
 import type {
   AcquisitionMonitoringState,
   AcquisitionEvent,

@@ -1,18 +1,59 @@
-import { Info, Play } from "lucide-react";
+"use client";
+
+import { CalendarDays, Info, Library, Sparkles } from "lucide-react";
+import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { DashboardModel } from "../lib/dashboard-data";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
-type AccentStyle = CSSProperties & { "--hero-accent": string };
+type AccentStyle = CSSProperties & {
+  "--hero-accent": string;
+};
 
-export function HeroSpotlight({ hero }: { hero: DashboardModel["hero"] }) {
+export interface HeroSpotlightProperties {
+  artworkPath?: string | null;
+  hero: DashboardModel["hero"];
+  onDetails?: () => void;
+  onRequest?: () => void;
+}
+
+export function HeroSpotlight({
+  artworkPath,
+  hero,
+  onDetails,
+  onRequest,
+}: HeroSpotlightProperties) {
+  const safeArtworkPath =
+    artworkPath && /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath)
+      ? artworkPath
+      : null;
+  const style = {
+    "--hero-accent": hero.accent,
+  } as AccentStyle;
+  const hasLiveActions = onDetails !== undefined;
+  const hasFallbackActions = !hasLiveActions && hero.actions !== "none";
+
   return (
     <section
       className="hero-spotlight"
-      style={{ "--hero-accent": hero.accent } as AccentStyle}
+      data-artwork-source={safeArtworkPath ? "remote" : "generated"}
+      style={style}
       aria-labelledby="hero-title"
     >
       <div className="hero-spotlight__art" aria-hidden="true">
+        {safeArtworkPath ? (
+          // The gateway already serves a bounded, session-protected image. Browser-native loading
+          // keeps credentials same-origin and avoids routing private artwork through an optimizer.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt=""
+            className="hero-spotlight__art-image"
+            decoding="async"
+            fetchPriority="high"
+            loading="eager"
+            src={safeArtworkPath}
+          />
+        ) : null}
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />
         <div className="hero-spotlight__grain" />
@@ -27,28 +68,46 @@ export function HeroSpotlight({ hero }: { hero: DashboardModel["hero"] }) {
           ))}
         </ul>
         <p className="hero-spotlight__description">{hero.description}</p>
-        {hero.actions !== "none" && (
+        {(hasLiveActions || hasFallbackActions) && (
           <DirectionalNavigationGroup className="hero-spotlight__actions">
-            <button className="button button--primary" data-directional-item type="button">
-              <Play aria-hidden="true" fill="currentColor" size={17} />
-              Play now
-            </button>
-            <button className="button button--glass" data-directional-item type="button">
-              <Info aria-hidden="true" size={18} />
-              Details
-            </button>
+            {hasLiveActions ? (
+              <>
+                <button
+                  className="button button--primary"
+                  data-directional-item
+                  onClick={onDetails}
+                  type="button"
+                >
+                  <Info aria-hidden="true" size={18} />
+                  View details
+                </button>
+                {onRequest ? (
+                  <button
+                    className="button button--glass"
+                    data-directional-item
+                    onClick={onRequest}
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" size={17} />
+                    Request title
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Link className="button button--primary" data-directional-item href="/library">
+                  <Library aria-hidden="true" size={17} />
+                  Browse library
+                </Link>
+                <Link className="button button--glass" data-directional-item href="/calendar">
+                  <CalendarDays aria-hidden="true" size={18} />
+                  Open calendar
+                </Link>
+              </>
+            )}
           </DirectionalNavigationGroup>
         )}
       </div>
-      {hero.actions !== "none" && (
-        <div className="hero-spotlight__position" aria-label="Spotlight 1 of 5" role="img">
-          <span className="is-active" />
-          <span />
-          <span />
-          <span />
-          <span />
-        </div>
-      )}
     </section>
   );
 }

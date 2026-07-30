@@ -1,6 +1,9 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type { SeerrDiscoveryFeedPage } from "@omnifin/connectors/adapters/seerr";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
+  discoveryFeedResponseSchema,
+  type DiscoveryFeedRailKind,
   discoveryMediaDetailResponseSchema,
   type DiscoveryMediaDetailResponse,
   discoveryPersonDetailResponseSchema,
@@ -123,9 +126,40 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
   },
 };
 
+async function normalizedFeedPage(kind: DiscoveryFeedRailKind): Promise<SeerrDiscoveryFeedPage> {
+  return {
+    items: [
+      {
+        artwork: {
+          backdropPath: `/private/${kind}-backdrop.jpg`,
+          posterPath: `/private/${kind}-poster.webp`,
+        },
+        media: {
+          availability: kind === "upcoming" ? "unavailable" : "available",
+          id: `movie:${kind.length + 100}`,
+          kind: "movie",
+          originalTitle: null,
+          overview: `${kind} overview`,
+          source: "seerr",
+          title: `${kind} title`,
+          tmdbId: kind.length + 100,
+          voteAverage: 8.1,
+          year: 2026,
+        },
+      },
+    ],
+    totalResults: 1,
+  };
+}
+
 async function harness(
   searchImplementation = vi.fn(async () => normalizedResponse),
   personDetailImplementation = vi.fn(async () => normalizedPersonResponse),
+  discoverImplementation = vi.fn(normalizedFeedPage),
+  artworkImplementation = vi.fn(async () => ({
+    body: Uint8Array.from([1, 2, 3, 4]),
+    contentType: "image/webp" as const,
+  })),
 ) {
   const config = testConfig();
   const detailImplementation = vi.fn(async () => normalizedDetailResponse);
@@ -135,7 +169,9 @@ async function harness(
       clock: () => now,
       createAdapter: () => ({
         detail: detailImplementation,
+        discover: discoverImplementation,
         personDetail: personDetailImplementation,
+        readDiscoveryArtwork: artworkImplementation,
         search: searchImplementation,
       }),
     },
@@ -178,35 +214,65 @@ async function harness(
     .run();
   app.database.db
     .insert(users)
-    .values({
-      createdAt: now,
-      displayName: "Viewer",
-      id: "viewer-user",
-      role: "viewer",
-      roleSource: "manual",
-      status: "active",
-      updatedAt: now,
-    })
+    .values([
+      {
+        createdAt: now,
+        displayName: "Viewer",
+        id: "viewer-user",
+        role: "viewer",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: now,
+      },
+      {
+        createdAt: now,
+        displayName: "Other viewer",
+        id: "other-user",
+        role: "viewer",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: now,
+      },
+    ])
     .run();
   app.database.db
     .insert(serviceIdentityLinks)
-    .values({
-      connectorId: "jellyfin-main",
-      createdAt: now,
-      deviceId: "viewer-device",
-      encryptedAccessToken: "v2.fixture-access-token",
-      externalDisplayName: "Viewer",
-      externalServerId: "jellyfin-server",
-      externalUserId: "viewer-external",
-      externalUsername: "viewer",
-      healthState: "linked",
-      id: "viewer-link",
-      lastVerifiedAt: now,
-      service: "jellyfin",
-      tokenCreatedAt: now,
-      updatedAt: now,
-      userId: "viewer-user",
-    })
+    .values([
+      {
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        deviceId: "viewer-device",
+        encryptedAccessToken: "v2.fixture-access-token",
+        externalDisplayName: "Viewer",
+        externalServerId: "jellyfin-server",
+        externalUserId: "viewer-external",
+        externalUsername: "viewer",
+        healthState: "linked",
+        id: "viewer-link",
+        lastVerifiedAt: now,
+        service: "jellyfin",
+        tokenCreatedAt: now,
+        updatedAt: now,
+        userId: "viewer-user",
+      },
+      {
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        deviceId: "other-device",
+        encryptedAccessToken: "v2.fixture-other-access-token",
+        externalDisplayName: "Other viewer",
+        externalServerId: "jellyfin-server",
+        externalUserId: "other-external",
+        externalUsername: "other",
+        healthState: "linked",
+        id: "other-link",
+        lastVerifiedAt: now,
+        service: "jellyfin",
+        tokenCreatedAt: now,
+        updatedAt: now,
+        userId: "other-user",
+      },
+    ])
     .run();
   const session = app.sessionService.createSession({
     attribution: {
@@ -218,9 +284,19 @@ async function harness(
   const recovery = app.sessionService.createSession({
     attribution: { authMethod: "recovery" },
   });
+  const otherSession = app.sessionService.createSession({
+    attribution: {
+      authMethod: "jellyfin",
+      serviceIdentityLinkId: "other-link",
+      userId: "other-user",
+    },
+  });
   return {
     app,
+    artworkImplementation,
     detailImplementation,
+    discoverImplementation,
+    otherSession,
     personDetailImplementation,
     recovery,
     searchImplementation,
@@ -229,6 +305,78 @@ async function harness(
 }
 
 describe("discovery search routes", () => {
+  it("serves a private live feed and user-bound artwork with cache validators", async () => {
+    const { app, artworkImplementation, discoverImplementation, otherSession, recovery, session } =
+      await harness();
+    try {
+      const anonymous = await app.inject({ method: "GET", url: "/v1/discovery/feed" });
+      expect(anonymous.statusCode).toBe(401);
+
+      const deniedRecovery = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/feed",
+      });
+      expect(deniedRecovery.statusCode).toBe(403);
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/feed?language=en-CA",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const feed = discoveryFeedResponseSchema.parse(response.json());
+      expect(feed.state).toBe("complete");
+      expect(discoverImplementation).toHaveBeenCalledTimes(4);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toContain("/private/");
+      expect(response.body).not.toContain("route-private-api-key");
+
+      const artworkPath = feed.rails[0]!.items[0]!.artwork.backdropPath!;
+      const artwork = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: artworkPath,
+      });
+      expect(artwork.statusCode, artwork.body).toBe(200);
+      expect(artwork.rawPayload).toEqual(Buffer.from([1, 2, 3, 4]));
+      expect(artwork.headers["content-type"]).toBe("image/webp");
+      expect(artwork.headers["cache-control"]).toBe("private, max-age=3600, immutable");
+      expect(artwork.headers.etag).toMatch(/^"discovery_artwork_[A-Za-z0-9_-]{22}"$/u);
+      expect(artwork.headers.vary).toBe("Cookie");
+      expect(artwork.headers["x-content-type-options"]).toBe("nosniff");
+      expect(artworkImplementation).toHaveBeenCalledWith(
+        "/private/trending-backdrop.jpg",
+        "backdrop",
+        expect.any(AbortSignal),
+      );
+
+      const conditional = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
+          "if-none-match": artwork.headers.etag,
+        },
+        method: "GET",
+        url: artworkPath,
+      });
+      expect(conditional.statusCode).toBe(304);
+      expect(conditional.rawPayload).toHaveLength(0);
+
+      const crossUser = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${otherSession.sessionToken}` },
+        method: "GET",
+        url: artworkPath,
+      });
+      expect(crossUser.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(crossUser.json()).error.code).toBe("discovery_artwork_not_found");
+      expect(artworkImplementation).toHaveBeenCalledTimes(2);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves private normalized details through a bounded media route", async () => {
     const { app, detailImplementation, recovery, session } = await harness();
     try {

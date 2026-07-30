@@ -1,13 +1,15 @@
 "use client";
 
+import "./profile-menu.css";
+
 import { ArrowUpRight, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AppearanceSelector } from "./appearance-selector";
 
-export function ProfileMenu() {
-  const [open, setOpen] = useState(false);
+export function ProfileMenu({ initialOpen = false }: { initialOpen?: boolean }) {
+  const [open, setOpen] = useState(initialOpen);
   const panelId = useId();
   const rootReference = useRef<HTMLDivElement>(null);
   const triggerReference = useRef<HTMLButtonElement>(null);

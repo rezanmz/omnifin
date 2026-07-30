@@ -193,6 +193,11 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Pull immutable Jellyfin media runtime
+        timeout-minutes: 10
+        run: >-
+          docker pull
+          ghcr.io/jellyfin/jellyfin:10.11.11@sha256:45f648c382a0c8b552582fcea40e95cb17c5d475473a891cba0eb7523fb92112
       - name: Generate and transcode media
         run: pnpm fixture:media --output artifacts/media/playback-fixture
       - name: Build playback connector

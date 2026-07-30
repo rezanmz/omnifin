@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { demoContinueWatchingFeed } from "../../lib/continue-watching-demo";
+import {
+  demoContinueWatchingFeed,
+  emptyContinueWatchingFeed,
+} from "../../lib/continue-watching-demo";
 import {
   acquisitionMonitoringCsrfToken,
   mockAcquisitionMonitoringSession,
@@ -10,7 +13,12 @@ import {
   mockAcquisitionRecoverySession,
   mockAcquisitionSearch,
 } from "../fixtures/acquisition-recovery";
-import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
+import {
+  mockDiscoveryDetails,
+  mockDiscoveryFeed,
+  mockDiscoveryFeedDetails,
+  mockDiscoverySearch,
+} from "../fixtures/discovery";
 import {
   mediaRequestCsrfToken,
   mediaRequestRoutingReference,
@@ -26,6 +34,16 @@ import {
   mockManualReleaseSession,
   openManualReleaseWorkbench,
 } from "../fixtures/manual-release";
+
+async function mockQuietContinueWatching(page: Parameters<typeof mockDiscoveryFeed>[0]) {
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(emptyContinueWatchingFeed),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
   await page.goto("/");
@@ -66,11 +84,31 @@ test("authenticated Continue Watching renders normalized progress and private ar
     page.getByRole("progressbar", { name: "Northern Lights watch progress" }),
   ).toHaveAttribute("aria-valuenow", "33");
   await expect(card.locator(".media-card__art")).toHaveAttribute("data-artwork-source", "remote");
-  await expect(card.locator(".media-card__art")).toHaveCSS(
-    "background-image",
+  await expect(card.locator(".media-card__artwork-image")).toHaveAttribute(
+    "src",
     /\/api\/media\/media_b{22}\/images\/poster/u,
   );
   await expect(page.getByText("jellyfin-main")).toHaveCount(0);
+});
+
+test("connected discovery renders live artwork and opens real title details", async ({ page }) => {
+  await mockDiscoveryFeed(page);
+  await mockDiscoveryFeedDetails(page);
+  await mockQuietContinueWatching(page);
+
+  await page.goto("/?test-view=continue-watching-live");
+  await expect(page.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Trending now" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Popular movies" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Series people are watching" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Coming soon" })).toBeVisible();
+  await expect(page.getByText("View all")).toHaveCount(0);
+  await expect(page.locator('.hero-spotlight[data-artwork-source="remote"]')).toBeVisible();
+
+  await page.getByRole("button", { exact: true, name: "View details" }).click();
+  const detail = page.getByRole("dialog", { name: "The Far Meridian details" });
+  await expect(detail).toBeVisible();
+  await expect(detail.getByText("Follow the signal.")).toBeVisible();
 });
 
 test("operators can inspect a title-level acquisition trace before choosing recovery", async ({
@@ -472,7 +510,9 @@ test("ten-foot posters support directional focus with focus-safe scrolling", asy
     testInfo.project.name !== "ten-foot",
     "Directional remote behavior uses the 10-foot profile.",
   );
-  await page.goto("/?test-profile=ten-foot");
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-profile=ten-foot&test-view=continue-watching-live");
 
   const discover = page.getByRole("link", { name: "Discover" });
   await discover.focus();
@@ -487,13 +527,13 @@ test("ten-foot posters support directional focus with focus-safe scrolling", asy
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("button", { name: "Open profile menu" })).toBeFocused();
 
-  const play = page.getByRole("button", { name: "Play now" });
-  await play.focus();
+  const details = page.getByRole("button", { exact: true, name: "View details" });
+  await details.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("button", { name: "Details" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Request title" })).toBeFocused();
 
-  const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
-  const secondPoster = page.getByRole("button", { name: "Open The Quiet Archive" });
+  const firstPoster = page.getByRole("button", { name: "View details for The Far Meridian" });
+  const secondPoster = page.getByRole("button", { name: "View details for The Quiet Archive" });
   await firstPoster.evaluate((poster) => poster.focus({ preventScroll: true }));
   await page.keyboard.press("ArrowRight");
 
@@ -511,7 +551,7 @@ test("ten-foot posters support directional focus with focus-safe scrolling", asy
     .toBe(true);
 
   await page.keyboard.press("End");
-  const lastPoster = page.getByRole("button", { name: "Open Field Notes" });
+  const lastPoster = page.getByRole("button", { name: "View details for Monolith Season" });
   await expect(lastPoster).toBeFocused();
   const edgeScrollPosition = await page.evaluate(() => window.scrollY);
   await page.keyboard.press("ArrowRight");
@@ -522,6 +562,7 @@ test("ten-foot posters support directional focus with focus-safe scrolling", asy
     )
     .toBeLessThanOrEqual(3);
 
+  await page.goto("/?test-profile=ten-foot");
   const firstCalendarItem = page.getByRole("button", { name: /Signal \/ 1×07/i });
   await firstCalendarItem.focus();
   await page.keyboard.press("ArrowRight");
@@ -619,26 +660,6 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
   }
   await expect(page.locator(".connection-pulse > svg")).toBeVisible();
 
-  const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
-  const secondPoster = page.getByRole("button", { name: "Open The Quiet Archive" });
-  await firstPoster.evaluate((poster) => poster.focus({ preventScroll: true }));
-  await page.keyboard.press("ArrowRight");
-  await expect(secondPoster).toBeFocused();
-  await expect
-    .poll(() =>
-      secondPoster.evaluate((poster) => {
-        const box = poster.getBoundingClientRect();
-        const commandBottom = document
-          .querySelector<HTMLElement>(".top-command-bar")!
-          .getBoundingClientRect().bottom;
-        const navigationTop = document
-          .querySelector<HTMLElement>(".mobile-navigation")!
-          .getBoundingClientRect().top;
-        return box.top >= commandBottom + 4 && box.bottom <= navigationTop - 4;
-      }),
-    )
-    .toBe(true);
-
   const operations = page.getByRole("button", { name: /2 acquisitions moving/i });
   await operations.click();
   await operations.focus();
@@ -657,6 +678,29 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
     )
     .toBe(true);
 
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  const firstPoster = page.getByRole("button", { name: "View details for The Far Meridian" });
+  const secondPoster = page.getByRole("button", { name: "View details for The Quiet Archive" });
+  await firstPoster.evaluate((poster) => poster.focus({ preventScroll: true }));
+  await page.keyboard.press("ArrowRight");
+  await expect(secondPoster).toBeFocused();
+  await expect
+    .poll(() =>
+      secondPoster.evaluate((poster) => {
+        const box = poster.getBoundingClientRect();
+        const commandBottom = document
+          .querySelector<HTMLElement>(".top-command-bar")!
+          .getBoundingClientRect().bottom;
+        const navigationTop = document
+          .querySelector<HTMLElement>(".mobile-navigation")!
+          .getBoundingClientRect().top;
+        return box.top >= commandBottom + 4 && box.bottom <= navigationTop - 4;
+      }),
+    )
+    .toBe(true);
+
   await page.goto("/?test-view=onboarding");
   await expect(page.locator(".mobile-navigation")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review account access" })).toBeVisible();
@@ -667,9 +711,11 @@ test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo
     testInfo.project.name !== "chromium",
     "One desktop engine covers hover geometry and transparent rail surfaces.",
   );
-  await page.goto("/");
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
 
-  const firstPoster = page.getByRole("button", { name: "Open Ember Coast" });
+  const firstPoster = page.getByRole("button", { name: "View details for The Far Meridian" });
   await firstPoster
     .locator("xpath=ancestor::*[contains(@class, 'media-rail__scroller')]")
     .evaluate((scroller) => {
@@ -701,9 +747,8 @@ test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo
     )
     .toBeGreaterThanOrEqual(1);
 
-  const railBackgrounds = await page
-    .locator(".media-rail")
-    .first()
+  const railBackgrounds = await firstPoster
+    .locator("xpath=ancestor::section[contains(@class, 'media-rail')]")
     .evaluate((rail) => {
       const scroller = rail.querySelector<HTMLElement>(".media-rail__scroller")!;
       return [getComputedStyle(rail).backgroundColor, getComputedStyle(scroller).backgroundColor];

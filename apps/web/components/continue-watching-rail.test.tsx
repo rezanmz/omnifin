@@ -47,9 +47,10 @@ describe("ContinueWatchingRail", () => {
     expect(
       screen.getByRole("button", { name: "Resume Northern Lights" }),
     ).toHaveAccessibleDescription("33% watched");
-    expect(container.querySelector('[data-artwork-source="remote"]')).toHaveStyle({
-      "--card-artwork": `url("/api/media/media_${"b".repeat(22)}/images/poster")`,
-    });
+    expect(container.querySelector('[data-artwork-source="remote"] img')).toHaveAttribute(
+      "src",
+      `/api/media/media_${"b".repeat(22)}/images/poster`,
+    );
     expect(container.innerHTML).not.toContain("jellyfin-main");
   });
 

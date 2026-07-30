@@ -67,6 +67,48 @@ test("CI installs actionlint from a checksum-pinned release", () => {
   assert.doesNotMatch(validation, /latest/u);
 });
 
+test("visual baseline refresh is review-only and cannot write to the repository", () => {
+  const source = workflow("visual-baselines.yml");
+  const document = workflowDocument("visual-baselines.yml");
+  const refresh = document.jobs.refresh;
+  const checkout = namedStep(refresh.steps, "Check out repository");
+  const build = namedStep(refresh.steps, "Build web application");
+  const installBrowsers = namedStep(refresh.steps, "Install browser runtimes");
+  const generate = namedStep(refresh.steps, "Generate visual baselines");
+  const upload = namedStep(refresh.steps, "Upload visual baselines for review");
+
+  assert.deepEqual(document.permissions, { contents: "read" });
+  assert.deepEqual(refresh.permissions, { contents: "read" });
+  assert.equal(refresh.strategy["fail-fast"], false);
+  assert.deepEqual(refresh.strategy.matrix.include, [
+    { platform: "linux", runner: "ubuntu-latest" },
+    { platform: "darwin", runner: "macos-latest" },
+  ]);
+  assert.equal(checkout.with["persist-credentials"], false);
+  assert.equal(build.run, "pnpm build");
+  assert.equal(
+    installBrowsers.run,
+    "pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit",
+  );
+  assert.match(generate.run, /--update-snapshots/u);
+  assert.equal(upload.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+  assert.doesNotMatch(source, /\b(?:git push|git commit|pull-requests: write|contents: write)\b/u);
+});
+
+test("visual comparisons retain PNG evidence without retry, trace, or video amplification", () => {
+  const config = repositoryFile("apps/web/playwright.config.ts");
+  const packageDocument = repositoryJson("apps/web/package.json");
+  const refresh = workflowDocument("visual-baselines.yml");
+  const generate = namedStep(refresh.jobs.refresh.steps, "Generate visual baselines");
+
+  assert.match(packageDocument.scripts["test:visual"], /OMNIFIN_VISUAL_TEST=true/u);
+  assert.match(config, /const visualTestMode = process\.env\.OMNIFIN_VISUAL_TEST === "true"/u);
+  assert.match(config, /retries: process\.env\.CI && !visualTestMode \? 2 : 0/u);
+  assert.match(config, /trace: visualTestMode \? "off" : "retain-on-failure"/u);
+  assert.match(config, /video: visualTestMode \? "off" : "retain-on-failure"/u);
+  assert.equal(generate.env.OMNIFIN_VISUAL_TEST, "true");
+});
+
 test("security workflow creates the SBOM output directory before generation", () => {
   const source = workflow("security.yml");
   const prepare = source.indexOf("- name: Prepare SBOM output directory");

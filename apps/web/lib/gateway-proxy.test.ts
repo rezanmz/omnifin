@@ -99,6 +99,58 @@ describe("trusted edge address selection", () => {
 });
 
 describe("gateway proxy transport", () => {
+  it("serves only bounded generated discovery artwork in explicit test mode", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+    const upstream = vi.fn();
+    vi.stubGlobal("fetch", upstream);
+
+    const response = await proxyGatewayRequest(
+      requestFixture({
+        path: `/api/discovery/artwork/discovery_art_${"a".repeat(22)}`,
+      }),
+    );
+    const body = new Uint8Array(await response.arrayBuffer());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(response.headers.get("cache-control")).toContain("immutable");
+    expect(body.byteLength).toBeGreaterThan(1_000);
+    expect([...body.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass the gateway for an unknown test artwork reference", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+    const upstream = vi.fn(async () => new Response("upstream", { status: 202 }));
+    vi.stubGlobal("fetch", upstream);
+
+    const response = await proxyGatewayRequest(
+      requestFixture({
+        path: `/api/discovery/artwork/discovery_art_${"z".repeat(22)}`,
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("upstream");
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
+  it("keeps generated artwork behind explicit test mode", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "false");
+    const upstream = vi.fn(async () => new Response("protected-upstream", { status: 206 }));
+    vi.stubGlobal("fetch", upstream);
+
+    const response = await proxyGatewayRequest(
+      requestFixture({
+        path: `/api/discovery/artwork/discovery_art_${"a".repeat(22)}`,
+      }),
+    );
+
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe("protected-upstream");
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
   it("strips untrusted hop assertions and preserves redirects with distinct cookies", async () => {
     let sentEndpoint: URL | string | Request | undefined;
     let sentInit: (RequestInit & { duplex?: "half" }) | undefined;

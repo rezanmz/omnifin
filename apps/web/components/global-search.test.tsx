@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import { GlobalSearch } from "./global-search";
+import { GlobalSearchLoader } from "./global-search-loader";
 
 const searchResponse: DiscoverySearchResponse = {
   generatedAt: "2026-07-27T07:30:00.000Z",
@@ -89,6 +90,21 @@ function client(
 }
 
 describe("global search", () => {
+  it("opens a query transferred while the lazy search implementation loads", async () => {
+    const search = vi.fn(async () => searchResponse);
+    render(<GlobalSearchLoader client={client(search)} debounceMs={0} />);
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "matrix" } });
+
+    const result = await screen.findByRole("option", { name: /The Matrix/i });
+    expect(result).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "true");
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, query: "matrix" }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("opens normalized title details without keeping the search console behind the dialog", async () => {
     const user = userEvent.setup();
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);

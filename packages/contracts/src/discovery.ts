@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { partialFailureSchema, type PartialFailure } from "./connectors.js";
+
 export const DISCOVERY_SEARCH_MAX_RESULTS = 100;
 export const DISCOVERY_DETAIL_MAX_CAST = 12;
 export const DISCOVERY_DETAIL_MAX_CREW = 12;
@@ -7,6 +9,8 @@ export const DISCOVERY_DETAIL_MAX_RATINGS = 6;
 export const DISCOVERY_DETAIL_MAX_RECOMMENDATIONS = 12;
 export const DISCOVERY_DETAIL_MAX_TRAILERS = 6;
 export const DISCOVERY_PERSON_MAX_CREDITS = 24;
+export const DISCOVERY_FEED_RAIL_COUNT = 4;
+export const DISCOVERY_FEED_MAX_ITEMS_PER_RAIL = 18;
 
 const tmdbIdentifierSchema = z.int().positive().max(2_147_483_647);
 const titleSchema = z.string().trim().min(1).max(300);
@@ -95,6 +99,164 @@ export const discoverySearchResponseSchema = z.strictObject({
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 export type DiscoverySearchResponse = z.infer<typeof discoverySearchResponseSchema>;
+
+export const discoveryFeedQuerySchema = z.strictObject({
+  language: languageSchema.default("en"),
+});
+export type DiscoveryFeedQuery = z.infer<typeof discoveryFeedQuerySchema>;
+
+export const discoveryFeedRailKindSchema = z.enum([
+  "trending",
+  "popular_movies",
+  "popular_series",
+  "upcoming",
+]);
+export type DiscoveryFeedRailKind = z.infer<typeof discoveryFeedRailKindSchema>;
+
+export const discoveryArtworkReferenceIdSchema = z
+  .string()
+  .regex(/^discovery_art_[A-Za-z0-9_-]{22}$/u);
+
+const discoveryArtworkPathSchema = z
+  .string()
+  .regex(/^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u)
+  .max(96)
+  .nullable();
+
+export const discoveryFeedArtworkSchema = z.strictObject({
+  backdropPath: discoveryArtworkPathSchema,
+  posterPath: discoveryArtworkPathSchema,
+});
+export type DiscoveryFeedArtwork = z.infer<typeof discoveryFeedArtworkSchema>;
+
+export const discoveryFeedMovieSchema = discoveryMovieResultSchema.extend({
+  artwork: discoveryFeedArtworkSchema,
+});
+export const discoveryFeedSeriesSchema = discoverySeriesResultSchema.extend({
+  artwork: discoveryFeedArtworkSchema,
+});
+export const discoveryFeedItemSchema = z.discriminatedUnion("kind", [
+  discoveryFeedMovieSchema,
+  discoveryFeedSeriesSchema,
+]);
+export type DiscoveryFeedItem = z.infer<typeof discoveryFeedItemSchema>;
+
+function failuresMatch(left: PartialFailure, right: PartialFailure) {
+  return (
+    left.code === right.code &&
+    left.message === right.message &&
+    left.occurredAt === right.occurredAt &&
+    left.operation === right.operation &&
+    left.retryable === right.retryable &&
+    left.retryAfterSeconds === right.retryAfterSeconds &&
+    left.service === right.service
+  );
+}
+
+export const discoveryFeedRailSchema = z
+  .strictObject({
+    failure: partialFailureSchema.nullable(),
+    items: z.array(discoveryFeedItemSchema).max(DISCOVERY_FEED_MAX_ITEMS_PER_RAIL),
+    kind: discoveryFeedRailKindSchema,
+    totalResults: z.int().nonnegative().max(10_000_000),
+    truncated: z.boolean(),
+  })
+  .superRefine((rail, context) => {
+    const ids = new Set<string>();
+    for (const [index, item] of rail.items.entries()) {
+      if (ids.has(item.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Discovery feed items must be unique within a rail.",
+          path: ["items", index, "id"],
+        });
+      }
+      ids.add(item.id);
+    }
+    if (rail.failure !== null) {
+      if (rail.failure.service !== "seerr") {
+        context.addIssue({
+          code: "custom",
+          message: "Discovery feed failures must identify Seerr.",
+          path: ["failure", "service"],
+        });
+      }
+      if (rail.items.length > 0 || rail.totalResults !== 0 || rail.truncated) {
+        context.addIssue({
+          code: "custom",
+          message: "An unavailable discovery rail cannot contain media or truncation.",
+          path: ["items"],
+        });
+      }
+      return;
+    }
+    if (rail.totalResults < rail.items.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Discovery rail totals cannot be smaller than the returned media.",
+        path: ["totalResults"],
+      });
+    }
+    if (rail.truncated !== rail.totalResults > rail.items.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Discovery rail truncation must match the returned result count.",
+        path: ["truncated"],
+      });
+    }
+  });
+export type DiscoveryFeedRail = z.infer<typeof discoveryFeedRailSchema>;
+
+export const discoveryFeedResponseSchema = z
+  .strictObject({
+    failures: z.array(partialFailureSchema).max(DISCOVERY_FEED_RAIL_COUNT),
+    generatedAt: z.iso.datetime({ offset: true }),
+    rails: z.array(discoveryFeedRailSchema).length(DISCOVERY_FEED_RAIL_COUNT),
+    state: z.enum(["complete", "degraded", "empty", "unavailable"]),
+  })
+  .superRefine((response, context) => {
+    const kinds = new Set(response.rails.map((rail) => rail.kind));
+    if (kinds.size !== DISCOVERY_FEED_RAIL_COUNT) {
+      context.addIssue({
+        code: "custom",
+        message: "A discovery feed must contain every rail exactly once.",
+        path: ["rails"],
+      });
+    }
+    const railFailures = response.rails.flatMap((rail) =>
+      rail.failure === null ? [] : [rail.failure],
+    );
+    if (
+      railFailures.length !== response.failures.length ||
+      railFailures.some(
+        (failure) => !response.failures.some((candidate) => failuresMatch(failure, candidate)),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Discovery feed failures must match unavailable rails exactly.",
+        path: ["failures"],
+      });
+    }
+    const failed = railFailures.length;
+    const items = response.rails.reduce((total, rail) => total + rail.items.length, 0);
+    const expectedState =
+      failed === DISCOVERY_FEED_RAIL_COUNT
+        ? "unavailable"
+        : failed > 0
+          ? "degraded"
+          : items === 0
+            ? "empty"
+            : "complete";
+    if (response.state !== expectedState) {
+      context.addIssue({
+        code: "custom",
+        message: "Discovery feed state must match its rails and failures.",
+        path: ["state"],
+      });
+    }
+  });
+export type DiscoveryFeedResponse = z.infer<typeof discoveryFeedResponseSchema>;
 
 export const discoveryMediaKindSchema = z.enum(["movie", "series"]);
 export type DiscoveryMediaKind = z.infer<typeof discoveryMediaKindSchema>;
@@ -292,6 +454,8 @@ export const discoverySearchQueryJsonSchema = withoutSchemaDialect(discoverySear
 export const discoverySearchResponseJsonSchema = withoutSchemaDialect(
   discoverySearchResponseSchema,
 );
+export const discoveryFeedQueryJsonSchema = withoutSchemaDialect(discoveryFeedQuerySchema);
+export const discoveryFeedResponseJsonSchema = withoutSchemaDialect(discoveryFeedResponseSchema);
 export const discoveryMediaDetailParamsJsonSchema = withoutSchemaDialect(
   discoveryMediaDetailParamsSchema,
 );

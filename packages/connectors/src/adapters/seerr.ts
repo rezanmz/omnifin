@@ -13,6 +13,9 @@ import {
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseSchema,
+  discoveryFeedQuerySchema,
+  type DiscoveryFeedQuery,
+  type DiscoveryFeedRailKind,
   discoveryPersonDetailParamsSchema,
   discoveryPersonDetailQuerySchema,
   discoveryPersonDetailResponseSchema,
@@ -49,7 +52,7 @@ import {
 } from "@omnifin/contracts/requests";
 import { z } from "zod";
 
-import { SafeConnectorError } from "../http/safe-http-client.js";
+import { SafeConnectorError, SafeHttpClient } from "../http/safe-http-client.js";
 import { ProbeOnlyAdapter } from "./base.js";
 import { upstreamVersionSchema } from "./schemas.js";
 import type { OptionalApiKeyConnectorConfig } from "../types.js";
@@ -69,19 +72,30 @@ const upstreamOverviewSchema = z.string().trim().max(2_000).nullish();
 const upstreamDateSchema = z.string().trim().max(32).nullish();
 const upstreamVoteAverageSchema = z.number().finite().min(0).max(10).nullish();
 const upstreamMediaInfoSchema = z.object({ status: z.int().min(1).max(6) }).nullish();
+const upstreamArtworkPathSchema = z
+  .string()
+  .trim()
+  .min(6)
+  .max(300)
+  .regex(/^\/[A-Za-z0-9/_-]+\.(?:jpe?g|png|webp)$/iu)
+  .refine((value) => !value.includes("..") && !value.includes("//"))
+  .nullish();
 
 const upstreamMovieResultSchema = z.object({
+  backdropPath: upstreamArtworkPathSchema,
   id: upstreamIdentifierSchema,
   mediaType: z.literal("movie"),
   mediaInfo: upstreamMediaInfoSchema,
   originalTitle: upstreamOptionalTitleSchema,
   overview: upstreamOverviewSchema,
+  posterPath: upstreamArtworkPathSchema,
   releaseDate: upstreamDateSchema,
   title: upstreamTitleSchema,
   voteAverage: upstreamVoteAverageSchema,
 });
 
 const upstreamSeriesResultSchema = z.object({
+  backdropPath: upstreamArtworkPathSchema,
   firstAirDate: upstreamDateSchema,
   id: upstreamIdentifierSchema,
   mediaType: z.literal("tv"),
@@ -89,6 +103,7 @@ const upstreamSeriesResultSchema = z.object({
   name: upstreamTitleSchema,
   originalName: upstreamOptionalTitleSchema,
   overview: upstreamOverviewSchema,
+  posterPath: upstreamArtworkPathSchema,
   voteAverage: upstreamVoteAverageSchema,
 });
 
@@ -199,6 +214,18 @@ const upstreamMovieRecommendationPageSchema = z.object({
 });
 const upstreamSeriesRecommendationPageSchema = z.object({
   results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
+});
+const upstreamMovieFeedPageSchema = z.object({
+  page: z.int().min(1).max(500),
+  results: z.array(upstreamMovieRecommendationSchema).max(100).default([]),
+  totalPages: z.int().min(0).max(500),
+  totalResults: z.int().nonnegative().max(10_000_000),
+});
+const upstreamSeriesFeedPageSchema = z.object({
+  page: z.int().min(1).max(500),
+  results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
+  totalPages: z.int().min(0).max(500),
+  totalResults: z.int().nonnegative().max(10_000_000),
 });
 
 const upstreamDetailBase = {
@@ -689,6 +716,71 @@ function normalizedSeriesRecommendation(
   };
 }
 
+export interface SeerrDiscoveryFeedItem {
+  artwork: {
+    backdropPath: string | null;
+    posterPath: string | null;
+  };
+  media: DiscoveryMediaRecommendation;
+}
+
+export interface SeerrDiscoveryFeedPage {
+  items: SeerrDiscoveryFeedItem[];
+  totalResults: number;
+}
+
+export interface SeerrDiscoveryArtwork {
+  body: Uint8Array;
+  contentType: "image/avif" | "image/jpeg" | "image/png" | "image/webp";
+}
+
+function feedMovie(
+  result: z.infer<typeof upstreamMovieRecommendationSchema>,
+): SeerrDiscoveryFeedItem {
+  return {
+    artwork: {
+      backdropPath: result.backdropPath ?? null,
+      posterPath: result.posterPath ?? null,
+    },
+    media: normalizedMovieRecommendation(result),
+  };
+}
+
+function feedSeries(
+  result: z.infer<typeof upstreamSeriesRecommendationSchema>,
+): SeerrDiscoveryFeedItem {
+  return {
+    artwork: {
+      backdropPath: result.backdropPath ?? null,
+      posterPath: result.posterPath ?? null,
+    },
+    media: normalizedSeriesRecommendation(result),
+  };
+}
+
+function boundedFeedItems(items: readonly SeerrDiscoveryFeedItem[]) {
+  const seen = new Set<string>();
+  return items.filter(({ media }) => {
+    if (seen.has(media.id)) return false;
+    seen.add(media.id);
+    return true;
+  });
+}
+
+function artworkContentType(value: string | null) {
+  const normalized = value?.split(";", 1)[0]?.trim().toLowerCase();
+  if (normalized === "image/jpg") return "image/jpeg" as const;
+  if (
+    normalized === "image/avif" ||
+    normalized === "image/jpeg" ||
+    normalized === "image/png" ||
+    normalized === "image/webp"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
 async function optionalIntelligence<T>(promise: Promise<T>) {
   try {
     return { state: "ready" as const, value: await promise };
@@ -814,6 +906,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
   readonly service = "seerr" as const;
   override readonly capabilities: readonly ConnectorCapability[];
   readonly #apiKey: string | null;
+  #artworkClientInstance: SafeHttpClient | undefined;
 
   constructor(config: OptionalApiKeyConnectorConfig) {
     const apiKey = config.apiKey?.trim() || null;
@@ -843,6 +936,151 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       });
       return status.version;
     });
+  }
+
+  async discover(
+    kind: DiscoveryFeedRailKind,
+    input: DiscoveryFeedQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryFeedPage> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr discovery requires configured credentials.",
+        operation: `discovery.feed.${kind}`,
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const query = discoveryFeedQuerySchema.parse(input);
+    const operation = `discovery.feed.${kind}`;
+    const options = {
+      headers: { "X-Api-Key": this.#apiKey },
+      operation,
+      ...(signal ? { signal } : {}),
+    } as const;
+
+    if (kind === "trending") {
+      const response = await this.client.requestJson(
+        "api/v1/discover/trending",
+        seerrSearchResponseSchema,
+        {
+          ...options,
+          query: new URLSearchParams({
+            language: query.language,
+            mediaType: "all",
+            page: "1",
+            timeWindow: "day",
+          }),
+        },
+      );
+      return {
+        items: boundedFeedItems(
+          response.results.flatMap((result) => {
+            if (result.mediaType === "movie") return [feedMovie(result)];
+            if (result.mediaType === "tv") return [feedSeries(result)];
+            return [];
+          }),
+        ),
+        totalResults: response.totalResults,
+      };
+    }
+
+    if (kind === "popular_movies") {
+      const response = await this.client.requestJson(
+        "api/v1/discover/movies",
+        upstreamMovieFeedPageSchema,
+        {
+          ...options,
+          query: new URLSearchParams({
+            language: query.language,
+            page: "1",
+            sortBy: "popularity.desc",
+          }),
+        },
+      );
+      return {
+        items: boundedFeedItems(response.results.map(feedMovie)),
+        totalResults: response.totalResults,
+      };
+    }
+
+    if (kind === "popular_series") {
+      const response = await this.client.requestJson(
+        "api/v1/discover/tv",
+        upstreamSeriesFeedPageSchema,
+        {
+          ...options,
+          query: new URLSearchParams({
+            language: query.language,
+            page: "1",
+            sortBy: "popularity.desc",
+          }),
+        },
+      );
+      return {
+        items: boundedFeedItems(response.results.map(feedSeries)),
+        totalResults: response.totalResults,
+      };
+    }
+
+    const parameters = new URLSearchParams({ language: query.language, page: "1" });
+    const [movies, series] = await Promise.all([
+      this.client.requestJson("api/v1/discover/movies/upcoming", upstreamMovieFeedPageSchema, {
+        ...options,
+        query: parameters,
+      }),
+      this.client.requestJson("api/v1/discover/tv/upcoming", upstreamSeriesFeedPageSchema, {
+        ...options,
+        query: parameters,
+      }),
+    ]);
+    const interleaved = Array.from(
+      { length: Math.max(movies.results.length, series.results.length) },
+      (_, index) => [movies.results[index], series.results[index]] as const,
+    ).flatMap(([movie, show]) => [
+      ...(movie === undefined ? [] : [feedMovie(movie)]),
+      ...(show === undefined ? [] : [feedSeries(show)]),
+    ]);
+    return {
+      items: boundedFeedItems(interleaved),
+      totalResults: Math.min(10_000_000, movies.totalResults + series.totalResults),
+    };
+  }
+
+  async readDiscoveryArtwork(
+    pathInput: string,
+    kind: "backdrop" | "poster",
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryArtwork> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr artwork requires configured credentials.",
+        operation: "discovery.artwork",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const path = upstreamArtworkPathSchema.parse(pathInput);
+    if (!path) throw this.#artworkClient().invalidResponse("discovery.artwork");
+    const size = kind === "poster" ? "w600_and_h900_bestv2" : "w1920_and_h800_multi_faces";
+    const response = await this.#artworkClient().requestBytes(
+      `imageproxy/tmdb/t/p/${size}${path}`,
+      {
+        headers: {
+          "X-Api-Key": this.#apiKey,
+          accept: "image/avif,image/webp,image/jpeg,image/png",
+        },
+        operation: "discovery.artwork",
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const contentType = artworkContentType(response.headers.get("content-type"));
+    if (contentType === null || response.body.byteLength === 0) {
+      throw this.#artworkClient().invalidResponse("discovery.artwork");
+    }
+    return Object.freeze({ body: response.body, contentType });
   }
 
   async search(
@@ -1163,6 +1401,23 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     if (matches.length === 0) throw new SeerrRequestError("identity_not_found");
     if (matches.length > 1) throw new SeerrRequestError("identity_ambiguous");
     return matches[0]!.id;
+  }
+
+  #artworkClient() {
+    this.#artworkClientInstance ??= new SafeHttpClient({
+      allowInsecureHttp: this.config.insecureHttpApproved ?? false,
+      baseUrl: this.config.baseUrl,
+      maxResponseBytes: 8 * 1_024 * 1_024,
+      service: this.service,
+      tlsPolicy: this.config.tlsPolicy ?? "strict",
+      ...(this.config.timeoutMs === undefined ? {} : { timeoutMs: this.config.timeoutMs }),
+      ...(this.config.resolveHost === undefined ? {} : { resolveHost: this.config.resolveHost }),
+      ...(this.config.tlsCaCertificatePem === undefined
+        ? {}
+        : { tlsCaCertificatePem: this.config.tlsCaCertificatePem }),
+      ...(this.config.transport === undefined ? {} : { transport: this.config.transport }),
+    });
+    return this.#artworkClientInstance;
   }
 
   async listRequestRouting(

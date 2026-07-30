@@ -1,9 +1,12 @@
 import type { CSSProperties } from "react";
+import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
+import type { ThemePreference } from "../lib/theme";
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
+import { DiscoveryDashboard } from "./discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
@@ -22,12 +25,22 @@ type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 
 export function DashboardScreen({
   data,
+  discoveryInitialFeed,
+  discoveryRefresh = true,
+  discoveryShowContinueWatching = true,
   displayProfile = "standard",
   liveContinueWatching = false,
+  liveDiscovery = false,
+  themePreference = "system",
 }: {
   data: DashboardModel;
+  discoveryInitialFeed?: DiscoveryFeedResponse;
+  discoveryRefresh?: boolean;
+  discoveryShowContinueWatching?: boolean;
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
+  liveDiscovery?: boolean;
+  themePreference?: ThemePreference;
 }) {
   return (
     <div
@@ -39,15 +52,28 @@ export function DashboardScreen({
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">
-        <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
+        <TopCommandBar
+          connectionStatus={aggregateStatus(data.services)}
+          themePreference={themePreference}
+        />
         <main className="dashboard" id="main-content" tabIndex={-1}>
-          <HeroSpotlight hero={data.hero} />
-          {liveContinueWatching ? (
-            <LazyContinueWatchingRail />
+          {liveDiscovery ? (
+            <DiscoveryDashboard
+              {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
+              live={discoveryRefresh}
+              showContinueWatching={discoveryShowContinueWatching}
+            />
           ) : (
-            <MediaRail items={data.continueWatching} title="Continue watching" />
+            <>
+              <HeroSpotlight hero={data.hero} />
+              {liveContinueWatching ? (
+                <LazyContinueWatchingRail />
+              ) : (
+                <MediaRail items={data.continueWatching} title="Continue watching" />
+              )}
+              <MediaRail items={data.discovery} title="Made for tonight" />
+            </>
           )}
-          <MediaRail items={data.discovery} title="Made for tonight" />
           <CalendarStrip items={data.calendar} />
           <OperationsDock operations={data.operations} />
         </main>
@@ -60,9 +86,11 @@ export function DashboardScreen({
 export function DashboardStateScreen({
   displayProfile = "standard",
   kind,
+  themePreference = "system",
 }: {
   displayProfile?: DisplayProfile;
   kind: DashboardStateKind;
+  themePreference?: ThemePreference;
 }) {
   const connectionStatus: ServiceStatus = kind === "offline" ? "offline" : "attention";
   return (
@@ -71,7 +99,7 @@ export function DashboardStateScreen({
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">
-        <TopCommandBar connectionStatus={connectionStatus} />
+        <TopCommandBar connectionStatus={connectionStatus} themePreference={themePreference} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           <DashboardState kind={kind} />
         </main>

@@ -1,0 +1,99 @@
+name: Visual baseline refresh
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-baselines-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11.9.0"
+
+jobs:
+  refresh:
+    name: Generate ${{ matrix.platform }} baselines
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'refresh-visual-baselines'
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-latest
+          - platform: darwin
+            runner: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build web application
+        run: pnpm build
+      - name: Install browser runtimes
+        run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit
+      - name: Generate visual baselines
+        env:
+          OMNIFIN_VISUAL_TEST: "true"
+        run: >-
+          pnpm --filter @omnifin/web exec playwright test tests/visual
+          --project=chromium --project=mobile --project=tablet --project=ten-foot
+          --update-snapshots
+      - name: Verify generated baseline scope
+        env:
+          BASELINE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          changes="$(git status --porcelain -- apps/web/tests/visual)"
+          printf '%s\n' "$changes"
+          unexpected="$(printf '%s\n' "$changes" | sed '/^$/d' | sed 's/^...//' | grep -Ev -- "-${BASELINE_PLATFORM}\\.png$" || true)"
+          if [[ -n "$unexpected" ]]; then
+            printf 'Baseline refresh changed unexpected files:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+      - name: Stage review artifact
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/visual-baselines"
+          mkdir -p "$artifact_root/apps/web/tests/visual"
+          git status --porcelain -- apps/web/tests/visual > "$artifact_root/changes.txt"
+          while IFS= read -r change; do
+            source="${change:3}"
+            if [[ -f "$source" ]]; then
+              destination="$artifact_root/$source"
+              mkdir -p "$(dirname "$destination")"
+              cp "$source" "$destination"
+            fi
+          done < "$artifact_root/changes.txt"
+      - name: Upload visual baselines for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-baselines-${{ matrix.platform }}
+          path: ${{ runner.temp }}/visual-baselines
+          if-no-files-found: error
+          retention-days: 14

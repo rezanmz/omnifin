@@ -1,9 +1,7 @@
-"use client";
-
 import { CalendarDays, ClipboardCheck, Compass, Gauge, Library, Settings2 } from "lucide-react";
 import Link from "next/link";
-import { handleDirectionalFocus } from "../lib/directional-focus";
 import { BrandMark } from "./brand-mark";
+import { DirectionalNavigationRegion } from "./directional-navigation-group";
 
 const destinations = [
   { current: true, href: "/", icon: Compass, label: "Discover" },
@@ -15,11 +13,12 @@ const destinations = [
 
 export function NavigationRail() {
   return (
-    <aside
+    <DirectionalNavigationRegion
+      ariaLabel="Primary navigation"
+      as="aside"
+      axis="vertical"
       className="navigation-rail"
-      aria-label="Primary navigation"
-      data-liquid-glass
-      onKeyDown={(event) => handleDirectionalFocus(event, { axis: "vertical" })}
+      liquidGlass
     >
       <Link className="navigation-rail__brand" href="/" aria-label="Omnifin home" prefetch={false}>
         <BrandMark compact />
@@ -50,17 +49,18 @@ export function NavigationRail() {
         <Settings2 aria-hidden="true" size={21} strokeWidth={1.55} />
         <span className="navigation-rail__tooltip">Settings</span>
       </Link>
-    </aside>
+    </DirectionalNavigationRegion>
   );
 }
 
 export function MobileNavigation() {
   return (
-    <nav
+    <DirectionalNavigationRegion
+      ariaLabel="Primary navigation"
+      as="nav"
+      axis="horizontal"
       className="mobile-navigation"
-      aria-label="Primary navigation"
-      data-liquid-glass
-      onKeyDown={(event) => handleDirectionalFocus(event, { axis: "horizontal" })}
+      liquidGlass
     >
       {destinations.map(({ current, href, icon: Icon, label }) => (
         <Link
@@ -85,6 +85,6 @@ export function MobileNavigation() {
         <Settings2 aria-hidden="true" size={20} strokeWidth={1.65} />
         <span>Settings</span>
       </Link>
-    </nav>
+    </DirectionalNavigationRegion>
   );
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import "./appearance-selector.css";
+
 import { Check, Moon, Monitor, Sun, type LucideIcon } from "lucide-react";
 
 import { THEME_PREFERENCES, type ThemePreference } from "../lib/theme";

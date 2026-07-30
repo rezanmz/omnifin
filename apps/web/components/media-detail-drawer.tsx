@@ -1,5 +1,7 @@
 "use client";
 
+import "./media-detail-drawer.css";
+
 import type {
   DiscoveryMediaDetail,
   DiscoveryMediaRecommendation,

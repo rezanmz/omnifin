@@ -17,7 +17,7 @@
     "test:e2e": "playwright test tests/e2e",
     "test:oidc-rewrite": "playwright test --config=playwright.oidc.config.ts",
     "test:storybook": "cross-env STORYBOOK_DISABLE_TELEMETRY=1 vitest run --project=storybook",
-    "test:visual": "playwright test tests/visual",
+    "test:visual": "cross-env OMNIFIN_VISUAL_TEST=true playwright test tests/visual",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

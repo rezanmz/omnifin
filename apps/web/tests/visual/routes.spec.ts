@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mockDiscoveryDetails, mockDiscoverySearch } from "../fixtures/discovery";
+import { emptyContinueWatchingFeed } from "../../lib/continue-watching-demo";
+import {
+  mockDiscoveryDetails,
+  mockDiscoveryFeed,
+  mockDiscoverySearch,
+} from "../fixtures/discovery";
 import { mockMediaRequestRouting, mockMediaRequestSession } from "../fixtures/media-request";
 import {
   mockManualReleaseSearch,
@@ -84,6 +89,31 @@ async function removeDevelopmentIndicator(page: Page) {
   });
 }
 
+async function mockQuietContinueWatching(page: Page) {
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(emptyContinueWatchingFeed),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+}
+
+async function waitForVisibleDiscoveryArtwork(page: Page) {
+  const artwork = page
+    .getByRole("region", { name: "Trending now" })
+    .locator("img.media-card__artwork-image")
+    .first();
+  await expect(artwork).toHaveAttribute("src", /\/api\/discovery\/artwork\/discovery_art_/u);
+  await expect
+    .poll(() =>
+      artwork.evaluate(
+        (image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+}
+
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -92,6 +122,36 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
   await page.goto(routeForProject("/", testInfo.project.name));
   await page.locator("main").waitFor();
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
+});
+
+test("connected discovery dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Connected discovery covers representative desktop and phone geometry",
+  );
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await waitForVisibleDiscoveryArtwork(page);
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
+});
+
+test("light connected discovery dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Light connected discovery covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await mockDiscoveryFeed(page);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await waitForVisibleDiscoveryArtwork(page);
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-live-discovery-light.png", { fullPage: true });
 });
 
 test("light dashboard visual baseline", async ({ page }, testInfo) => {
@@ -133,9 +193,12 @@ async function openMediaDetails(page: Page) {
   await mockDiscoveryDetails(page);
   await page.goto("/");
   const search = page.getByRole("combobox");
+  await search.click();
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
-  await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
+  const details = page.getByRole("dialog", { name: "The Matrix details" });
+  await expect(details).toBeVisible();
+  await expect(details.getByText("Free your mind.")).toBeVisible();
 }
 
 test("media detail drawer visual baseline", async ({ page }, testInfo) => {
@@ -166,6 +229,7 @@ test("person context drawer visual baseline", async ({ page }, testInfo) => {
   await openMediaDetails(page);
   await page.getByRole("button", { name: /Keanu Reeves/iu }).click();
   await expect(page.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+  await expect(page.getByText(/work spans independent drama/iu)).toBeVisible();
   await expect(page).toHaveScreenshot("dashboard-person-context.png");
 });
 
@@ -180,10 +244,12 @@ async function openRequestComposer(page: Page, advanced = false) {
   const requestAction = page.getByRole("button", { name: "Request The Matrix" });
   await requestAction.waitFor();
   await requestAction.click();
-  await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+  const composer = page.getByRole("dialog", { name: "Compose request" });
+  await expect(composer).toBeVisible();
+  await expect(composer.getByRole("button", { name: "Send request" })).toBeVisible();
   if (advanced) {
-    await page.getByText("Advanced routing").click();
-    await expect(page.getByRole("combobox", { name: /Destination/i })).toBeVisible();
+    await composer.getByText("Advanced routing").click();
+    await expect(composer.getByRole("combobox", { name: /Destination/i })).toBeVisible();
   }
 }
 
@@ -1015,7 +1081,7 @@ test("focus-visible visual baseline", async ({ page }, testInfo) => {
     "Focus treatment covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "Play now" }).focus();
-  await expect(page.getByRole("button", { name: "Play now" })).toBeFocused();
+  await page.getByRole("link", { name: "Browse library" }).focus();
+  await expect(page.getByRole("link", { name: "Browse library" })).toBeFocused();
   await expect(page).toHaveScreenshot("dashboard-focus-visible.png", { fullPage: true });
 });

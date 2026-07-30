@@ -174,6 +174,15 @@ For an interface slice, complete the three passes in the
 meaningful state and update visual baselines only after inspecting the rendered
 difference.
 
+For a cross-platform refresh, add the `refresh-visual-baselines` label to the pull
+request or manually run the **Visual baseline refresh** workflow after the workflow
+is present on the default branch. The workflow renders Linux and Darwin baselines on
+hosted runners and uploads separate review artifacts. It has read-only repository
+permissions and never commits generated images. Each artifact contains a change
+manifest and only the new or modified snapshots. Download both artifacts, inspect the
+changed compositions at full size, and copy only accepted snapshots into the branch.
+Remove the label when the refresh is complete.
+
 ## Commit and pull-request conventions
 
 Commit messages and squash-merge titles follow Conventional Commits, for example:

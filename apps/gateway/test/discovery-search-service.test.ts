@@ -1,3 +1,5 @@
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type { SeerrDiscoveryFeedPage } from "@omnifin/connectors/adapters/seerr";
 import {
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -5,6 +7,7 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type {
+  DiscoveryFeedRailKind,
   DiscoveryMediaDetailResponse,
   DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
@@ -12,9 +15,13 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
-import { DiscoverySearchService } from "../src/discovery/search-service.js";
+import {
+  DiscoveryArtworkError,
+  DiscoverySearchService,
+  type DiscoverySearchAdapter,
+} from "../src/discovery/search-service.js";
 import type { DiscoverySearchError } from "../src/discovery/search-service.js";
-import { connectorConfigs } from "../src/db/schema.js";
+import { connectorConfigs, users } from "../src/db/schema.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
@@ -180,23 +187,310 @@ function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-ma
     .run();
 }
 
-function harness(options: { withConnector?: boolean } = {}) {
+function harness(
+  options: { withArtwork?: boolean; withConnector?: boolean; withFeed?: boolean } = {},
+) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
+  database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Viewer",
+      id: "viewer-user",
+      role: "viewer",
+      roleSource: "manual",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
   if (options.withConnector !== false) insertSeerr(database, config);
   const search = vi.fn(async () => normalizedResponse);
   const detail = vi.fn(async () => normalizedDetailResponse);
   const personDetail = vi.fn(async () => normalizedPersonResponse);
-  const createAdapter = vi.fn(() => ({ detail, personDetail, search }));
+  const discover = vi.fn(async (kind: DiscoveryFeedRailKind): Promise<SeerrDiscoveryFeedPage> => ({
+    items: [
+      {
+        artwork: {
+          backdropPath: `/private/${kind}-backdrop.jpg`,
+          posterPath: `/private/${kind}-poster.webp`,
+        },
+        media: {
+          availability: kind === "upcoming" ? "unavailable" : "available",
+          id: `movie:${kind.length + 100}`,
+          kind: "movie",
+          originalTitle: null,
+          overview: `${kind} overview`,
+          source: "seerr",
+          title: `${kind} title`,
+          tmdbId: kind.length + 100,
+          voteAverage: 8.1,
+          year: 2026,
+        },
+      },
+    ],
+    totalResults: 1,
+  }));
+  const readDiscoveryArtwork = vi.fn(async () => ({
+    body: Uint8Array.from([1, 2, 3, 4]),
+    contentType: "image/webp" as const,
+  }));
+  const createAdapter = vi.fn((): DiscoverySearchAdapter => ({
+    detail,
+    ...(options.withFeed === false ? {} : { discover }),
+    personDetail,
+    ...(options.withArtwork === false ? {} : { readDiscoveryArtwork }),
+    search,
+  }));
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
   });
-  return { config, createAdapter, database, detail, personDetail, search, service };
+  return {
+    config,
+    createAdapter,
+    database,
+    detail,
+    discover,
+    personDetail,
+    readDiscoveryArtwork,
+    search,
+    service,
+  };
 }
 
 describe("discovery search service", () => {
+  it("fans out four feed rails and replaces every upstream artwork path", async () => {
+    const { database, discover, readDiscoveryArtwork, service } = harness();
+    try {
+      const response = await service.feed({ language: "en-CA" }, { principal: principal() });
+
+      expect(response.state).toBe("complete");
+      expect(response.rails.map(({ kind }) => kind)).toEqual([
+        "trending",
+        "popular_movies",
+        "popular_series",
+        "upcoming",
+      ]);
+      expect(discover).toHaveBeenCalledTimes(4);
+      for (const kind of ["trending", "popular_movies", "popular_series", "upcoming"] as const) {
+        expect(discover).toHaveBeenCalledWith(kind, { language: "en-CA" }, undefined);
+      }
+      expect(JSON.stringify(response)).not.toContain("/private/");
+      const reference = response.rails[0]!.items[0]!.artwork.backdropPath;
+      expect(reference).toMatch(/^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u);
+      const artwork = await service.readArtwork(
+        { principal: principal() },
+        reference!.split("/").at(-1)!,
+      );
+      expect(artwork).toMatchObject({ contentType: "image/webp" });
+      expect(artwork.body).toEqual(Uint8Array.from([1, 2, 3, 4]));
+      expect(artwork.etag).toMatch(/^"discovery_artwork_[A-Za-z0-9_-]{22}"$/u);
+      expect(readDiscoveryArtwork).toHaveBeenCalledWith(
+        "/private/trending-backdrop.jpg",
+        "backdrop",
+        undefined,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves healthy rails when one feed source is unavailable", async () => {
+    const test = harness();
+    const upstream = new SafeConnectorError({
+      code: "timeout",
+      message: "private upstream timeout",
+      operation: "discovery.feed.popular_series",
+      retryable: true,
+      service: "seerr",
+    });
+    test.discover.mockImplementation(async (kind) => {
+      if (kind === "popular_series") throw upstream;
+      return {
+        items: [],
+        totalResults: 0,
+      };
+    });
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(response.state).toBe("degraded");
+      expect(response.failures).toHaveLength(1);
+      expect(response.failures[0]).toMatchObject({
+        code: "timeout",
+        operation: "discovery.feed.popular_series",
+        retryable: true,
+        service: "seerr",
+      });
+      expect(response.rails.find(({ kind }) => kind === "popular_series")).toMatchObject({
+        failure: expect.objectContaining({ code: "timeout" }),
+        items: [],
+        totalResults: 0,
+      });
+      expect(JSON.stringify(response)).not.toContain("private upstream timeout");
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("reports an unavailable feed with bounded retry guidance when every rail fails", async () => {
+    const test = harness();
+    test.discover.mockRejectedValue(
+      new SafeConnectorError({
+        code: "rate_limited",
+        message: "private rate-limit response",
+        operation: "private operation",
+        retryAfterSeconds: 12,
+        retryable: true,
+        service: "seerr",
+        status: 429,
+      }),
+    );
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(response.state).toBe("unavailable");
+      expect(response.failures).toHaveLength(4);
+      expect(response.failures.every(({ retryAfterSeconds }) => retryAfterSeconds === 12)).toBe(
+        true,
+      );
+      expect(
+        response.failures.every(
+          ({ message }) => message === "The discovery rail could not be loaded.",
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(response)).not.toContain("private rate-limit response");
+      expect(JSON.stringify(response)).not.toContain("private operation");
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("supports complete feeds whose media has no usable artwork", async () => {
+    const test = harness();
+    test.discover.mockImplementation(async (kind) => ({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            availability: "unknown",
+            id: `series:${kind.length + 200}`,
+            kind: "series",
+            originalTitle: null,
+            overview: null,
+            source: "seerr",
+            title: `${kind} without artwork`,
+            tmdbId: kind.length + 200,
+            voteAverage: null,
+            year: null,
+          },
+        },
+      ],
+      totalResults: 1,
+    }));
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(response.state).toBe("complete");
+      expect(
+        response.rails.every(({ items }) =>
+          items.every(
+            ({ artwork }) => artwork.backdropPath === null && artwork.posterPath === null,
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        test.database.sqlite
+          .prepare("select count(*) as count from discovery_artwork_references")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("returns an explicit empty feed when every healthy rail has no media", async () => {
+    const test = harness();
+    test.discover.mockResolvedValue({ items: [], totalResults: 0 });
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(response).toMatchObject({ failures: [], state: "empty" });
+      expect(response.rails.every(({ failure }) => failure === null)).toBe(true);
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("normalizes unknown feed failures while preserving cancellation", async () => {
+    const test = harness();
+    test.discover.mockImplementation(async (kind) => {
+      if (kind === "trending") throw new Error("private unknown failure");
+      return { items: [], totalResults: 0 };
+    });
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(response.state).toBe("degraded");
+      expect(response.failures[0]).toMatchObject({
+        code: "upstream_error",
+        message: "The discovery rail could not be loaded.",
+        retryable: false,
+      });
+      expect(JSON.stringify(response)).not.toContain("private unknown failure");
+
+      const abort = new DOMException("Aborted", "AbortError");
+      test.discover.mockRejectedValue(abort);
+      await expect(test.service.feed({ language: "en" }, { principal: principal() })).rejects.toBe(
+        abort,
+      );
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("wraps artwork failures without swallowing request cancellation", async () => {
+    const test = harness();
+    try {
+      const feed = await test.service.feed({ language: "en" }, { principal: principal() });
+      const reference = feed.rails[0]!.items[0]!.artwork.posterPath!.split("/").at(-1)!;
+      test.readDiscoveryArtwork.mockRejectedValueOnce(new Error("private image failure"));
+      await expect(
+        test.service.readArtwork({ principal: principal() }, reference),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      const abort = new DOMException("Aborted", "AbortError");
+      test.readDiscoveryArtwork.mockRejectedValueOnce(abort);
+      await expect(test.service.readArtwork({ principal: principal() }, reference)).rejects.toBe(
+        abort,
+      );
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("fails safely when a configured adapter lacks a required live-feed capability", async () => {
+    const missingFeed = harness({ withFeed: false });
+    try {
+      await expect(
+        missingFeed.service.feed({ language: "en" }, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "connector_integrity_failure" });
+    } finally {
+      missingFeed.database.close();
+    }
+
+    const missingArtwork = harness({ withArtwork: false });
+    try {
+      const feed = await missingArtwork.service.feed(
+        { language: "en" },
+        { principal: principal() },
+      );
+      const reference = feed.rails[0]!.items[0]!.artwork.backdropPath!.split("/").at(-1)!;
+      await expect(
+        missingArtwork.service.readArtwork({ principal: principal() }, reference),
+      ).rejects.toBeInstanceOf(DiscoveryArtworkError);
+    } finally {
+      missingArtwork.database.close();
+    }
+  });
+
   it("authorizes and returns only normalized media details", async () => {
     const { database, detail, service } = harness();
     try {

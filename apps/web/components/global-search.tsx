@@ -1,5 +1,7 @@
 "use client";
 
+import "./global-search.css";
+
 import type { DiscoverySearchResult } from "@omnifin/contracts/discovery";
 import {
   Command,

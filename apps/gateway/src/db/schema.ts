@@ -463,6 +463,55 @@ export const mediaReferences = sqliteTable(
   ],
 );
 
+export const discoveryArtworkReferences = sqliteTable(
+  "discovery_artwork_references",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    itemDigest: text("item_digest").notNull(),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("discovery_artwork_references_user_item_unique").on(
+      table.userId,
+      table.connectorId,
+      table.itemDigest,
+    ),
+    index("discovery_artwork_references_user_last_used_idx").on(table.userId, table.lastUsedAt),
+    index("discovery_artwork_references_expiry_idx").on(table.expiresAt),
+    check(
+      "discovery_artwork_references_id_check",
+      sql`length(${table.id}) = 36
+        and substr(${table.id}, 1, 14) = 'discovery_art_'
+        and substr(${table.id}, 15) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "discovery_artwork_references_item_digest_check",
+      sql`length(${table.itemDigest}) = 22
+        and ${table.itemDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "discovery_artwork_references_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 4096`,
+    ),
+    check(
+      "discovery_artwork_references_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
 export const playbackSessions = sqliteTable(
   "playback_sessions",
   {

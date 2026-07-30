@@ -337,13 +337,16 @@ async function waitForHttp(url, runtime) {
 }
 
 function browserFailureCategory(stderr) {
-  const match = stderr.match(/"event":"oidc_provider_browser_checks_failed","stage":"([a-z_]+)"/u);
+  const match = stderr.match(
+    /"event":"oidc_provider_browser_checks_failed","stage":"([a-z_]+)"(?:,"check":"([a-z_]+)")?/u,
+  );
   const allowedStages = new Set([
     "authorization_code_pkce",
     "configuration",
     "discovery_logout",
     "local_logout_fallback",
     "local_session_revocation",
+    "mapped_cookie",
     "mapped_login",
     "mapped_login_approval",
     "mapped_login_callback",
@@ -364,11 +367,33 @@ function browserFailureCategory(stderr) {
     "viewer_login_callback",
     "viewer_login_connector",
     "viewer_login_navigation",
+    "viewer_cookie",
     "viewer_session",
   ]);
-  return match && allowedStages.has(match[1])
-    ? `browser_flow_failed_${match[1]}`
-    : "browser_flow_failed";
+  if (!match || !allowedStages.has(match[1])) return "browser_flow_failed";
+
+  const allowedChecks = new Set([
+    "assertion",
+    "principal_account_state",
+    "principal_authentication_method",
+    "principal_authentication_provider",
+    "principal_available",
+    "principal_display_name",
+    "principal_email",
+    "principal_email_verified",
+    "principal_external_issuer",
+    "principal_external_provider",
+    "principal_external_subject",
+    "principal_link_state",
+    "principal_permissions",
+    "principal_role",
+    "principal_subject_continuity",
+    "principal_user_continuity",
+    "session_cookie_replacement",
+  ]);
+  return match[2] && allowedChecks.has(match[2])
+    ? `browser_flow_failed_${match[1]}_${match[2]}`
+    : `browser_flow_failed_${match[1]}`;
 }
 
 async function main(options) {

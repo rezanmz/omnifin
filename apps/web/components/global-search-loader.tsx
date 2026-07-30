@@ -41,6 +41,7 @@ function GlobalSearchPlaceholder({
           setQuery?.(event.currentTarget.value);
           activate?.();
         }}
+        onFocus={activate}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "Enter") activate?.();
         }}
@@ -108,7 +109,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
     <SearchComponent
       {...properties}
       initialFocus={restoreFocus}
-      initialOpen={properties.initialOpen || shortcutRequested}
+      initialOpen={properties.initialOpen || shortcutRequested || pendingQuery.trim().length > 0}
       initialQuery={pendingQuery}
     />
   );
