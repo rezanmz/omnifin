@@ -99,6 +99,21 @@ async function mockQuietContinueWatching(page: Page) {
   });
 }
 
+async function waitForVisibleDiscoveryArtwork(page: Page) {
+  const artwork = page
+    .getByRole("region", { name: "Trending now" })
+    .locator("img.media-card__artwork-image")
+    .first();
+  await expect(artwork).toHaveAttribute("src", /\/api\/discovery\/artwork\/discovery_art_/u);
+  await expect
+    .poll(() =>
+      artwork.evaluate(
+        (image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+}
+
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
@@ -118,6 +133,7 @@ test("connected discovery dashboard visual baseline", async ({ page }, testInfo)
   await mockQuietContinueWatching(page);
   await page.goto("/?test-view=continue-watching-live");
   await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await waitForVisibleDiscoveryArtwork(page);
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
 });
@@ -132,6 +148,7 @@ test("light connected discovery dashboard visual baseline", async ({ page }, tes
   await mockQuietContinueWatching(page);
   await page.goto("/?test-view=continue-watching-live");
   await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
+  await waitForVisibleDiscoveryArtwork(page);
   await removeDevelopmentIndicator(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page).toHaveScreenshot("dashboard-live-discovery-light.png", { fullPage: true });
@@ -176,6 +193,7 @@ async function openMediaDetails(page: Page) {
   await mockDiscoveryDetails(page);
   await page.goto("/");
   const search = page.getByRole("combobox");
+  await search.click();
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
   await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();

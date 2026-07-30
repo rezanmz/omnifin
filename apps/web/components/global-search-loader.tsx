@@ -41,6 +41,7 @@ function GlobalSearchPlaceholder({
           setQuery?.(event.currentTarget.value);
           activate?.();
         }}
+        onFocus={activate}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "Enter") activate?.();
         }}
