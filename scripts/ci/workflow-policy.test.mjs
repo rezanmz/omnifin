@@ -349,6 +349,34 @@ test("release automation allows protected main CI to finish under runner content
   }
 });
 
+test("draft-aware release jobs receive narrowly scoped push access", () => {
+  const document = workflowDocument("publish.yml");
+  const metadata = document.jobs["validate-release-metadata"];
+  const promotion = document.jobs["promote-stable"];
+  const finalize = document.jobs.finalize;
+
+  assert.deepEqual(metadata.permissions, { contents: "write" });
+  assert.equal(metadata.environment, undefined);
+  assert.equal(metadata.steps.length, 1);
+  assert.equal(metadata.steps[0].name, "Bind release inputs to protected main");
+  assert.match(metadata.steps[0].with.script, /repos\.listReleases/u);
+  assert.doesNotMatch(JSON.stringify(metadata), /checkout|packages: write|secrets\./u);
+
+  assert.deepEqual(promotion.permissions, { contents: "write", packages: "write" });
+  assert.equal(promotion.environment, "release");
+  assert.match(
+    namedStep(promotion.steps, "Recheck draft and monotonic release order").with.script,
+    /repos\.listReleases/u,
+  );
+  assert.deepEqual(finalize.permissions, { contents: "write" });
+
+  const contentWriters = Object.entries(document.jobs)
+    .filter(([, job]) => job.permissions?.contents === "write")
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(contentWriters, ["finalize", "promote-stable", "validate-release-metadata"]);
+});
+
 test("CI builds Storybook before exercising stories", () => {
   const source = workflow("ci.yml");
   const build = source.indexOf("pnpm --filter @omnifin/web build:storybook");

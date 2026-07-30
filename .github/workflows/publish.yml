@@ -76,7 +76,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      # GitHub omits draft releases unless the caller has push access. This job
+      # performs no mutation, but it must be able to see the Release Please draft.
+      contents: write
     outputs:
       candidate_tag: ${{ steps.release-inputs.outputs.candidate_tag }}
       major: ${{ steps.release-inputs.outputs.major }}
@@ -712,7 +714,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      # The final pre-promotion check must still be able to see the unpublished
+      # Release Please draft. Package aliases are mutated only after that check.
+      contents: write
       packages: write
     steps:
       - name: Recheck draft and monotonic release order
