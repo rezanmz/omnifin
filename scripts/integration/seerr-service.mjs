@@ -492,7 +492,18 @@ export function parseSeerrTransportOutput(output) {
     typeof parsed.body !== "string" ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(parsed.body) ||
     !Array.isArray(parsed.headers) ||
-    parsed.headers.length > 64
+    parsed.headers.length > 64 ||
+    parsed.headers.some(
+      (entry) =>
+        !Array.isArray(entry) ||
+        entry.length !== 2 ||
+        typeof entry[0] !== "string" ||
+        typeof entry[1] !== "string" ||
+        entry[0].length > 128 ||
+        entry[1].length > 8_192 ||
+        /[^!#$%&'*+.^_`|~0-9A-Za-z-]/u.test(entry[0]) ||
+        /[\r\n\0]/u.test(entry[1]),
+    )
   ) {
     throw new SeerrFixtureFailure("fixture_transport_invalid");
   }

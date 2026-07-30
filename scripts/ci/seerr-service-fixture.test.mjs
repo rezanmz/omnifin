@@ -194,6 +194,13 @@ test("container transport is bounded and reconstructs only a validated response"
     () => parseSeerrTransportOutput('{"body":"","headers":[],"status":700}'),
     /fixture_transport_invalid/u,
   );
+  assert.throws(
+    () =>
+      parseSeerrTransportOutput(
+        '{"body":"","headers":[["content-type","application/json\\r\\nx-private: value"]],"status":200}',
+      ),
+    /fixture_transport_invalid/u,
+  );
 
   const source = readFileSync(
     new URL("../integration/seerr-container-request.mjs", import.meta.url),
