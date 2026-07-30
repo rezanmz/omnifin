@@ -1,10 +1,8 @@
-"use client";
-
 import { CalendarOff, CalendarRange } from "lucide-react";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { CalendarItemModel } from "../lib/dashboard-data";
-import { handleDirectionalFocus } from "../lib/directional-focus";
+import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
 type CalendarStyle = CSSProperties & { "--calendar-accent": string };
 
@@ -23,10 +21,7 @@ export function CalendarStrip({ items }: { items: CalendarItemModel[] }) {
         )}
       </div>
       {items.length > 0 ? (
-        <div
-          className="calendar-strip__grid"
-          onKeyDown={(event) => handleDirectionalFocus(event, { axis: "grid" })}
-        >
+        <DirectionalNavigationGroup axis="grid" className="calendar-strip__grid">
           {items.map((item) => (
             <button
               className="calendar-item"
@@ -43,7 +38,7 @@ export function CalendarStrip({ items }: { items: CalendarItemModel[] }) {
               </span>
             </button>
           ))}
-        </div>
+        </DirectionalNavigationGroup>
       ) : (
         <div className="quiet-state quiet-state--calendar" role="status">
           <span className="quiet-state__icon" aria-hidden="true">

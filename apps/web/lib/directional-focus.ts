@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react";
 
-type DirectionalAxis = "grid" | "horizontal" | "vertical";
+export type DirectionalAxis = "grid" | "horizontal" | "vertical";
 
 interface DirectionalFocusOptions {
   axis: DirectionalAxis;

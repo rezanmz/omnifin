@@ -1,5 +1,7 @@
 "use client";
 
+import "./manual-release-workbench.css";
+
 import type {
   ManualReleaseCandidate,
   ManualReleaseSearchResponse,

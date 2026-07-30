@@ -1,5 +1,7 @@
 "use client";
 
+import "./request-composer.css";
+
 import type { DiscoveryMovieResult, DiscoverySeriesResult } from "@omnifin/contracts/discovery";
 import type {
   MediaRequestInput,

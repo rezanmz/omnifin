@@ -2,12 +2,11 @@
 
 import { ArrowRight, Clapperboard, PanelRightOpen, Play } from "lucide-react";
 import type { CSSProperties } from "react";
+import { useEffect, useRef } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 
 type CardStyle = CSSProperties & { "--card-accent": string };
-
-type ArtworkStyle = CSSProperties & { "--card-artwork"?: string };
 
 export function MediaRail({
   emptyCopy,
@@ -32,6 +31,34 @@ export function MediaRail({
     (title.toLowerCase().includes("continue")
       ? "Start watching something in Jellyfin and it will appear here with your progress."
       : "Discovery will return when connected metadata and library services have suggestions.");
+  const scrollerReference = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const scroller = scrollerReference.current;
+    if (!scroller) return;
+    const images = Array.from(scroller.querySelectorAll<HTMLImageElement>("img[data-artwork-src]"));
+    const reveal = (image: HTMLImageElement) => {
+      const source = image.dataset.artworkSrc;
+      if (source) image.src = source;
+      image.removeAttribute("data-artwork-src");
+    };
+    if (!("IntersectionObserver" in window)) {
+      images.forEach(reveal);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting || !(entry.target instanceof HTMLImageElement)) continue;
+          observer.unobserve(entry.target);
+          reveal(entry.target);
+        }
+      },
+      { root: scroller },
+    );
+    images.forEach((image) => observer.observe(image));
+    return () => observer.disconnect();
+  }, [items]);
   return (
     <section className="media-rail" aria-labelledby={headingId}>
       <div className="section-heading">
@@ -61,6 +88,7 @@ export function MediaRail({
             })
           }
           role={onSelect ? undefined : "region"}
+          ref={scrollerReference}
           tabIndex={onSelect ? undefined : 0}
         >
           {items.map((item, index) => {
@@ -81,12 +109,20 @@ export function MediaRail({
                   data-artwork={item.artwork ?? "fallback"}
                   data-artwork-source={artworkPath ? "remote" : "generated"}
                   aria-hidden="true"
-                  style={
-                    artworkPath
-                      ? ({ "--card-artwork": `url("${artworkPath}")` } as ArtworkStyle)
-                      : undefined
-                  }
                 >
+                  {artworkPath ? (
+                    // Artwork stays on the authenticated origin; native lazy loading also keeps
+                    // below-hero posters from competing with the spotlight image.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      alt=""
+                      className="media-card__artwork-image"
+                      data-artwork-src={artworkPath}
+                      decoding="async"
+                      fetchPriority="low"
+                      loading="lazy"
+                    />
+                  ) : null}
                   <span className="media-card__motif media-card__motif--one" />
                   <span className="media-card__motif media-card__motif--two" />
                   <span className="media-card__number">{String(index + 1).padStart(2, "0")}</span>

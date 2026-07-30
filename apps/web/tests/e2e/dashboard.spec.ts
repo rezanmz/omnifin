@@ -84,8 +84,8 @@ test("authenticated Continue Watching renders normalized progress and private ar
     page.getByRole("progressbar", { name: "Northern Lights watch progress" }),
   ).toHaveAttribute("aria-valuenow", "33");
   await expect(card.locator(".media-card__art")).toHaveAttribute("data-artwork-source", "remote");
-  await expect(card.locator(".media-card__art")).toHaveCSS(
-    "background-image",
+  await expect(card.locator(".media-card__artwork-image")).toHaveAttribute(
+    "src",
     /\/api\/media\/media_b{22}\/images\/poster/u,
   );
   await expect(page.getByText("jellyfin-main")).toHaveCount(0);

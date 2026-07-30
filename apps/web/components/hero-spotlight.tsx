@@ -1,7 +1,6 @@
 "use client";
 
 import { CalendarDays, Info, Library, Sparkles } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { DashboardModel } from "../lib/dashboard-data";
@@ -43,15 +42,16 @@ export function HeroSpotlight({
     >
       <div className="hero-spotlight__art" aria-hidden="true">
         {safeArtworkPath ? (
-          <Image
+          // The gateway already serves a bounded, session-protected image. Browser-native loading
+          // keeps credentials same-origin and avoids routing private artwork through an optimizer.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
             alt=""
             className="hero-spotlight__art-image"
+            decoding="async"
             fetchPriority="high"
-            fill
             loading="eager"
-            sizes="100vw"
             src={safeArtworkPath}
-            unoptimized
           />
         ) : null}
         <div className="hero-spotlight__planet" />

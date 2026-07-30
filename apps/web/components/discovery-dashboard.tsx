@@ -6,11 +6,10 @@ import type {
   DiscoveryFeedRailKind,
   DiscoveryFeedResponse,
 } from "@omnifin/contracts/discovery";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { CloudOff, LockKeyhole, Radar, RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   DiscoveryFeedClientError,
@@ -59,6 +58,7 @@ const FALLBACK_HERO = {
   facts: ["Jellyfin linked", "Private by design", "No telemetry"],
   title: "Ready when you are",
 };
+const discoveryRefreshIntervalMs = 5 * 60_000;
 
 export interface DiscoveryDashboardProperties {
   client?: DiscoveryFeedClient;
@@ -302,6 +302,76 @@ function FailedRail({ onRetry, rail }: { onRetry: () => void; rail: DiscoveryFee
   );
 }
 
+interface DiscoveryQueryState {
+  data: DiscoveryFeedResponse | undefined;
+  error: unknown | null;
+  isPending: boolean;
+}
+
+function useDiscoveryFeed({
+  client,
+  initialFeed,
+  language,
+  live,
+}: {
+  client: DiscoveryFeedClient;
+  initialFeed: DiscoveryFeedResponse | undefined;
+  language: string;
+  live: boolean | undefined;
+}) {
+  const refreshAvailable = live ?? initialFeed === undefined;
+  const [requestRevision, setRequestRevision] = useState(0);
+  const [state, setState] = useState<DiscoveryQueryState>({
+    data: initialFeed,
+    error: null,
+    isPending: initialFeed === undefined,
+  });
+  const refetch = useCallback(() => setRequestRevision((revision) => revision + 1), []);
+
+  useEffect(() => {
+    if (!refreshAvailable && requestRevision === 0) return;
+
+    const controller = new AbortController();
+    let refreshTimer: number | undefined;
+
+    async function load() {
+      try {
+        const data = await client.load({ language }, controller.signal);
+        if (controller.signal.aborted) return;
+        setState({ data, error: null, isPending: false });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setState((current) => {
+          const authorizationLost =
+            error instanceof DiscoveryFeedClientError &&
+            (error.kind === "signed_out" || error.kind === "forbidden");
+          return {
+            data: authorizationLost ? undefined : current.data,
+            error,
+            isPending: false,
+          };
+        });
+      } finally {
+        if (!controller.signal.aborted && refreshAvailable) {
+          refreshTimer = window.setTimeout(() => void load(), discoveryRefreshIntervalMs);
+        }
+      }
+    }
+
+    void load();
+    return () => {
+      controller.abort();
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+    };
+  }, [client, language, refreshAvailable, requestRevision]);
+
+  return {
+    ...state,
+    isError: state.error !== null,
+    refetch,
+  };
+}
+
 function DiscoveryDashboardContent({
   client,
   detailClient,
@@ -312,22 +382,7 @@ function DiscoveryDashboardContent({
 }: Required<Pick<DiscoveryDashboardProperties, "client" | "showContinueWatching">> &
   Omit<DiscoveryDashboardProperties, "client" | "showContinueWatching">) {
   const language = discoveryLanguage();
-  const refreshAvailable = live ?? initialFeed === undefined;
-  const query = useQuery({
-    enabled: refreshAvailable,
-    ...(initialFeed === undefined
-      ? {}
-      : {
-          initialData: initialFeed,
-          ...(refreshAvailable ? { initialDataUpdatedAt: 0 } : {}),
-        }),
-    queryFn: ({ signal }) => client.load({ language }, signal),
-    queryKey: ["discovery-feed", language],
-    refetchInterval: refreshAvailable ? 5 * 60_000 : false,
-    refetchIntervalInBackground: false,
-    retry: false,
-    staleTime: 4 * 60_000,
-  });
+  const query = useDiscoveryFeed({ client, initialFeed, language, live });
   const [detailMedia, setDetailMedia] = useState<DetailMedia | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [composerMedia, setComposerMedia] = useState<RequestableMedia | null>(null);
@@ -409,12 +464,17 @@ function DiscoveryDashboardContent({
     data.rails.find(({ kind }) => kind === "trending")?.items[0] ??
     data.rails.flatMap((rail) => rail.items)[0] ??
     null;
+  const spotlightArtworkPath =
+    spotlightItem?.artwork.backdropPath ?? spotlightItem?.artwork.posterPath ?? null;
 
   return (
     <>
+      {spotlightArtworkPath ? (
+        <link as="image" fetchPriority="high" href={spotlightArtworkPath} rel="preload" />
+      ) : null}
       {spotlightItem ? (
         <HeroSpotlight
-          artworkPath={spotlightItem.artwork.backdropPath ?? spotlightItem.artwork.posterPath}
+          artworkPath={spotlightArtworkPath}
           hero={{
             accent: accentFor(spotlightItem),
             actions: "none",
@@ -515,22 +575,14 @@ export function DiscoveryDashboard({
   requestClient,
   showContinueWatching = true,
 }: DiscoveryDashboardProperties) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: { queries: { gcTime: 10 * 60_000, retry: false } },
-      }),
-  );
   return (
-    <QueryClientProvider client={queryClient}>
-      <DiscoveryDashboardContent
-        client={client}
-        {...(detailClient === undefined ? {} : { detailClient })}
-        {...(initialFeed === undefined ? {} : { initialFeed })}
-        {...(live === undefined ? {} : { live })}
-        {...(requestClient === undefined ? {} : { requestClient })}
-        showContinueWatching={showContinueWatching}
-      />
-    </QueryClientProvider>
+    <DiscoveryDashboardContent
+      client={client}
+      {...(detailClient === undefined ? {} : { detailClient })}
+      {...(initialFeed === undefined ? {} : { initialFeed })}
+      {...(live === undefined ? {} : { live })}
+      {...(requestClient === undefined ? {} : { requestClient })}
+      showContinueWatching={showContinueWatching}
+    />
   );
 }

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -151,6 +151,46 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.queryByRole("button", { name: "View details for The Far Meridian" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the last safe feed visible when a background refresh is interrupted", async () => {
+    render(
+      <DiscoveryDashboard
+        client={{
+          load: async () =>
+            Promise.reject(
+              new DiscoveryFeedClientError(
+                "unavailable",
+                "service_unavailable",
+                "Service unavailable.",
+              ),
+            ),
+        }}
+        initialFeed={demoDiscoveryFeed}
+        live
+        showContinueWatching={false}
+      />,
+    );
+
+    expect(await screen.findAllByText("Saved results · refresh interrupted")).not.toHaveLength(0);
+    expect(screen.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "View details for The Far Meridian" })).toBeVisible();
+  });
+
+  it("aborts an in-flight feed request when the dashboard unmounts", async () => {
+    let signal: AbortSignal | undefined;
+    const load = vi.fn((_input, requestSignal?: AbortSignal) => {
+      signal = requestSignal;
+      return new Promise<never>(() => undefined);
+    });
+    const { unmount } = render(
+      <DiscoveryDashboard client={{ load }} showContinueWatching={false} />,
+    );
+
+    await waitFor(() => expect(load).toHaveBeenCalledOnce());
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("matches loading geometry before the discovery chunk resolves", () => {

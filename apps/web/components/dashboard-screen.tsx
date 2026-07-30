@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
+import type { ThemePreference } from "../lib/theme";
 import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
@@ -30,6 +31,7 @@ export function DashboardScreen({
   displayProfile = "standard",
   liveContinueWatching = false,
   liveDiscovery = false,
+  themePreference = "system",
 }: {
   data: DashboardModel;
   discoveryInitialFeed?: DiscoveryFeedResponse;
@@ -38,6 +40,7 @@ export function DashboardScreen({
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
   liveDiscovery?: boolean;
+  themePreference?: ThemePreference;
 }) {
   return (
     <div
@@ -49,7 +52,10 @@ export function DashboardScreen({
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">
-        <TopCommandBar connectionStatus={aggregateStatus(data.services)} />
+        <TopCommandBar
+          connectionStatus={aggregateStatus(data.services)}
+          themePreference={themePreference}
+        />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           {liveDiscovery ? (
             <DiscoveryDashboard
@@ -80,9 +86,11 @@ export function DashboardScreen({
 export function DashboardStateScreen({
   displayProfile = "standard",
   kind,
+  themePreference = "system",
 }: {
   displayProfile?: DisplayProfile;
   kind: DashboardStateKind;
+  themePreference?: ThemePreference;
 }) {
   const connectionStatus: ServiceStatus = kind === "offline" ? "offline" : "attention";
   return (
@@ -91,7 +99,7 @@ export function DashboardStateScreen({
       <CinematicBackdrop />
       <NavigationRail />
       <div className="application-shell">
-        <TopCommandBar connectionStatus={connectionStatus} />
+        <TopCommandBar connectionStatus={connectionStatus} themePreference={themePreference} />
         <main className="dashboard" id="main-content" tabIndex={-1}>
           <DashboardState kind={kind} />
         </main>
