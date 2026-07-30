@@ -241,10 +241,12 @@ async function openRequestComposer(page: Page, advanced = false) {
   const requestAction = page.getByRole("button", { name: "Request The Matrix" });
   await requestAction.waitFor();
   await requestAction.click();
-  await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+  const composer = page.getByRole("dialog", { name: "Compose request" });
+  await expect(composer).toBeVisible();
+  await expect(composer.getByRole("button", { name: "Send request" })).toBeVisible();
   if (advanced) {
-    await page.getByText("Advanced routing").click();
-    await expect(page.getByRole("combobox", { name: /Destination/i })).toBeVisible();
+    await composer.getByText("Advanced routing").click();
+    await expect(composer.getByRole("combobox", { name: /Destination/i })).toBeVisible();
   }
 }
 
