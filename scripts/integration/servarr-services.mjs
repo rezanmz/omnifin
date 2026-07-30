@@ -1321,15 +1321,17 @@ async function verifyBazarr(context, adapter) {
     }),
   );
   const candidate = result.candidates[0];
-  if (
-    result.target.kind !== "movie" ||
-    result.target.radarrId !== 1 ||
-    result.candidates.length !== 1 ||
-    !candidate ||
-    candidate.provider !== "embeddedsubtitles" ||
-    candidate.language.toLocaleLowerCase("en-US") !== "english"
-  ) {
-    throw new ServarrFixtureFailure("subtitle_search_invalid");
+  if (result.target.kind !== "movie" || result.target.radarrId !== 1) {
+    throw new ServarrFixtureFailure("subtitle_target_invalid");
+  }
+  if (result.candidates.length !== 1 || !candidate) {
+    throw new ServarrFixtureFailure("subtitle_candidate_count_invalid");
+  }
+  if (candidate.provider !== "embeddedsubtitles") {
+    throw new ServarrFixtureFailure("subtitle_provider_invalid");
+  }
+  if (!new Set(["en", "eng", "english"]).has(candidate.language.toLocaleLowerCase("en-US"))) {
+    throw new ServarrFixtureFailure("subtitle_language_invalid");
   }
   await connectorOperation("subtitle_download", () =>
     adapter.downloadSubtitle(result.target, candidate),
