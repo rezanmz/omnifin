@@ -242,9 +242,9 @@ export function publishedLoopbackPort(value, operation) {
       !(portBindings === null || (Array.isArray(portBindings) && portBindings.length === 0)),
   );
   if (hasOtherPublishedPort) throw new RehearsalFailure(`${operation}_other_port`);
-  if (!Array.isArray(bindings) || bindings.length !== 1) {
-    throw new RehearsalFailure(`${operation}_binding_count`);
-  }
+  if (!Array.isArray(bindings)) throw new RehearsalFailure(`${operation}_binding_missing`);
+  if (bindings.length === 0) throw new RehearsalFailure(`${operation}_binding_empty`);
+  if (bindings.length > 1) throw new RehearsalFailure(`${operation}_binding_multiple`);
   if (!bindings[0] || typeof bindings[0] !== "object") {
     throw new RehearsalFailure(`${operation}_binding_shape`);
   }

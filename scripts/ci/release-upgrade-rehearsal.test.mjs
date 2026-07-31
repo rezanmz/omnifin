@@ -50,8 +50,9 @@ test("accepts exactly one structured IPv4 loopback port binding", () => {
   for (const [binding, category] of [
     ["null", "map"],
     ["[]", "map"],
-    ["{}", "binding_count"],
-    ['{"4000/tcp":null}', "binding_count"],
+    ["{}", "binding_missing"],
+    ['{"4000/tcp":null}', "binding_missing"],
+    ['{"4000/tcp":[]}', "binding_empty"],
     ['{"4000/tcp":[{"HostIp":"0.0.0.0","HostPort":"32768"}]}', "host_ip"],
     ['{"4000/tcp":[{"HostIp":"::1","HostPort":"32768"}]}', "host_ip"],
     ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}', "host_port"],
@@ -59,7 +60,7 @@ test("accepts exactly one structured IPv4 loopback port binding", () => {
     ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}', "host_port"],
     [
       '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]}',
-      "binding_count",
+      "binding_multiple",
     ],
     [
       '{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}],"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
