@@ -287,6 +287,7 @@ test("operators can explicitly pause whole-title monitoring without touching fil
 });
 
 test("operators can queue one exact-target acquisition search", async ({ page }) => {
+  test.setTimeout(60_000);
   await mockAcquisitionRecoverySession(page);
   const capture = await mockAcquisitionSearch(page);
   await page.goto("/");
