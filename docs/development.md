@@ -146,6 +146,14 @@ Container, compatibility, and Lighthouse checks may require Docker or the dedica
 CI environment. A pull request must not waive a failing check merely because it passes
 on one workstation.
 
+Hosted browser jobs install Playwright in two fail-closed phases. Operating-system
+packages receive one bounded ten-minute attempt before any browser binary is downloaded;
+Chromium, Firefox, and WebKit downloads then retain one bounded retry for transient CDN
+failures. A dependency timeout must finish exact process-group teardown before the helper
+returns, and it never searches for or signals an unrelated package-manager lock owner.
+This separation prevents a retry from racing a privileged package process left behind by
+an interrupted dependency install.
+
 Connector fixture work must keep `scripts/integration/readiness.json` truthful. A
 strict fixture check succeeds only for a profile reviewed as `ready`. The deterministic OIDC
 contracts, standards-generic browser gate, and isolated Authentik profile are enforced; live identity profiles remain
