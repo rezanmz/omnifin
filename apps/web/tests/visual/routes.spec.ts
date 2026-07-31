@@ -1074,10 +1074,16 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
-  await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await expect(timeline).toBeVisible();
   await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot("acquisition-timeline.png");
+  // Keep this component baseline independent from native backdrop sampling of the live dashboard.
+  await page.addStyleTag({
+    content:
+      ".acquisition-timeline__glass { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--surface-card-solid) !important; }",
+  });
+  await expect(timeline).toHaveScreenshot("acquisition-timeline.png");
 });
 
 test("acquisition recovery confirmation visual baseline", async ({ page }, testInfo) => {

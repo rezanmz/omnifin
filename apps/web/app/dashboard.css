@@ -483,6 +483,7 @@
   gap: 8px;
   min-height: 44px;
   padding: 0 13px;
+  text-decoration: none;
   transition:
     background-color 160ms ease-out,
     border-color 160ms ease-out,

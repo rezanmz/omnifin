@@ -54,9 +54,7 @@ describe("directional navigation", () => {
 
     await user.clear(search);
     await user.keyboard("{ArrowRight}");
-    expect(
-      screen.getByRole("button", { name: "All connected services are healthy" }),
-    ).toHaveFocus();
+    expect(screen.getByRole("link", { name: "All connected services are healthy" })).toHaveFocus();
   });
 
   it("moves between calendar cells with arrow keys", async () => {

@@ -1,4 +1,5 @@
 import { CircleAlert, CircleCheck, CloudOff } from "lucide-react";
+import Link from "next/link";
 import type { ServiceStatus } from "../lib/dashboard-data";
 
 const statusCopy: Record<ServiceStatus, string> = {
@@ -10,11 +11,12 @@ const statusCopy: Record<ServiceStatus, string> = {
 export function ConnectionPulse({ status }: { status: ServiceStatus }) {
   const Icon = status === "healthy" ? CircleCheck : status === "attention" ? CircleAlert : CloudOff;
   return (
-    <button
+    <Link
+      href="/operations/health"
       className="connection-pulse"
       data-status={status}
       data-directional-item
-      type="button"
+      prefetch={false}
       aria-label={statusCopy[status]}
     >
       <Icon aria-hidden="true" size={17} strokeWidth={1.8} />
@@ -22,6 +24,6 @@ export function ConnectionPulse({ status }: { status: ServiceStatus }) {
         {status === "healthy" ? "Systems quiet" : "Review systems"}
       </span>
       <span className="connection-pulse__dot" aria-hidden="true" />
-    </button>
+    </Link>
   );
 }
