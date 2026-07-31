@@ -58,6 +58,13 @@ export interface JellyfinPasswordPairingInput extends Omit<
   readonly validatedSession?: unknown;
 }
 
+export interface JellyfinPasswordBootstrapInput extends Omit<
+  JellyfinPasswordSignInInput,
+  "currentSessionToken"
+> {
+  readonly validatedSession?: unknown;
+}
+
 export interface JellyfinAuthenticatedSignInInput {
   readonly authentication: JellyfinAuthenticationResult;
   readonly currentSessionToken?: unknown;
@@ -77,6 +84,13 @@ export interface JellyfinAuthenticatedPairingInput {
   readonly requestId?: string;
   readonly target: JellyfinConnectorTarget;
   readonly userAgent?: string;
+  readonly validatedSession?: unknown;
+}
+
+export interface JellyfinAuthenticatedBootstrapInput extends Omit<
+  JellyfinAuthenticatedPairingInput,
+  "validatedSession"
+> {
   readonly validatedSession?: unknown;
 }
 
@@ -116,6 +130,28 @@ export interface JellyfinPairingSuccessResult {
 }
 
 export type JellyfinPairingResult = JellyfinPairingDeniedResult | JellyfinPairingSuccessResult;
+
+export type JellyfinBootstrapDenialReason =
+  | "account_disabled"
+  | "administrator_already_exists"
+  | "invalid_credentials"
+  | "jellyfin_admin_required"
+  | "recovery_session_required";
+
+export interface JellyfinBootstrapDeniedResult {
+  readonly reason: JellyfinBootstrapDenialReason;
+  readonly status: "denied";
+  toJSON(): never;
+}
+
+export interface JellyfinBootstrapSuccessResult {
+  readonly session: IssuedSession;
+  readonly status: "bootstrapped";
+  toJSON(): never;
+}
+
+export type JellyfinBootstrapResult =
+  JellyfinBootstrapDeniedResult | JellyfinBootstrapSuccessResult;
 
 export interface JellyfinSignInServiceDependencies {
   readonly clock?: () => Date;
@@ -230,6 +266,11 @@ export class JellyfinSignInService {
     return this.#sessionService.beginValidatedOidcPairingSession(validatedSession);
   }
 
+  /** @internal Resolves only the exact recovery session eligible for first-admin bootstrap. */
+  public resolveEligibleRecoveryBootstrapSession(validatedSession: unknown) {
+    return this.#sessionService.beginValidatedRecoveryBootstrapSession(validatedSession);
+  }
+
   public async signInWithPassword(
     input: JellyfinPasswordSignInInput,
   ): Promise<JellyfinSignInResult> {
@@ -338,6 +379,61 @@ export class JellyfinSignInService {
     });
   }
 
+  public async bootstrapWithPassword(
+    input: JellyfinPasswordBootstrapInput,
+  ): Promise<JellyfinBootstrapResult> {
+    this.#validatePasswordInput(input);
+    if (!this.#sessionService.beginValidatedRecoveryBootstrapSession(input.validatedSession)) {
+      return internalResult({
+        reason: "recovery_session_required" as const,
+        status: "denied" as const,
+      });
+    }
+    let target: JellyfinConnectorTarget;
+    try {
+      target = this.#registry.resolve();
+    } catch (error) {
+      if (error instanceof JellyfinConnectorConfigurationError) {
+        throw new JellyfinSignInServiceError("configuration_invalid", { cause: error });
+      }
+      throw error;
+    }
+    const deviceId = this.#nextIdentifier(this.#createDeviceId());
+    const client = this.#createClient(target);
+    let publicInfo: JellyfinPublicSystemInfo;
+    let authentication: JellyfinAuthenticationResult;
+    try {
+      publicInfo = await client.getPublicSystemInfo();
+      authentication = await client.authenticateByName({
+        deviceId,
+        password: input.password,
+        username: input.username,
+      });
+    } catch (error) {
+      if (error instanceof SafeConnectorError && error.code === "invalid_credentials") {
+        return internalResult({
+          reason: "invalid_credentials" as const,
+          status: "denied" as const,
+        });
+      }
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+    if (publicInfo.Id !== authentication.ServerId) {
+      throw new JellyfinSignInServiceError("server_mismatch");
+    }
+
+    return this.completeAuthenticatedBootstrap({
+      authentication,
+      deviceId,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      proof: "password",
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      target,
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+      validatedSession: input.validatedSession,
+    });
+  }
+
   public completeAuthenticatedSignIn(
     input: JellyfinAuthenticatedSignInInput,
   ): JellyfinSignInResult {
@@ -387,6 +483,51 @@ export class JellyfinSignInService {
             },
           );
           return internalResult({ session, status: "paired" as const });
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof JellyfinSignInServiceError) throw error;
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+  }
+
+  public completeAuthenticatedBootstrap(
+    input: JellyfinAuthenticatedBootstrapInput,
+  ): JellyfinBootstrapResult {
+    this.#validateAuthenticatedBootstrapInput(input);
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const bootstrapSession = this.#sessionService.beginValidatedRecoveryBootstrapSession(
+            input.validatedSession,
+          );
+          if (!bootstrapSession) {
+            return internalResult({
+              reason: "recovery_session_required" as const,
+              status: "denied" as const,
+            });
+          }
+          const identity = this.#bootstrapIdentity({
+            authentication: input.authentication,
+            deviceId: input.deviceId,
+            occurredAt: bootstrapSession.operationTime,
+            proof: input.proof,
+            requestContext: input,
+            target: input.target,
+          });
+          if (identity.status === "denied") return identity;
+          const session = this.#sessionService.completeValidatedRecoveryBootstrapSession(
+            bootstrapSession,
+            identity.userId,
+            identity.linkId,
+            {
+              ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+              ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+            },
+          );
+          return internalResult({ session, status: "bootstrapped" as const });
         })
         .immediate();
     } catch (error) {
@@ -888,6 +1029,102 @@ export class JellyfinSignInService {
     return Object.freeze({ linkId, status: "resolved" as const, userId });
   }
 
+  #bootstrapIdentity(input: {
+    authentication: JellyfinAuthenticationResult;
+    deviceId: string;
+    proof: "password" | "quick_connect";
+    requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
+    occurredAt: number;
+    target: JellyfinConnectorTarget;
+  }):
+    | JellyfinBootstrapDeniedResult
+    | { readonly linkId: string; readonly status: "resolved"; readonly userId: string } {
+    if (!this.#database.sqlite.inTransaction || !this.#registry.bindingIsCurrent(input.target)) {
+      throw new JellyfinSignInServiceError("configuration_invalid");
+    }
+    if (input.authentication.User.Policy.IsAdministrator !== true) {
+      this.#insertAudit({
+        eventType: "auth.admin.bootstrap",
+        metadata: { proof: input.proof, reason: "jellyfin_admin_required" },
+        occurredAt: input.occurredAt,
+        outcome: "denied",
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        targetId: input.target.connectorId,
+        targetType: "connector",
+      });
+      return internalResult({
+        reason: "jellyfin_admin_required" as const,
+        status: "denied" as const,
+      });
+    }
+    const activeAdministrator = this.#database.sqlite
+      .prepare("select id from users where role = 'admin' and status = 'active' limit 1")
+      .get() as { id: string } | undefined;
+    if (activeAdministrator) {
+      this.#insertAudit({
+        eventType: "auth.admin.bootstrap",
+        metadata: { proof: input.proof, reason: "administrator_already_exists" },
+        occurredAt: input.occurredAt,
+        outcome: "denied",
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        targetId: input.target.connectorId,
+        targetType: "connector",
+      });
+      return internalResult({
+        reason: "administrator_already_exists" as const,
+        status: "denied" as const,
+      });
+    }
+
+    const existingLink = this.#database.sqlite
+      .prepare(
+        `select id
+         from service_identity_links
+         where connector_id = ? and external_server_id = ? and external_user_id = ?`,
+      )
+      .get(
+        input.target.connectorId,
+        input.authentication.ServerId,
+        input.authentication.User.Id,
+      ) as { id: string } | undefined;
+    const identity = this.#reconcileIdentity(input);
+    if (identity.status === "denied") {
+      return internalResult({ reason: identity.reason, status: "denied" as const });
+    }
+    const promoted = this.#database.sqlite
+      .prepare(
+        `update users
+         set role = 'admin', role_source = 'recovery_bootstrap', status = 'active', updated_at = @now
+         where id = @userId
+           and status <> 'disabled'
+           and not exists (
+             select 1 from users
+             where role = 'admin' and status = 'active' and id <> @userId
+           )`,
+      )
+      .run({ now: input.occurredAt, userId: identity.userId });
+    if (promoted.changes !== 1) {
+      throw new JellyfinSignInServiceError("provider_unavailable");
+    }
+    this.#insertAudit({
+      actorUserId: identity.userId,
+      eventType: "auth.admin.bootstrap",
+      metadata: { proof: input.proof, provisioned: existingLink === undefined },
+      occurredAt: input.occurredAt,
+      outcome: "success",
+      ...(input.requestContext.requestId === undefined
+        ? {}
+        : { requestId: input.requestContext.requestId }),
+      targetId: identity.userId,
+      targetType: "user",
+    });
+    return identity;
+  }
+
   #existingLinkIsValid(
     row: ExistingLinkRow,
     input: {
@@ -919,7 +1156,7 @@ export class JellyfinSignInService {
   }
 
   #insertAudit(event: {
-    actorUserId: string;
+    actorUserId?: string;
     eventType: string;
     metadata: Readonly<Record<string, boolean | string>>;
     occurredAt: number;
@@ -944,7 +1181,7 @@ export class JellyfinSignInService {
       )
       .run(
         this.#nextIdentifier(this.#createId()),
-        event.actorUserId,
+        event.actorUserId ?? null,
         event.eventType,
         event.outcome,
         event.targetType,
@@ -1012,6 +1249,24 @@ export class JellyfinSignInService {
       !input ||
       typeof input !== "object" ||
       !input.validatedSession ||
+      !validIdentifier(input.deviceId) ||
+      (input.proof !== "password" && input.proof !== "quick_connect") ||
+      !input.authentication ||
+      typeof input.authentication !== "object" ||
+      !validIdentifier(input.target?.connectorId) ||
+      (input.requestId !== undefined &&
+        (typeof input.requestId !== "string" ||
+          input.requestId.length < 1 ||
+          input.requestId.length > 128))
+    ) {
+      throw new JellyfinSignInServiceError("provider_unavailable");
+    }
+  }
+
+  #validateAuthenticatedBootstrapInput(input: JellyfinAuthenticatedBootstrapInput) {
+    if (
+      !input ||
+      typeof input !== "object" ||
       !validIdentifier(input.deviceId) ||
       (input.proof !== "password" && input.proof !== "quick_connect") ||
       !input.authentication ||

@@ -147,6 +147,9 @@ gateway directly.
 | `POST /api/auth/oidc/backchannel/{providerId}`                                 | Verify a provider Logout Token and revoke its exact local session scope.    |
 | `GET /api/auth/oidc/frontchannel/{providerId}`                                 | Accept exact session-aware provider logout in a restricted iframe.          |
 | `POST /api/auth/jellyfin/password`                                             | Verify credentials with Jellyfin and establish a local session.             |
+| `POST /api/auth/bootstrap/jellyfin/password`                                   | Establish the first admin from recovery plus Jellyfin admin proof.          |
+| `POST /api/auth/bootstrap/jellyfin/quick-connect`                              | Start recovery-bound first-admin Quick Connect proof.                       |
+| `POST /api/auth/bootstrap/jellyfin/quick-connect/{transactionId}/poll`         | Complete first-admin bootstrap for the exact recovery session.              |
 | `POST /api/auth/jellyfin/link/password`                                        | Pair fresh credentials to the exact pending OIDC session.                   |
 | `POST /api/auth/jellyfin/link/quick-connect`                                   | Create Quick Connect proof bound to the exact pending OIDC session.         |
 | `POST /api/auth/jellyfin/link/quick-connect/{transactionId}/poll`              | Complete pairing only for the originating OIDC session.                     |
@@ -453,6 +456,15 @@ A successful recovery session must be short-lived, locally scoped, visibly marke
 must not be usable as a permanent authentication method. Operators should test recovery
 after initial setup, store the secret separately from the database, and rotate it after
 use.
+
+On a fresh database, the hidden `/recovery` interface can exchange that session for a
+normal administrator session only after password or Quick Connect proof from a Jellyfin
+account whose upstream policy explicitly marks it as an administrator. The exchange is one
+immediate SQLite transaction: it verifies that no active local administrator exists, reuses
+only an exact immutable server/user identity, records `recovery_bootstrap` role provenance,
+and replaces the recovery session. Ordinary Jellyfin sign-in remains viewer-default and
+never imports upstream administrator authority. Competing proofs can therefore produce at
+most one first administrator.
 
 The implemented recovery boundary allows only one active recovery session: a newly
 verified break-glass login atomically supersedes the prior recovery session and records

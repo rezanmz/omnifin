@@ -34,6 +34,7 @@ import { BrandMark } from "./brand-mark";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 
 export type JellyfinCredentialStatus =
+  | "admin_required"
   | "identity_conflict"
   | "idle"
   | "invalid_credentials"
@@ -45,9 +46,9 @@ export type JellyfinCredentialStatus =
 type CredentialOutcome = Exclude<JellyfinCredentialStatus, "idle" | "submitting"> | "success";
 type AuthenticationMethod = "password" | "quick-connect";
 type QuickConnectFailure =
-  "identity_conflict" | "rate_limited" | "session_required" | "unavailable";
+  "admin_required" | "identity_conflict" | "rate_limited" | "session_required" | "unavailable";
 
-export type JellyfinCredentialIntent = "pair" | "sign-in";
+export type JellyfinCredentialIntent = "bootstrap" | "pair" | "sign-in";
 
 export type PairingSessionOutcome =
   { csrfToken: string; status: "ready" } | { status: "ineligible" | "signed_out" | "unavailable" };
@@ -86,7 +87,7 @@ export interface JellyfinCredentialScreenProperties {
   initialQuickConnectTransaction?: JellyfinQuickConnectInitiationResponse;
   initialStatus?: JellyfinCredentialStatus;
   intent?: JellyfinCredentialIntent;
-  loadPairingSession?: () => Promise<PairingSessionOutcome>;
+  loadPairingSession?: (intent?: JellyfinCredentialIntent) => Promise<PairingSessionOutcome>;
   onAuthenticated?: () => void;
   pollQuickConnect?: (transactionId: string) => Promise<QuickConnectPollOutcome>;
   startQuickConnect?: () => Promise<QuickConnectStartOutcome>;
@@ -96,6 +97,7 @@ export interface JellyfinCredentialScreenProperties {
 const STATUS_MESSAGES: Readonly<
   Record<Exclude<JellyfinCredentialStatus, "idle" | "submitting">, string>
 > = Object.freeze({
+  admin_required: "That Jellyfin account is not an administrator.",
   identity_conflict: "That Jellyfin identity is already linked to another account.",
   invalid_credentials: "That Jellyfin username or password was not accepted.",
   rate_limited: "Too many attempts were made. Wait a moment, then try again.",
@@ -104,6 +106,7 @@ const STATUS_MESSAGES: Readonly<
 });
 
 const QUICK_CONNECT_MESSAGES = Object.freeze({
+  admin_required: "Approve Quick Connect with a Jellyfin administrator account.",
   expired: "This code expired before it was approved. Generate a fresh code to continue.",
   identity_conflict: "That Jellyfin identity is already linked to another account.",
   rate_limited: "Too many codes were requested. Wait a moment, then try again.",
@@ -128,18 +131,39 @@ function isAuthenticatedSessionResponse(
   const principal = value.principal;
   if (!isRecord(principal) || principal.accountState !== "active") return false;
   const method = principal.authenticationMethod;
+  const expectedMethod = intent === "pair" ? "oidc" : "jellyfin";
   return (
     typeof principal.sessionId === "string" &&
     typeof principal.userId === "string" &&
     isRecord(method) &&
-    method.kind === (intent === "pair" ? "oidc" : "jellyfin")
+    method.kind === expectedMethod &&
+    (intent !== "bootstrap" || principal.role === "admin")
   );
 }
 
-async function responseFailure(response: Response): Promise<Exclude<CredentialOutcome, "success">> {
+async function responseFailure(
+  response: Response,
+  intent: JellyfinCredentialIntent,
+): Promise<Exclude<CredentialOutcome, "success">> {
   if (response.status === 401) return "invalid_credentials";
   if (response.status === 429) return "rate_limited";
-  if (response.status === 403) return "session_required";
+  if (response.status === 403) {
+    if (intent === "bootstrap") {
+      try {
+        const body = (await response.json()) as unknown;
+        if (
+          isRecord(body) &&
+          isRecord(body.error) &&
+          body.error.code === "jellyfin_admin_required"
+        ) {
+          return "admin_required";
+        }
+      } catch {
+        // A bounded status-derived fallback avoids exposing gateway response details.
+      }
+    }
+    return "session_required";
+  }
   if (response.status === 409) {
     try {
       const body = (await response.json()) as unknown;
@@ -154,12 +178,17 @@ async function responseFailure(response: Response): Promise<Exclude<CredentialOu
   return "unavailable";
 }
 
-async function quickConnectFailure(response: Response): Promise<QuickConnectFailure> {
-  const outcome = await responseFailure(response);
+async function quickConnectFailure(
+  response: Response,
+  intent: JellyfinCredentialIntent,
+): Promise<QuickConnectFailure> {
+  const outcome = await responseFailure(response, intent);
   return outcome === "invalid_credentials" ? "unavailable" : outcome;
 }
 
-async function defaultLoadPairingSession(): Promise<PairingSessionOutcome> {
+async function defaultLoadPairingSession(
+  intent: JellyfinCredentialIntent = "pair",
+): Promise<PairingSessionOutcome> {
   try {
     const response = await fetch("/api/auth/session", {
       cache: "no-store",
@@ -174,11 +203,17 @@ async function defaultLoadPairingSession(): Promise<PairingSessionOutcome> {
       return { status: "unavailable" };
     }
     const method = body.principal.authenticationMethod;
-    if (
-      !isRecord(method) ||
-      method.kind !== "oidc" ||
-      (body.principal.accountState !== "pending_link" && body.principal.accountState !== "active")
-    ) {
+    const pairingEligible =
+      intent === "pair" &&
+      isRecord(method) &&
+      method.kind === "oidc" &&
+      (body.principal.accountState === "pending_link" || body.principal.accountState === "active");
+    const bootstrapEligible =
+      intent === "bootstrap" &&
+      isRecord(method) &&
+      method.kind === "recovery" &&
+      body.principal.accountState === "recovery";
+    if (!pairingEligible && !bootstrapEligible) {
       return { status: "ineligible" };
     }
     return { csrfToken: String(body.csrfToken), status: "ready" };
@@ -209,26 +244,29 @@ async function defaultSubmitCredentials(
   intent: JellyfinCredentialIntent,
   csrfToken: string | null,
 ): Promise<CredentialOutcome> {
-  if (intent === "pair" && csrfToken === null) return "session_required";
+  if (intent !== "sign-in" && csrfToken === null) return "session_required";
   try {
-    const response = await fetch(
-      intent === "pair" ? "/api/auth/jellyfin/link/password" : "/api/auth/jellyfin/password",
-      {
-        body: JSON.stringify(credentials),
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: {
-          "content-type": "application/json",
-          ...(csrfToken === null ? {} : { [CSRF_HEADER]: csrfToken }),
-        },
-        method: "POST",
+    const endpoint =
+      intent === "pair"
+        ? "/api/auth/jellyfin/link/password"
+        : intent === "bootstrap"
+          ? "/api/auth/bootstrap/jellyfin/password"
+          : "/api/auth/jellyfin/password";
+    const response = await fetch(endpoint, {
+      body: JSON.stringify(credentials),
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/json",
+        ...(csrfToken === null ? {} : { [CSRF_HEADER]: csrfToken }),
       },
-    );
+      method: "POST",
+    });
     if (response.ok) {
       const body = (await response.json()) as unknown;
       return isAuthenticatedSessionResponse(body, intent) ? "success" : "unavailable";
     }
-    return responseFailure(response);
+    return responseFailure(response, intent);
   } catch {
     return "unavailable";
   }
@@ -238,24 +276,25 @@ async function defaultStartQuickConnect(
   intent: JellyfinCredentialIntent,
   csrfToken: string | null,
 ): Promise<QuickConnectStartOutcome> {
-  if (intent === "pair" && csrfToken === null) return { status: "session_required" };
+  if (intent !== "sign-in" && csrfToken === null) return { status: "session_required" };
   try {
-    const response = await fetch(
+    const endpoint =
       intent === "pair"
         ? "/api/auth/jellyfin/link/quick-connect"
-        : "/api/auth/jellyfin/quick-connect",
-      {
-        body: "{}",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: {
-          "content-type": "application/json",
-          ...(csrfToken === null ? {} : { [CSRF_HEADER]: csrfToken }),
-        },
-        method: "POST",
+        : intent === "bootstrap"
+          ? "/api/auth/bootstrap/jellyfin/quick-connect"
+          : "/api/auth/jellyfin/quick-connect";
+    const response = await fetch(endpoint, {
+      body: "{}",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/json",
+        ...(csrfToken === null ? {} : { [CSRF_HEADER]: csrfToken }),
       },
-    );
-    if (!response.ok) return { status: await quickConnectFailure(response) };
+      method: "POST",
+    });
+    if (!response.ok) return { status: await quickConnectFailure(response, intent) };
     const body = (await response.json()) as unknown;
     return isQuickConnectTransaction(body)
       ? { status: "started", transaction: body }
@@ -270,10 +309,16 @@ async function defaultPollQuickConnect(
   intent: JellyfinCredentialIntent,
   csrfToken: string | null,
 ): Promise<QuickConnectPollOutcome> {
-  if (intent === "pair" && csrfToken === null) return { status: "session_required" };
+  if (intent !== "sign-in" && csrfToken === null) return { status: "session_required" };
   try {
+    const endpointPrefix =
+      intent === "pair"
+        ? "/api/auth/jellyfin/link"
+        : intent === "bootstrap"
+          ? "/api/auth/bootstrap/jellyfin"
+          : "/api/auth/jellyfin";
     const response = await fetch(
-      `/api/auth/jellyfin/${intent === "pair" ? "link/" : ""}quick-connect/${encodeURIComponent(transactionId)}/poll`,
+      `${endpointPrefix}/quick-connect/${encodeURIComponent(transactionId)}/poll`,
       {
         body: "{}",
         cache: "no-store",
@@ -285,7 +330,7 @@ async function defaultPollQuickConnect(
         method: "POST",
       },
     );
-    if (!response.ok) return { status: await quickConnectFailure(response) };
+    if (!response.ok) return { status: await quickConnectFailure(response, intent) };
     const body = (await response.json()) as unknown;
     if (!isRecord(body) || typeof body.status !== "string") return { status: "unavailable" };
     if (body.status === "expired") return { status: "expired" };
@@ -304,7 +349,8 @@ async function defaultPollQuickConnect(
       };
     }
     if (
-      body.status === (intent === "pair" ? "paired" : "signed_in") &&
+      body.status ===
+        (intent === "pair" ? "paired" : intent === "bootstrap" ? "bootstrapped" : "signed_in") &&
       isAuthenticatedSessionResponse(body, intent)
     ) {
       return { session: body, status: "signed_in" };
@@ -353,6 +399,9 @@ export function JellyfinCredentialScreen({
   startQuickConnect,
   submitCredentials,
 }: JellyfinCredentialScreenProperties) {
+  const isBootstrap = intent === "bootstrap";
+  const isPairing = intent === "pair";
+  const requiresSecureSession = intent !== "sign-in";
   const [method, setMethod] = useState<AuthenticationMethod>(initialMethod);
   const hydrated = useSyncExternalStore(
     subscribeToHydration,
@@ -371,7 +420,7 @@ export function JellyfinCredentialScreen({
   const [copied, setCopied] = useState(false);
   const [currentTime, setCurrentTime] = useState<number | null>(initialNow ?? null);
   const [pairingSession, setPairingSession] = useState<PairingSessionOutcome | null>(
-    intent === "pair" ? (initialPairingSession ?? null) : { csrfToken: "", status: "ready" },
+    requiresSecureSession ? (initialPairingSession ?? null) : { csrfToken: "", status: "ready" },
   );
   const passwordInput = useRef<HTMLInputElement>(null);
   const passwordTab = useRef<HTMLButtonElement>(null);
@@ -383,15 +432,15 @@ export function JellyfinCredentialScreen({
   const csrfToken = pairingSession?.status === "ready" ? pairingSession.csrfToken || null : null;
 
   useEffect(() => {
-    if (intent !== "pair" || pairingSession !== null) return;
+    if (!requiresSecureSession || pairingSession !== null) return;
     let active = true;
-    void loadPairingSession().then((outcome) => {
+    void loadPairingSession(intent).then((outcome) => {
       if (active) setPairingSession(outcome);
     });
     return () => {
       active = false;
     };
-  }, [intent, loadPairingSession, pairingSession]);
+  }, [intent, loadPairingSession, pairingSession, requiresSecureSession]);
 
   useEffect(() => {
     if (!error || !restorePasswordFocus.current) return;
@@ -518,22 +567,32 @@ export function JellyfinCredentialScreen({
           <BrandMark />
           <a
             className="jellyfin-login-card__back"
-            href={intent === "pair" ? "/settings" : "/login"}
+            href={isPairing ? "/settings" : isBootstrap ? "/" : "/login"}
           >
             <ArrowLeft aria-hidden="true" size={16} />
-            {intent === "pair" ? "Account settings" : "All sign-in methods"}
+            {isPairing ? "Account settings" : isBootstrap ? "Exit recovery" : "All sign-in methods"}
           </a>
           <div className="jellyfin-login-card__headline">
             <p className="eyebrow">
-              {intent === "pair" ? "Secure account pairing" : "Jellyfin identity"}
+              {isPairing
+                ? "Secure account pairing"
+                : isBootstrap
+                  ? "First administrator"
+                  : "Jellyfin identity"}
             </p>
             <h1 id="jellyfin-login-title">
-              {intent === "pair" ? "Bring your library with you." : "Step into your library."}
+              {isPairing
+                ? "Bring your library with you."
+                : isBootstrap
+                  ? "Establish trusted control."
+                  : "Step into your library."}
             </h1>
             <p>
-              {intent === "pair"
+              {isPairing
                 ? "Prove control of your Jellyfin account once. Omnifin will preserve your own library visibility, playback permissions, and watch state."
-                : "Sign in directly or approve this device from Jellyfin. Your media permissions stay anchored to your own account."}
+                : isBootstrap
+                  ? "Verify a Jellyfin administrator account. This one-time claim closes as soon as the first Omnifin administrator is established."
+                  : "Sign in directly or approve this device from Jellyfin. Your media permissions stay anchored to your own account."}
             </p>
           </div>
           <ul className="jellyfin-login-card__assurances" aria-label="Authentication safeguards">
@@ -543,9 +602,11 @@ export function JellyfinCredentialScreen({
             </li>
             <li>
               <ShieldCheck aria-hidden="true" size={17} />
-              {intent === "pair"
+              {isPairing
                 ? "Identity ownership is proven, never guessed"
-                : "Session and token remain gateway-side"}
+                : isBootstrap
+                  ? "Jellyfin administrator policy is verified live"
+                  : "Session and token remain gateway-side"}
             </li>
             <li>
               <RadioTower aria-hidden="true" size={17} />
@@ -556,34 +617,50 @@ export function JellyfinCredentialScreen({
 
         <section
           className="jellyfin-login-card__form-panel"
-          aria-label={intent === "pair" ? "Link a Jellyfin account" : "Jellyfin sign in"}
+          aria-label={
+            isPairing
+              ? "Link a Jellyfin account"
+              : isBootstrap
+                ? "Create the first administrator"
+                : "Jellyfin sign in"
+          }
         >
           <div className="jellyfin-login-card__method-icon" aria-hidden="true">
             {method === "password" ? <KeyRound size={22} /> : <Smartphone size={22} />}
           </div>
           <div className="jellyfin-login-card__form-heading">
             <p className="section-kicker">
-              {intent === "pair" ? "Account pairing" : "Direct authentication"}
+              {isPairing
+                ? "Account pairing"
+                : isBootstrap
+                  ? "Administrator verification"
+                  : "Direct authentication"}
             </p>
             <h2>
               {method === "password"
-                ? intent === "pair"
+                ? isPairing
                   ? "Connect your Jellyfin identity"
-                  : "Use your Jellyfin account"
-                : intent === "pair"
+                  : isBootstrap
+                    ? "Verify a Jellyfin administrator"
+                    : "Use your Jellyfin account"
+                : isPairing
                   ? "Approve your account"
-                  : "Approve this screen"}
+                  : isBootstrap
+                    ? "Approve as an administrator"
+                    : "Approve this screen"}
             </h2>
             <p>
               {method === "password"
-                ? intent === "pair"
+                ? isPairing
                   ? "Jellyfin verifies your credentials; Omnifin immediately discards the password and links only the proven identity."
-                  : "Your server verifies these credentials and returns a revocable access token."
+                  : isBootstrap
+                    ? "Jellyfin verifies both the identity and current administrator policy. The password is discarded immediately."
+                    : "Your server verifies these credentials and returns a revocable access token."
                 : "Generate a short code, then approve it from any device already signed in to Jellyfin."}
             </p>
           </div>
 
-          {intent === "pair" && !pairingReady ? (
+          {requiresSecureSession && !pairingReady ? (
             <div
               aria-live="polite"
               className="jellyfin-pairing-gate"
@@ -601,24 +678,39 @@ export function JellyfinCredentialScreen({
                   {pairingState === "checking"
                     ? "Checking your secure session"
                     : pairingState === "signed_out"
-                      ? "Sign in again to continue"
+                      ? isBootstrap
+                        ? "Recovery access has ended"
+                        : "Sign in again to continue"
                       : pairingState === "ineligible"
-                        ? "This account cannot be paired"
-                        : "Account pairing is unavailable"}
+                        ? isBootstrap
+                          ? "Recovery access is required"
+                          : "This account cannot be paired"
+                        : isBootstrap
+                          ? "Administrator bootstrap is unavailable"
+                          : "Account pairing is unavailable"}
                 </h3>
                 <p>
                   {pairingState === "checking"
-                    ? "Confirming your OIDC identity and current account permissions…"
+                    ? isBootstrap
+                      ? "Confirming the short-lived recovery session…"
+                      : "Confirming your OIDC identity and current account permissions…"
                     : pairingState === "signed_out"
-                      ? "Your session has ended. Start with your identity provider, then return here to link Jellyfin."
+                      ? isBootstrap
+                        ? "Re-enter through the private recovery route before attempting the first-admin claim again."
+                        : "Your session has ended. Start with your identity provider, then return here to link Jellyfin."
                       : pairingState === "ineligible"
-                        ? "Jellyfin pairing is available to OIDC-authenticated accounts. Your current identity remains unchanged."
+                        ? isBootstrap
+                          ? "This route accepts only an active break-glass recovery session. No account was changed."
+                          : "Jellyfin pairing is available to OIDC-authenticated accounts. Your current identity remains unchanged."
                         : "The gateway could not confirm your session. No credentials have been requested or sent."}
                 </p>
               </div>
               {pairingState === "signed_out" ? (
-                <a className="jellyfin-login-form__submit" href="/login">
-                  Return to sign in
+                <a
+                  className="jellyfin-login-form__submit"
+                  href={isBootstrap ? "/recovery" : "/login"}
+                >
+                  {isBootstrap ? "Return to recovery" : "Return to sign in"}
                   <ArrowRight aria-hidden="true" size={18} />
                 </a>
               ) : pairingState === "unavailable" ? (
@@ -757,7 +849,11 @@ export function JellyfinCredentialScreen({
                         </>
                       ) : (
                         <>
-                          {intent === "pair" ? "Link Jellyfin account" : "Continue to Omnifin"}
+                          {isPairing
+                            ? "Link Jellyfin account"
+                            : isBootstrap
+                              ? "Create first administrator"
+                              : "Continue to Omnifin"}
                           <ArrowRight aria-hidden="true" size={18} />
                         </>
                       )}

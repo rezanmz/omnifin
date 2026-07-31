@@ -134,6 +134,13 @@
       "when": 1785387509671,
       "tag": "0018_discovery_artwork_references",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1785533270544,
+      "tag": "0019_jellyfin_admin_bootstrap",
+      "breakpoints": true
     }
   ]
 }

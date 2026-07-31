@@ -17,6 +17,9 @@ const jellyfinPublicSystemInfoSchema = z.object({
 const jellyfinUserSchema = z.object({
   Id: z.string().trim().min(1).max(256),
   Name: z.string().trim().min(1).max(160),
+  Policy: z.object({
+    IsAdministrator: z.boolean(),
+  }),
 });
 
 const jellyfinAuthenticationResultSchema = z.object({

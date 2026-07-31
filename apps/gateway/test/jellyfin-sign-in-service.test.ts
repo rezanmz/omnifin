@@ -3,6 +3,10 @@ import type {
   JellyfinPublicSystemInfo,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import { eq } from "drizzle-orm";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -88,7 +92,11 @@ function authentication(
   return {
     AccessToken: "private-access-token",
     ServerId: "server-1",
-    User: { Id: "jellyfin-user-1", Name: "Riley" },
+    User: {
+      Id: "jellyfin-user-1",
+      Name: "Riley",
+      Policy: { IsAdministrator: true },
+    },
     ...overrides,
   };
 }
@@ -190,7 +198,280 @@ function seedPendingOidcSession(handle: DatabaseHandle, sessions: SessionService
   return { session, validated };
 }
 
+function seedRecoverySession(sessions: SessionService) {
+  const session = sessions.createSession({ attribution: { authMethod: "recovery" } });
+  const validated = sessions.validateSessionCsrf(session.sessionToken, session.csrfToken);
+  if (!validated) throw new Error("Expected a validated recovery session.");
+  return { session, validated };
+}
+
 describe("JellyfinSignInService", () => {
+  it("bootstraps the first administrator from a CSRF-proven recovery session", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { sessions, signIn } = service(handle);
+    try {
+      const recovery = seedRecoverySession(sessions);
+
+      const result = await signIn.bootstrapWithPassword({
+        ...credentials({ requestId: "request-first-admin" }),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result.status).toBe("bootstrapped");
+      if (result.status !== "bootstrapped") throw new Error("Expected bootstrap success.");
+      expect(result.session.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "jellyfin" },
+        role: "admin",
+      });
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({
+          role: "admin",
+          roleSource: "recovery_bootstrap",
+          status: "active",
+        }),
+      ]);
+      expect(sessions.resolveAndRefresh(recovery.session.sessionToken)).toBeNull();
+      expect(
+        handle.sqlite
+          .prepare(
+            `select event_type as eventType, outcome, metadata_json as metadataJson
+             from audit_events
+             where event_type = 'auth.admin.bootstrap'
+             order by rowid desc
+             limit 1`,
+          )
+          .get(),
+      ).toEqual({
+        eventType: "auth.admin.bootstrap",
+        metadataJson: JSON.stringify({ proof: "password", provisioned: true }),
+        outcome: "success",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("keeps recovery access intact when the Jellyfin account is not an administrator", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { sessions, signIn } = service(handle, {
+      authentication: authentication({
+        User: {
+          Id: "jellyfin-user-1",
+          Name: "Riley",
+          Policy: { IsAdministrator: false },
+        },
+      }),
+    });
+    try {
+      const recovery = seedRecoverySession(sessions);
+
+      const result = await signIn.bootstrapWithPassword({
+        ...credentials(),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result).toMatchObject({ reason: "jellyfin_admin_required", status: "denied" });
+      expect(handle.db.select().from(users).all()).toEqual([]);
+      expect(sessions.resolveAndRefresh(recovery.session.sessionToken)?.principal).toMatchObject({
+        accountState: "recovery",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("refuses bootstrap after an active local administrator already exists", async () => {
+    const handle = database();
+    seedConnector(handle);
+    handle.db
+      .insert(users)
+      .values({
+        createdAt: EARLIER,
+        displayName: "Existing administrator",
+        id: "existing-admin",
+        role: "admin",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: EARLIER,
+      })
+      .run();
+    const { sessions, signIn } = service(handle);
+    try {
+      const recovery = seedRecoverySession(sessions);
+
+      const result = await signIn.bootstrapWithPassword({
+        ...credentials(),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result).toMatchObject({ reason: "administrator_already_exists", status: "denied" });
+      expect(handle.db.select().from(users).all()).toHaveLength(1);
+      expect(sessions.resolveAndRefresh(recovery.session.sessionToken)?.principal).toMatchObject({
+        accountState: "recovery",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("atomically grants exactly one administrator across competing recovery proofs", () => {
+    const handle = database();
+    seedConnector(handle);
+    const firstService = service(handle);
+    const secondService = service(handle);
+    try {
+      const firstRecovery = seedRecoverySession(firstService.sessions);
+      const secondRecovery = seedRecoverySession(secondService.sessions);
+      handle.db
+        .update(sessionRows)
+        .set({ revokedAt: null })
+        .where(eq(sessionRows.id, firstRecovery.session.principal.sessionId))
+        .run();
+      const firstValidated = firstService.sessions.validateSessionCsrf(
+        firstRecovery.session.sessionToken,
+        firstRecovery.session.csrfToken,
+      );
+      if (!firstValidated) throw new Error("Expected the competing recovery proof to be valid.");
+
+      const first = firstService.signIn.completeAuthenticatedBootstrap({
+        authentication: authentication(),
+        deviceId: "bootstrap-device-1",
+        proof: "password",
+        target: {
+          baseUrl: "https://jellyfin.example.test",
+          connectorId: "jellyfin-home",
+          displayName: "Home Jellyfin",
+          insecureHttpApproved: false,
+          updatedAt: EARLIER.getTime(),
+        },
+        validatedSession: firstValidated,
+      });
+      const second = secondService.signIn.completeAuthenticatedBootstrap({
+        authentication: authentication({
+          AccessToken: "private-second-access-token",
+          User: {
+            Id: "jellyfin-user-2",
+            Name: "Morgan",
+            Policy: { IsAdministrator: true },
+          },
+        }),
+        deviceId: "bootstrap-device-2",
+        proof: "quick_connect",
+        target: {
+          baseUrl: "https://jellyfin.example.test",
+          connectorId: "jellyfin-home",
+          displayName: "Home Jellyfin",
+          insecureHttpApproved: false,
+          updatedAt: EARLIER.getTime(),
+        },
+        validatedSession: secondRecovery.validated,
+      });
+
+      expect(first.status).toBe("bootstrapped");
+      expect(second).toMatchObject({
+        reason: "administrator_already_exists",
+        status: "denied",
+      });
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ role: "admin", roleSource: "recovery_bootstrap" }),
+      ]);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toHaveLength(1);
+      expect(
+        secondService.sessions.resolveAndRefresh(secondRecovery.session.sessionToken)?.principal,
+      ).toMatchObject({ accountState: "recovery" });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("promotes an existing immutable Jellyfin identity and revokes its sibling sessions", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const test = service(handle);
+    try {
+      const viewer = await test.signIn.signInWithPassword(credentials());
+      if (viewer.status !== "signed_in") throw new Error("Expected viewer sign-in success.");
+      const recovery = seedRecoverySession(test.sessions);
+
+      const result = await test.signIn.bootstrapWithPassword({
+        ...credentials({ requestId: "request-promote-existing-viewer" }),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result.status).toBe("bootstrapped");
+      if (result.status !== "bootstrapped") throw new Error("Expected bootstrap success.");
+      expect(result.session.principal.userId).toBe(viewer.session.principal.userId);
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ role: "admin", roleSource: "recovery_bootstrap" }),
+      ]);
+      expect(handle.db.select().from(serviceIdentityLinks).all()).toHaveLength(1);
+      expect(test.sessions.resolveAndRefresh(viewer.session.sessionToken)).toBeNull();
+      expect(test.sessions.resolveAndRefresh(recovery.session.sessionToken)).toBeNull();
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("persists the bootstrap invariant across a database restart", async () => {
+    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "omnifin-admin-bootstrap-"));
+    const databasePath = path.join(temporaryDirectory, "omnifin.db");
+    let handle: DatabaseHandle | undefined;
+    try {
+      handle = openDatabase(databasePath);
+      handle.migrate();
+      seedConnector(handle);
+      const initial = service(handle);
+      const recovery = seedRecoverySession(initial.sessions);
+      const first = await initial.signIn.bootstrapWithPassword({
+        ...credentials(),
+        validatedSession: recovery.validated,
+      });
+      expect(first.status).toBe("bootstrapped");
+      handle.close();
+      handle = undefined;
+
+      handle = openDatabase(databasePath);
+      handle.migrate();
+      const restarted = service(handle);
+      const restartedRecovery = seedRecoverySession(restarted.sessions);
+      const second = await restarted.signIn.bootstrapWithPassword({
+        ...credentials(),
+        validatedSession: restartedRecovery.validated,
+      });
+
+      expect(second).toMatchObject({
+        reason: "administrator_already_exists",
+        status: "denied",
+      });
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ role: "admin", roleSource: "recovery_bootstrap" }),
+      ]);
+    } finally {
+      handle?.close();
+      rmSync(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("requires a live CSRF-proven recovery session for administrator bootstrap", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const { signIn } = service(handle);
+    try {
+      const result = await signIn.bootstrapWithPassword({
+        ...credentials(),
+        validatedSession: undefined,
+      });
+
+      expect(result).toMatchObject({ reason: "recovery_session_required", status: "denied" });
+      expect(handle.db.select().from(users).all()).toEqual([]);
+    } finally {
+      handle.close();
+    }
+  });
+
   it("provisions a viewer, encrypts the token, and issues an attributed session", async () => {
     const handle = database();
     seedConnector(handle);
@@ -256,7 +537,11 @@ describe("JellyfinSignInService", () => {
       const secondService = service(handle, {
         authentication: authentication({
           AccessToken: "rotated-private-access-token",
-          User: { Id: "jellyfin-user-1", Name: "Riley Renamed" },
+          User: {
+            Id: "jellyfin-user-1",
+            Name: "Riley Renamed",
+            Policy: { IsAdministrator: true },
+          },
         }),
       });
       const second = await secondService.signIn.signInWithPassword(
@@ -293,7 +578,11 @@ describe("JellyfinSignInService", () => {
       const second = await service(handle, {
         authentication: authentication({
           AccessToken: "second-private-access-token",
-          User: { Id: "jellyfin-user-2", Name: "Riley" },
+          User: {
+            Id: "jellyfin-user-2",
+            Name: "Riley",
+            Policy: { IsAdministrator: true },
+          },
         }),
       }).signIn.signInWithPassword(credentials());
 
@@ -564,7 +853,11 @@ describe("JellyfinSignInService", () => {
       const relinkService = service(handle, {
         authentication: authentication({
           AccessToken: "fresh-private-access-token",
-          User: { Id: "jellyfin-user-1", Name: "Riley Renamed" },
+          User: {
+            Id: "jellyfin-user-1",
+            Name: "Riley Renamed",
+            Policy: { IsAdministrator: true },
+          },
         }),
       });
 

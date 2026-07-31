@@ -3,6 +3,7 @@ import {
   jellyfinIdentityPairingResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
   jellyfinPasswordPairingRequestSchema,
+  jellyfinQuickConnectBootstrapPollResponseSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
   jellyfinQuickConnectPairingPollResponseSchema,
@@ -113,7 +114,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       | "permission_denied"
       | "rate_limited"
       | "upstream_unavailable",
-    operation: "pairing" | "sign_in" = "sign_in",
+    operation: "bootstrap" | "pairing" | "sign_in" = "sign_in",
   ) => {
     if (recordedRequests.has(request)) return;
     recordedRequests.add(request);
@@ -136,7 +137,9 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
           randomUUID(),
           operation === "pairing"
             ? "auth.jellyfin.identity.pairing_attempt"
-            : "auth.jellyfin.sign_in",
+            : operation === "bootstrap"
+              ? "auth.admin.bootstrap_attempt"
+              : "auth.jellyfin.sign_in",
           request.id,
           JSON.stringify({ reason }),
           privacyHash("ip_address", request.ip, app.appConfig.encryptionKey),
@@ -155,11 +158,12 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
     request: FastifyRequest,
     reply: FastifyReply,
     message: string,
+    operation: "bootstrap" | "pairing" | "sign_in" = "sign_in",
   ) => {
     const result = await limiter(request);
     if (result.isAllowed || !result.isExceeded) return;
     setRateLimitHeaders(reply, result);
-    recordFailure(request, "rate_limited");
+    recordFailure(request, "rate_limited", operation);
     throw new SafeHttpError({
       code: "rate_limit_exceeded",
       message,
@@ -262,6 +266,143 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         throw new SafeHttpError({
           code: "authentication_denied",
           message: "The Jellyfin username or password was not accepted.",
+          statusCode: 401,
+        });
+      }
+
+      recordedRequests.add(request);
+      const response = authenticatedSessionResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/bootstrap/jellyfin/password",
+    {
+      bodyLimit: PASSWORD_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        recordFailure(request, auditFailureReason(error), "bootstrap");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.jellyfin.manage",
+      );
+      const clientLimit = await clientCredentialRateLimit(request);
+      if (!clientLimit.isAllowed && clientLimit.isExceeded) {
+        setRateLimitHeaders(reply, clientLimit);
+        recordFailure(request, "rate_limited", "bootstrap");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Too many administrator bootstrap attempts were received.",
+          statusCode: 429,
+        });
+      }
+      const globalLimit = await globalCredentialRateLimit(request);
+      if (!globalLimit.isAllowed && globalLimit.isExceeded) {
+        setRateLimitHeaders(reply, globalLimit);
+        recordFailure(request, "rate_limited", "bootstrap");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Administrator bootstrap is temporarily rate limited.",
+          statusCode: 429,
+        });
+      }
+      const parsed = jellyfinPasswordPairingRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        recordFailure(request, "invalid_request", "bootstrap");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator bootstrap request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let result;
+      try {
+        result = await signIn.bootstrapWithPassword({
+          ...parsed.data,
+          ...requestContext(request),
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited", "bootstrap");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Administrator bootstrap is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinSignInServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "bootstrap",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin administrator verification is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      if (result.status === "denied") {
+        if (result.reason === "jellyfin_admin_required") {
+          recordFailure(request, "permission_denied", "bootstrap");
+          throw new SafeHttpError({
+            code: "jellyfin_admin_required",
+            message: "A Jellyfin administrator account is required.",
+            statusCode: 403,
+          });
+        }
+        if (
+          result.reason === "administrator_already_exists" ||
+          result.reason === "recovery_session_required"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "bootstrap_not_available",
+            message: "Administrator bootstrap is not available.",
+            statusCode: 409,
+          });
+        }
+        recordFailure(request, "authentication_denied", "bootstrap");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin account was not accepted.",
           statusCode: 401,
         });
       }
@@ -616,6 +757,271 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
   );
 
   app.post(
+    "/v1/auth/bootstrap/jellyfin/quick-connect",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 12, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        recordFailure(request, auditFailureReason(error), "bootstrap");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.jellyfin.manage",
+      );
+      await enforceRateLimit(
+        clientQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Too many administrator Quick Connect attempts were started.",
+        "bootstrap",
+      );
+      await enforceRateLimit(
+        globalQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Administrator Quick Connect is temporarily rate limited.",
+        "bootstrap",
+      );
+      if (!jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success) {
+        recordFailure(request, "invalid_request", "bootstrap");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator Quick Connect request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let started;
+      try {
+        started = await quickConnect.startBootstrap({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (
+          error instanceof JellyfinQuickConnectServiceError &&
+          error.reason === "recovery_session_required"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "bootstrap_not_available",
+            message: "Administrator bootstrap is not available.",
+            statusCode: 409,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "bootstrap",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin administrator verification is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+
+      recordedRequests.add(request);
+      writeJellyfinQuickConnectBrowserBindingCookie(
+        reply,
+        app.appConfig,
+        started.browserBindingToken,
+        started.expiresAt,
+      );
+      return jellyfinQuickConnectInitiationResponseSchema.parse({
+        code: started.code,
+        expiresAt: started.expiresAt.toISOString(),
+        pollAfterMs: started.pollAfterMs,
+        transactionId: started.transactionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { transactionId: string } }>(
+    "/v1/auth/bootstrap/jellyfin/quick-connect/:transactionId/poll",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 90, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        recordFailure(request, auditFailureReason(error), "bootstrap");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.jellyfin.manage",
+      );
+      await enforceRateLimit(
+        globalQuickConnectPollRateLimit,
+        request,
+        reply,
+        "Administrator Quick Connect polling is temporarily rate limited.",
+        "bootstrap",
+      );
+      if (
+        !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||
+        !jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success
+      ) {
+        recordFailure(request, "invalid_request", "bootstrap");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator Quick Connect poll request is invalid.",
+          statusCode: 400,
+        });
+      }
+
+      let result;
+      try {
+        result = await quickConnect.pollBootstrap({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          ...requestContext(request),
+          transactionId: request.params.transactionId,
+          validatedSession: request.validatedSession,
+        });
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited", "bootstrap");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Administrator bootstrap is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          if (error.reason === "recovery_session_required") {
+            recordedRequests.add(request);
+            throw new SafeHttpError({
+              code: "bootstrap_not_available",
+              message: "Administrator bootstrap is not available.",
+              statusCode: 409,
+            });
+          }
+          if (error.reason === "invalid_transaction") {
+            recordFailure(request, "invalid_request", "bootstrap");
+            throw new SafeHttpError({
+              cause: error,
+              code: "authentication_attempt_invalid",
+              message: "The administrator Quick Connect attempt is invalid or has expired.",
+              statusCode: 400,
+            });
+          }
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+            "bootstrap",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin administrator verification is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+
+      if (result.status === "expired") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectBootstrapPollResponseSchema.parse({ status: "expired" });
+      }
+      if (result.status === "pending") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectBootstrapPollResponseSchema.parse({
+          expiresAt: result.expiresAt.toISOString(),
+          pollAfterMs: result.pollAfterMs,
+          status: "pending",
+        });
+      }
+      if (result.status === "denied") {
+        if (result.reason === "jellyfin_admin_required") {
+          recordFailure(request, "permission_denied", "bootstrap");
+          throw new SafeHttpError({
+            code: "jellyfin_admin_required",
+            message: "A Jellyfin administrator account is required.",
+            statusCode: 403,
+          });
+        }
+        if (
+          result.reason === "administrator_already_exists" ||
+          result.reason === "recovery_session_required"
+        ) {
+          recordedRequests.add(request);
+          throw new SafeHttpError({
+            code: "bootstrap_not_available",
+            message: "Administrator bootstrap is not available.",
+            statusCode: 409,
+          });
+        }
+        recordFailure(request, "authentication_denied", "bootstrap");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin account was not accepted.",
+          statusCode: 401,
+        });
+      }
+
+      recordedRequests.add(request);
+      const response = jellyfinQuickConnectBootstrapPollResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+        status: "bootstrapped",
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      return response;
+    },
+  );
+
+  app.post(
     "/v1/auth/jellyfin/link/quick-connect",
     {
       bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
@@ -650,12 +1056,14 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         request,
         reply,
         "Too many Jellyfin Quick Connect pairing attempts were started.",
+        "pairing",
       );
       await enforceRateLimit(
         globalQuickConnectStartRateLimit,
         request,
         reply,
         "Jellyfin Quick Connect pairing is temporarily rate limited.",
+        "pairing",
       );
       if (!jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success) {
         recordFailure(request, "invalid_request", "pairing");
@@ -754,6 +1162,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         request,
         reply,
         "Jellyfin Quick Connect pairing polling is temporarily rate limited.",
+        "pairing",
       );
       if (
         !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||

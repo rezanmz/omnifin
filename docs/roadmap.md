@@ -41,6 +41,7 @@ claim live-service compatibility; those profiles remain gated by later phases.
 - Explicit OIDC-to-Jellyfin account pairing and lifecycle controls
 - Local roles and permissions, recovery access, opaque session rotation, logout, and
   audit records, including browser-safe administrator role and account-state controls
+- Recovery-bound first-administrator bootstrap with fresh Jellyfin administrator proof
 - Encrypted connector configuration, capability negotiation, and partial-failure
   contracts
 

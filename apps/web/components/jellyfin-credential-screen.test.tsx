@@ -93,6 +93,79 @@ describe("JellyfinCredentialScreen", () => {
     expect(screen.getByLabelText("Password")).toHaveValue("");
   });
 
+  it("bootstraps only through the recovery-bound administrator endpoint", async () => {
+    const user = userEvent.setup();
+    const csrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const onAuthenticated = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        csrfToken,
+        principal: {
+          accountState: "active",
+          authenticationMethod: { kind: "jellyfin" },
+          role: "admin",
+          sessionId: "bootstrap-session",
+          userId: "bootstrap-user",
+        },
+      }),
+    );
+    render(
+      <JellyfinCredentialScreen
+        initialPairingSession={{ csrfToken, status: "ready" }}
+        intent="bootstrap"
+        onAuthenticated={onAuthenticated}
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Username" }), "riley");
+    await user.type(screen.getByLabelText("Password"), "private-password");
+    await user.click(screen.getByRole("button", { name: "Create first administrator" }));
+
+    await waitFor(() => expect(onAuthenticated).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/bootstrap/jellyfin/password", {
+      body: JSON.stringify({ password: "private-password", username: "riley" }),
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-omnifin-csrf": csrfToken },
+      method: "POST",
+    });
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("starts first-admin Quick Connect only through the recovery-bound endpoint", async () => {
+    const user = userEvent.setup();
+    const csrfToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        code: "EF-9012",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        pollAfterMs: 2_000,
+        transactionId: "bootstrap-quick-connect",
+      }),
+    );
+    render(
+      <JellyfinCredentialScreen
+        autoPollQuickConnect={false}
+        initialMethod="quick-connect"
+        initialPairingSession={{ csrfToken, status: "ready" }}
+        intent="bootstrap"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Generate a code" }));
+
+    expect(await screen.findByLabelText("Jellyfin Quick Connect code")).toHaveTextContent(
+      "EF-9012",
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/bootstrap/jellyfin/quick-connect", {
+      body: "{}",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-omnifin-csrf": csrfToken },
+      method: "POST",
+    });
+  });
+
   it("keeps pairing controls hidden after a signed-out session check", () => {
     render(
       <JellyfinCredentialScreen initialPairingSession={{ status: "signed_out" }} intent="pair" />,

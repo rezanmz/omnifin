@@ -17,9 +17,12 @@ globally installed runtime.
 pnpm install --frozen-lockfile
 cp .env.example .env
 openssl rand -base64 32
+openssl rand -base64 48
 ```
 
-Place the generated value in `OMNIFIN_ENCRYPTION_KEY` before starting. The example
+Place the values in `OMNIFIN_ENCRYPTION_KEY` and `OMNIFIN_RECOVERY_SECRET`, respectively,
+before starting. Set `OMNIFIN_JELLYFIN_URL` to an isolated Jellyfin fixture when exercising
+first-administrator bootstrap. The example
 configuration is for local development. Use isolated test accounts and service
 instances. Never point mutation tests at a personal media library or reuse production
 credentials. Root environment files are not loaded automatically by the separate
@@ -36,7 +39,8 @@ The current workspace starts the application shells, health and readiness endpoi
 safe provider metadata, OIDC browser routes, RP-initiated logout, provider-initiated
 back- and front-channel logout, individual and account-wide local session
 revocation, recovery access,
-migrations, direct Jellyfin sign-in, password and Quick Connect pairing for pending OIDC users,
+migrations, recovery-bound first-administrator proof, direct Jellyfin sign-in, password and Quick
+Connect pairing for pending OIDC users,
 the permission-checked OIDC provider and role-mapping control room, and connector fixture/probe
 tooling. Account and provider administration are available as pre-release development surfaces.
 The versioned gateway API can administer encrypted connector records, validate capabilities, and

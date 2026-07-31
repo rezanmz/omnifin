@@ -1424,7 +1424,7 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
     connectorType: text("connector_type", { enum: ["jellyfin"] })
       .notNull()
       .default("jellyfin"),
-    purpose: text("purpose", { enum: ["sign_in", "pairing"] })
+    purpose: text("purpose", { enum: ["sign_in", "pairing", "bootstrap"] })
       .notNull()
       .default("sign_in"),
     pairingSessionId: text("pairing_session_id").references(() => sessions.id, {
@@ -1467,7 +1467,7 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
     check(
       "jellyfin_quick_connect_transactions_purpose_check",
       sql`(${table.purpose} = 'sign_in' and ${table.pairingSessionId} is null)
-        or (${table.purpose} = 'pairing' and ${table.pairingSessionId} is not null)`,
+        or (${table.purpose} in ('pairing', 'bootstrap') and ${table.pairingSessionId} is not null)`,
     ),
     check(
       "jellyfin_quick_connect_transactions_poll_count_check",

@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDatabase } from "../src/db/client.js";
@@ -297,6 +297,113 @@ describe("authentication schema upgrades", () => {
           )
           .get(),
       ).toEqual({ name: "jellyfin_quick_connect_transactions_pairing_session_idx" });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves Quick Connect transactions while adding recovery-bound bootstrap", () => {
+    const database = new Database(":memory:");
+    try {
+      for (const migration of readdirSync(migrationDirectory)
+        .filter((filename) => /^00(?:0\d|1[0-8])_.+\.sql$/u.test(filename))
+        .sort()) {
+        applyMigration(database, migration);
+      }
+      database.exec(`
+        insert into connector_configs (
+          id, type, display_name, base_url, encrypted_credentials, created_at, updated_at
+        ) values (
+          'jellyfin-home',
+          'jellyfin',
+          'Home Jellyfin',
+          'https://jellyfin.example.test',
+          'v1.fixture-connector-secret',
+          1000,
+          1000
+        );
+
+        insert into sessions (
+          id, token_hash, auth_method, csrf_token_hash, encrypted_csrf_token,
+          created_at, last_rotated_at, last_seen_at, expires_at, absolute_expires_at
+        ) values (
+          'recovery-bootstrap-session',
+          '${"r".repeat(43)}',
+          'recovery',
+          '${"s".repeat(43)}',
+          'v1.fixture-csrf-token',
+          1000,
+          1000,
+          1000,
+          3000,
+          4000
+        );
+
+        insert into jellyfin_quick_connect_transactions (
+          id, connector_id, purpose, pairing_session_id, browser_binding_hash,
+          encrypted_payload, expires_at, next_poll_at, created_at
+        ) values
+          (
+            'quick-connect-sign-in', 'jellyfin-home', 'sign_in', null,
+            '${"a".repeat(43)}', 'v1.fixture-sign-in', 3000, 2000, 1000
+          ),
+          (
+            'quick-connect-pairing', 'jellyfin-home', 'pairing',
+            'recovery-bootstrap-session', '${"b".repeat(43)}',
+            'v1.fixture-pairing', 3000, 2000, 1000
+          );
+      `);
+
+      applyMigration(database, "0019_jellyfin_admin_bootstrap.sql");
+
+      expect(
+        database
+          .prepare(
+            `select id, purpose, pairing_session_id as pairingSessionId, encrypted_payload as payload
+             from jellyfin_quick_connect_transactions
+             order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "quick-connect-pairing",
+          pairingSessionId: "recovery-bootstrap-session",
+          payload: "v1.fixture-pairing",
+          purpose: "pairing",
+        },
+        {
+          id: "quick-connect-sign-in",
+          pairingSessionId: null,
+          payload: "v1.fixture-sign-in",
+          purpose: "sign_in",
+        },
+      ]);
+      expect(() =>
+        database
+          .prepare(
+            `insert into jellyfin_quick_connect_transactions (
+              id, connector_id, purpose, pairing_session_id, browser_binding_hash,
+              encrypted_payload, expires_at, next_poll_at, created_at
+            ) values (?, 'jellyfin-home', 'bootstrap', null, ?, 'v1.invalid', 3000, 2000, 1000)`,
+          )
+          .run("bootstrap-without-session", "c".repeat(43)),
+      ).toThrow(/CHECK constraint failed/u);
+      database
+        .prepare(
+          `insert into jellyfin_quick_connect_transactions (
+            id, connector_id, purpose, pairing_session_id, browser_binding_hash,
+            encrypted_payload, expires_at, next_poll_at, created_at
+          ) values (?, 'jellyfin-home', 'bootstrap', 'recovery-bootstrap-session', ?, ?, 3000, 2000, 1000)`,
+        )
+        .run("quick-connect-bootstrap", "d".repeat(43), "v1.fixture-bootstrap");
+      expect(
+        database
+          .prepare(
+            "select purpose, pairing_session_id as pairingSessionId from jellyfin_quick_connect_transactions where id = ?",
+          )
+          .get("quick-connect-bootstrap"),
+      ).toEqual({ pairingSessionId: "recovery-bootstrap-session", purpose: "bootstrap" });
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();
@@ -1007,7 +1114,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 19 });
+      ).toEqual({ count: 20 });
       expect(
         database.sqlite
           .prepare(

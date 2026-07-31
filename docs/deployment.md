@@ -5,26 +5,27 @@ an operator must make safely. Omnifin is currently pre-release; do not treat an
 untagged image or default branch build as a production support promise.
 
 > [!IMPORTANT]
-> The current development branch is not an operable media control plane or a production
-> support promise. It can run the OIDC browser flow for an already configured provider,
+> The current development branch is not a production support promise. It can run the OIDC
+> browser flow for a configured provider,
 > establish local sessions, authenticate by password or Quick Connect with a configured
 > Jellyfin server, pair a pending OIDC user through fresh credentials or Quick Connect, and
 > provide RP-initiated logout, provider-initiated back- and front-channel logout, and
-> hidden recovery access. A permission-checked interface and API can create, inspect, and safely
+> hidden first-administrator recovery. A permission-checked interface and API can create, inspect, and safely
 > validate encrypted OIDC provider records, manage their guarded lifecycle, and administer explicit
 > role mappings. A separate connector API stores encrypted credentials, requires fresh probes before
 > enablement, and permits recovery sessions to repair Jellyfin configuration only. The connector
-> browser interface, protected live compatibility baseline, and upstream media operations remain
-> incomplete. Tagged phase releases define supported deployment claims.
+> browser interface and normalized upstream media operations are pre-release surfaces; the
+> protected live compatibility baseline remains incomplete. Tagged phase releases define supported
+> deployment claims.
 
 ## Deployment model
 
 The Compose file establishes the intended topology: web and gateway processes
 run from the same source-built image, only the web service is published, and the
-gateway owns the SQLite volume. The gateway currently communicates with Jellyfin only
-for public server identity, password and Quick Connect authentication, and connector probes. Other live
-upstream workflows remain later-phase capabilities, and the runtime has no supported
-administrative configuration surface.
+gateway owns the SQLite volume. The gateway owns all upstream communication, secret isolation,
+authorization, and audit records. The runtime includes permission-checked identity, connector, and
+media-operation surfaces; the compatibility matrix, not the presence of a route, determines which
+upstream versions have enough evidence for a release claim.
 
 The production image is distroless and runs without a shell or package manager as a
 numeric non-root user. Use the application health endpoints and structured logs for
@@ -61,12 +62,36 @@ secrets, Jellyfin access tokens, connector credentials, and local session and re
 state. Direct Jellyfin sign-in is the first workflow that writes an encrypted upstream
 token; passwords are used only for the upstream exchange and are never persisted.
 
-The optional `OMNIFIN_JELLYFIN_URL` setting bootstraps the single direct-authentication
-connector and exposes browser-safe provider metadata. It must be a canonical HTTPS URL
+The `OMNIFIN_JELLYFIN_URL` setting bootstraps the single Jellyfin connector used for the first
+administrator, direct authentication, pairing, and media operations. It must be a canonical HTTPS URL
 without embedded credentials, a query, or a fragment. An operator who deliberately
 targets a trusted private-network HTTP endpoint must also set
 `OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. That acknowledgement enables only the
-currently implemented authentication exchange and does not enable media operations.
+configured for that server. Treat this acknowledgement as a deployment-specific trust decision,
+not as a substitute for network isolation.
+
+## First administrator
+
+A fresh database has no privileged local user. Before configuring OIDC or additional services:
+
+1. Configure `OMNIFIN_JELLYFIN_URL` and start the gateway and web processes.
+2. Open `<OMNIFIN_BASE_URL>/recovery` directly. The route is intentionally absent from normal
+   sign-in navigation and is marked `noindex`.
+3. Enter the deployment recovery secret, then choose Jellyfin password or Quick Connect.
+4. Prove a Jellyfin account whose current Jellyfin policy has `IsAdministrator=true`.
+
+Omnifin keys the account by the immutable Jellyfin server and user identifiers. A password is sent
+only to Jellyfin and discarded immediately; only the returned token is encrypted at rest. The
+database transaction refuses the operation if an active local administrator already exists,
+creates or reuses the exact Jellyfin identity, promotes it with `recovery_bootstrap` provenance,
+and replaces recovery access with a normal Jellyfin-attributed administrator session. Other active
+sessions for that same local user are revoked.
+
+Ordinary Jellyfin sign-in never inherits Jellyfin administrator authority and provisions a local
+`viewer` by default. The hidden bootstrap endpoint is the only initial bridge, and it requires both
+the short-lived recovery session and current proof of Jellyfin administrator control. Denials leave
+the recovery session intact so an operator can correct the account or an upstream outage without
+re-entering the secret. See the [first-run runbook](first-run.md) for exact commands and checks.
 
 `OMNIFIN_BASE_URL` must contain only the canonical public origin, with no credentials,
 path, query, or fragment. Production requires HTTPS except for a loopback-only source
@@ -148,10 +173,12 @@ verification enabled against that connector-specific trust anchor.
    Do not use a personal identity provider or manually edit production data.
 6. Confirm recovery remains absent from the ordinary login interface and rejects a
    missing or incorrect secret without revealing whether recovery is configured.
-7. Confirm a gateway restart revokes the active recovery session, then reauthenticate
+7. On a fresh disposable database, establish the first administrator and confirm the
+   resulting session is Jellyfin-attributed, locally `admin`, and no longer a recovery session.
+8. Confirm a gateway restart revokes the active recovery session, then reauthenticate
    deliberately; each new recovery session consumes one of eight rolling 24-hour
    issuance slots.
-8. Confirm telemetry is disabled and inspect logs for accidental private values.
+9. Confirm telemetry is disabled and inspect logs for accidental private values.
 
 These checks validate the foundation only. They do not make the preview suitable for
 real users or a personal media library.
