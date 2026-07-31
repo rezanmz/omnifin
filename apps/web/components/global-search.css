@@ -1,11 +1,11 @@
 .search-console {
+  --search-console-base: color-mix(in srgb, var(--glass-popover) 24%, var(--surface-card-solid));
   animation: search-console-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   -webkit-backdrop-filter: blur(56px) saturate(142%);
   backdrop-filter: blur(56px) saturate(142%);
   background:
     radial-gradient(ellipse at 14% 0%, var(--glass-specular), transparent 34%),
-    linear-gradient(150deg, var(--glass-highlight), transparent 42%),
-    color-mix(in srgb, var(--glass-popover) 24%, var(--surface-card-solid));
+    linear-gradient(150deg, var(--glass-highlight), transparent 42%), var(--search-console-base);
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius-md);
   box-shadow:
@@ -838,6 +838,7 @@
 
 @media (max-width: 760px) {
   .search-console {
+    --search-console-base: color-mix(in srgb, var(--glass-popover) 10%, var(--surface-card-solid));
     border-radius: var(--radius-sm);
     max-height: calc(100dvh - 164px - env(safe-area-inset-bottom));
     top: calc(100% + 7px);
