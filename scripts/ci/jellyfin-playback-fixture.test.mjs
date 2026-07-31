@@ -12,6 +12,7 @@ import {
   isLibraryProbePending,
   jellyfinCompatibilityReport,
   jellyfinTarget,
+  quickConnectAuthorizationQuery,
   restartPlaybackNegotiation,
   selectConnectorAddress,
   validateImportedItem,
@@ -90,6 +91,22 @@ test("builds a closed compatibility report without retaining supplied secrets", 
   assert.doesNotMatch(
     JSON.stringify(report),
     /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
+  );
+});
+
+test("binds Quick Connect approval to the exact authenticated Jellyfin user", () => {
+  const userId = "a".repeat(32);
+  assert.equal(
+    quickConnectAuthorizationQuery("123456", userId).toString(),
+    `code=123456&userId=${userId}`,
+  );
+  assert.throws(
+    () => quickConnectAuthorizationQuery("12 3456", userId),
+    /quick_connect_state_invalid/u,
+  );
+  assert.throws(
+    () => quickConnectAuthorizationQuery("123456", "not-a-user"),
+    /quick_connect_state_invalid/u,
   );
 });
 

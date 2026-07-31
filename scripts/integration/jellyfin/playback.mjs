@@ -166,6 +166,13 @@ export function jellyfinCompatibilityReport(input) {
   };
 }
 
+export function quickConnectAuthorizationQuery(code, userId) {
+  if (!/^\d{6}$/u.test(code) || !IDENTIFIER_PATTERN.test(userId)) {
+    throw new JellyfinFixtureFailure("quick_connect_state_invalid");
+  }
+  return new URLSearchParams({ code, userId });
+}
+
 function argumentValue(arguments_, name) {
   const indexes = arguments_.flatMap((argument, index) => (argument === name ? [index] : []));
   if (indexes.length !== 1 || !arguments_[indexes[0] + 1]) {
@@ -598,14 +605,15 @@ async function verifyIdentity(context, server, adminAuthentication, username, pa
   ) {
     throw new JellyfinFixtureFailure("quick_connect_state_invalid");
   }
-  const authorizationQuery = new URLSearchParams({ Code: quickConnect.Code });
-  const authorized = await requestJson(
-    server.loopbackUrl,
-    `QuickConnect/Authorize?${authorizationQuery}`,
-    {
+  const authorizationQuery = quickConnectAuthorizationQuery(
+    quickConnect.Code,
+    adminAuthentication.userId,
+  );
+  const authorized = await connectorOperation("quick_connect_authorize", () =>
+    requestJson(server.loopbackUrl, `QuickConnect/Authorize?${authorizationQuery}`, {
       headers: tokenHeaders(adminAuthentication.accessToken),
       method: "POST",
-    },
+    }),
   );
   if (authorized !== true) throw new JellyfinFixtureFailure("quick_connect_state_invalid");
   const approved = await connectorOperation("quick_connect_poll", () =>
