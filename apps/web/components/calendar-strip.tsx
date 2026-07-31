@@ -44,7 +44,7 @@ export function CalendarStrip({ items }: { items: CalendarItemModel[] }) {
           <span className="quiet-state__icon" aria-hidden="true">
             <CalendarOff size={20} />
           </span>
-          <span>
+          <span className="quiet-state__copy">
             <strong>No arrivals scheduled</strong>
             <span>Upcoming episodes and requested releases will appear here.</span>
           </span>

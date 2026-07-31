@@ -155,4 +155,5 @@ movie-detail, series-detail, degraded intelligence, and person-context states.
 Route-level tests cover the normalized network boundary, keyboard flow, lower-action
 reachability, protected artwork, hover containment, seamless rail surfaces, automated
 accessibility checks, reduced motion, and deterministic dark and light desktop and mobile
-visual baselines.
+visual baselines. Dedicated signed-out baselines keep the OIDC/Jellyfin entry path visually
+coherent and prevent unauthenticated states from implying that a Jellyfin identity is linked.

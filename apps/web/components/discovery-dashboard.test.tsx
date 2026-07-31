@@ -127,6 +127,9 @@ describe("DiscoveryDashboard", () => {
     expect(
       await screen.findByRole("heading", { name: "Your discovery signal is waiting" }),
     ).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Welcome back" })).toBeVisible();
+    expect(screen.getByText("OIDC or Jellyfin")).toBeVisible();
+    expect(screen.queryByText("Jellyfin linked")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
   });
 
@@ -151,6 +154,9 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.queryByRole("button", { name: "View details for The Far Meridian" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Ready when you are" })).toBeVisible();
+    expect(screen.getByText("Protected upstreams")).toBeVisible();
+    expect(screen.queryByText("Jellyfin linked")).not.toBeInTheDocument();
   });
 
   it("keeps the last safe feed visible when a background refresh is interrupted", async () => {

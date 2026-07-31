@@ -77,6 +77,10 @@ describe("ContinueWatchingRail", () => {
 
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
     expect(screen.getByRole("status")).toHaveTextContent("Your progress is waiting");
+    expect(screen.getByText("Your progress is waiting").parentElement).toHaveClass(
+      "quiet-state__copy",
+    );
+    expect(screen.getByText(/Sign in with OIDC or Jellyfin/u)).toBeVisible();
     expect(load).not.toHaveBeenCalled();
   });
 

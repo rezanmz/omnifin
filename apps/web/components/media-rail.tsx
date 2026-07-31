@@ -202,7 +202,7 @@ export function MediaRail({
           <span className="quiet-state__icon" aria-hidden="true">
             <Clapperboard size={20} />
           </span>
-          <span>
+          <span className="quiet-state__copy">
             <strong>{emptyTitle}</strong>
             <span>{resolvedEmptyCopy}</span>
           </span>

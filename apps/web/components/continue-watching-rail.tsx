@@ -93,7 +93,7 @@ function BoundaryRail({ status }: { status: keyof typeof boundaryCopy }) {
         <span className="quiet-state__icon" aria-hidden="true">
           <Icon size={20} />
         </span>
-        <span>
+        <span className="quiet-state__copy">
           <strong>{copy.title}</strong>
           <span>{copy.detail}</span>
         </span>
@@ -119,7 +119,7 @@ function UnavailableRail({ onRetry }: { onRetry: () => void }) {
         <span className="quiet-state__icon" aria-hidden="true">
           <CloudOff size={20} />
         </span>
-        <span>
+        <span className="quiet-state__copy">
           <strong>Jellyfin is out of reach</strong>
           <span>
             Your watch state is untouched. Omnifin will try again when the signal returns.

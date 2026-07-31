@@ -1013,7 +1013,7 @@
   width: 44px;
 }
 
-.quiet-state > span:last-child {
+.quiet-state__copy {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1026,7 +1026,7 @@
   font-weight: 590;
 }
 
-.quiet-state > span:last-child > span {
+.quiet-state__copy > span {
   color: var(--paper-2);
   font-size: 0.74rem;
   line-height: 1.5;
