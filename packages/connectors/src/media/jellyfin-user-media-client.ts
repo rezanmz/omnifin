@@ -11,12 +11,15 @@ import type { ConnectorTargetConfig } from "../types.js";
 export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
+const BLUR_HASH_ALPHABET =
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
 
 const imageTagsSchema = z.record(z.string().trim().min(1).max(80), z.string().min(1).max(256));
 
 const jellyfinResumeItemSchema = z.object({
   BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
   Id: z.string().trim().min(1).max(256),
+  ImageBlurHashes: z.unknown().optional(),
   ImageTags: imageTagsSchema.optional(),
   IndexNumber: z.int().nonnegative().max(100_000).optional(),
   Name: z.string().trim().min(1).max(300),
@@ -50,7 +53,9 @@ export interface JellyfinArtworkSource {
 
 export interface JellyfinContinueWatchingItem {
   artwork: {
+    accentColor: string | null;
     backdrop: JellyfinArtworkSource | null;
+    blurHash: string | null;
     poster: JellyfinArtworkSource | null;
   };
   contentRating: string | null;
@@ -95,6 +100,103 @@ function secondsFromTicks(ticks: number) {
   return Math.floor(ticks / JELLYFIN_TICKS_PER_SECOND);
 }
 
+function decodeBase83(value: string) {
+  let decoded = 0;
+  for (const character of value) {
+    const digit = BLUR_HASH_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    decoded = decoded * 83 + digit;
+  }
+  return decoded;
+}
+
+function toneMappedAccent(rgb: number) {
+  const red = ((rgb >> 16) & 0xff) / 255;
+  const green = ((rgb >> 8) & 0xff) / 255;
+  const blue = (rgb & 0xff) / 255;
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  const delta = maximum - minimum;
+  if (delta < 1 / 255) return null;
+
+  let hue =
+    maximum === red
+      ? ((green - blue) / delta) % 6
+      : maximum === green
+        ? (blue - red) / delta + 2
+        : (red - green) / delta + 4;
+  if (hue < 0) hue += 6;
+
+  const sourceLightness = (maximum + minimum) / 2;
+  const sourceSaturation = delta / (1 - Math.abs(2 * sourceLightness - 1));
+  const saturation = Math.min(0.72, Math.max(0.38, sourceSaturation));
+  const lightness = Math.min(0.62, Math.max(0.4, sourceLightness));
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const intermediate = chroma * (1 - Math.abs((hue % 2) - 1));
+  const offset = lightness - chroma / 2;
+  const [hueRed, hueGreen, hueBlue] =
+    hue < 1
+      ? [chroma, intermediate, 0]
+      : hue < 2
+        ? [intermediate, chroma, 0]
+        : hue < 3
+          ? [0, chroma, intermediate]
+          : hue < 4
+            ? [0, intermediate, chroma]
+            : hue < 5
+              ? [intermediate, 0, chroma]
+              : [chroma, 0, intermediate];
+  return `#${[hueRed, hueGreen, hueBlue]
+    .map((channel) =>
+      Math.round((channel + offset) * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+function paletteFromBlurHash(blurHash: string) {
+  if (blurHash.length < 6 || blurHash.length > 166) return null;
+  if ([...blurHash].some((character) => !BLUR_HASH_ALPHABET.includes(character))) return null;
+  const sizeFlag = decodeBase83(blurHash[0]!);
+  const dc = decodeBase83(blurHash.slice(2, 6));
+  if (sizeFlag === null || sizeFlag > 80 || dc === null || dc > 0xff_ffff) return null;
+  const componentColumns = (sizeFlag % 9) + 1;
+  const componentRows = Math.floor(sizeFlag / 9) + 1;
+  if (blurHash.length !== 4 + 2 * componentColumns * componentRows) return null;
+  return { accentColor: toneMappedAccent(dc), blurHash };
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function selectedBlurHash(imageBlurHashes: unknown, type: "Backdrop" | "Primary", tag: string) {
+  if (!isUnknownRecord(imageBlurHashes)) return null;
+  const hashesForType = imageBlurHashes[type];
+  if (!isUnknownRecord(hashesForType) || !Object.hasOwn(hashesForType, tag)) return null;
+  const blurHash = hashesForType[tag];
+  return typeof blurHash === "string" && blurHash.length <= 256 ? blurHash : null;
+}
+
+function artworkPalette(
+  item: z.infer<typeof jellyfinResumeItemSchema>,
+  posterTag: string | undefined,
+  backdropTag: string | undefined,
+) {
+  for (const [type, tag] of [
+    ["Primary", posterTag],
+    ["Backdrop", backdropTag],
+  ] as const) {
+    if (!tag) continue;
+    const blurHash = selectedBlurHash(item.ImageBlurHashes, type, tag);
+    if (!blurHash) continue;
+    const palette = paletteFromBlurHash(blurHash);
+    if (palette) return palette;
+  }
+  return { accentColor: null, blurHash: null };
+}
+
 function episodeLabel(item: z.infer<typeof jellyfinResumeItemSchema>) {
   const season = item.ParentIndexNumber;
   const episode = item.IndexNumber;
@@ -118,20 +220,27 @@ function normalizeResumeItem(
 
   const isEpisode = item.Type === "Episode";
   const isMovie = item.Type === "Movie";
-  const poster =
+  const posterTag =
     isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
+      ? item.SeriesPrimaryImageTag
+      : item.ImageTags?.Primary;
+  const poster =
+    isEpisode && item.SeriesId && posterTag
       ? { itemId: item.SeriesId, type: "Primary" as const }
-      : item.ImageTags?.Primary
+      : posterTag
         ? { itemId: item.Id, type: "Primary" as const }
         : null;
+  const backdropTag = item.ParentBackdropImageTags?.[0] ?? item.BackdropImageTags?.[0];
   const backdropItemId = item.ParentBackdropImageTags?.length
     ? (item.ParentBackdropItemId ?? item.SeriesId)
     : item.BackdropImageTags?.length
       ? item.Id
       : undefined;
+  const palette = artworkPalette(item, posterTag, backdropTag);
 
   return {
     artwork: {
+      ...palette,
       backdrop: backdropItemId ? { itemId: backdropItemId, type: "Backdrop" } : null,
       poster,
     },
@@ -190,7 +299,7 @@ export class JellyfinUserMediaClient {
           EnableImageTypes: "Primary,Backdrop",
           EnableUserData: "true",
           ExcludeActiveSessions: "true",
-          Fields: "Overview,ProductionYear,OfficialRating",
+          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
           ImageTypeLimit: "1",
           Limit: String(JELLYFIN_CONTINUE_WATCHING_LIMIT + 1),
           MediaTypes: "Video",

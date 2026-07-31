@@ -103,7 +103,7 @@ async function harness(options: { playbackIssueTokens?: readonly string[] } = {}
         readContinueWatching: async () => ({
           items: [
             {
-              artwork: { backdrop: null, poster: null },
+              artwork: { accentColor: null, backdrop: null, blurHash: null, poster: null },
               contentRating: "PG-13",
               episodeNumber: null,
               externalId: privateItemId,

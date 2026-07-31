@@ -55,6 +55,14 @@ fill of their own, and their scrollport reserves enough transparent optical spac
 the fixed lift and scale of a focused card—including unusually wide cards at browser
 zoom—so neither the transformed edge nor its shadow is clipped.
 
+Continue Watching uses Jellyfin's image-tag-keyed BlurHash metadata when it is available.
+The connector accepts a hash only when it belongs to the exact poster or backdrop selected for
+the card, validates the complete Base83 structure, and exposes neither image tags nor upstream
+item identifiers. Its DC colour is tone-mapped into a restrained accent with bounded saturation
+and lightness; neutral artwork retains its useful BlurHash without inventing a hue. Missing or
+malformed aesthetic metadata leaves the media available and falls back to the deterministic local
+palette.
+
 Motion may make a liquid control scale, blur, or morph to explain where an overlay
 came from. It may not distort content, delay input, or continuously shimmer. Where
 `backdrop-filter` is unavailable, the same components fall back to an opaque semantic

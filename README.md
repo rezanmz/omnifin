@@ -80,7 +80,10 @@ operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowl
 with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
-translucent while preserving solid, readable content surfaces.
+translucent while preserving solid, readable content surfaces. Continue Watching uses
+strictly validated Jellyfin BlurHash metadata to derive tone-bounded artwork accents without
+fetching full images for palette analysis; invalid or neutral colour data falls back without
+blocking the media feed.
 
 All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
 pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate. A

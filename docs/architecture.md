@@ -68,7 +68,11 @@ a bounded SSE channel and visibly falls back to foreground polling when that cha
 A viewer-accessible
 acquisition calendar combines bounded Radarr and Sonarr timing through opaque identifiers and remains
 read-only. Jellyfin playback, progress, and Continue Watching use the
-paired user's permissions through server-held tokens and normalized, opaque media targets. The
+paired user's permissions through server-held tokens and normalized, opaque media targets.
+Continue Watching also normalizes Jellyfin's image-tag-keyed BlurHash metadata into a browser-safe
+placeholder and tone-bounded artwork accent; exact tag matching prevents unrelated artwork colour
+from crossing into a card, while malformed aesthetic metadata degrades to the local palette without
+hiding playable media. The
 gateway also exposes role-gated player issue reporting, Bazarr subtitle operations, and Jellyfin
 scan, unmatched-item, artwork, and metadata maintenance without exposing upstream identifiers or
 filesystem paths to the browser.

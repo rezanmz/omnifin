@@ -25,6 +25,7 @@ function clientWithResponses(responses: Response[]) {
 const movie = {
   BackdropImageTags: ["backdrop-tag"],
   Id: "movie-upstream-1",
+  ImageBlurHashes: { Primary: { "poster-tag": "005?}k" } },
   ImageTags: { Primary: "poster-tag" },
   Name: "The Far Meridian",
   OfficialRating: "PG-13",
@@ -48,7 +49,9 @@ describe("JellyfinUserMediaClient", () => {
       items: [
         {
           artwork: {
+            accentColor: "#336699",
             backdrop: { itemId: "movie-upstream-1", type: "Backdrop" },
+            blurHash: "005?}k",
             poster: { itemId: "movie-upstream-1", type: "Primary" },
           },
           contentRating: "PG-13",
@@ -70,6 +73,7 @@ describe("JellyfinUserMediaClient", () => {
     expect(requests[0]?.url.pathname).toBe("/base/UserItems/Resume");
     expect(requests[0]?.url.searchParams.get("Limit")).toBe("51");
     expect(requests[0]?.url.searchParams.get("MediaTypes")).toBe("Video");
+    expect(requests[0]?.url.searchParams.get("Fields")?.split(",")).toContain("ImageBlurHashes");
     expect(requests[0]?.url.searchParams.has("userId")).toBe(false);
     expect(requests[0]?.init.headers.get("authorization")).toBe(
       'MediaBrowser Client="Omnifin", Device="Omnifin Gateway", DeviceId="installation-1", Version="1.2.3", Token="private-access-token"',
@@ -82,6 +86,10 @@ describe("JellyfinUserMediaClient", () => {
         Items: [
           {
             Id: "episode-upstream-1",
+            ImageBlurHashes: {
+              Backdrop: { "series-backdrop": "00H,-T" },
+              Primary: { "series-poster": "005?}k", "unrelated-poster": "001.H." },
+            },
             IndexNumber: 3,
             Name: "The Long Meridian",
             ParentBackdropImageTags: ["series-backdrop"],
@@ -106,7 +114,9 @@ describe("JellyfinUserMediaClient", () => {
       items: [
         expect.objectContaining({
           artwork: {
+            accentColor: "#336699",
             backdrop: { itemId: "series-upstream-1", type: "Backdrop" },
+            blurHash: "005?}k",
             poster: { itemId: "series-upstream-1", type: "Primary" },
           },
           externalId: "episode-upstream-1",
@@ -118,6 +128,76 @@ describe("JellyfinUserMediaClient", () => {
         }),
       ],
       truncated: false,
+    });
+  });
+
+  it("keeps resumable media available when Jellyfin returns a malformed blur hash", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            ImageBlurHashes: { Primary: { "poster-tag": 42 } },
+          },
+          {
+            ...movie,
+            Id: "movie-upstream-2",
+            ImageBlurHashes: { Primary: { "poster-tag": "0!5?}k" } },
+          },
+          {
+            ...movie,
+            Id: "movie-upstream-3",
+            ImageBlurHashes: {
+              Primary: { "poster-tag": "}05?}k000000000000000000" },
+            },
+          },
+        ],
+        TotalRecordCount: 3,
+      }),
+    ]);
+
+    await expect(client.readContinueWatching()).resolves.toMatchObject({
+      items: [
+        { artwork: { accentColor: null, blurHash: null } },
+        { artwork: { accentColor: null, blurHash: null } },
+        { artwork: { accentColor: null, blurHash: null } },
+      ],
+    });
+  });
+
+  it("tone-maps a dark chromatic average into a usable artwork accent", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            ImageBlurHashes: { Primary: { "poster-tag": "001.H." } },
+          },
+        ],
+        TotalRecordCount: 1,
+      }),
+    ]);
+
+    await expect(client.readContinueWatching()).resolves.toMatchObject({
+      items: [{ artwork: { accentColor: "#661daf", blurHash: "001.H." } }],
+    });
+  });
+
+  it("retains a valid neutral blur hash without inventing an artwork accent", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            ImageBlurHashes: { Primary: { "poster-tag": "00TI,a" } },
+          },
+        ],
+        TotalRecordCount: 1,
+      }),
+    ]);
+
+    await expect(client.readContinueWatching()).resolves.toMatchObject({
+      items: [{ artwork: { accentColor: null, blurHash: "00TI,a" } }],
     });
   });
 
