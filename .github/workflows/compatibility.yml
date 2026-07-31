@@ -132,7 +132,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install isolated browser runtime
         if: matrix.browser
-        run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium
+        run: node scripts/ci/install-playwright.mjs chromium
       - name: Build identity control plane
         if: matrix.browser
         run: pnpm build

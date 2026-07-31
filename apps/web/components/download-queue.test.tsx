@@ -275,6 +275,27 @@ describe("DownloadQueue", () => {
     );
   });
 
+  it("restores the queue action trigger after a synchronous animation frame", async () => {
+    const animationFrame = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    const user = userEvent.setup();
+    renderQueue();
+    const triggerName = "Pause The.Far.Meridian.2026.2160p.WEB-DL";
+
+    try {
+      await user.click(screen.getByRole("button", { name: triggerName }));
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(screen.getByRole("button", { name: triggerName })).toHaveFocus());
+    } finally {
+      animationFrame.mockRestore();
+    }
+  });
+
   it("requires typed confirmation before removing one item with downloaded files preserved", async () => {
     const user = userEvent.setup();
     const item = demoDownloadQueue.items[0]!;

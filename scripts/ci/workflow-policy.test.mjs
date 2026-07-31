@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 import { parse } from "yaml";
@@ -88,7 +88,7 @@ test("visual baseline refresh is review-only and cannot write to the repository"
   assert.equal(build.run, "pnpm build");
   assert.equal(
     installBrowsers.run,
-    "pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit",
+    "node scripts/ci/install-playwright.mjs chromium firefox webkit",
   );
   assert.match(generate.run, /--update-snapshots/u);
   assert.equal(upload.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
@@ -116,6 +116,21 @@ test("browser CI rejects retry-hidden flaky tests", () => {
 
   assert.match(config, /failOnFlakyTests: Boolean\(process\.env\.CI\)/u);
   assert.match(config, /retries: process\.env\.CI && !visualTestMode \? 2 : 0/u);
+});
+
+test("hosted Playwright installs use the bounded retry helper", () => {
+  const workflowNames = readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter(
+    (name) => name.endsWith(".yml") || name.endsWith(".yaml"),
+  );
+  const sources = workflowNames.map((name) => workflow(name));
+  const helperCalls = sources.flatMap(
+    (source) => source.match(/node scripts\/ci\/install-playwright\.mjs/gu) ?? [],
+  );
+
+  assert.equal(helperCalls.length, 9);
+  for (const source of sources) {
+    assert.doesNotMatch(source, /playwright install(?:\s|$)/u);
+  }
 });
 
 test("security workflow creates the SBOM output directory before generation", () => {
@@ -355,7 +370,7 @@ test("fixture integration makes real Authentik OIDC behavior a protected aggrega
   assert.equal(JSON.stringify(authentik).includes("vars."), false);
 
   const browser = namedStep(authentik.steps, "Install isolated browser runtime");
-  assert.match(browser.run, /playwright install --with-deps chromium/u);
+  assert.equal(browser.run, "node scripts/ci/install-playwright.mjs chromium");
   const run = namedStep(authentik.steps, "Run isolated Authentik authorization-code gate");
   assert.match(run.run, /pnpm test:authentik/u);
   assert.match(run.run, /artifacts\/integration\/authentik\/report\.json/u);
@@ -378,7 +393,7 @@ test("fixture integration makes standards-generic OIDC behavior a protected aggr
   assert.equal(JSON.stringify(oidc).includes("vars."), false);
 
   const browser = namedStep(oidc.steps, "Install isolated browser runtime");
-  assert.match(browser.run, /playwright install --with-deps chromium/u);
+  assert.equal(browser.run, "node scripts/ci/install-playwright.mjs chromium");
   const run = namedStep(oidc.steps, "Run isolated standards-generic authorization-code gate");
   assert.match(run.run, /pnpm test:oidc-provider/u);
   assert.match(run.run, /artifacts\/integration\/oidc-provider\/report\.json/u);
@@ -501,6 +516,7 @@ test("CI runs Storybook and accessibility as independent protected jobs", () => 
 
   assert.equal(storybook.name, "Storybook");
   assert.equal(accessibility.name, "Accessibility");
+  assert.equal(accessibility["timeout-minutes"], 30);
   assert.ok(storybook.steps.some((step) => step.run === "pnpm test:storybook"));
   assert.ok(!storybook.steps.some((step) => step.run === "pnpm test:a11y"));
   assert.ok(accessibility.steps.some((step) => step.run === "pnpm test:a11y"));

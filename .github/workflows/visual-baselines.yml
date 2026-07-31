@@ -56,7 +56,7 @@ jobs:
       - name: Build web application
         run: pnpm build
       - name: Install browser runtimes
-        run: pnpm --filter @omnifin/web exec playwright install --with-deps chromium firefox webkit
+        run: node scripts/ci/install-playwright.mjs chromium firefox webkit
       - name: Generate visual baselines
         env:
           OMNIFIN_VISUAL_TEST: "true"

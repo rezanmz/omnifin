@@ -39,7 +39,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   downloadQueueClient,
@@ -91,6 +91,18 @@ const PAUSABLE_STATES = new Set<DownloadQueueItemState>([
   "queued",
   "stalled",
 ]);
+
+type QueueControlAttribute = "data-item-action" | "data-item-removal";
+
+function focusQueueControl(attribute: QueueControlAttribute, itemId: string) {
+  const controls = document.querySelectorAll<HTMLButtonElement>(`button[${attribute}]`);
+  for (const control of controls) {
+    if (control.getAttribute(attribute) === itemId) {
+      control.focus();
+      return;
+    }
+  }
+}
 
 type QueueActionStatus = "confirming" | "error" | "submitting" | "success";
 
@@ -753,6 +765,8 @@ function ReadyQueue({
   const [promotionState, setPromotionState] = useState<QueuePromotionState | null>(null);
   const [removalState, setRemovalState] = useState<QueueRemovalState | null>(null);
   const [operationAnnouncement, setOperationAnnouncement] = useState("");
+  const actionReturnFocus = useRef<string | null>(null);
+  const removalReturnFocus = useRef<string | null>(null);
   const visibleItems = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     return queue.items.filter((item) => {
@@ -778,11 +792,23 @@ function ReadyQueue({
     promotionState?.status === "submitting" ||
     removalState?.status === "submitting";
 
+  useEffect(() => {
+    if (actionState !== null || actionReturnFocus.current === null) return;
+    const itemId = actionReturnFocus.current;
+    actionReturnFocus.current = null;
+    focusQueueControl("data-item-action", itemId);
+  }, [actionState]);
+
+  useEffect(() => {
+    if (removalState !== null || removalReturnFocus.current === null) return;
+    const itemId = removalReturnFocus.current;
+    removalReturnFocus.current = null;
+    focusQueueControl("data-item-removal", itemId);
+  }, [removalState]);
+
   const cancelAction = (item: DownloadQueueItem) => {
+    actionReturnFocus.current = item.id;
     setActionState(null);
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLButtonElement>(`[data-item-action="${item.id}"]`)?.focus();
-    });
   };
 
   const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
@@ -793,10 +819,8 @@ function ReadyQueue({
   };
 
   const cancelRemoval = (item: DownloadQueueItem) => {
+    removalReturnFocus.current = item.id;
     setRemovalState(null);
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLButtonElement>(`[data-item-removal="${item.id}"]`)?.focus();
-    });
   };
 
   const beginRemoval = (item: DownloadQueueItem) => {
