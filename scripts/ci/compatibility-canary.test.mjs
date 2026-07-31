@@ -17,7 +17,10 @@ import {
   canonicalCompatibilityReport,
   validateAggregateCompatibilityReport,
 } from "../integration/compatibility-report.mjs";
-import { teardownMatches } from "../integration/compatibility-service.mjs";
+import {
+  compatibilityHarnessArguments,
+  teardownMatches,
+} from "../integration/compatibility-service.mjs";
 
 const DIGESTS = Object.fromEntries(
   COMPATIBILITY_SERVICES.map((service, index) => [
@@ -303,6 +306,20 @@ test("requires deterministic container, network, and volume teardown", () => {
     }),
     false,
   );
+});
+
+test("passes repository-relative evidence paths to identity fixture harnesses", () => {
+  const output = "artifacts/compatibility/services/.oidc.fixture.json";
+  const target = resolveCompatibilityTargets({ execute: successfulResolver }).targets.find(
+    ({ service }) => service === "oidc",
+  );
+  assert.ok(target);
+  assert.deepEqual(compatibilityHarnessArguments("oidc", output, null, target), [
+    "scripts/integration/oidc-provider/run.mjs",
+    "--skip-build",
+    "--output",
+    output,
+  ]);
 });
 
 test("aggregates exactly one sanitized report for every resolved service", () => {

@@ -119,7 +119,7 @@ export function teardownMatches(before, after) {
   });
 }
 
-function harnessArguments(service, rawOutput, fixture, target) {
+export function compatibilityHarnessArguments(service, rawOutput, fixture, target) {
   switch (service) {
     case "authentik":
       return ["scripts/integration/authentik/run.mjs", "--skip-build", "--output", rawOutput];
@@ -195,6 +195,10 @@ async function executeService(options) {
     dirname(options.output),
     `.${options.service}.fixture.${randomBytes(6).toString("hex")}.json`,
   );
+  const rawOutputArgument = relative(REPOSITORY_ROOT, rawOutput);
+  if (!rawOutputArgument || rawOutputArgument.startsWith("..") || isAbsolute(rawOutputArgument)) {
+    throw new CompatibilityServiceError("output_path_invalid");
+  }
   const environment = {
     ...process.env,
     OMNIFIN_COMPATIBILITY_IMAGE: target.image,
@@ -208,7 +212,7 @@ async function executeService(options) {
     before = dockerResourceSnapshot();
     execution = runProcess(
       process.execPath,
-      harnessArguments(options.service, rawOutput, options.fixture, target),
+      compatibilityHarnessArguments(options.service, rawOutputArgument, options.fixture, target),
       environment,
     );
     teardownPassed = teardownMatches(before, dockerResourceSnapshot());
