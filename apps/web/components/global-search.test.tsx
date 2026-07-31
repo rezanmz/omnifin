@@ -193,6 +193,40 @@ describe("global search", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it("keeps matching destinations available while remote media search is unavailable", async () => {
+    let rejectSearch: ((reason: unknown) => void) | undefined;
+    const search = vi.fn(
+      async () =>
+        new Promise<DiscoverySearchResponse>((_resolve, reject) => {
+          rejectSearch = reject;
+        }),
+    );
+    render(
+      <GlobalSearch
+        client={client(search)}
+        debounceMs={0}
+        initialOpen
+        initialPermissions={[]}
+        initialQuery="account"
+      />,
+    );
+
+    await waitFor(() => expect(search).toHaveBeenCalledOnce());
+    expect(screen.getByRole("option", { name: /Account & appearance/i })).toBeVisible();
+    expect(screen.getByText("Searching media…")).toBeVisible();
+
+    rejectSearch?.(
+      new DiscoverySearchClientError(
+        "unavailable",
+        "discovery_unavailable",
+        "Search is temporarily unavailable.",
+      ),
+    );
+    expect(await screen.findByText("Media search is unavailable")).toBeVisible();
+    expect(screen.getByRole("option", { name: /Account & appearance/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry media search" })).toBeVisible();
+  });
+
   it("loads access once on activation and fails closed when access cannot be read", async () => {
     const permissionLoader = vi.fn(async () => ["connectors.manage"] as const);
     const loaded = render(
@@ -291,6 +325,7 @@ describe("global search", () => {
     const user = userEvent.setup();
     render(<GlobalSearch client={client()} debounceMs={0} initialQuery="matrix" />);
     const input = screen.getByRole("combobox");
+    expect(input).toHaveAttribute("aria-keyshortcuts", "Meta+K Control+K");
 
     fireEvent.keyDown(document, { key: "k", metaKey: true });
     expect(input).toHaveFocus();

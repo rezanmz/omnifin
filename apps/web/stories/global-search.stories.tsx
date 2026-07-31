@@ -107,6 +107,31 @@ export const CommandFilter: Story = {
   },
 };
 
+export const CommandDegraded: Story = {
+  args: {
+    client: client(async () =>
+      Promise.reject(
+        new DiscoverySearchClientError(
+          "unavailable",
+          "discovery_unavailable",
+          "Discovery is temporarily unavailable.",
+        ),
+      ),
+    ),
+    initialPermissions: [],
+    initialQuery: "account",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const command = await canvas.findByRole("option", { name: /Account & appearance/i });
+    await waitFor(() => expect(command).toBeVisible());
+    await waitFor(() => expect(canvas.getByText("Media search is unavailable")).toBeVisible());
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "Retry media search" })).toBeVisible(),
+    );
+  },
+};
+
 export const Loading: Story = {
   args: {
     client: client(async () => new Promise<DiscoverySearchResponse>(() => undefined)),

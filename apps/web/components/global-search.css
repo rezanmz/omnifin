@@ -1,8 +1,11 @@
 .search-console {
   animation: search-console-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  backdrop-filter: blur(40px) saturate(180%);
-  background: linear-gradient(150deg, var(--glass-highlight), transparent 42%), var(--glass-strong);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
+  backdrop-filter: blur(48px) saturate(180%);
+  background:
+    radial-gradient(ellipse at 14% 0%, var(--glass-specular), transparent 34%),
+    linear-gradient(150deg, var(--glass-highlight), transparent 42%),
+    color-mix(in srgb, var(--glass-popover) 50%, var(--surface-card-solid));
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius-md);
   box-shadow:
@@ -375,11 +378,41 @@
   width: 12px;
 }
 
-.command-palette__footer i {
+.command-palette__access {
   color: var(--paper-2);
-  font-style: normal;
   margin-left: auto;
   white-space: nowrap;
+}
+
+.command-palette__retry {
+  background: var(--fill-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--paper-1);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  min-height: 44px;
+  padding: 8px 12px;
+  transition:
+    background-color 130ms ease-out,
+    border-color 130ms ease-out,
+    transform 130ms ease-out;
+}
+
+.command-palette__retry:hover,
+.command-palette__retry:focus-visible {
+  background: var(--fill-hover);
+  border-color: color-mix(in srgb, var(--acid) 24%, var(--glass-edge));
+}
+
+.command-palette__retry:focus-visible {
+  outline: 2px solid var(--acid);
+  outline-offset: 2px;
+}
+
+.command-palette__retry:active {
+  transform: scale(0.98);
 }
 
 .search-console__loading,
@@ -857,7 +890,7 @@
     padding-block: 10px;
   }
 
-  .command-palette__footer i {
+  .command-palette__access {
     margin-left: 0;
   }
 

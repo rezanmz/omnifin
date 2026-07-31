@@ -35,6 +35,7 @@ function GlobalSearchPlaceholder({
         aria-controls="global-search-results"
         aria-expanded="false"
         aria-haspopup="listbox"
+        aria-keyshortcuts="Meta+K Control+K"
         autoComplete="off"
         data-directional-item
         disabled={!interactive}

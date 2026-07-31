@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -55,6 +56,7 @@ const SEARCH_RESULT_LIMIT = 12;
 const SEARCH_ACCENTS = ["#d8ff70", "#75d8c8", "#e8a575", "#a88be4", "#7eb6e8", "#e27f9f"];
 
 type PaletteCommandGroup = "Navigate" | "Operate" | "Administer";
+type PaletteMediaState = "idle" | "searching" | "unavailable";
 
 interface PaletteCommand {
   description: string;
@@ -323,7 +325,7 @@ function CommandOption({
 }) {
   const Icon = command.icon;
   return (
-    <a
+    <Link
       aria-label={`${command.label}. ${command.description}`}
       aria-selected="false"
       className="command-option"
@@ -331,6 +333,7 @@ function CommandOption({
       href={command.href}
       onClick={onDismiss}
       onKeyDown={(event) => onKeyDown(event, index)}
+      prefetch={false}
       role="option"
     >
       <span className="command-option__icon">
@@ -343,24 +346,42 @@ function CommandOption({
       <span className="command-option__arrow" aria-hidden="true">
         ↗
       </span>
-    </a>
+    </Link>
   );
 }
 
 function CommandPaletteHome({
   commands,
+  mediaState = "idle",
   onDismiss,
   onKeyDown,
+  onRetryMedia,
   permissionState,
   query,
 }: {
   commands: readonly PaletteCommand[];
+  mediaState?: PaletteMediaState;
   onDismiss: () => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLElement>, index: number) => void;
+  onRetryMedia?: () => void;
   permissionState: PermissionState;
   query: string;
 }) {
   let optionIndex = 0;
+  const status = [
+    permissionState.kind === "loading"
+      ? "Checking access…"
+      : permissionState.kind === "unavailable"
+        ? "Showing safe destinations"
+        : null,
+    mediaState === "searching"
+      ? "Searching media…"
+      : mediaState === "unavailable"
+        ? "Media search is unavailable"
+        : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div className="command-palette">
       <div className="command-palette__intro">
@@ -432,8 +453,14 @@ function CommandPaletteHome({
           <Search aria-hidden="true" /> Search the whole signal
         </span>
         <span>Type at least two characters to find movies, series, and people.</span>
-        {permissionState.kind === "loading" ? <i>Checking access…</i> : null}
-        {permissionState.kind === "unavailable" ? <i>Showing safe destinations</i> : null}
+        <span className="command-palette__access" role="status">
+          {status}
+        </span>
+        {mediaState === "unavailable" && onRetryMedia ? (
+          <button className="command-palette__retry" onClick={onRetryMedia} type="button">
+            Retry media search
+          </button>
+        ) : null}
       </footer>
     </div>
   );
@@ -644,6 +671,14 @@ export function GlobalSearch({
     (selectedResult.availability === "unavailable" || selectedResult.availability === "partial");
   const permissions = permissionState.kind === "ready" ? permissionState.permissions : [];
   const commandMatches = matchingCommands(permissions, normalizedQuery);
+  const commandFallbackState: PaletteMediaState | null =
+    normalizedQuery.length >= 2 && commandMatches.length > 0
+      ? searchState.kind === "error"
+        ? "unavailable"
+        : searchState.kind === "loading" || searchState.kind === "idle"
+          ? "searching"
+          : null
+      : null;
 
   const focusResult = useCallback((position: "first" | "last") => {
     const options = rootReference.current?.querySelectorAll<HTMLElement>("[data-search-option]");
@@ -707,6 +742,7 @@ export function GlobalSearch({
         aria-controls="global-search-results"
         aria-expanded={open}
         aria-haspopup="listbox"
+        aria-keyshortcuts="Meta+K Control+K"
         autoComplete="off"
         data-directional-item
         enterKeyHint="search"
@@ -769,11 +805,13 @@ export function GlobalSearch({
             )}
           </header>
 
-          {normalizedQuery.length < 2 ? (
+          {normalizedQuery.length < 2 || commandFallbackState ? (
             <CommandPaletteHome
               commands={commandMatches}
+              mediaState={commandFallbackState ?? "idle"}
               onDismiss={() => setOpen(false)}
               onKeyDown={handleOptionKeyDown}
+              onRetryMedia={() => setRetry((value) => value + 1)}
               permissionState={permissionState}
               query={normalizedQuery}
             />
