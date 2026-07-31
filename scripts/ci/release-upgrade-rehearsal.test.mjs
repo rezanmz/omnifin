@@ -7,7 +7,8 @@ import { parse } from "yaml";
 import {
   failedUpgradeRehearsalReport,
   immutableOmnifinImage,
-  publishedLoopbackPort,
+  privateContainerAddress,
+  runningContainerState,
   upgradeRehearsalReport,
 } from "../release/upgrade-rehearsal.mjs";
 
@@ -38,39 +39,16 @@ test("accepts only immutable public Omnifin image digests", () => {
   );
 });
 
-test("accepts exactly one structured IPv4 loopback port binding", () => {
-  assert.equal(
-    publishedLoopbackPort(
-      '{"3000/tcp":null,"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
-      "gateway_port",
-    ),
-    32_768,
-  );
+test("accepts only a running gateway on one private container address", () => {
+  assert.equal(runningContainerState("true:0", "gateway_state"), true);
+  assert.equal(privateContainerAddress("172.19.0.2", "gateway_address"), "172.19.0.2");
 
-  for (const [binding, category] of [
-    ["null", "map"],
-    ["[]", "map"],
-    ["{}", "binding_missing"],
-    ['{"4000/tcp":null}', "binding_missing"],
-    ['{"4000/tcp":[]}', "binding_empty"],
-    ['{"4000/tcp":[{"HostIp":"0.0.0.0","HostPort":"32768"}]}', "host_ip"],
-    ['{"4000/tcp":[{"HostIp":"::1","HostPort":"32768"}]}', "host_ip"],
-    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}', "host_port"],
-    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"65536"}]}', "host_port_range"],
-    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}', "host_port"],
-    [
-      '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]}',
-      "binding_multiple",
-    ],
-    [
-      '{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}],"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
-      "other_port",
-    ],
-    ["not-json", null],
-  ]) {
+  assert.throws(() => runningContainerState("false:1", "gateway_state"), /gateway_state_exited/u);
+  assert.throws(() => runningContainerState("unknown", "gateway_state"), /gateway_state_invalid/u);
+  for (const address of ["", "127.0.0.1", "8.8.8.8", "172.19.0.2\n172.19.0.3", "::1"]) {
     assert.throws(
-      () => publishedLoopbackPort(binding, "gateway_port"),
-      category ? new RegExp(`gateway_port_${category}`, "u") : /gateway_port/u,
+      () => privateContainerAddress(address, "gateway_address"),
+      /gateway_address_invalid/u,
     );
   }
 });
@@ -226,12 +204,10 @@ test("isolates and resource-bounds every rehearsal runtime", () => {
     const occurrences = HARNESS_SOURCE.match(new RegExp(`"${option}"`, "gu")) ?? [];
     assert.equal(occurrences.length, 2, `${option} must protect gateway and maintenance runs`);
   }
-  assert.equal((HARNESS_SOURCE.match(/"127\.0\.0\.1::4000"/gu) ?? []).length, 1);
-  assert.doesNotMatch(HARNESS_SOURCE, /"0\.0\.0\.0:/u);
-  assert.match(HARNESS_SOURCE, /json \.NetworkSettings\.Ports/u);
-  assert.doesNotMatch(HARNESS_SOURCE, /docker\(\["port"/u);
-  assert.match(HARNESS_SOURCE, /`\$\{operation\}_inspect`/u);
-  assert.match(HARNESS_SOURCE, /`\$\{operation\}_contract`/u);
+  assert.doesNotMatch(HARNESS_SOURCE, /"--publish"/u);
+  assert.doesNotMatch(HARNESS_SOURCE, /\.NetworkSettings\.Ports/u);
+  assert.match(HARNESS_SOURCE, /\.State\.Running/u);
+  assert.match(HARNESS_SOURCE, /\.NetworkSettings\.Networks/u);
   assert.match(
     HARNESS_SOURCE,
     /function runMaintenance[\s\S]*resources\.containers\.add\(name\)[\s\S]*resources\.containers\.delete\(name\)/u,

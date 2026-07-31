@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
@@ -15,6 +16,7 @@ const RESPONSE_MAX_BYTES = 1_048_576;
 const IMAGE_PATTERN = /^ghcr\.io\/rezanmz\/omnifin@(sha256:[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SESSION_VALUE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const REQUIRED_CHECKS = Object.freeze([
   "previous_runtime_verified",
   "previous_state_seeded",
@@ -225,47 +227,43 @@ async function waitForHealthy(container, operation) {
   throw new RehearsalFailure(operation);
 }
 
-export function publishedLoopbackPort(value, operation) {
-  let ports;
-  try {
-    ports = JSON.parse(value);
-  } catch {
-    throw new RehearsalFailure(operation);
-  }
-  if (!ports || typeof ports !== "object" || Array.isArray(ports)) {
-    throw new RehearsalFailure(`${operation}_map`);
-  }
-  const bindings = ports["4000/tcp"];
-  const hasOtherPublishedPort = Object.entries(ports).some(
-    ([port, portBindings]) =>
-      port !== "4000/tcp" &&
-      !(portBindings === null || (Array.isArray(portBindings) && portBindings.length === 0)),
-  );
-  if (hasOtherPublishedPort) throw new RehearsalFailure(`${operation}_other_port`);
-  if (!Array.isArray(bindings)) throw new RehearsalFailure(`${operation}_binding_missing`);
-  if (bindings.length === 0) throw new RehearsalFailure(`${operation}_binding_empty`);
-  if (bindings.length > 1) throw new RehearsalFailure(`${operation}_binding_multiple`);
-  if (!bindings[0] || typeof bindings[0] !== "object") {
-    throw new RehearsalFailure(`${operation}_binding_shape`);
-  }
-  if (bindings[0].HostIp !== "127.0.0.1") {
-    throw new RehearsalFailure(`${operation}_host_ip`);
-  }
-  if (typeof bindings[0].HostPort !== "string" || !/^[1-9]\d{0,4}$/u.test(bindings[0].HostPort)) {
-    throw new RehearsalFailure(`${operation}_host_port`);
-  }
-  const port = Number(bindings[0].HostPort);
-  if (port > 65_535) throw new RehearsalFailure(`${operation}_host_port_range`);
-  return port;
+export function runningContainerState(value, operation) {
+  const state = typeof value === "string" ? value.trim() : "";
+  if (state === "true:0") return true;
+  if (/^false:\d{1,3}$/u.test(state)) throw new RehearsalFailure(`${operation}_exited`);
+  throw new RehearsalFailure(`${operation}_invalid`);
 }
 
-function publishedGatewayUrl(container, operation) {
-  const bindings = docker(
-    ["container", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container],
-    `${operation}_inspect`,
+export function privateContainerAddress(value, operation) {
+  const address = typeof value === "string" ? value.trim() : "";
+  if (isIP(address) !== 4 || !PRIVATE_IPV4_PATTERN.test(address)) {
+    throw new RehearsalFailure(`${operation}_invalid`);
+  }
+  return address;
+}
+
+function privateGatewayUrl(container, operation) {
+  runningContainerState(
+    docker(
+      ["container", "inspect", "--format", "{{.State.Running}}:{{.State.ExitCode}}", container],
+      `${operation}_state_inspect`,
+    ),
+    `${operation}_state`,
   );
-  const port = publishedLoopbackPort(bindings, `${operation}_contract`);
-  return new URL(`http://127.0.0.1:${port}/`);
+  const address = privateContainerAddress(
+    docker(
+      [
+        "container",
+        "inspect",
+        "--format",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        container,
+      ],
+      `${operation}_address_inspect`,
+    ),
+    `${operation}_address`,
+  );
+  return new URL(`http://${address}:4000/`);
 }
 
 function startGateway(resources, image, label) {
@@ -281,8 +279,6 @@ function startGateway(resources, image, label) {
       resources.network,
       "--network-alias",
       "gateway",
-      "--publish",
-      "127.0.0.1::4000",
       "--read-only",
       "--cap-drop",
       "ALL",
@@ -319,7 +315,7 @@ function startGateway(resources, image, label) {
     ],
     `${label}_gateway_start`,
   );
-  return { name, url: publishedGatewayUrl(name, `${label}_gateway_port`) };
+  return { name, url: privateGatewayUrl(name, `${label}_gateway`) };
 }
 
 function stopGateway(resources, gateway, label) {
