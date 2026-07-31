@@ -118,3 +118,24 @@ Never start older application code against a newer database unless the release n
 that the schema is backward compatible. Otherwise restore the matching pre-upgrade backup
 while selecting the previously verified image digest. Published tags remain immutable;
 rollback selects an earlier version or digest rather than moving a tag.
+
+### Automated release rehearsal
+
+Before stable aliases can move, the release workflow performs the same safety sequence with
+bounded synthetic state on a GitHub-hosted runner. It resolves the previous stable image and
+candidate to immutable digests, creates an OIDC provider through the previous image's real recovery
+API, creates and verifies a private backup, then starts the candidate against that persisted data.
+After candidate health, migration, and state checks pass, the runner preserves and verifies the
+candidate database as the automatic rollback set, restores the previous backup, and proves the
+exact previous image can still read the original provider state.
+
+The initial-release exception is fail-closed: it is available only when the registry has no stable
+version tags and the repository has no published release. A missing or inconsistent `latest` alias
+after any stable publication blocks promotion instead of silently skipping the rehearsal.
+
+The job removes its generated credentials, database, backups, volumes, network, and containers even
+when a check fails. Its retained report contains only the two image digests, schema digests,
+migration counts, normalized check names, and status. It contains no provider identifiers, client
+secret, recovery secret, database digest, path, log, or raw API response. This protects release
+promotion from an untested schema transition; it does not replace a deployment-specific rehearsal
+with representative data and external services.

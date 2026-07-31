@@ -703,19 +703,157 @@ jobs:
 
           cosign verify \
             --certificate-identity-regexp \
-              "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/(publish|release-please)\\.yml@refs/heads/main$" \
+              "^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/(publish|release-please)\\.yml@refs/heads/main$" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$image_ref" >/dev/null
           node scripts/container-smoke.mjs --image "$image_ref"
 
+  rehearse-upgrade:
+    name: Rehearse upgrade and exact-digest rollback
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.verify-candidate.result == 'success' }}
+    needs:
+      - validate-release-metadata
+      - publish-candidate
+      - verify-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable upgrade harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+      - name: Resolve previous stable digest
+        id: previous
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG"
+          stable_metadata=$(
+            oras repo tags "$IMAGE_NAME" --format json \
+              | node --input-type=module --eval '
+                  let source = "";
+                  for await (const chunk of process.stdin) source += chunk;
+                  const payload = JSON.parse(source);
+                  if (!Array.isArray(payload.tags)) throw new Error("GHCR returned an invalid tag list.");
+                  const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+                  const versions = payload.tags
+                    .map((tag) => ({ match: tag.match(stable), tag }))
+                    .filter((entry) => entry.match)
+                    .sort((left, right) => {
+                      for (let index = 1; index <= 3; index += 1) {
+                        const difference = BigInt(right.match[index]) - BigInt(left.match[index]);
+                        if (difference !== 0n) return difference > 0n ? 1 : -1;
+                      }
+                      return 0;
+                    });
+                  process.stdout.write(JSON.stringify({
+                    count: versions.length,
+                    newest: versions[0]?.tag ?? null,
+                  }));
+                '
+          )
+          stable_count=$(jq --raw-output '.count' <<<"$stable_metadata")
+          newest_version=$(jq --raw-output '.newest // empty' <<<"$stable_metadata")
+
+          set +e
+          previous_digest=$(oras resolve "${IMAGE_NAME}:latest" 2>/dev/null)
+          resolve_status=$?
+          set -e
+
+          if (( resolve_status == 0 )); then
+            if [[ ! "$previous_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::The previous stable alias returned an invalid digest."
+              exit 1
+            fi
+            if (( stable_count == 0 )); then
+              echo "::error::The latest alias exists without an immutable stable version tag."
+              exit 1
+            fi
+            if [ "$(oras resolve "${IMAGE_NAME}:${newest_version}")" != "$previous_digest" ]; then
+              echo "::error::The latest alias does not match the newest stable version digest."
+              exit 1
+            fi
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$previous_digest" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if (( stable_count != 0 )); then
+            echo "::error::Stable releases exist but the latest alias could not be resolved."
+            exit 1
+          fi
+          published_count=$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --slurp \
+              | jq --raw-output \
+                '[.[][] | select(.draft == false and .prerelease == false)] | length'
+          )
+          if (( published_count != 0 )); then
+            echo "::error::Published releases exist but no prior stable image can be resolved."
+            exit 1
+          fi
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          echo "No prior stable release exists; the reviewed initial-release exception applies."
+      - name: Exercise upgrade and rollback on the hosted runner
+        env:
+          CANDIDATE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+          PREVIOUS_AVAILABLE: ${{ steps.previous.outputs.available }}
+          PREVIOUS_DIGEST: ${{ steps.previous.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir --parents "$DOCKER_CONFIG" artifacts/release
+          candidate_ref="${IMAGE_NAME}@${CANDIDATE_DIGEST}"
+          docker pull "$candidate_ref"
+
+          if [ "$PREVIOUS_AVAILABLE" = "true" ]; then
+            previous_ref="${IMAGE_NAME}@${PREVIOUS_DIGEST}"
+            cosign verify \
+              --certificate-identity-regexp \
+                "^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/(publish|release-please)\\.yml@refs/heads/main$" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$previous_ref" >/dev/null
+            docker pull "$previous_ref"
+            node scripts/release/upgrade-rehearsal.mjs \
+              --candidate-image "$candidate_ref" \
+              --previous-image "$previous_ref" \
+              --output artifacts/release/upgrade-rehearsal.json
+          else
+            node scripts/release/upgrade-rehearsal.mjs \
+              --candidate-image "$candidate_ref" \
+              --initial-release \
+              --output artifacts/release/upgrade-rehearsal.json
+          fi
+      - name: Upload sanitized upgrade rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-upgrade-rehearsal
+          path: artifacts/release/upgrade-rehearsal.json
+          if-no-files-found: error
+          retention-days: 30
+
   promote-stable:
     name: Promote verified digest to stable tags
-    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' }}
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.rehearse-upgrade.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
       - scan-candidate
       - verify-candidate
+      - rehearse-upgrade
     environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
