@@ -138,7 +138,9 @@ function resumeResult(): JellyfinContinueWatchingResult {
     items: [
       {
         artwork: {
+          accentColor: "#336699",
           backdrop: { itemId: privateSeriesId, type: "Backdrop" },
+          blurHash: "005?}k",
           poster: { itemId: privateSeriesId, type: "Primary" },
         },
         contentRating: "TV-14",
@@ -197,7 +199,9 @@ describe("ContinueWatchingService", () => {
           {
             media: {
               artwork: {
+                accentColor: "#336699",
                 backdropPath: `/v1/media/media_${"m".repeat(22)}/images/backdrop`,
+                blurHash: "005?}k",
                 posterPath: `/v1/media/media_${"m".repeat(22)}/images/poster`,
               },
               id: `media_${"m".repeat(22)}`,

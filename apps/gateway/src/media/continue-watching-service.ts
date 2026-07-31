@@ -343,9 +343,9 @@ export class ContinueWatchingService {
         lastPlayedAt: item.lastPlayedAt,
         media: {
           artwork: {
-            accentColor: null,
+            accentColor: item.artwork.accentColor,
             backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
-            blurHash: null,
+            blurHash: item.artwork.blurHash,
             posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
           },
           availability: "available" as const,

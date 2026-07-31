@@ -51,7 +51,9 @@ async function harness() {
     items: [
       {
         artwork: {
+          accentColor: "#336699",
           backdrop: null,
+          blurHash: "005?}k",
           poster: { itemId: privateItemId, type: "Primary" },
         },
         contentRating: "PG-13",
@@ -163,7 +165,14 @@ describe("Continue Watching routes", () => {
 
       expect(response.statusCode, response.body).toBe(200);
       expect(continueWatchingResponseSchema.parse(response.json())).toMatchObject({
-        items: [{ media: { id: `media_${"r".repeat(22)}` } }],
+        items: [
+          {
+            media: {
+              artwork: { accentColor: "#336699", blurHash: "005?}k" },
+              id: `media_${"r".repeat(22)}`,
+            },
+          },
+        ],
         state: "complete",
       });
       expect(response.headers["cache-control"]).toBe("no-store");
