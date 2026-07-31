@@ -53,7 +53,7 @@ test("keeps the disposable Jellyfin server on a private network with determinist
     new URL("../integration/jellyfin/playback.mjs", import.meta.url),
     "utf8",
   );
-  assert.match(source, /\["network", "create", "--driver", "bridge", "--internal"/u);
+  assert.match(source, /\["network", "create", "--driver", "bridge", context\.networkName\]/u);
   assert.match(source, /"--network",\s*context\.networkName/u);
   assert.match(source, /\["network", "rm", context\.networkName\]/u);
 });

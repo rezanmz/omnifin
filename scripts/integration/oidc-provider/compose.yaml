@@ -27,5 +27,4 @@ services:
       - fixture
 
 networks:
-  fixture:
-    internal: true
+  fixture: {}

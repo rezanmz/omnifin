@@ -917,7 +917,7 @@ async function main(options) {
   let running = false;
   let networkCreated = false;
   try {
-    docker(["network", "create", "--driver", "bridge", "--internal", context.networkName]);
+    docker(["network", "create", "--driver", "bridge", context.networkName]);
     networkCreated = true;
     const firstServer = startContainer(context);
     running = true;

@@ -96,7 +96,7 @@ test("pins and hardens the isolated standards provider", () => {
   assert.deepEqual(provider.cap_drop, ["ALL"]);
   assert.deepEqual(provider.security_opt, ["no-new-privileges:true"]);
   assert.ok(provider.tmpfs.includes("/var/dex:uid=1001,gid=1001,mode=0700"));
-  assert.deepEqual(compose.networks.fixture, { internal: true });
+  assert.deepEqual(compose.networks.fixture, {});
   assert.match(runnerSource, /OMNIFIN_OIDC_PROVIDER_IMAGE: oidcProviderFixture\.image/u);
   assert.match(JSON.stringify(provider.ports), /127\.0\.0\.1/u);
   assert.doesNotMatch(composeSource, /:\s*latest(?:\s|$)|docker\.sock/u);

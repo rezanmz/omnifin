@@ -95,5 +95,4 @@ volumes:
   database:
 
 networks:
-  fixture:
-    internal: true
+  fixture: {}

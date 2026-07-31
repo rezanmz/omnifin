@@ -252,7 +252,7 @@ test("pins an isolated Authentik topology without privileged host mounts", () =>
     authentikFixture.image,
     /^ghcr\.io\/goauthentik\/server:2026\.5\.6@sha256:[a-f0-9]{64}$/u,
   );
-  assert.deepEqual(compose.networks.fixture, { internal: true });
+  assert.deepEqual(compose.networks.fixture, {});
   assert.match(runnerSource, /OMNIFIN_AUTHENTIK_IMAGE: authentikFixture\.image/u);
   assert.equal(compose.services.server.environment.AUTHENTIK_ERROR_REPORTING__ENABLED, "false");
   assert.equal(compose.services.server.environment.AUTHENTIK_DISABLE_UPDATE_CHECK, "true");

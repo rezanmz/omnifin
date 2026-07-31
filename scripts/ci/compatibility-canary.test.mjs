@@ -374,7 +374,6 @@ test("runs the self-contained canary with minimal permissions and no configured 
     .map((path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"))
     .join("\n");
   assert.match(isolationSource, /--internal/u);
-  assert.match(isolationSource, /internal: true/u);
 
   const actions = [...source.matchAll(/^\s+uses:\s+([^\s#]+)(?:\s+#.*)?$/gmu)].map(
     (match) => match[1],
