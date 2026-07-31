@@ -10,6 +10,7 @@ import {
   hlsSegmentFormat,
   hostContainerUser,
   isLibraryProbePending,
+  restartPlaybackNegotiation,
   selectConnectorAddress,
   validateImportedItem,
 } from "../integration/jellyfin/playback.mjs";
@@ -45,6 +46,91 @@ test("waits for Jellyfin to finish probing imported media streams", () => {
   }
   assert.equal(isLibraryProbePending(probeError), true);
   assert.equal(isLibraryProbePending(new Error("unrelated")), false);
+});
+
+test("retries only transient post-restart negotiation failures", async () => {
+  let now = 0;
+  let attempts = 0;
+  const delays = [];
+  const expected = { delivery: "direct" };
+  const result = await restartPlaybackNegotiation(
+    async (signal) => {
+      assert.equal(signal instanceof AbortSignal, true);
+      assert.equal(signal.aborted, false);
+      attempts += 1;
+      if (attempts === 1) {
+        throw Object.assign(new Error("partial response"), { code: "response_invalid" });
+      }
+      if (attempts === 2) throw Object.assign(new Error("request timed out"), { code: "timeout" });
+      if (attempts === 3)
+        throw Object.assign(new Error("server unavailable"), { code: "unreachable" });
+      return expected;
+    },
+    {
+      now: () => now,
+      pause: async (milliseconds) => {
+        delays.push(milliseconds);
+        now += milliseconds;
+      },
+    },
+  );
+
+  assert.equal(result, expected);
+  assert.equal(attempts, 4);
+  assert.deepEqual(delays, [250, 250, 250]);
+});
+
+test("fails immediately for stable post-restart negotiation failures", async () => {
+  let attempts = 0;
+  let pauses = 0;
+  const stableFailure = Object.assign(new Error("credentials rejected"), {
+    code: "invalid_credentials",
+  });
+
+  await assert.rejects(
+    restartPlaybackNegotiation(
+      async () => {
+        attempts += 1;
+        throw stableFailure;
+      },
+      {
+        now: () => 0,
+        pause: async () => {
+          pauses += 1;
+        },
+      },
+    ),
+    (error) => error === stableFailure,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(pauses, 0);
+});
+
+test("surfaces a persistent invalid response at the readiness deadline", async () => {
+  let now = 0;
+  let attempts = 0;
+  const persistentFailure = Object.assign(new Error("incomplete media source"), {
+    code: "response_invalid",
+  });
+
+  await assert.rejects(
+    restartPlaybackNegotiation(
+      async () => {
+        attempts += 1;
+        throw persistentFailure;
+      },
+      {
+        now: () => now,
+        pause: async (milliseconds) => {
+          now += milliseconds;
+        },
+        timeoutMs: 500,
+      },
+    ),
+    (error) => error === persistentFailure,
+  );
+  assert.equal(now, 500);
+  assert.equal(attempts, 3);
 });
 
 test("selects a private non-loopback connector address deterministically", () => {

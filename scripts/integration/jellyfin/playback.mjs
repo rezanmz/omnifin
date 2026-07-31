@@ -18,6 +18,8 @@ const MAX_SEGMENT_BYTES = 8 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SERVER_READY_TIMEOUT_MS = 90_000;
 const LIBRARY_READY_TIMEOUT_MS = 60_000;
+const RESTART_NEGOTIATION_READY_TIMEOUT_MS = 10_000;
+const RESTART_NEGOTIATION_RETRY_INTERVAL_MS = 250;
 const TICKS_PER_SECOND = 10_000_000;
 const IDENTIFIER_PATTERN = /^[a-f0-9]{32}$/u;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
@@ -33,6 +35,7 @@ const SAFE_CONNECTOR_FAILURE_CODES = new Set([
   "unsupported_version",
   "upstream_error",
 ]);
+const TRANSIENT_RESTART_NEGOTIATION_CODES = new Set(["response_invalid", "timeout", "unreachable"]);
 
 class JellyfinFixtureFailure extends Error {
   constructor(code, options) {
@@ -69,6 +72,37 @@ async function connectorOperation(stage, operation) {
     return await operation();
   } catch (error) {
     throw new JellyfinFixtureFailure(connectorFailureCode(stage, error), { cause: error });
+  }
+}
+
+function isTransientRestartNegotiationFailure(error) {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    TRANSIENT_RESTART_NEGOTIATION_CODES.has(error.code)
+  );
+}
+
+export async function restartPlaybackNegotiation(operation, options = {}) {
+  const now = options.now ?? Date.now;
+  const pause = options.pause ?? sleep;
+  const timeoutMs = options.timeoutMs ?? RESTART_NEGOTIATION_READY_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new JellyfinFixtureFailure("restart_retry_policy_invalid");
+  }
+  const deadline = now() + timeoutMs;
+
+  while (true) {
+    try {
+      const attemptSignal = AbortSignal.timeout(Math.max(1, deadline - now()));
+      return await operation(attemptSignal);
+    } catch (error) {
+      const remainingMs = deadline - now();
+      if (!isTransientRestartNegotiationFailure(error) || remainingMs <= 0) throw error;
+      await pause(Math.min(RESTART_NEGOTIATION_RETRY_INTERVAL_MS, remainingMs));
+    }
   }
 }
 
@@ -692,20 +726,26 @@ async function main(options) {
       secondAuthentication,
       item.id,
     );
+    const reconnectClient = playbackClient(
+      context,
+      secondServer,
+      secondAuthentication.accessToken,
+      context.deviceId,
+    );
     const reconnected = await connectorOperation("restart_negotiation", () =>
-      playbackClient(
-        context,
-        secondServer,
-        secondAuthentication.accessToken,
-        context.deviceId,
-      ).negotiate({
-        audioStreamIndex: null,
-        itemId: item.id,
-        maxStreamingBitrate: 20_000_000,
-        mode: "direct",
-        positionSeconds: restartPosition,
-        subtitleStreamIndex: null,
-      }),
+      restartPlaybackNegotiation((signal) =>
+        reconnectClient.negotiate(
+          {
+            audioStreamIndex: null,
+            itemId: item.id,
+            maxStreamingBitrate: 20_000_000,
+            mode: "direct",
+            positionSeconds: restartPosition,
+            subtitleStreamIndex: null,
+          },
+          signal,
+        ),
+      ),
     );
     if (reconnected.delivery !== "direct") {
       throw new JellyfinFixtureFailure("restart_playback_invalid");
