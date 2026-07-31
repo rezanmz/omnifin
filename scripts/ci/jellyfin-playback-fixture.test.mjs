@@ -10,10 +10,138 @@ import {
   hlsSegmentFormat,
   hostContainerUser,
   isLibraryProbePending,
+  jellyfinCompatibilityReport,
+  jellyfinTarget,
+  quickConnectAuthorizationQuery,
   restartPlaybackNegotiation,
   selectConnectorAddress,
   validateImportedItem,
+  verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
+
+const OLDEST_IMAGE =
+  "ghcr.io/jellyfin/jellyfin:10.10.7@sha256:e4d1dc5374344446a3a78e43dd211247f22afba84ea2e5a13cbe1a94e1ff2141";
+const LATEST_IMAGE =
+  "ghcr.io/jellyfin/jellyfin:10.11.11@sha256:45f648c382a0c8b552582fcea40e95cb17c5d475473a891cba0eb7523fb92112";
+
+test("accepts only immutable official Jellyfin images bound to their exact version", () => {
+  assert.deepEqual(jellyfinTarget(OLDEST_IMAGE, "10.10.7"), {
+    image: OLDEST_IMAGE,
+    version: "10.10.7",
+  });
+  assert.deepEqual(jellyfinTarget(LATEST_IMAGE, "10.11.11"), {
+    image: LATEST_IMAGE,
+    version: "10.11.11",
+  });
+  assert.throws(
+    () => jellyfinTarget("ghcr.io/jellyfin/jellyfin:latest", "10.11.11"),
+    /jellyfin_target_invalid/u,
+  );
+  assert.throws(() => jellyfinTarget(OLDEST_IMAGE, "10.11.11"), /jellyfin_target_invalid/u);
+  assert.throws(
+    () =>
+      jellyfinTarget(
+        "registry.example.test/jellyfin:10.10.7@sha256:e4d1dc5374344446a3a78e43dd211247f22afba84ea2e5a13cbe1a94e1ff2141",
+        "10.10.7",
+      ),
+    /jellyfin_target_invalid/u,
+  );
+});
+
+test("builds a closed compatibility report without retaining supplied secrets", () => {
+  const report = jellyfinCompatibilityReport({
+    accessToken: "private-access-token",
+    identityChecks: {
+      invalidPasswordRejected: true,
+      mismatchedQuickConnectSecretRejected: true,
+      password: true,
+      publicInfo: true,
+      quickConnect: true,
+      secret: "private-quick-connect-secret",
+    },
+    image: LATEST_IMAGE,
+    persistedSeconds: 6,
+    playback: {
+      direct: { bytes: 4_096, status: 206, token: "private-direct-token" },
+      hls: { bytes: 8_192, format: "fmp4", status: 200, path: "/private/media" },
+      seekSeconds: 4,
+      selectedAudio: "fra",
+      selectedSubtitle: "eng",
+    },
+    reconnectDelivery: "direct",
+    restartPosition: 6,
+    version: "10.11.11",
+  });
+
+  assert.deepEqual(Object.keys(report).sort(), [
+    "checks",
+    "image",
+    "schemaVersion",
+    "serverVersion",
+    "status",
+  ]);
+  assert.deepEqual(report.checks.identity, {
+    invalidPasswordRejected: true,
+    mismatchedQuickConnectSecretRejected: true,
+    password: true,
+    publicInfo: true,
+    quickConnect: true,
+  });
+  assert.deepEqual(report.checks.directRange, { bytes: 4_096, status: 206 });
+  assert.deepEqual(report.checks.hlsTranscode, { bytes: 8_192, format: "fmp4", status: 200 });
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
+  );
+});
+
+test("binds Quick Connect approval to the exact authenticated Jellyfin user", () => {
+  const userId = "a".repeat(32);
+  assert.equal(
+    quickConnectAuthorizationQuery("123456", userId).toString(),
+    `code=123456&userId=${userId}`,
+  );
+  assert.throws(
+    () => quickConnectAuthorizationQuery("12 3456", userId),
+    /quick_connect_state_invalid/u,
+  );
+  assert.throws(
+    () => quickConnectAuthorizationQuery("123456", "not-a-user"),
+    /quick_connect_state_invalid/u,
+  );
+});
+
+test("continues with the fresh Quick Connect session for the approved user", () => {
+  const userId = "a".repeat(32);
+  const serverId = "server-fixture";
+  const quickConnect = verifiedQuickConnectSession(
+    { accessToken: "password-session-token", userId },
+    {
+      AccessToken: "quick-connect-session-token",
+      ServerId: serverId,
+      User: { Id: userId },
+    },
+    serverId,
+  );
+
+  assert.deepEqual(quickConnect, {
+    accessToken: "quick-connect-session-token",
+    userId,
+  });
+  assert.throws(
+    () =>
+      verifiedQuickConnectSession(
+        { accessToken: "password-session-token", userId },
+        {
+          AccessToken: "quick-connect-session-token",
+          ServerId: serverId,
+          User: { Id: "b".repeat(32) },
+        },
+        serverId,
+      ),
+    /quick_connect_identity_mismatch/u,
+  );
+});
 
 test("emits only allowlisted connector diagnostics", () => {
   assert.equal(
@@ -165,20 +293,37 @@ test("extracts only a bounded URI line from an HLS manifest", () => {
   assert.throws(() => firstManifestUri("#EXTM3U\n#EXT-X-ENDLIST\n"), /manifest_invalid/u);
 });
 
-test("the protected fixture aggregate runs the real playback connector", () => {
+test("the protected fixture aggregate runs the supported Jellyfin version matrix", () => {
   const workflow = parse(
     readFileSync(new URL("../../.github/workflows/integration.yml", import.meta.url), "utf8"),
   );
+  const media = workflow.jobs["playback-media-fixture"];
+  assert.equal(media.name, "Generate copyright-free playback fixture");
+  assert.equal(JSON.stringify(media).includes("secrets."), false);
+
   const fixture = workflow.jobs["playback-fixture"];
-  assert.equal(fixture.name, "Isolated Jellyfin playback integration");
+  assert.equal(fixture.name, "Jellyfin compatibility (${{ matrix.label }})");
   assert.equal(fixture["timeout-minutes"], 20);
   assert.equal(JSON.stringify(fixture).includes("secrets."), false);
+  assert.equal(fixture.needs, "playback-media-fixture");
+  assert.deepEqual(fixture.strategy.matrix.include, [
+    { image: OLDEST_IMAGE, label: "oldest-targeted", version: "10.10.7" },
+    { image: LATEST_IMAGE, label: "latest-verified", version: "10.11.11" },
+  ]);
+  const download = fixture.steps.find((step) => step.name === "Download generated media fixture");
+  assert.match(download.uses, /^actions\/download-artifact@[a-f0-9]{40}$/u);
   const build = fixture.steps.find((step) => step.name === "Build playback connector");
   assert.equal(build.run, "pnpm --filter @omnifin/connectors... build");
   const playback = fixture.steps.find(
-    (step) => step.name === "Exercise isolated Jellyfin playback",
+    (step) => step.name === "Exercise Jellyfin identity and playback compatibility",
   );
   assert.match(playback.run, /pnpm fixture:jellyfin-playback/u);
-  assert.match(playback.run, /artifacts\/integration\/jellyfin-playback\/report\.json/u);
+  assert.match(playback.run, /--image "\$JELLYFIN_IMAGE"/u);
+  assert.match(playback.run, /--expected-version "\$JELLYFIN_VERSION"/u);
+  assert.match(
+    playback.run,
+    /artifacts\/integration\/jellyfin-playback\/\$JELLYFIN_LABEL\/report\.json/u,
+  );
+  assert.ok(workflow.jobs.gate.needs.includes("playback-media-fixture"));
   assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
 });

@@ -12,8 +12,8 @@ Run the same isolated generation and transcode check locally:
 pnpm fixture:media --output artifacts/media/playback-fixture
 ```
 
-The runner uses the official Jellyfin 10.11.11 image pinned by multi-architecture
-digest. Docker runs with networking disabled, a read-only root filesystem, no Linux
+The runner generates media with the official Jellyfin 10.11.11 image pinned by
+multi-architecture digest. Docker runs with networking disabled, a read-only root filesystem, no Linux
 capabilities, no privilege escalation, a PID limit, a private temporary filesystem,
 and only a private staging directory mounted writable. Validated files are published
 atomically into the selected artifact directory only after every generation and
@@ -35,17 +35,27 @@ sizes, SHA-256 digests, normalized stream metadata, and segment count. It contai
 host path, media path from an installation, account identity, token, cookie, or upstream
 response.
 
-The protected gate then starts that same Jellyfin image with fresh private configuration
-and cache directories. It completes the first-run flow with ephemeral credentials,
-imports the fixture, and calls Omnifin's production playback connector. The gate requires
-successful direct-play negotiation, an authenticated 4 KiB range response, French audio
-and English subtitle selection, a seeked HLS transcode and real media segment, exact
-progress persistence, and successful playback renegotiation after restarting Jellyfin.
-The second uploaded report contains only normalized pass evidence and versions; it omits
-server, user, session, media, device, path, port, and credential identifiers.
+The protected gate then distributes that single generated fixture to two independent
+GitHub-hosted runners. One starts Jellyfin 10.10.7 as the oldest targeted version and the
+other starts Jellyfin 10.11.11 as the latest version verified on 2026-07-31. Both official
+images are pinned by their multi-architecture digest and run with fresh private
+configuration and cache directories.
 
-This isolated gate proves deterministic media construction and Omnifin-to-Jellyfin
-playback behavior without depending on copyrighted media or a maintainer's server. The
-protected live compatibility matrix remains a separate release gate for installations
+Each version completes the first-run flow with ephemeral credentials and then calls
+Omnifin's production identity and playback connectors. The gate requires public version
+discovery, password authentication, invalid-password rejection, Quick Connect
+initiation, mismatched-secret rejection, administrator approval, polling, and final
+Quick Connect authentication. It then imports the fixture and requires successful
+direct-play negotiation, an authenticated 4 KiB range response, French audio and English
+subtitle selection, a seeked HLS transcode and real media segment, exact progress
+persistence, and playback renegotiation after restarting Jellyfin. The uploaded reports
+contain only normalized booleans, versions, and immutable image references; they omit
+server, user, session, Quick Connect, media, device, path, port, token, and credential
+identifiers.
+
+This isolated matrix proves deterministic media construction and Omnifin-to-Jellyfin
+identity and playback behavior across the targeted range without depending on copyrighted
+media, a maintainer's server, or local container capacity. It remains development evidence:
+the protected live compatibility matrix is a separate release gate for installations
 outside the CI network, and the Playwright browser matrix separately verifies player
 interaction and browser behavior.

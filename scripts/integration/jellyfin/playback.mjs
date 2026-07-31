@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { JellyfinAuthenticationClient } from "../../../packages/connectors/dist/auth/jellyfin-authentication-client.js";
 import { JellyfinPlaybackClient } from "../../../packages/connectors/dist/media/jellyfin-playback-client.js";
 
 import { JELLYFIN_FIXTURE_IMAGE } from "../../media/playback-fixture.mjs";
@@ -22,6 +23,8 @@ const RESTART_NEGOTIATION_READY_TIMEOUT_MS = 10_000;
 const RESTART_NEGOTIATION_RETRY_INTERVAL_MS = 250;
 const TICKS_PER_SECOND = 10_000_000;
 const IDENTIFIER_PATTERN = /^[a-f0-9]{32}$/u;
+const JELLYFIN_IMAGE_PATTERN =
+  /^ghcr\.io\/jellyfin\/jellyfin:((?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2})@sha256:[a-f0-9]{64}$/u;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const SAFE_CONNECTOR_FAILURE_CODES = new Set([
   "configuration_invalid",
@@ -106,21 +109,97 @@ export async function restartPlaybackNegotiation(operation, options = {}) {
   }
 }
 
+export function jellyfinTarget(image, expectedVersion) {
+  if (typeof image !== "string" || typeof expectedVersion !== "string") {
+    throw new JellyfinFixtureFailure("jellyfin_target_invalid");
+  }
+  const match = image.match(JELLYFIN_IMAGE_PATTERN);
+  if (!match || match[1] !== expectedVersion) {
+    throw new JellyfinFixtureFailure("jellyfin_target_invalid");
+  }
+  return { image, version: expectedVersion };
+}
+
+export function jellyfinCompatibilityReport(input) {
+  const target = jellyfinTarget(input.image, input.version);
+  const identity = {
+    invalidPasswordRejected: input.identityChecks?.invalidPasswordRejected === true,
+    mismatchedQuickConnectSecretRejected:
+      input.identityChecks?.mismatchedQuickConnectSecretRejected === true,
+    password: input.identityChecks?.password === true,
+    publicInfo: input.identityChecks?.publicInfo === true,
+    quickConnect: input.identityChecks?.quickConnect === true,
+  };
+  if (Object.values(identity).some((passed) => !passed)) {
+    throw new JellyfinFixtureFailure("compatibility_report_invalid");
+  }
+  return {
+    checks: {
+      directRange: {
+        bytes: input.playback.direct.bytes,
+        status: input.playback.direct.status,
+      },
+      hlsTranscode: {
+        bytes: input.playback.hls.bytes,
+        format: input.playback.hls.format,
+        status: input.playback.hls.status,
+      },
+      identity,
+      progress: {
+        persistedSeconds: input.persistedSeconds,
+        reportedSeconds: 6,
+      },
+      reconnect: {
+        delivery: input.reconnectDelivery,
+        persistedSeconds: input.restartPosition,
+      },
+      tracks: {
+        audio: input.playback.selectedAudio,
+        subtitle: input.playback.selectedSubtitle,
+      },
+      transcodeSeekSeconds: input.playback.seekSeconds,
+    },
+    image: target.image,
+    schemaVersion: 1,
+    serverVersion: target.version,
+    status: "passed",
+  };
+}
+
+export function quickConnectAuthorizationQuery(code, userId) {
+  if (!/^\d{6}$/u.test(code) || !IDENTIFIER_PATTERN.test(userId)) {
+    throw new JellyfinFixtureFailure("quick_connect_state_invalid");
+  }
+  return new URLSearchParams({ code, userId });
+}
+
+function argumentValue(arguments_, name) {
+  const indexes = arguments_.flatMap((argument, index) => (argument === name ? [index] : []));
+  if (indexes.length !== 1 || !arguments_[indexes[0] + 1]) {
+    throw new JellyfinFixtureFailure("usage_invalid");
+  }
+  return arguments_[indexes[0] + 1];
+}
+
 function parseArguments(arguments_) {
   const fixtureIndex = arguments_.indexOf("--fixture");
   const outputIndex = arguments_.indexOf("--output");
-  if (
-    arguments_.length !== 4 ||
-    fixtureIndex < 0 ||
-    outputIndex < 0 ||
-    !arguments_[fixtureIndex + 1] ||
-    !arguments_[outputIndex + 1]
-  ) {
+  if (![4, 8].includes(arguments_.length) || fixtureIndex < 0 || outputIndex < 0) {
     throw new JellyfinFixtureFailure("usage_invalid");
   }
+  const fixturePath = argumentValue(arguments_, "--fixture");
+  const outputPath = argumentValue(arguments_, "--output");
+  const target =
+    arguments_.length === 4
+      ? jellyfinTarget(JELLYFIN_FIXTURE_IMAGE, "10.11.11")
+      : jellyfinTarget(
+          argumentValue(arguments_, "--image"),
+          argumentValue(arguments_, "--expected-version"),
+        );
   return {
-    fixturePath: repositoryPath(arguments_[fixtureIndex + 1]),
-    outputPath: repositoryPath(arguments_[outputIndex + 1]),
+    fixturePath: repositoryPath(fixturePath),
+    outputPath: repositoryPath(outputPath),
+    target,
   };
 }
 
@@ -262,7 +341,7 @@ function startContainer(context) {
     `type=bind,src=${context.cacheDirectory},dst=/cache`,
     "--mount",
     `type=bind,src=${context.mediaDirectory},dst=/media,readonly`,
-    JELLYFIN_FIXTURE_IMAGE,
+    context.target.image,
   ]);
   const port = publishedPort(context.containerName);
   return {
@@ -436,6 +515,150 @@ function playbackClient(context, server, accessToken, deviceId) {
       timeoutMs: REQUEST_TIMEOUT_MS,
     },
   });
+}
+
+function authenticationClient(context, server) {
+  return new JellyfinAuthenticationClient(
+    {
+      baseUrl: server.connectorUrl.href,
+      insecureHttpApproved: true,
+      maxResponseBytes: MAX_JSON_BYTES,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    },
+    { appVersion: "0.1.0" },
+  );
+}
+
+function authenticationResult(result, expectedServerId) {
+  if (
+    typeof result?.AccessToken !== "string" ||
+    result.AccessToken.length < 16 ||
+    result.AccessToken.length > 512 ||
+    !IDENTIFIER_PATTERN.test(result?.User?.Id ?? "") ||
+    result.ServerId !== expectedServerId
+  ) {
+    throw new JellyfinFixtureFailure("authentication_invalid");
+  }
+  return { accessToken: result.AccessToken, userId: result.User.Id };
+}
+
+export function verifiedQuickConnectSession(passwordAuthentication, result, expectedServerId) {
+  const quickConnectAuthentication = authenticationResult(result, expectedServerId);
+  if (quickConnectAuthentication.userId !== passwordAuthentication.userId) {
+    throw new JellyfinFixtureFailure("quick_connect_identity_mismatch");
+  }
+  return quickConnectAuthentication;
+}
+
+async function rejectsQuickConnectSecret(client, context, secret) {
+  try {
+    const result = await client.pollQuickConnect({
+      deviceId: context.deviceId,
+      secret,
+    });
+    return result.Authenticated === false;
+  } catch (error) {
+    return (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      ["invalid_credentials", "upstream_error"].includes(error.code)
+    );
+  }
+}
+
+async function verifyIdentity(context, server, username, password, serverId) {
+  const client = authenticationClient(context, server);
+  const info = await connectorOperation("identity_public_info", () => client.getPublicSystemInfo());
+  if (info.Id !== serverId || info.Version !== context.target.version) {
+    throw new JellyfinFixtureFailure("identity_public_info_invalid");
+  }
+
+  const passwordResult = await connectorOperation("password_authentication", () =>
+    client.authenticateByName({
+      deviceId: context.deviceId,
+      password,
+      username,
+    }),
+  );
+  const passwordAuthentication = authenticationResult(passwordResult, serverId);
+  let invalidPasswordRejected = false;
+  try {
+    await client.authenticateByName({
+      deviceId: `${context.deviceId}-invalid`,
+      password: `${password}-invalid`,
+      username,
+    });
+  } catch (error) {
+    invalidPasswordRejected =
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "invalid_credentials";
+  }
+  if (!invalidPasswordRejected) {
+    throw new JellyfinFixtureFailure("invalid_password_accepted");
+  }
+
+  const quickConnectEnabled = await connectorOperation("quick_connect_capability", () =>
+    client.quickConnectEnabled({ deviceId: context.deviceId }),
+  );
+  if (!quickConnectEnabled) throw new JellyfinFixtureFailure("quick_connect_disabled");
+  const quickConnect = await connectorOperation("quick_connect_initiate", () =>
+    client.initiateQuickConnect({ deviceId: context.deviceId }),
+  );
+  if (
+    quickConnect.Authenticated ||
+    !(await rejectsQuickConnectSecret(client, context, `${quickConnect.Secret}-mismatch`))
+  ) {
+    throw new JellyfinFixtureFailure("quick_connect_state_invalid");
+  }
+  const authorizationQuery = quickConnectAuthorizationQuery(
+    quickConnect.Code,
+    passwordAuthentication.userId,
+  );
+  const authorized = await connectorOperation("quick_connect_authorize", () =>
+    requestJson(server.loopbackUrl, `QuickConnect/Authorize?${authorizationQuery}`, {
+      headers: tokenHeaders(passwordAuthentication.accessToken),
+      method: "POST",
+    }),
+  );
+  if (authorized !== true) throw new JellyfinFixtureFailure("quick_connect_state_invalid");
+  const approved = await connectorOperation("quick_connect_poll", () =>
+    client.pollQuickConnect({
+      deviceId: context.deviceId,
+      secret: quickConnect.Secret,
+    }),
+  );
+  if (
+    !approved.Authenticated ||
+    approved.Code !== quickConnect.Code ||
+    approved.Secret !== quickConnect.Secret
+  ) {
+    throw new JellyfinFixtureFailure("quick_connect_state_invalid");
+  }
+  const quickConnectResult = await connectorOperation("quick_connect_authentication", () =>
+    client.authenticateWithQuickConnect({
+      deviceId: context.deviceId,
+      secret: quickConnect.Secret,
+    }),
+  );
+  const quickConnectAuthentication = verifiedQuickConnectSession(
+    passwordAuthentication,
+    quickConnectResult,
+    serverId,
+  );
+
+  return {
+    authentication: quickConnectAuthentication,
+    checks: {
+      invalidPasswordRejected: true,
+      mismatchedQuickConnectSecretRejected: true,
+      password: true,
+      publicInfo: true,
+      quickConnect: true,
+    },
+  };
 }
 
 async function readStream(stream, maximumBytes) {
@@ -616,15 +839,15 @@ async function playbackPosition(baseUrl, authentication, itemId) {
   throw new JellyfinFixtureFailure("progress_invalid");
 }
 
-async function serverInfo(baseUrl) {
+async function serverInfo(baseUrl, expectedVersion) {
   const info = await requestJson(baseUrl, "System/Info/Public");
-  if (info?.Version !== "10.11.11" || typeof info?.Id !== "string") {
+  if (info?.Version !== expectedVersion || typeof info?.Id !== "string") {
     throw new JellyfinFixtureFailure("server_info_invalid");
   }
   return { id: info.Id, version: info.Version };
 }
 
-async function prepareContext(fixturePath) {
+async function prepareContext(fixturePath, target) {
   const fixtureMetadata = await lstat(fixturePath);
   if (!fixtureMetadata.isFile() || fixtureMetadata.isSymbolicLink()) {
     throw new JellyfinFixtureFailure("fixture_invalid");
@@ -644,6 +867,7 @@ async function prepareContext(fixturePath) {
     containerUser: hostContainerUser(process.getuid?.(), process.getgid?.()),
     deviceId: `omnifin-integration-${randomUUID()}`,
     mediaDirectory: resolve(temporaryDirectory, "media"),
+    target,
     temporaryDirectory,
   };
   await Promise.all([
@@ -684,7 +908,7 @@ async function writeReport(outputPath, report) {
 }
 
 async function main(options) {
-  const context = await prepareContext(options.fixturePath);
+  const context = await prepareContext(options.fixturePath, options.target);
   const username = `fixture-${randomBytes(6).toString("hex")}`;
   const password = randomBytes(32).toString("base64url");
   let running = false;
@@ -692,13 +916,10 @@ async function main(options) {
     const firstServer = startContainer(context);
     running = true;
     await waitForHealthy(firstServer.loopbackUrl);
-    const firstInfo = await serverInfo(firstServer.loopbackUrl);
-    const authentication = await initializeServer(
-      firstServer.loopbackUrl,
-      username,
-      password,
-      context.deviceId,
-    );
+    const firstInfo = await serverInfo(firstServer.loopbackUrl, context.target.version);
+    await initializeServer(firstServer.loopbackUrl, username, password, context.deviceId);
+    const identity = await verifyIdentity(context, firstServer, username, password, firstInfo.id);
+    const authentication = identity.authentication;
     await configureFixtureServer(firstServer.loopbackUrl, authentication);
     const item = await importFixture(firstServer.loopbackUrl, authentication);
     const playback = await verifyPlayback(context, firstServer, authentication, item);
@@ -713,7 +934,7 @@ async function main(options) {
     const secondServer = startContainer(context);
     running = true;
     await waitForHealthy(secondServer.loopbackUrl);
-    const secondInfo = await serverInfo(secondServer.loopbackUrl);
+    const secondInfo = await serverInfo(secondServer.loopbackUrl, context.target.version);
     if (secondInfo.id !== firstInfo.id) throw new JellyfinFixtureFailure("restart_state_invalid");
     const secondAuthentication = await authenticate(
       secondServer.loopbackUrl,
@@ -751,23 +972,15 @@ async function main(options) {
       throw new JellyfinFixtureFailure("restart_playback_invalid");
     }
 
-    const report = {
-      checks: {
-        directRange: playback.direct,
-        hlsTranscode: playback.hls,
-        progress: { persistedSeconds, reportedSeconds: 6 },
-        reconnect: { delivery: reconnected.delivery, persistedSeconds: restartPosition },
-        tracks: {
-          audio: playback.selectedAudio,
-          subtitle: playback.selectedSubtitle,
-        },
-        transcodeSeekSeconds: playback.seekSeconds,
-      },
-      image: JELLYFIN_FIXTURE_IMAGE,
-      schemaVersion: 1,
-      serverVersion: secondInfo.version,
-      status: "passed",
-    };
+    const report = jellyfinCompatibilityReport({
+      identityChecks: identity.checks,
+      image: context.target.image,
+      persistedSeconds,
+      playback,
+      reconnectDelivery: reconnected.delivery,
+      restartPosition,
+      version: secondInfo.version,
+    });
     await writeReport(options.outputPath, report);
     process.stdout.write(`${JSON.stringify(report)}\n`);
   } finally {
