@@ -14,6 +14,7 @@ import {
   secretLeakDetected,
   selectPrivateHost,
 } from "./oidc-provider/fixture.mjs";
+import { waitForSemanticSessionThenCookie } from "./oidc-provider/session-convergence.mjs";
 
 const composeSource = readFileSync(
   new URL("./oidc-provider/compose.yaml", import.meta.url),
@@ -152,6 +153,14 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /SESSION_CONVERGENCE_TIMEOUT_MS = 10_000/u);
   assert.match(browserSource, /waitForPendingPrincipal/u);
   assert.match(browserSource, /waitForSessionCookie/u);
+  assert.equal(
+    (browserSource.match(/await waitForPendingPrincipalThenSessionCookie\(/gu) ?? []).length,
+    2,
+  );
+  assert.ok(
+    browserSource.indexOf("currentStage = `${stage}_session`") <
+      browserSource.indexOf("currentStage = `${stage}_cookie`"),
+  );
   assert.match(browserSource, /candidate\.name === SESSION_COOKIE_NAME/u);
   assert.match(browserSource, /cookie\.value !== previousValue/u);
   assert.match(browserSource, /administrationContext\.request/u);
@@ -168,4 +177,51 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
   assert.equal((proxySource.match(/response\.writeHead\(/gu) ?? []).length, 1);
   assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|forwarded\[name\]/u);
+});
+
+test("waits for semantic session convergence before inspecting the replacement cookie", async () => {
+  const calls = [];
+  let releaseSession;
+  const sessionReady = new Promise((resolve) => {
+    releaseSession = resolve;
+  });
+
+  const convergence = waitForSemanticSessionThenCookie({
+    waitForSession: async () => {
+      calls.push("session");
+      await sessionReady;
+      return { principal: { role: "admin" } };
+    },
+    waitForCookie: async () => {
+      calls.push("cookie");
+      return "replacement-observed";
+    },
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(calls, ["session"]);
+  releaseSession();
+  assert.deepEqual(await convergence, {
+    sessionCookie: "replacement-observed",
+    sessionResult: { principal: { role: "admin" } },
+  });
+  assert.deepEqual(calls, ["session", "cookie"]);
+});
+
+test("does not inspect cookies when semantic session convergence fails", async () => {
+  let cookieInspected = false;
+
+  await assert.rejects(
+    waitForSemanticSessionThenCookie({
+      waitForSession: async () => {
+        throw new Error("session_not_ready");
+      },
+      waitForCookie: async () => {
+        cookieInspected = true;
+        return "unexpected";
+      },
+    }),
+    /session_not_ready/u,
+  );
+  assert.equal(cookieInspected, false);
 });
