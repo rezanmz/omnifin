@@ -22,6 +22,7 @@ import {
   quickConnectAuthorizationQuery,
   restartPlaybackNegotiation,
   selectConnectorAddress,
+  startContainerWithRetry,
   validateImportedItem,
   verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
@@ -64,6 +65,8 @@ test("keeps the disposable Jellyfin server on a private network with determinist
   assert.match(source, /\["network", "create", "--driver", "bridge", context\.networkName\]/u);
   assert.match(source, /"--network",\s*context\.networkName/u);
   assert.match(source, /\["network", "rm", context\.networkName\]/u);
+  assert.equal(source.match(/await startContainerWithRetry\(/gu)?.length, 2);
+  assert.match(source, /\["container", "rm", "--force", "--volumes", containerName\]/u);
 });
 
 test("builds a closed compatibility report without retaining supplied secrets", () => {
@@ -172,6 +175,7 @@ test("maps every Docker lifecycle boundary to a bounded diagnostic stage", () =>
   const expectedStages = new Map([
     ["network_create_failed", "network_create"],
     ["container_start_failed", "container_start"],
+    ["container_start_retry_exhausted", "container_start"],
     ["published_port_discovery_failed", "container_start"],
     ["server_readiness_failed", "readiness"],
     ["container_stop_failed", "container_stop"],
@@ -189,6 +193,185 @@ test("maps every Docker lifecycle boundary to a bounded diagnostic stage", () =>
       { code, stage },
     );
   }
+});
+
+test("recovers one explicitly transient container start after deterministic cleanup", async () => {
+  const transient = new JellyfinFixtureFailure("container_start_failed", {
+    cause: Object.assign(new Error("private Docker failure"), {
+      stderr: "failed to bind host port: address already in use",
+    }),
+  });
+  const events = [];
+  let attempts = 0;
+
+  await startContainerWithRetry(
+    () => {
+      attempts += 1;
+      events.push(`start:${attempts}`);
+      if (attempts === 1) throw transient;
+    },
+    () => {
+      events.push("cleanup");
+    },
+    {
+      pause: async (milliseconds) => {
+        events.push(`pause:${milliseconds}`);
+      },
+    },
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(events, ["start:1", "cleanup", "pause:250", "start:2"]);
+});
+
+test("does not retry a stable container configuration failure", async () => {
+  const stable = new JellyfinFixtureFailure("container_start_failed", {
+    cause: Object.assign(new Error("private Docker failure"), {
+      stderr: "invalid reference format",
+    }),
+  });
+  let attempts = 0;
+  let cleanups = 0;
+  let pauses = 0;
+
+  await assert.rejects(
+    startContainerWithRetry(
+      () => {
+        attempts += 1;
+        throw stable;
+      },
+      () => {
+        cleanups += 1;
+      },
+      {
+        pause: async () => {
+          pauses += 1;
+        },
+      },
+    ),
+    (error) => error === stable,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(cleanups, 0);
+  assert.equal(pauses, 0);
+});
+
+test("fails closed with bounded evidence after transient start retry exhaustion", async () => {
+  const privateFailure = () =>
+    new JellyfinFixtureFailure("container_start_failed", {
+      cause: Object.assign(new Error("private-container-name"), {
+        stderr: "failed programming external connectivity: resource temporarily unavailable",
+      }),
+    });
+  let attempts = 0;
+  let cleanups = 0;
+
+  let exhausted;
+  try {
+    await startContainerWithRetry(
+      () => {
+        attempts += 1;
+        throw privateFailure();
+      },
+      () => {
+        cleanups += 1;
+      },
+      { pause: async () => undefined },
+    );
+  } catch (error) {
+    exhausted = error;
+  }
+
+  assert.equal(attempts, 2);
+  assert.equal(cleanups, 2);
+  assert.equal(exhausted?.code, "container_start_retry_exhausted");
+  const report = jellyfinFailureReport({
+    error: exhausted,
+    image: LATEST_IMAGE,
+    version: "10.11.11",
+  });
+  assert.deepEqual(report.error, {
+    code: "container_start_retry_exhausted",
+    stage: "container_start",
+  });
+  assert.doesNotMatch(JSON.stringify(report), /private-container-name|external connectivity/u);
+});
+
+test("preserves retry exhaustion when final partial-container cleanup fails", async () => {
+  const transient = () =>
+    new JellyfinFixtureFailure("container_start_failed", {
+      cause: Object.assign(new Error("private retry detail"), {
+        stderr: "port is already allocated",
+      }),
+    });
+  let attempts = 0;
+  let cleanups = 0;
+
+  let retained;
+  try {
+    await startContainerWithRetry(
+      () => {
+        attempts += 1;
+        throw transient();
+      },
+      () => {
+        cleanups += 1;
+        if (cleanups === 2) {
+          throw new JellyfinFixtureFailure("container_teardown_failed", {
+            cause: new Error("private final cleanup detail"),
+          });
+        }
+      },
+      { pause: async () => undefined },
+    );
+  } catch (error) {
+    retained = error;
+  }
+
+  assert.equal(attempts, 2);
+  assert.equal(cleanups, 2);
+  assert.equal(retained?.code, "container_start_retry_exhausted");
+  assert.equal(retained?.cleanupCode, "container_teardown_failed");
+  assert.doesNotMatch(
+    JSON.stringify(
+      jellyfinFailureReport({ error: retained, image: LATEST_IMAGE, version: "10.11.11" }),
+    ),
+    /private retry detail|private final cleanup detail|port is already allocated/u,
+  );
+});
+
+test("preserves the initial start failure when retry cleanup also fails", async () => {
+  const startFailure = new JellyfinFixtureFailure("container_start_failed", {
+    cause: Object.assign(new Error("private start detail"), {
+      stderr: "port allocation failed",
+    }),
+  });
+
+  let retained;
+  try {
+    await startContainerWithRetry(
+      () => {
+        throw startFailure;
+      },
+      () => {
+        throw new JellyfinFixtureFailure("container_teardown_failed", {
+          cause: new Error("private cleanup detail"),
+        });
+      },
+      { pause: async () => undefined },
+    );
+  } catch (error) {
+    retained = error;
+  }
+
+  assert.equal(retained, startFailure);
+  assert.equal(retained?.cleanupCode, "container_teardown_failed");
+  assert.doesNotMatch(
+    JSON.stringify(
+      jellyfinFailureReport({ error: retained, image: LATEST_IMAGE, version: "10.11.11" }),
+    ),
+    /private start detail|private cleanup detail|port allocation/u,
+  );
 });
 
 test("writes a sanitized failure artifact before exiting a failed fixture", () => {

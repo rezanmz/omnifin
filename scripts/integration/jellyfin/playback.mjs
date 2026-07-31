@@ -21,6 +21,7 @@ const SERVER_READY_TIMEOUT_MS = 90_000;
 const LIBRARY_READY_TIMEOUT_MS = 60_000;
 const RESTART_NEGOTIATION_READY_TIMEOUT_MS = 10_000;
 const RESTART_NEGOTIATION_RETRY_INTERVAL_MS = 250;
+const CONTAINER_START_RETRY_INTERVAL_MS = 250;
 const TICKS_PER_SECOND = 10_000_000;
 const IDENTIFIER_PATTERN = /^[a-f0-9]{32}$/u;
 const JELLYFIN_IMAGE_PATTERN =
@@ -39,6 +40,15 @@ const SAFE_CONNECTOR_FAILURE_CODES = new Set([
   "upstream_error",
 ]);
 const TRANSIENT_RESTART_NEGOTIATION_CODES = new Set(["response_invalid", "timeout", "unreachable"]);
+const TRANSIENT_CONTAINER_START_CODES = new Set(["EAGAIN", "ECONNRESET", "ETIMEDOUT"]);
+const TRANSIENT_CONTAINER_START_PATTERNS = [
+  /address already in use/iu,
+  /context deadline exceeded/iu,
+  /failed (?:programming external connectivity|to bind host port|to set up container networking)/iu,
+  /port allocation failed/iu,
+  /port is already allocated/iu,
+  /resource temporarily unavailable/iu,
+];
 
 const REPORTABLE_FAILURE_CODES = new Set([
   "authentication_invalid",
@@ -48,6 +58,7 @@ const REPORTABLE_FAILURE_CODES = new Set([
   "container_failed",
   "container_port_invalid",
   "container_start_failed",
+  "container_start_retry_exhausted",
   "container_stop_failed",
   "container_teardown_failed",
   "diagnostic_stage_invalid",
@@ -152,6 +163,7 @@ function failureStage(code) {
     code === "container_failed" ||
     code === "container_port_invalid" ||
     code === "container_start_failed" ||
+    code === "container_start_retry_exhausted" ||
     code === "published_port_discovery_failed"
   ) {
     return "container_start";
@@ -174,6 +186,62 @@ export function preserveFixtureFailure(primaryError, cleanupError) {
   const cleanupCode = reportableFailureCode(cleanupError);
   primary.cleanupCode = cleanupCode === "jellyfin_fixture_failed" ? "cleanup_failed" : cleanupCode;
   return primary;
+}
+
+function dockerFailureText(error) {
+  const cause = error instanceof JellyfinFixtureFailure ? error.cause : error;
+  if (!cause || typeof cause !== "object" || !("stderr" in cause)) return "";
+  if (typeof cause.stderr === "string") return cause.stderr.slice(0, 16_384);
+  if (cause.stderr instanceof Uint8Array) {
+    return new TextDecoder().decode(cause.stderr.subarray(0, 16_384));
+  }
+  return "";
+}
+
+function isTransientContainerStartFailure(error) {
+  if (!(error instanceof JellyfinFixtureFailure) || error.code !== "container_start_failed") {
+    return false;
+  }
+  const causeCode =
+    error.cause &&
+    typeof error.cause === "object" &&
+    "code" in error.cause &&
+    typeof error.cause.code === "string"
+      ? error.cause.code
+      : "";
+  if (TRANSIENT_CONTAINER_START_CODES.has(causeCode)) return true;
+  const diagnostic = dockerFailureText(error);
+  return TRANSIENT_CONTAINER_START_PATTERNS.some((pattern) => pattern.test(diagnostic));
+}
+
+export async function startContainerWithRetry(start, cleanup, options = {}) {
+  const pause = options.pause ?? sleep;
+  try {
+    await start();
+    return;
+  } catch (error) {
+    if (!isTransientContainerStartFailure(error)) throw error;
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw preserveFixtureFailure(error, cleanupError);
+    }
+    await pause(CONTAINER_START_RETRY_INTERVAL_MS);
+    try {
+      await start();
+      return;
+    } catch (retryError) {
+      const exhausted = new JellyfinFixtureFailure("container_start_retry_exhausted", {
+        cause: retryError,
+      });
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        throw preserveFixtureFailure(exhausted, cleanupError);
+      }
+      throw exhausted;
+    }
+  }
 }
 
 export function hostContainerUser(uid, gid) {
@@ -509,6 +577,17 @@ function startContainer(context) {
     ],
     { failureCode: "container_start_failed" },
   );
+}
+
+function removeContainerAfterFailedStart(containerName) {
+  try {
+    docker(["container", "rm", "--force", "--volumes", containerName], {
+      failureCode: "container_teardown_failed",
+    });
+  } catch (error) {
+    if (/No such container/iu.test(dockerFailureText(error))) return;
+    throw error;
+  }
 }
 
 function containerServer(context) {
@@ -1096,7 +1175,10 @@ async function main(options) {
       failureCode: "network_create_failed",
     });
     networkCreated = true;
-    startContainer(context);
+    await startContainerWithRetry(
+      () => startContainer(context),
+      () => removeContainerAfterFailedStart(context.containerName),
+    );
     running = true;
     const firstServer = containerServer(context);
     await verifyServerReadiness(firstServer.loopbackUrl);
@@ -1115,7 +1197,10 @@ async function main(options) {
 
     stopContainer(context.containerName, "container_stop_failed");
     running = false;
-    startContainer(context);
+    await startContainerWithRetry(
+      () => startContainer(context),
+      () => removeContainerAfterFailedStart(context.containerName),
+    );
     running = true;
     const secondServer = containerServer(context);
     await verifyServerReadiness(secondServer.loopbackUrl);
