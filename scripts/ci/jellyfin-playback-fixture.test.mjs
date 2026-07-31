@@ -16,6 +16,7 @@ import {
   restartPlaybackNegotiation,
   selectConnectorAddress,
   validateImportedItem,
+  verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
 
 const OLDEST_IMAGE =
@@ -107,6 +108,38 @@ test("binds Quick Connect approval to the exact authenticated Jellyfin user", ()
   assert.throws(
     () => quickConnectAuthorizationQuery("123456", "not-a-user"),
     /quick_connect_state_invalid/u,
+  );
+});
+
+test("continues with the fresh Quick Connect session for the approved user", () => {
+  const userId = "a".repeat(32);
+  const serverId = "server-fixture";
+  const quickConnect = verifiedQuickConnectSession(
+    { accessToken: "password-session-token", userId },
+    {
+      AccessToken: "quick-connect-session-token",
+      ServerId: serverId,
+      User: { Id: userId },
+    },
+    serverId,
+  );
+
+  assert.deepEqual(quickConnect, {
+    accessToken: "quick-connect-session-token",
+    userId,
+  });
+  assert.throws(
+    () =>
+      verifiedQuickConnectSession(
+        { accessToken: "password-session-token", userId },
+        {
+          AccessToken: "quick-connect-session-token",
+          ServerId: serverId,
+          User: { Id: "b".repeat(32) },
+        },
+        serverId,
+      ),
+    /quick_connect_identity_mismatch/u,
   );
 });
 

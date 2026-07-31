@@ -542,6 +542,14 @@ function authenticationResult(result, expectedServerId) {
   return { accessToken: result.AccessToken, userId: result.User.Id };
 }
 
+export function verifiedQuickConnectSession(passwordAuthentication, result, expectedServerId) {
+  const quickConnectAuthentication = authenticationResult(result, expectedServerId);
+  if (quickConnectAuthentication.userId !== passwordAuthentication.userId) {
+    throw new JellyfinFixtureFailure("quick_connect_identity_mismatch");
+  }
+  return quickConnectAuthentication;
+}
+
 async function rejectsQuickConnectSecret(client, context, secret) {
   try {
     const result = await client.pollQuickConnect({
@@ -635,10 +643,14 @@ async function verifyIdentity(context, server, username, password, serverId) {
       secret: quickConnect.Secret,
     }),
   );
-  authenticationResult(quickConnectResult, serverId);
+  const quickConnectAuthentication = verifiedQuickConnectSession(
+    passwordAuthentication,
+    quickConnectResult,
+    serverId,
+  );
 
   return {
-    authentication: passwordAuthentication,
+    authentication: quickConnectAuthentication,
     checks: {
       invalidPasswordRejected: true,
       mismatchedQuickConnectSecretRejected: true,
