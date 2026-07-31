@@ -220,6 +220,8 @@ test("isolates and resource-bounds every rehearsal runtime", () => {
   assert.doesNotMatch(HARNESS_SOURCE, /"0\.0\.0\.0:/u);
   assert.match(HARNESS_SOURCE, /json \.NetworkSettings\.Ports/u);
   assert.doesNotMatch(HARNESS_SOURCE, /docker\(\["port"/u);
+  assert.match(HARNESS_SOURCE, /`\$\{operation\}_inspect`/u);
+  assert.match(HARNESS_SOURCE, /`\$\{operation\}_contract`/u);
   assert.match(
     HARNESS_SOURCE,
     /function runMaintenance[\s\S]*resources\.containers\.add\(name\)[\s\S]*resources\.containers\.delete\(name\)/u,

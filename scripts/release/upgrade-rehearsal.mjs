@@ -261,9 +261,9 @@ export function publishedLoopbackPort(value, operation) {
 function publishedGatewayUrl(container, operation) {
   const bindings = docker(
     ["container", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container],
-    operation,
+    `${operation}_inspect`,
   );
-  const port = publishedLoopbackPort(bindings, operation);
+  const port = publishedLoopbackPort(bindings, `${operation}_contract`);
   return new URL(`http://127.0.0.1:${port}/`);
 }
 
