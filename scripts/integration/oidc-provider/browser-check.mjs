@@ -2,7 +2,10 @@
 
 import { createRequire } from "node:module";
 
-import { waitForSemanticSessionThenCookie } from "./session-convergence.mjs";
+import {
+  readSessionFromBrowserOrigin,
+  waitForSemanticSessionThenCookie,
+} from "./session-convergence.mjs";
 
 const requireFromWeb = createRequire(new URL("../../../apps/web/package.json", import.meta.url));
 const { chromium } = requireFromWeb("@playwright/test");
@@ -104,6 +107,33 @@ async function currentSession(request) {
   return json(await request.get("/api/auth/session", { maxRedirects: 0 }), 200);
 }
 
+async function currentBrowserSession(page) {
+  let response;
+  try {
+    response = await readSessionFromBrowserOrigin(page);
+  } catch {
+    throw new BrowserCheckError();
+  }
+  if (response.status !== 200) {
+    const errorCode = response.body?.error?.code;
+    failureDetail = {
+      ...(typeof errorCode === "string" && /^[a-z][a-z0-9_]{2,63}$/u.test(errorCode)
+        ? { errorCode }
+        : {}),
+      ...(typeof response.requestId === "string" &&
+      /^[A-Za-z0-9._:-]{1,128}$/u.test(response.requestId)
+        ? { requestId: response.requestId }
+        : {}),
+      status: response.status,
+    };
+    throw new BrowserCheckError();
+  }
+  if (!response.body || typeof response.body !== "object" || Array.isArray(response.body)) {
+    throw new BrowserCheckError();
+  }
+  return response.body;
+}
+
 async function waitForLocalRevocation(request) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -200,7 +230,7 @@ function assertPendingPrincipal(session, issuer, expectedRole, expectedSubject, 
 }
 
 async function waitForPendingPrincipal(
-  request,
+  readSession,
   issuer,
   expectedRole,
   expectedSubject,
@@ -210,7 +240,7 @@ async function waitForPendingPrincipal(
   let lastFailureDetail = {};
   while (Date.now() < deadline) {
     try {
-      const session = await currentSession(request);
+      const session = await readSession();
       const identity = assertPendingPrincipal(
         session,
         issuer,
@@ -252,6 +282,7 @@ async function waitForSessionCookie(context, webOrigin, previousValue) {
 }
 
 async function waitForPendingPrincipalThenSessionCookie(
+  page,
   context,
   webOrigin,
   stage,
@@ -265,7 +296,7 @@ async function waitForPendingPrincipalThenSessionCookie(
     waitForSession: () => {
       currentStage = `${stage}_session`;
       return waitForPendingPrincipal(
-        context.request,
+        () => currentBrowserSession(page),
         issuer,
         expectedRole,
         expectedSubject,
@@ -393,7 +424,7 @@ async function run() {
     await completeAuthorization(page, startPath, webOrigin, "viewer_login");
     currentStage = "viewer_session";
     const { identity: viewerIdentity } = await waitForPendingPrincipal(
-      context.request,
+      () => currentBrowserSession(page),
       issuer,
       "viewer",
     );
@@ -429,6 +460,7 @@ async function run() {
       sessionCookie: mappedSessionCookie,
       sessionResult: { identity: mappedIdentity, session: mappedSession },
     } = await waitForPendingPrincipalThenSessionCookie(
+      page,
       context,
       webOrigin,
       "mapped",
@@ -465,6 +497,7 @@ async function run() {
     const {
       sessionResult: { session: remappedSession },
     } = await waitForPendingPrincipalThenSessionCookie(
+      page,
       context,
       webOrigin,
       "remapped",
