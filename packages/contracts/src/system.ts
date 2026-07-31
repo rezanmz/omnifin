@@ -195,6 +195,15 @@ export const systemStatusResponseSchema = z
   });
 export type SystemStatusResponse = z.infer<typeof systemStatusResponseSchema>;
 
+export const systemStatusEventCursorSchema = z.string().regex(/^system_event_[A-Za-z0-9_-]{22}$/u);
+
+export const systemStatusSnapshotEventSchema = z.strictObject({
+  cursor: systemStatusEventCursorSchema,
+  kind: z.literal("snapshot"),
+  status: systemStatusResponseSchema,
+});
+export type SystemStatusSnapshotEvent = z.infer<typeof systemStatusSnapshotEventSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -202,3 +211,6 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 }
 
 export const systemStatusResponseJsonSchema = withoutSchemaDialect(systemStatusResponseSchema);
+export const systemStatusSnapshotEventJsonSchema = withoutSchemaDialect(
+  systemStatusSnapshotEventSchema,
+);

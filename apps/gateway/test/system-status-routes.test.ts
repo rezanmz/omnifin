@@ -1,5 +1,8 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { systemStatusResponseSchema } from "@omnifin/contracts/system";
+import {
+  systemStatusResponseSchema,
+  systemStatusSnapshotEventSchema,
+} from "@omnifin/contracts/system";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -43,7 +46,13 @@ function sessionDependencies() {
   };
 }
 
-async function harness() {
+async function harness(eventDependencies?: {
+  connectionLifetimeMs?: number;
+  createCursor?: () => string;
+  heartbeatIntervalMs?: number;
+  pollIntervalMs?: number;
+  reconnectDelayMs?: number;
+}) {
   const config = testConfig();
   const readSystemHealth = vi.fn(async () => []);
   const readStorageCapacity = vi.fn(async () => [
@@ -64,6 +73,9 @@ async function harness() {
         service: input.service,
       }),
     },
+    ...(eventDependencies === undefined
+      ? {}
+      : { systemStatusEventDependencies: eventDependencies }),
   });
   app.database.db
     .insert(connectorConfigs)
@@ -163,6 +175,94 @@ async function harness() {
 }
 
 describe("system status routes", () => {
+  it("streams one strict private snapshot with bounded resumable SSE headers", async () => {
+    const fixture = await harness({
+      connectionLifetimeMs: 30,
+      createCursor: () => "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+      heartbeatIntervalMs: 10,
+      pollIntervalMs: 60_000,
+      reconnectDelayMs: 3_000,
+    });
+    try {
+      const response = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/system/status/events",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toBe("text/event-stream; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe("no-store, no-transform");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.headers["x-accel-buffering"]).toBe("no");
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+      expect(response.headers["x-frame-options"]).toBe("DENY");
+      expect(response.headers["permissions-policy"]).toContain("camera=()");
+      expect(response.body).toContain("retry: 3000\n\n");
+      expect(response.body).toContain("id: system_event_ABCDEFGHIJKLMNOPQRSTUV\n");
+      const dataLine = response.body.split("\n").find((line) => line.startsWith("data: "));
+      expect(dataLine).toBeDefined();
+      expect(
+        systemStatusSnapshotEventSchema.parse(JSON.parse(dataLine!.slice("data: ".length))),
+      ).toMatchObject({
+        cursor: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        status: { state: "complete", summary: { sources: 1 } },
+      });
+      expect(response.body).not.toMatch(/private\/media|private-radarr-key|radarr-main/u);
+      expect(fixture.readSystemHealth).toHaveBeenCalledOnce();
+      expect(fixture.readStorageCapacity).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("rejects an untrusted resume cursor before contacting a connector", async () => {
+    const fixture = await harness();
+    try {
+      const response = await fixture.app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${fixture.operator.sessionToken}`,
+          "last-event-id": "private-upstream-cursor",
+        },
+        method: "GET",
+        url: "/v1/system/status/events",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "system_status_event_cursor_invalid",
+      );
+      expect(fixture.readSystemHealth).not.toHaveBeenCalled();
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("denies viewers and anonymous callers before opening a live stream", async () => {
+    const fixture = await harness();
+    try {
+      const viewer = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/system/status/events",
+      });
+      const anonymous = await fixture.app.inject({
+        method: "GET",
+        url: "/v1/system/status/events",
+      });
+
+      expect(viewer.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(viewer.json()).error.code).toBe("permission_denied");
+      expect(anonymous.statusCode).toBe(401);
+      expect(apiErrorSchema.parse(anonymous.json()).error.code).toBe("authentication_required");
+      expect(fixture.readSystemHealth).not.toHaveBeenCalled();
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
   it("serves private, normalized system telemetry to operators", async () => {
     const fixture = await harness();
     try {

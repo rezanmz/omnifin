@@ -14,6 +14,20 @@ const ready: SystemStatusLoadOutcome = {
   status: "ready",
 };
 const staticClient: SystemStatusClient = { load: async () => ready };
+const liveClient: SystemStatusClient = {
+  load: async () => ready,
+  watch: (callbacks) => {
+    callbacks.onStatus("live");
+    return () => undefined;
+  },
+};
+const pollingClient: SystemStatusClient = {
+  load: async () => ready,
+  watch: (callbacks) => {
+    callbacks.onStatus("fallback");
+    return () => undefined;
+  },
+};
 
 const meta = {
   args: { client: staticClient, initialOutcome: ready, live: false },
@@ -38,6 +52,18 @@ export const Ready: Story = {
   },
 };
 export const ReadyLight: Story = { globals: { theme: "light" } };
+export const LiveUpdates: Story = {
+  args: { client: liveClient, live: true },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByText("Live")).toBeVisible();
+  },
+};
+export const PollingFallback: Story = {
+  args: { client: pollingClient, live: true },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByText("30s polling")).toBeVisible();
+  },
+};
 export const Degraded: Story = {
   args: {
     initialOutcome: {

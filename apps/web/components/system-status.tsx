@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   systemStatusClient,
   type SystemStatusClient,
+  type SystemStatusLiveStatus,
   type SystemStatusLoadOutcome,
 } from "../lib/system-status";
 import type { ThemePreference } from "../lib/theme";
@@ -381,11 +382,13 @@ function CapacityMeter({ storage }: { storage: StorageCapacity }) {
 }
 
 function ReadyStatus({
+  liveStatus,
   onRefresh,
   refreshing,
   stale,
   status,
 }: {
+  liveStatus: SystemStatusLiveStatus | "snapshot";
   onRefresh: () => void;
   refreshing: boolean;
   stale: boolean;
@@ -412,6 +415,23 @@ function ReadyStatus({
               <span>
                 <Activity aria-hidden="true" size={16} /> Updated{" "}
                 {formatTimestamp(status.generatedAt)}
+              </span>
+              <span
+                aria-label={`System status updates: ${
+                  liveStatus === "fallback" ? "30 second polling fallback" : liveStatus
+                }`}
+                aria-live="polite"
+                className={styles.liveState}
+                data-state={liveStatus}
+              >
+                <i aria-hidden="true" />
+                {liveStatus === "live"
+                  ? "Live"
+                  : liveStatus === "connecting"
+                    ? "Connecting"
+                    : liveStatus === "fallback"
+                      ? "30s polling"
+                      : "Snapshot"}
               </span>
               <button disabled={refreshing} onClick={onRefresh} type="button">
                 <RefreshCw aria-hidden="true" data-spinning={refreshing || undefined} size={16} />
@@ -512,6 +532,7 @@ export function SystemStatus({
   const [outcome, setOutcome] = useState<SystemStatusLoadOutcome | undefined>(initialOutcome);
   const [refreshing, setRefreshing] = useState(false);
   const [stale, setStale] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<SystemStatusLiveStatus>("connecting");
   const mounted = useRef(true);
   const outcomeRef = useRef<SystemStatusLoadOutcome | undefined>(initialOutcome);
   const requestController = useRef<AbortController | null>(null);
@@ -554,12 +575,40 @@ export function SystemStatus({
   }, [initialOutcome, refresh]);
 
   useEffect(() => {
-    if (!live) return;
+    if (!live || outcome?.status !== "ready" || !client.watch) return;
+    return client.watch({
+      onSnapshot: (event) => {
+        const current = outcomeRef.current;
+        if (!mounted.current || current?.status !== "ready") return;
+        requestController.current?.abort();
+        requestController.current = null;
+        const next: SystemStatusLoadOutcome = {
+          snapshot: { principal: current.snapshot.principal, status: event.status },
+          status: "ready",
+        };
+        outcomeRef.current = next;
+        setOutcome(next);
+        setRefreshing(false);
+        setStale(false);
+        setStreamStatus("live");
+      },
+      onStatus: setStreamStatus,
+    });
+  }, [client, live, outcome?.status]);
+
+  const liveStatus: SystemStatusLiveStatus | "snapshot" = !live
+    ? "snapshot"
+    : client.watch
+      ? streamStatus
+      : "fallback";
+
+  useEffect(() => {
+    if (!live || liveStatus === "live") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 30_000);
     return () => window.clearInterval(timer);
-  }, [live, refresh]);
+  }, [live, liveStatus, refresh]);
 
   const announcement = useMemo(() => {
     if (!outcome) return "Loading system telemetry.";
@@ -579,6 +628,7 @@ export function SystemStatus({
         {announcement}
       </span>
       <ReadyStatus
+        liveStatus={liveStatus}
         onRefresh={() => void refresh()}
         refreshing={refreshing}
         stale={stale}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
 
 import { demoSystemStatus, demoSystemStatusPrincipal } from "./system-status-demo";
-import { loadSystemStatus } from "./system-status";
+import { loadSystemStatus, watchSystemStatusEvents } from "./system-status";
 
 function json(value: unknown, status = 200) {
   return Promise.resolve(
@@ -21,6 +21,93 @@ const session = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("system status client", () => {
+  it("accepts one strict same-origin system-status snapshot event", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    const event = {
+      cursor: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot" as const,
+      status: demoSystemStatus,
+    };
+
+    const stop = watchSystemStatusEvents({ onSnapshot, onStatus }, (url) => {
+      expect(url).toBe("/api/system/status/events");
+      return source;
+    });
+    source.onopen?.(new Event("open"));
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify(event),
+        lastEventId: event.cursor,
+      }),
+    );
+
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledWith(event));
+    expect(onStatus).toHaveBeenNthCalledWith(1, "connecting");
+    expect(onStatus).toHaveBeenLastCalledWith("live");
+    expect(source.close).not.toHaveBeenCalled();
+
+    stop();
+    expect(source.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed to polling for an untrusted cursor or malformed payload", async () => {
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchSystemStatusEvents({ onSnapshot, onStatus }, () => source);
+
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          cursor: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+          kind: "snapshot",
+          status: demoSystemStatus,
+        }),
+        lastEventId: "system_event_ZYXWVUTSRQPONMLKJIHGFE",
+      }),
+    );
+
+    await vi.waitFor(() => expect(source.close).toHaveBeenCalledOnce());
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
+  it("rejects an oversized event before parsing and preserves transient reconnects", () => {
+    const onStatus = vi.fn();
+    const source = {
+      close: vi.fn(),
+      onerror: null as ((event: Event) => void) | null,
+      onmessage: null as ((event: MessageEvent<string>) => void) | null,
+      onopen: null as ((event: Event) => void) | null,
+    };
+    watchSystemStatusEvents({ onSnapshot: vi.fn(), onStatus }, () => source);
+
+    source.onerror?.(new Event("error"));
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(source.close).not.toHaveBeenCalled();
+
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: "x".repeat(512_001),
+        lastEventId: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+      }),
+    );
+    expect(source.close).toHaveBeenCalledOnce();
+    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+  });
+
   it("loads operator telemetry through same-origin authenticated requests", async () => {
     const fetchMock = vi
       .fn()
