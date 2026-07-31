@@ -1071,6 +1071,15 @@ test("expanded operations visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("dashboard-operations-expanded.png", { fullPage: true });
 });
 
+async function stabilizeAcquisitionTimelineVisual(page: Page) {
+  // Native backdrop sampling varies with GPU composition and the obscured dashboard.
+  // Keep component baselines deterministic without changing production glass rendering.
+  await page.addStyleTag({
+    content:
+      ".acquisition-timeline__glass { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--surface-card-solid) !important; }",
+  });
+}
+
 test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),
@@ -1085,11 +1094,7 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
   await expect(timeline).toBeVisible();
   await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  // Keep this component baseline independent from native backdrop sampling of the live dashboard.
-  await page.addStyleTag({
-    content:
-      ".acquisition-timeline__glass { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--surface-card-solid) !important; }",
-  });
+  await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-timeline.png");
 });
 
@@ -1108,7 +1113,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await timeline.getByRole("button", { name: "Review search" }).click();
   await expect(timeline.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  // Keep the component-state baseline independent from native backdrop sampling.
+  await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-recovery-confirmation.png");
 });
 
@@ -1127,7 +1132,7 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
   await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
   await expect(timeline.getByRole("button", { name: "Pause" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  // Keep the component-state baseline independent from native backdrop sampling.
+  await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-monitoring-confirmation.png");
 });
 
