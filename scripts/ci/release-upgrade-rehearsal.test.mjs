@@ -47,21 +47,30 @@ test("accepts exactly one structured IPv4 loopback port binding", () => {
     32_768,
   );
 
-  for (const binding of [
-    "null",
-    "[]",
-    "{}",
-    '{"4000/tcp":null}',
-    '{"4000/tcp":[{"HostIp":"0.0.0.0","HostPort":"32768"}]}',
-    '{"4000/tcp":[{"HostIp":"::1","HostPort":"32768"}]}',
-    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}',
-    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"65536"}]}',
-    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}',
-    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]}',
-    '{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}],"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
-    "not-json",
+  for (const [binding, category] of [
+    ["null", "map"],
+    ["[]", "map"],
+    ["{}", "binding_count"],
+    ['{"4000/tcp":null}', "binding_count"],
+    ['{"4000/tcp":[{"HostIp":"0.0.0.0","HostPort":"32768"}]}', "host_ip"],
+    ['{"4000/tcp":[{"HostIp":"::1","HostPort":"32768"}]}', "host_ip"],
+    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}', "host_port"],
+    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"65536"}]}', "host_port_range"],
+    ['{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}', "host_port"],
+    [
+      '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]}',
+      "binding_count",
+    ],
+    [
+      '{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}],"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
+      "other_port",
+    ],
+    ["not-json", null],
   ]) {
-    assert.throws(() => publishedLoopbackPort(binding, "gateway_port"), /gateway_port/u);
+    assert.throws(
+      () => publishedLoopbackPort(binding, "gateway_port"),
+      category ? new RegExp(`gateway_port_${category}`, "u") : /gateway_port/u,
+    );
   }
 });
 

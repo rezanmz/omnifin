@@ -233,7 +233,7 @@ export function publishedLoopbackPort(value, operation) {
     throw new RehearsalFailure(operation);
   }
   if (!ports || typeof ports !== "object" || Array.isArray(ports)) {
-    throw new RehearsalFailure(operation);
+    throw new RehearsalFailure(`${operation}_map`);
   }
   const bindings = ports["4000/tcp"];
   const hasOtherPublishedPort = Object.entries(ports).some(
@@ -241,20 +241,21 @@ export function publishedLoopbackPort(value, operation) {
       port !== "4000/tcp" &&
       !(portBindings === null || (Array.isArray(portBindings) && portBindings.length === 0)),
   );
-  if (
-    hasOtherPublishedPort ||
-    !Array.isArray(bindings) ||
-    bindings.length !== 1 ||
-    !bindings[0] ||
-    typeof bindings[0] !== "object" ||
-    bindings[0].HostIp !== "127.0.0.1" ||
-    typeof bindings[0].HostPort !== "string" ||
-    !/^[1-9]\d{0,4}$/u.test(bindings[0].HostPort)
-  ) {
-    throw new RehearsalFailure(operation);
+  if (hasOtherPublishedPort) throw new RehearsalFailure(`${operation}_other_port`);
+  if (!Array.isArray(bindings) || bindings.length !== 1) {
+    throw new RehearsalFailure(`${operation}_binding_count`);
+  }
+  if (!bindings[0] || typeof bindings[0] !== "object") {
+    throw new RehearsalFailure(`${operation}_binding_shape`);
+  }
+  if (bindings[0].HostIp !== "127.0.0.1") {
+    throw new RehearsalFailure(`${operation}_host_ip`);
+  }
+  if (typeof bindings[0].HostPort !== "string" || !/^[1-9]\d{0,4}$/u.test(bindings[0].HostPort)) {
+    throw new RehearsalFailure(`${operation}_host_port`);
   }
   const port = Number(bindings[0].HostPort);
-  if (port > 65_535) throw new RehearsalFailure(operation);
+  if (port > 65_535) throw new RehearsalFailure(`${operation}_host_port_range`);
   return port;
 }
 
