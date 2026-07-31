@@ -60,9 +60,9 @@ test("the fixture workflow uses the immutable official Jellyfin image", () => {
   const workflow = parse(
     readFileSync(new URL("../../.github/workflows/integration.yml", import.meta.url), "utf8"),
   );
-  const fixture = workflow.jobs["playback-fixture"];
-  assert.equal(fixture.name, "Isolated Jellyfin playback integration");
-  assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
+  const fixture = workflow.jobs["playback-media-fixture"];
+  assert.equal(fixture.name, "Generate copyright-free playback fixture");
+  assert.ok(workflow.jobs.gate.needs.includes("playback-media-fixture"));
   const imagePull = fixture.steps.find(
     (step) => step.name === "Pull immutable Jellyfin media runtime",
   );
@@ -70,11 +70,10 @@ test("the fixture workflow uses the immutable official Jellyfin image", () => {
   assert.equal(imagePull.run.replace(/\s+/gu, " ").trim(), `docker pull ${JELLYFIN_FIXTURE_IMAGE}`);
   const generation = fixture.steps.find((step) => step.name === "Generate and transcode media");
   assert.equal(generation.run, "pnpm fixture:media --output artifacts/media/playback-fixture");
-  const upload = fixture.steps.find((step) => step.name === "Upload sanitized fixture evidence");
-  assert.match(
-    upload.with.path,
-    /artifacts\/media\/playback-fixture\/playback-fixture-report\.json/u,
-  );
-  assert.match(upload.with.path, /artifacts\/integration\/jellyfin-playback\/report\.json/u);
-  assert.equal(upload.with["if-no-files-found"], "error");
+  const report = fixture.steps.find((step) => step.name === "Retain generated media report");
+  assert.equal(report.with.path, "artifacts/media/playback-fixture/playback-fixture-report.json");
+  assert.equal(report.with["if-no-files-found"], "error");
+  const media = fixture.steps.find((step) => step.name === "Upload generated media fixture");
+  assert.equal(media.with.path, "artifacts/media/playback-fixture");
+  assert.equal(media.with["retention-days"], 1);
 });

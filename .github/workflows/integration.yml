@@ -172,8 +172,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  playback-fixture:
-    name: Isolated Jellyfin playback integration
+  playback-media-fixture:
+    name: Generate copyright-free playback fixture
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -200,23 +200,85 @@ jobs:
           ghcr.io/jellyfin/jellyfin:10.11.11@sha256:45f648c382a0c8b552582fcea40e95cb17c5d475473a891cba0eb7523fb92112
       - name: Generate and transcode media
         run: pnpm fixture:media --output artifacts/media/playback-fixture
+      - name: Retain generated media report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generated-playback-fixture-report
+          path: artifacts/media/playback-fixture/playback-fixture-report.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload generated media fixture
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generated-playback-media-${{ github.run_id }}
+          path: artifacts/media/playback-fixture
+          if-no-files-found: error
+          retention-days: 1
+
+  playback-fixture:
+    name: Jellyfin compatibility (${{ matrix.label }})
+    needs: playback-media-fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - image: ghcr.io/jellyfin/jellyfin:10.10.7@sha256:e4d1dc5374344446a3a78e43dd211247f22afba84ea2e5a13cbe1a94e1ff2141
+            label: oldest-targeted
+            version: 10.10.7
+          - image: ghcr.io/jellyfin/jellyfin:10.11.11@sha256:45f648c382a0c8b552582fcea40e95cb17c5d475473a891cba0eb7523fb92112
+            label: latest-verified
+            version: 10.11.11
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Download generated media fixture
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: generated-playback-media-${{ github.run_id }}
+          path: artifacts/media/playback-fixture
       - name: Build playback connector
         run: pnpm --filter @omnifin/connectors... build
-      - name: Exercise isolated Jellyfin playback
+      - name: Pull immutable Jellyfin compatibility image
+        env:
+          JELLYFIN_IMAGE: ${{ matrix.image }}
+        run: docker pull "$JELLYFIN_IMAGE"
+      - name: Exercise Jellyfin identity and playback compatibility
+        env:
+          JELLYFIN_IMAGE: ${{ matrix.image }}
+          JELLYFIN_LABEL: ${{ matrix.label }}
+          JELLYFIN_VERSION: ${{ matrix.version }}
         run: >-
           pnpm fixture:jellyfin-playback
           --fixture artifacts/media/playback-fixture/omnifin-playback-fixture.mp4
-          --output artifacts/integration/jellyfin-playback/report.json
+          --output "artifacts/integration/jellyfin-playback/$JELLYFIN_LABEL/report.json"
+          --image "$JELLYFIN_IMAGE"
+          --expected-version "$JELLYFIN_VERSION"
       - name: Upload sanitized fixture evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: generated-playback-fixture-report
+          name: jellyfin-${{ matrix.label }}-compatibility-report
           path: |
-            artifacts/media/playback-fixture/playback-fixture-report.json
-            artifacts/integration/jellyfin-playback/report.json
+            artifacts/integration/jellyfin-playback/${{ matrix.label }}/report.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   download-client-fixtures:
     name: Isolated download-client integration (${{ matrix.service }})
@@ -408,6 +470,7 @@ jobs:
       - download-client-fixtures
       - integration
       - oidc-provider
+      - playback-media-fixture
       - playback-fixture
       - seerr-service-fixture
       - servarr-service-fixtures
