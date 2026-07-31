@@ -177,6 +177,7 @@ test("Jellyfin Quick Connect keeps protocol secrets server-side and polls by opa
   await page.goto("/login/jellyfin");
 
   const passwordMethod = page.getByRole("tab", { name: "Password sign in" });
+  await expect(passwordMethod).toBeEnabled();
   await passwordMethod.focus();
   await passwordMethod.press("ArrowRight");
   await expect(page.getByRole("tab", { name: "Quick Connect" })).toBeFocused();

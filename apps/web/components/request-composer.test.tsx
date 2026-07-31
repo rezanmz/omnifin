@@ -184,13 +184,14 @@ describe("request composer", () => {
       }),
     }));
     const onCreated = vi.fn();
+    const onOpenChange = vi.fn();
     const user = userEvent.setup();
     render(
       <RequestComposer
         client={client(create)}
         media={series}
         onCreated={onCreated}
-        onOpenChange={vi.fn()}
+        onOpenChange={onOpenChange}
         open
       />,
     );
@@ -219,6 +220,9 @@ describe("request composer", () => {
     expect(await screen.findByRole("heading", { name: "The signal is in motion" })).toBeVisible();
     expect(screen.getByText("#42")).toBeVisible();
     expect(onCreated).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onOpenChange).toHaveBeenCalledOnce();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("submits only opaque, user-bound choices for explicit Seerr routing", async () => {
