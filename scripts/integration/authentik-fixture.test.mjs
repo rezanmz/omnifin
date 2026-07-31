@@ -75,9 +75,11 @@ test("emits only the bounded, sanitized Authentik report contract", () => {
   const report = reportFor();
   assert.equal(report.passed, true);
   assert.equal(report.upstreamVersion, authentikFixture.version);
+  assert.equal(report.image, authentikFixture.image);
   assert.deepEqual(report.checks, authentikFixture.checks);
   assert.deepEqual(Object.keys(report).sort(), [
     "checks",
+    "image",
     "mode",
     "passed",
     "schemaVersion",
@@ -85,14 +87,15 @@ test("emits only the bounded, sanitized Authentik report contract", () => {
     "upstreamVersion",
   ]);
   const serialized = JSON.stringify(report);
-  assert.doesNotMatch(serialized, /https?:\/\/|@|-----BEGIN/iu);
+  assert.doesNotMatch(serialized, /https?:\/\/|-----BEGIN|private-token/iu);
   assert.throws(() => reportFor(["authorization_code_pkce"]), /fixture_checks_incomplete/u);
 
   const failure = failureReportFor("backchannel_send_failed");
   assert.equal(failure.passed, false);
   assert.deepEqual(failure.checks, []);
   assert.equal(failure.errorCategory, "backchannel_send_failed");
-  assert.doesNotMatch(JSON.stringify(failure), /https?:\/\/|@|-----BEGIN/iu);
+  assert.equal(failure.image, authentikFixture.image);
+  assert.doesNotMatch(JSON.stringify(failure), /https?:\/\/|-----BEGIN|private-token/iu);
   assert.throws(() => failureReportFor("invalid category"), /fixture_error_category_invalid/u);
 });
 
@@ -240,9 +243,17 @@ test("pins an isolated Authentik topology without privileged host mounts", () =>
     /^docker\.io\/library\/postgres:16-alpine@sha256:[a-f0-9]{64}$/u,
   );
   for (const service of [compose.services.server, compose.services.worker]) {
-    assert.match(service.image, /^ghcr\.io\/goauthentik\/server:2026\.5\.6@sha256:[a-f0-9]{64}$/u);
+    assert.equal(service.image, "${OMNIFIN_AUTHENTIK_IMAGE:?immutable Authentik image required}");
     assert.equal(service.restart, "no");
+    assert.deepEqual(service.cap_drop, ["ALL"]);
+    assert.deepEqual(service.security_opt, ["no-new-privileges:true"]);
   }
+  assert.match(
+    authentikFixture.image,
+    /^ghcr\.io\/goauthentik\/server:2026\.5\.6@sha256:[a-f0-9]{64}$/u,
+  );
+  assert.deepEqual(compose.networks.fixture, {});
+  assert.match(runnerSource, /OMNIFIN_AUTHENTIK_IMAGE: authentikFixture\.image/u);
   assert.equal(compose.services.server.environment.AUTHENTIK_ERROR_REPORTING__ENABLED, "false");
   assert.equal(compose.services.server.environment.AUTHENTIK_DISABLE_UPDATE_CHECK, "true");
   assert.match(JSON.stringify(compose.services.worker.environment), /BOOTSTRAP_PASSWORD_HASH/u);

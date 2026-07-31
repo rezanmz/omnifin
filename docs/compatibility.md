@@ -117,10 +117,21 @@ pending, so there is no verified live baseline.
 The stable release workflow applies the strict cumulative matrix declared by its
 reviewed phase profile. A Phase 0 release has no live compatibility claim; later
 profiles enter the same protected environment for every capability they claim, and
-`v1` requires the complete fixture and live service matrix. The weekly canary uses the
-protected configuration to evaluate new upstream releases and open a labelled
-compatibility issue on regression. Fixture results remain development evidence rather
-than a public support claim until live evidence records exact versions and dates.
+`v1` requires the complete fixture and live service matrix.
+
+The weekly and manually dispatched compatibility canary is separate from that protected live
+installation baseline. It uses no repository or environment secrets. At the start of each run it
+selects the newest product-specific stable version tag from each allowlisted repository, resolves
+that exact tag to an immutable digest, then
+starts fresh Jellyfin, Seerr, Servarr, download-client, Authentik, and generic OIDC fixtures on
+GitHub-hosted runners. The production adapters perform the established identity, playback,
+request, acquisition, subtitle, indexer, and queue checks. Each job fails if its container,
+network, or volume set is not restored after teardown. The retained aggregate contains only the
+commit, verification time, exact image references, observed versions, normalized checks, statuses,
+and bounded error categories. A main-branch regression opens or updates one labelled issue; a later
+green run closes it. Canary results remain disposable-fixture evidence rather than a public
+installation support claim until the separately protected live evidence records exact versions and
+dates.
 
 ## Reporting a compatibility problem
 

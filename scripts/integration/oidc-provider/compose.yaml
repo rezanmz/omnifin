@@ -2,7 +2,7 @@ name: omnifin-oidc-provider-fixture
 
 services:
   provider:
-    image: ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462
+    image: ${OMNIFIN_OIDC_PROVIDER_IMAGE:?immutable OIDC provider image required}
     command:
       - /usr/local/bin/dex
       - serve
@@ -11,6 +11,9 @@ services:
       - "127.0.0.1:${OMNIFIN_OIDC_PROVIDER_HTTP_PORT:?provider port required}:5556"
     read_only: true
     restart: "no"
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
     cap_drop:
       - ALL
     security_opt:

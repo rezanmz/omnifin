@@ -45,6 +45,10 @@ export default defineConfig({
             instances: [{ browser: "chromium" }],
             provider: playwright({}),
           },
+          // Story files share one real browser process. Capping file-level
+          // concurrency keeps animation frames and interaction retries
+          // deterministic on the two-core GitHub-hosted runner.
+          maxWorkers: 2,
           name: "storybook",
         },
       },

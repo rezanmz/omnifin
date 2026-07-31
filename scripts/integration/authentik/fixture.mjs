@@ -1,7 +1,15 @@
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
-const AUTHENTIK_VERSION = "2026.5.6";
+import { applyCompatibilityTargetOverride } from "../compatibility-targets.mjs";
+
+const authentikTarget = applyCompatibilityTargetOverride({
+  authentik: {
+    image:
+      "ghcr.io/goauthentik/server:2026.5.6@sha256:ed120caf710ccf82ef0026f0bc74e51615bc95ebff228a7a2d6fc60c441c3868",
+    version: "2026.5.6",
+  },
+}).authentik;
 export const PROVIDER_VALIDATION_MAX_ATTEMPTS = 10;
 export const PROVIDER_VALIDATION_MAX_WAIT_MS = 300_000;
 const PROVIDER_VALIDATION_JITTER_SECONDS = 6;
@@ -83,11 +91,12 @@ export function reportFor(checks = CHECKS) {
   }
   return {
     checks: [...CHECKS],
+    image: authentikTarget.image,
     mode: "isolated_fixture",
     passed: true,
     schemaVersion: 1,
     service: "authentik",
-    upstreamVersion: AUTHENTIK_VERSION,
+    upstreamVersion: authentikTarget.version,
   };
 }
 
@@ -98,11 +107,12 @@ export function failureReportFor(category) {
   return {
     checks: [],
     errorCategory: category,
+    image: authentikTarget.image,
     mode: "isolated_fixture",
     passed: false,
     schemaVersion: 1,
     service: "authentik",
-    upstreamVersion: AUTHENTIK_VERSION,
+    upstreamVersion: authentikTarget.version,
   };
 }
 
@@ -149,5 +159,6 @@ export function secretLeakDetected(logs, secrets) {
 
 export const authentikFixture = Object.freeze({
   checks: CHECKS,
-  version: AUTHENTIK_VERSION,
+  image: authentikTarget.image,
+  version: authentikTarget.version,
 });

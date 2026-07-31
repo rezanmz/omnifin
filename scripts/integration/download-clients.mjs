@@ -30,17 +30,31 @@ import {
   DockerImagePullError,
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
+import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
 
-export const DOWNLOAD_CLIENT_IMAGES = Object.freeze({
-  qbittorrent:
-    "ghcr.io/linuxserver/qbittorrent:5.2.0_v2.0.12-ls454@sha256:8bff8880f4e056c068ac6359de4cbcf44fb4811493cf15d83c1341fa05a515c0",
-  sabnzbd:
-    "ghcr.io/linuxserver/sabnzbd:5.0.4-ls263@sha256:f12cb77b4e16d2d60fc8226e433daf69884e83874d90447c6ff1d57ef4247d6f",
+const downloadClientTargets = applyCompatibilityTargetOverride({
+  qbittorrent: {
+    image:
+      "ghcr.io/linuxserver/qbittorrent:5.2.0_v2.0.12-ls454@sha256:8bff8880f4e056c068ac6359de4cbcf44fb4811493cf15d83c1341fa05a515c0",
+    version: "5.2.0",
+  },
+  sabnzbd: {
+    image:
+      "ghcr.io/linuxserver/sabnzbd:5.0.4-ls263@sha256:f12cb77b4e16d2d60fc8226e433daf69884e83874d90447c6ff1d57ef4247d6f",
+    version: "5.0.4",
+  },
 });
-const DOWNLOAD_CLIENT_VERSIONS = Object.freeze({
-  qbittorrent: "5.2.0",
-  sabnzbd: "5.0.4",
-});
+
+export const DOWNLOAD_CLIENT_IMAGES = Object.freeze(
+  Object.fromEntries(
+    Object.entries(downloadClientTargets).map(([service, target]) => [service, target.image]),
+  ),
+);
+const DOWNLOAD_CLIENT_VERSIONS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(downloadClientTargets).map(([service, target]) => [service, target.version]),
+  ),
+);
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -390,6 +404,8 @@ export function containerIsolationArguments(uid, gid) {
     `${uid}:${gid}`,
     "--security-opt",
     "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "--tmpfs",
     `/run:uid=${uid},gid=${gid},exec`,
   ];
