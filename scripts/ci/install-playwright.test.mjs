@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
@@ -6,6 +7,8 @@ import {
   DEFAULT_BACKOFF_MS,
   DEFAULT_TIMEOUT_MS,
   installPlaywright,
+  runPlaywrightInstallAttempt,
+  terminateProcessGroup,
 } from "./install-playwright.mjs";
 
 const success = Object.freeze({ code: 0, ok: true, reason: "success", signal: null });
@@ -73,4 +76,56 @@ test("rejects unknown or duplicate browser targets before spawning", async () =>
     /Duplicate Playwright browser target/u,
   );
   assert.equal(attempts, 0);
+});
+
+test("keeps a timed-out attempt pending until descendant processes are force-killed", async () => {
+  const child = new EventEmitter();
+  child.pid = 42;
+  let finishTermination;
+  const termination = new Promise((resolveTermination) => {
+    finishTermination = resolveTermination;
+  });
+  const attempt = runPlaywrightInstallAttempt(["chromium"], {
+    spawnProcess: () => child,
+    terminate: async () => termination,
+    timeoutMs: 1,
+  });
+
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
+  child.emit("exit", null, "SIGTERM");
+  let settled = false;
+  void attempt.then(() => {
+    settled = true;
+  });
+  await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+  assert.equal(settled, false);
+
+  finishTermination();
+  assert.deepEqual(await attempt, {
+    code: null,
+    ok: false,
+    reason: "timeout",
+    signal: "SIGTERM",
+  });
+});
+
+test("terminates the complete process group with a bounded graceful window", async () => {
+  const signals = [];
+  const delays = [];
+
+  await terminateProcessGroup(
+    { pid: 42 },
+    {
+      forceKillDelayMs: 250,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+      },
+      stop: (_child, signal) => {
+        signals.push(signal);
+      },
+    },
+  );
+
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(delays, [250]);
 });

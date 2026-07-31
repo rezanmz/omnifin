@@ -55,9 +55,38 @@ function stopProcessGroup(child, signal) {
   }
 }
 
-export function runPlaywrightInstallAttempt(browsers, { timeoutMs }) {
+export async function terminateProcessGroup(
+  child,
+  { forceKillDelayMs = FORCE_KILL_DELAY_MS, sleep = delay, stop = stopProcessGroup } = {},
+) {
+  let terminationError;
+  try {
+    stop(child, "SIGTERM");
+  } catch (error) {
+    terminationError = error;
+  }
+
+  try {
+    await sleep(forceKillDelayMs);
+  } catch (error) {
+    terminationError ??= error;
+  }
+
+  try {
+    stop(child, "SIGKILL");
+  } catch (error) {
+    terminationError ??= error;
+  }
+
+  if (terminationError) throw terminationError;
+}
+
+export function runPlaywrightInstallAttempt(
+  browsers,
+  { spawnProcess = spawn, terminate = terminateProcessGroup, timeoutMs },
+) {
   return new Promise((resolveAttempt) => {
-    const child = spawn(
+    const child = spawnProcess(
       "pnpm",
       ["--filter", "@omnifin/web", "exec", "playwright", "install", "--with-deps", ...browsers],
       {
@@ -67,30 +96,43 @@ export function runPlaywrightInstallAttempt(browsers, { timeoutMs }) {
       },
     );
 
-    let forceKillTimer;
+    let exitCode = null;
+    let exitSignal = null;
     let settled = false;
     let timedOut = false;
 
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      stopProcessGroup(child, "SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        stopProcessGroup(child, "SIGKILL");
-      }, FORCE_KILL_DELAY_MS);
+      void terminate(child).then(
+        () => {
+          settle({
+            code: exitCode,
+            ok: false,
+            reason: "timeout",
+            signal: exitSignal,
+          });
+        },
+        () => {
+          settle({ code: exitCode, ok: false, reason: "timeout", signal: exitSignal });
+        },
+      );
     }, timeoutMs);
 
     const settle = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
       resolveAttempt(Object.freeze(result));
     };
 
     child.once("error", () => {
+      if (timedOut) return;
       settle({ code: null, ok: false, reason: "spawn", signal: null });
     });
     child.once("exit", (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+      if (timedOut) return;
       settle({
         code,
         ok: code === 0 && !timedOut,

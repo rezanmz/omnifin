@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { readFileSync, rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 
@@ -11,7 +15,10 @@ import {
   hostContainerUser,
   isLibraryProbePending,
   jellyfinCompatibilityReport,
+  jellyfinFailureReport,
   jellyfinTarget,
+  JellyfinFixtureFailure,
+  preserveFixtureFailure,
   quickConnectAuthorizationQuery,
   restartPlaybackNegotiation,
   selectConnectorAddress,
@@ -23,6 +30,7 @@ const OLDEST_IMAGE =
   "ghcr.io/jellyfin/jellyfin:10.10.7@sha256:e4d1dc5374344446a3a78e43dd211247f22afba84ea2e5a13cbe1a94e1ff2141";
 const LATEST_IMAGE =
   "ghcr.io/jellyfin/jellyfin:10.11.11@sha256:45f648c382a0c8b552582fcea40e95cb17c5d475473a891cba0eb7523fb92112";
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 test("accepts only immutable official Jellyfin images bound to their exact version", () => {
   assert.deepEqual(jellyfinTarget(OLDEST_IMAGE, "10.10.7"), {
@@ -103,6 +111,120 @@ test("builds a closed compatibility report without retaining supplied secrets", 
     JSON.stringify(report),
     /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
   );
+});
+
+test("builds a stage-specific failure report without retaining failure causes", () => {
+  const primary = new JellyfinFixtureFailure("container_start_failed", {
+    cause: new Error("private-container-path /tmp/private-config"),
+  });
+  const cleanup = new JellyfinFixtureFailure("network_teardown_failed", {
+    cause: new Error("private-network-id"),
+  });
+
+  const report = jellyfinFailureReport({
+    error: preserveFixtureFailure(primary, cleanup),
+    image: OLDEST_IMAGE,
+    version: "10.10.7",
+  });
+
+  assert.deepEqual(report, {
+    error: {
+      cleanupCode: "network_teardown_failed",
+      code: "container_start_failed",
+      stage: "container_start",
+    },
+    image: OLDEST_IMAGE,
+    schemaVersion: 1,
+    serverVersion: "10.10.7",
+    status: "failed",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /private-container-path|private-config|private-network-id/u,
+  );
+});
+
+test("preserves the primary fixture failure and normalizes untrusted diagnostics", () => {
+  const primary = new JellyfinFixtureFailure("server_readiness_failed");
+  const retained = preserveFixtureFailure(
+    primary,
+    new JellyfinFixtureFailure("container_teardown_failed"),
+  );
+
+  assert.equal(retained, primary);
+  assert.equal(retained.code, "server_readiness_failed");
+  assert.equal(retained.cleanupCode, "container_teardown_failed");
+  assert.deepEqual(
+    jellyfinFailureReport({
+      error: new JellyfinFixtureFailure("private_access_token"),
+      image: LATEST_IMAGE,
+      version: "10.11.11",
+    }).error,
+    { code: "jellyfin_fixture_failed", stage: "exercise" },
+  );
+  assert.equal(
+    preserveFixtureFailure(primary, new Error("private-cleanup-message")).cleanupCode,
+    "cleanup_failed",
+  );
+});
+
+test("maps every Docker lifecycle boundary to a bounded diagnostic stage", () => {
+  const expectedStages = new Map([
+    ["network_create_failed", "network_create"],
+    ["container_start_failed", "container_start"],
+    ["published_port_discovery_failed", "container_start"],
+    ["server_readiness_failed", "readiness"],
+    ["container_stop_failed", "container_stop"],
+    ["container_teardown_failed", "teardown"],
+    ["network_teardown_failed", "teardown"],
+  ]);
+
+  for (const [code, stage] of expectedStages) {
+    assert.deepEqual(
+      jellyfinFailureReport({
+        error: new JellyfinFixtureFailure(code),
+        image: LATEST_IMAGE,
+        version: "10.11.11",
+      }).error,
+      { code, stage },
+    );
+  }
+});
+
+test("writes a sanitized failure artifact before exiting a failed fixture", () => {
+  const artifactDirectory = `artifacts/test/jellyfin-fixture-${randomUUID()}`;
+  const output = `${artifactDirectory}/report.json`;
+  const execution = spawnSync(
+    process.execPath,
+    [
+      "scripts/integration/jellyfin/playback.mjs",
+      "--fixture",
+      `${artifactDirectory}/private-missing-fixture.mp4`,
+      "--output",
+      output,
+      "--image",
+      LATEST_IMAGE,
+      "--expected-version",
+      "10.11.11",
+    ],
+    { cwd: REPOSITORY_ROOT, encoding: "utf8" },
+  );
+
+  try {
+    assert.equal(execution.status, 1);
+    const report = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, output), "utf8"));
+    assert.deepEqual(report, {
+      error: { code: "fixture_invalid", stage: "setup" },
+      image: LATEST_IMAGE,
+      schemaVersion: 1,
+      serverVersion: "10.11.11",
+      status: "failed",
+    });
+    assert.doesNotMatch(JSON.stringify(report), /private-missing-fixture|private-cleanup-message/u);
+    assert.match(execution.stderr, /"status":"failed"/u);
+  } finally {
+    rmSync(resolve(REPOSITORY_ROOT, dirname(output)), { force: true, recursive: true });
+  }
 });
 
 test("binds Quick Connect approval to the exact authenticated Jellyfin user", () => {
@@ -334,6 +456,9 @@ test("the protected fixture aggregate runs the supported Jellyfin version matrix
     playback.run,
     /artifacts\/integration\/jellyfin-playback\/\$JELLYFIN_LABEL\/report\.json/u,
   );
+  const upload = fixture.steps.find((step) => step.name === "Upload sanitized fixture evidence");
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with["if-no-files-found"], "error");
   assert.ok(workflow.jobs.gate.needs.includes("playback-media-fixture"));
   assert.ok(workflow.jobs.gate.needs.includes("playback-fixture"));
 });
