@@ -347,7 +347,7 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await mockDiscoverySearch(page);
   await page.goto("/");
 
-  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
   await search.click();
   await expect(search).toHaveAttribute("aria-expanded", "true");
   await search.fill("matrix");
@@ -366,6 +366,28 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await expect(search).toHaveValue("matrix");
 });
 
+test("command palette reveals only destinations allowed by the current session", async ({
+  page,
+}) => {
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
+  await search.click();
+  await expect(page.getByRole("option", { name: /Calendar/i })).toHaveAttribute(
+    "href",
+    "/calendar",
+  );
+  await expect(page.getByRole("option", { name: /Download queue/i })).toHaveCount(0);
+
+  await search.fill("d");
+  await expect(page.getByRole("option", { name: /Discover/i })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Download queue/i })).toHaveCount(0);
+  await expect(
+    page.getByText(/Keep typing to search movies, series, and people too/i),
+  ).toBeVisible();
+});
+
 test("media details preserve search context and expose a guarded request handoff", async ({
   page,
 }) => {
@@ -373,7 +395,7 @@ test("media details preserve search context and expose a guarded request handoff
   await mockDiscoveryDetails(page);
   await page.goto("/");
 
-  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
   const drawer = page.locator("dialog.media-detail");

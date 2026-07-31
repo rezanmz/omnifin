@@ -27,7 +27,7 @@ function GlobalSearchPlaceholder({
     <div className="global-search" data-liquid-glass>
       <Search aria-hidden="true" className="global-search__icon" size={18} strokeWidth={1.7} />
       <label className="sr-only" htmlFor="global-search-placeholder">
-        Search movies, series, and people
+        Search media and commands
       </label>
       <input
         aria-autocomplete="list"
@@ -35,6 +35,7 @@ function GlobalSearchPlaceholder({
         aria-controls="global-search-results"
         aria-expanded="false"
         aria-haspopup="listbox"
+        aria-keyshortcuts="Meta+K Control+K"
         autoComplete="off"
         data-directional-item
         disabled={!interactive}
