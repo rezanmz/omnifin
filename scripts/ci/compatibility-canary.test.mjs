@@ -195,7 +195,7 @@ test("fails closed when latest has no stable version tag at the same digest", ()
           return execution;
         },
       }),
-    /stable_tag_unresolved/u,
+    (error) => error.code === "stable_tag_unresolved" && error.service === "authentik",
   );
 });
 
@@ -359,6 +359,7 @@ test("runs the self-contained canary with minimal permissions and no configured 
   assert.ok(workflow.on.schedule);
   assert.notEqual(workflow.on.workflow_dispatch, undefined);
   assert.equal(jobs.resolve.name, "Resolve latest stable upstream images");
+  assert.deepEqual(jobs.media.needs, ["resolve"]);
   assert.equal(jobs.canary.strategy["fail-fast"], false);
   assert.ok(jobs.canary.strategy["max-parallel"] <= 3);
   assert.deepEqual(jobs.canary.strategy.matrix.include.map(({ service }) => service).sort(), [

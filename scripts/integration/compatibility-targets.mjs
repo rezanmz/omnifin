@@ -14,10 +14,12 @@ const MAX_STABLE_TAG_CANDIDATES = 16;
 const TARGET_KEYS = "image,service,source,version";
 
 export class CompatibilityTargetError extends Error {
-  constructor(code, options) {
-    super(code, options);
+  constructor(code, { cause, service } = {}) {
+    super(code, { cause });
     this.name = "CompatibilityTargetError";
     this.code = code;
+    this.service =
+      typeof service === "string" && /^[a-z][a-z0-9_]{0,31}$/u.test(service) ? service : null;
   }
 }
 
@@ -207,9 +209,16 @@ export function resolveCompatibilityTargets({
   const report = {
     resolvedAt,
     schemaVersion: 1,
-    targets: COMPATIBILITY_TARGET_DEFINITIONS.map((definition) =>
-      targetForDefinition(definition, execute),
-    ),
+    targets: COMPATIBILITY_TARGET_DEFINITIONS.map((definition) => {
+      try {
+        return targetForDefinition(definition, execute);
+      } catch (error) {
+        throw new CompatibilityTargetError(
+          error instanceof CompatibilityTargetError ? error.code : "registry_resolution_failed",
+          { cause: error, service: definition.service },
+        );
+      }
+    }),
   };
   return validateCompatibilityTargets(report);
 }
@@ -360,7 +369,8 @@ if (import.meta.url === invokedPath) {
   main().catch((error) => {
     const code =
       error instanceof CompatibilityTargetError ? error.code : "compatibility_resolution_failed";
-    process.stderr.write(`${JSON.stringify({ code, status: "failed" })}\n`);
+    const service = error instanceof CompatibilityTargetError ? error.service : null;
+    process.stderr.write(`${JSON.stringify({ code, service, status: "failed" })}\n`);
     process.exitCode = 1;
   });
 }

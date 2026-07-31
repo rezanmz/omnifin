@@ -46,6 +46,8 @@ jobs:
 
   media:
     name: Generate compatibility media fixture
+    needs:
+      - resolve
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
