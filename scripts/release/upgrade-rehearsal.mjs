@@ -225,13 +225,41 @@ async function waitForHealthy(container, operation) {
   throw new RehearsalFailure(operation);
 }
 
-function publishedGatewayUrl(container, operation) {
-  const output = docker(["port", container, "4000/tcp"], operation);
-  const match = output.match(/^127\.0\.0\.1:(\d{1,5})$/u);
-  const port = Number(match?.[1]);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+export function publishedLoopbackPort(value, operation) {
+  let bindings;
+  try {
+    bindings = JSON.parse(value);
+  } catch {
     throw new RehearsalFailure(operation);
   }
+  if (
+    !Array.isArray(bindings) ||
+    bindings.length !== 1 ||
+    !bindings[0] ||
+    typeof bindings[0] !== "object" ||
+    bindings[0].HostIp !== "127.0.0.1" ||
+    typeof bindings[0].HostPort !== "string" ||
+    !/^[1-9]\d{0,4}$/u.test(bindings[0].HostPort)
+  ) {
+    throw new RehearsalFailure(operation);
+  }
+  const port = Number(bindings[0].HostPort);
+  if (port > 65_535) throw new RehearsalFailure(operation);
+  return port;
+}
+
+function publishedGatewayUrl(container, operation) {
+  const bindings = docker(
+    [
+      "container",
+      "inspect",
+      "--format",
+      '{{json (index .NetworkSettings.Ports "4000/tcp")}}',
+      container,
+    ],
+    operation,
+  );
+  const port = publishedLoopbackPort(bindings, operation);
   return new URL(`http://127.0.0.1:${port}/`);
 }
 

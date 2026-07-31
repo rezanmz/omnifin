@@ -7,6 +7,7 @@ import { parse } from "yaml";
 import {
   failedUpgradeRehearsalReport,
   immutableOmnifinImage,
+  publishedLoopbackPort,
   upgradeRehearsalReport,
 } from "../release/upgrade-rehearsal.mjs";
 
@@ -35,6 +36,27 @@ test("accepts only immutable public Omnifin image digests", () => {
       ),
     /image_reference_invalid/u,
   );
+});
+
+test("accepts exactly one structured IPv4 loopback port binding", () => {
+  assert.equal(
+    publishedLoopbackPort('[{"HostIp":"127.0.0.1","HostPort":"32768"}]', "gateway_port"),
+    32_768,
+  );
+
+  for (const binding of [
+    "null",
+    "[]",
+    '[{"HostIp":"0.0.0.0","HostPort":"32768"}]',
+    '[{"HostIp":"::1","HostPort":"32768"}]',
+    '[{"HostIp":"127.0.0.1","HostPort":"0"}]',
+    '[{"HostIp":"127.0.0.1","HostPort":"65536"}]',
+    '[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]',
+    '[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]',
+    "not-json",
+  ]) {
+    assert.throws(() => publishedLoopbackPort(binding, "gateway_port"), /gateway_port/u);
+  }
 });
 
 test("builds a closed upgrade and rollback report", () => {
@@ -190,6 +212,8 @@ test("isolates and resource-bounds every rehearsal runtime", () => {
   }
   assert.equal((HARNESS_SOURCE.match(/"127\.0\.0\.1::4000"/gu) ?? []).length, 1);
   assert.doesNotMatch(HARNESS_SOURCE, /"0\.0\.0\.0:/u);
+  assert.match(HARNESS_SOURCE, /\.NetworkSettings\.Ports "4000\/tcp"/u);
+  assert.doesNotMatch(HARNESS_SOURCE, /docker\(\["port"/u);
   assert.match(
     HARNESS_SOURCE,
     /function runMaintenance[\s\S]*resources\.containers\.add\(name\)[\s\S]*resources\.containers\.delete\(name\)/u,
