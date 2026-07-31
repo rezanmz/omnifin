@@ -2,6 +2,8 @@
 
 import { createRequire } from "node:module";
 
+import { waitForSemanticSessionThenCookie } from "./session-convergence.mjs";
+
 const requireFromWeb = createRequire(new URL("../../../apps/web/package.json", import.meta.url));
 const { chromium } = requireFromWeb("@playwright/test");
 
@@ -249,6 +251,34 @@ async function waitForSessionCookie(context, webOrigin, previousValue) {
   throw new BrowserCheckError();
 }
 
+async function waitForPendingPrincipalThenSessionCookie(
+  context,
+  webOrigin,
+  stage,
+  issuer,
+  expectedRole,
+  expectedSubject,
+  expectedUserId,
+  previousCookieValue,
+) {
+  return waitForSemanticSessionThenCookie({
+    waitForSession: () => {
+      currentStage = `${stage}_session`;
+      return waitForPendingPrincipal(
+        context.request,
+        issuer,
+        expectedRole,
+        expectedSubject,
+        expectedUserId,
+      );
+    },
+    waitForCookie: () => {
+      currentStage = `${stage}_cookie`;
+      return waitForSessionCookie(context, webOrigin, previousCookieValue);
+    },
+  });
+}
+
 async function run() {
   const webOrigin = required("OMNIFIN_FIXTURE_WEB_ORIGIN");
   const issuer = required("OMNIFIN_FIXTURE_OIDC_ISSUER");
@@ -395,15 +425,18 @@ async function run() {
 
     currentStage = "mapped_login";
     await completeAuthorization(page, startPath, webOrigin, "mapped_login");
-    currentStage = "mapped_cookie";
-    const mappedSessionCookie = await waitForSessionCookie(context, webOrigin, viewerSessionCookie);
-    currentStage = "mapped_session";
-    const { identity: mappedIdentity, session: mappedSession } = await waitForPendingPrincipal(
-      context.request,
+    const {
+      sessionCookie: mappedSessionCookie,
+      sessionResult: { identity: mappedIdentity, session: mappedSession },
+    } = await waitForPendingPrincipalThenSessionCookie(
+      context,
+      webOrigin,
+      "mapped",
       issuer,
       "admin",
       viewerIdentity.subject,
       viewerIdentity.userId,
+      viewerSessionCookie,
     );
     assert(mappedIdentity.userId === mappedSession.principal?.userId);
 
@@ -429,15 +462,17 @@ async function run() {
 
     currentStage = "remapped_login";
     await completeAuthorization(page, startPath, webOrigin, "remapped_login");
-    currentStage = "remapped_cookie";
-    await waitForSessionCookie(context, webOrigin, mappedSessionCookie);
-    currentStage = "remapped_session";
-    const { session: remappedSession } = await waitForPendingPrincipal(
-      context.request,
+    const {
+      sessionResult: { session: remappedSession },
+    } = await waitForPendingPrincipalThenSessionCookie(
+      context,
+      webOrigin,
+      "remapped",
       issuer,
       "operator",
       mappedIdentity.subject,
       mappedIdentity.userId,
+      mappedSessionCookie,
     );
 
     currentStage = "authorization_code_pkce";
