@@ -14,7 +14,10 @@ import {
   secretLeakDetected,
   selectPrivateHost,
 } from "./oidc-provider/fixture.mjs";
-import { waitForSemanticSessionThenCookie } from "./oidc-provider/session-convergence.mjs";
+import {
+  readSessionFromBrowserOrigin,
+  waitForSemanticSessionThenCookie,
+} from "./oidc-provider/session-convergence.mjs";
 
 const composeSource = readFileSync(
   new URL("./oidc-provider/compose.yaml", import.meta.url),
@@ -151,6 +154,9 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.match(browserSource, /updatedMapping\.revokedSessions === 1/u);
   assert.match(browserSource, /"operator",\s*mappedIdentity\.subject/u);
   assert.match(browserSource, /SESSION_CONVERGENCE_TIMEOUT_MS = 10_000/u);
+  assert.match(browserSource, /readSessionFromBrowserOrigin/u);
+  assert.match(browserSource, /waitForPendingPrincipal\(\s*\(\) => currentBrowserSession\(page\)/u);
+  assert.doesNotMatch(browserSource, /waitForPendingPrincipal\(\s*context\.request/u);
   assert.match(browserSource, /waitForPendingPrincipal/u);
   assert.match(browserSource, /waitForSessionCookie/u);
   assert.equal(
@@ -224,4 +230,44 @@ test("does not inspect cookies when semantic session convergence fails", async (
     /session_not_ready/u,
   );
   assert.equal(cookieInspected, false);
+});
+
+test("reads post-callback session state through the authenticated browser origin", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  const session = {
+    csrfToken: "fixture-csrf",
+    principal: { accountState: "pending_link", role: "admin" },
+  };
+  globalThis.fetch = async (input, init) => {
+    requests.push({ init, input });
+    return new Response(JSON.stringify(session), {
+      headers: { "content-type": "application/json", "x-request-id": "fixture-request" },
+      status: 200,
+    });
+  };
+
+  try {
+    const page = {
+      evaluate: async (operation) => operation(),
+    };
+    assert.deepEqual(await readSessionFromBrowserOrigin(page), {
+      body: session,
+      requestId: "fixture-request",
+      status: 200,
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.deepEqual(requests, [
+    {
+      init: {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      },
+      input: "/api/auth/session",
+    },
+  ]);
 });

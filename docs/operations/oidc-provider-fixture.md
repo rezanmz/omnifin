@@ -36,6 +36,9 @@ Omit `--skip-build` to let the harness build the workspace itself. The browser c
 - reuse of the immutable `(issuer, sub)` identity across sign-ins;
 - JIT provisioning as `viewer` with media access denied pending Jellyfin pairing;
 - elevation only after an explicit `groups` role mapping is configured;
+- mapped and remapped session convergence read through the post-callback browser origin before the
+  harness inspects the rotated HttpOnly cookie, preventing a separate request context from
+  supplying stale authentication state under runner load;
 - local session revocation and a same-origin logout redirect when no provider logout endpoint is
   advertised; and
 - absence of generated client, recovery, and encryption secrets from captured browser, application,
