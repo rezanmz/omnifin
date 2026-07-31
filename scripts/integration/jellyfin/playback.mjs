@@ -40,12 +40,140 @@ const SAFE_CONNECTOR_FAILURE_CODES = new Set([
 ]);
 const TRANSIENT_RESTART_NEGOTIATION_CODES = new Set(["response_invalid", "timeout", "unreachable"]);
 
-class JellyfinFixtureFailure extends Error {
+const REPORTABLE_FAILURE_CODES = new Set([
+  "authentication_invalid",
+  "compatibility_report_invalid",
+  "cleanup_failed",
+  "connector_address_unavailable",
+  "container_failed",
+  "container_port_invalid",
+  "container_start_failed",
+  "container_stop_failed",
+  "container_teardown_failed",
+  "diagnostic_stage_invalid",
+  "direct_negotiation_invalid",
+  "direct_range_invalid",
+  "fixture_invalid",
+  "hls_segment_invalid",
+  "host_identity_unavailable",
+  "identity_public_info_invalid",
+  "invalid_password_accepted",
+  "jellyfin_fixture_failed",
+  "jellyfin_target_invalid",
+  "library_item_invalid",
+  "library_scan_timeout",
+  "library_streams_invalid",
+  "manifest_invalid",
+  "network_create_failed",
+  "network_teardown_failed",
+  "path_invalid",
+  "progress_invalid",
+  "published_port_discovery_failed",
+  "quick_connect_disabled",
+  "quick_connect_identity_mismatch",
+  "quick_connect_state_invalid",
+  "report_write_failed",
+  "response_invalid",
+  "restart_playback_invalid",
+  "restart_retry_policy_invalid",
+  "restart_state_invalid",
+  "server_configuration_invalid",
+  "server_info_invalid",
+  "server_readiness_failed",
+  "server_start_timeout",
+  "stream_too_large",
+  "temporary_teardown_failed",
+  "track_selection_invalid",
+  "transcode_negotiation_invalid",
+  "upstream_rejected",
+  "upstream_unreachable",
+  "usage_invalid",
+]);
+const CONNECTOR_DIAGNOSTIC_PATTERN = new RegExp(
+  `^(?:${[
+    "direct_negotiation",
+    "direct_range",
+    "hls_manifest_read",
+    "hls_manifest_target",
+    "hls_segment_open",
+    "hls_segment_read",
+    "identity_public_info",
+    "password_authentication",
+    "playback_report_progress",
+    "playback_report_started",
+    "playback_report_stopped",
+    "quick_connect_authentication",
+    "quick_connect_authorize",
+    "quick_connect_capability",
+    "quick_connect_initiate",
+    "quick_connect_poll",
+    "restart_negotiation",
+    "transcode_negotiation",
+  ].join("|")})(?:_(?:${[...SAFE_CONNECTOR_FAILURE_CODES].join("|")}))?$`,
+  "u",
+);
+const SETUP_FAILURE_CODES = new Set([
+  "connector_address_unavailable",
+  "fixture_invalid",
+  "host_identity_unavailable",
+  "jellyfin_target_invalid",
+  "path_invalid",
+  "usage_invalid",
+]);
+const TEARDOWN_FAILURE_CODES = new Set([
+  "cleanup_failed",
+  "container_teardown_failed",
+  "network_teardown_failed",
+  "report_write_failed",
+  "temporary_teardown_failed",
+]);
+
+export class JellyfinFixtureFailure extends Error {
   constructor(code, options) {
     super(code, options);
     this.name = "JellyfinFixtureFailure";
     this.code = code;
+    this.cleanupCode = undefined;
   }
+}
+
+function reportableFailureCode(error) {
+  if (!(error instanceof JellyfinFixtureFailure)) return "jellyfin_fixture_failed";
+  if (REPORTABLE_FAILURE_CODES.has(error.code) || CONNECTOR_DIAGNOSTIC_PATTERN.test(error.code)) {
+    return error.code;
+  }
+  return "jellyfin_fixture_failed";
+}
+
+function failureStage(code) {
+  if (SETUP_FAILURE_CODES.has(code)) return "setup";
+  if (code === "network_create_failed") return "network_create";
+  if (
+    code === "container_failed" ||
+    code === "container_port_invalid" ||
+    code === "container_start_failed" ||
+    code === "published_port_discovery_failed"
+  ) {
+    return "container_start";
+  }
+  if (code === "server_readiness_failed" || code === "server_start_timeout") return "readiness";
+  if (code === "container_stop_failed") return "container_stop";
+  if (TEARDOWN_FAILURE_CODES.has(code)) return "teardown";
+  return "exercise";
+}
+
+function normalizedFixtureFailure(error) {
+  if (error instanceof JellyfinFixtureFailure && reportableFailureCode(error) === error.code) {
+    return error;
+  }
+  return new JellyfinFixtureFailure("jellyfin_fixture_failed", { cause: error });
+}
+
+export function preserveFixtureFailure(primaryError, cleanupError) {
+  const primary = normalizedFixtureFailure(primaryError);
+  const cleanupCode = reportableFailureCode(cleanupError);
+  primary.cleanupCode = cleanupCode === "jellyfin_fixture_failed" ? "cleanup_failed" : cleanupCode;
+  return primary;
 }
 
 export function hostContainerUser(uid, gid) {
@@ -166,6 +294,26 @@ export function jellyfinCompatibilityReport(input) {
   };
 }
 
+export function jellyfinFailureReport(input) {
+  const target = jellyfinTarget(input.image, input.version);
+  const failure = normalizedFixtureFailure(input.error);
+  const code = reportableFailureCode(failure);
+  const cleanupCode = failure.cleanupCode;
+  return {
+    error: {
+      ...(typeof cleanupCode === "string" && TEARDOWN_FAILURE_CODES.has(cleanupCode)
+        ? { cleanupCode }
+        : {}),
+      code,
+      stage: failureStage(code),
+    },
+    image: target.image,
+    schemaVersion: 1,
+    serverVersion: target.version,
+    status: "failed",
+  };
+}
+
 export function quickConnectAuthorizationQuery(code, userId) {
   if (!/^\d{6}$/u.test(code) || !IDENTIFIER_PATTERN.test(userId)) {
     throw new JellyfinFixtureFailure("quick_connect_state_invalid");
@@ -212,7 +360,9 @@ function repositoryPath(candidate) {
   return path;
 }
 
-function docker(arguments_, captureOutput = false) {
+function docker(arguments_, options = {}) {
+  const captureOutput = options.captureOutput === true;
+  const failureCode = options.failureCode ?? "container_failed";
   try {
     return execFileSync("docker", arguments_, {
       cwd: REPOSITORY_ROOT,
@@ -222,7 +372,7 @@ function docker(arguments_, captureOutput = false) {
       timeout: 180_000,
     });
   } catch (error) {
-    throw new JellyfinFixtureFailure("container_failed", { cause: error });
+    throw new JellyfinFixtureFailure(failureCode, { cause: error });
   }
 }
 
@@ -285,8 +435,19 @@ async function waitForHealthy(baseUrl) {
   throw new JellyfinFixtureFailure("server_start_timeout");
 }
 
+async function verifyServerReadiness(baseUrl) {
+  try {
+    await waitForHealthy(baseUrl);
+  } catch (error) {
+    throw new JellyfinFixtureFailure("server_readiness_failed", { cause: error });
+  }
+}
+
 function publishedPort(containerName) {
-  const output = docker(["port", containerName, "8096/tcp"], true);
+  const output = docker(["port", containerName, "8096/tcp"], {
+    captureOutput: true,
+    failureCode: "published_port_discovery_failed",
+  });
   const match = output.match(/(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]):(\d{1,5})/u);
   const port = Number(match?.[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -312,39 +473,45 @@ export function selectConnectorAddress(interfaces = networkInterfaces()) {
 }
 
 function startContainer(context) {
-  docker([
-    "run",
-    "--detach",
-    "--rm",
-    "--name",
-    context.containerName,
-    "--network",
-    context.networkName,
-    "--user",
-    context.containerUser,
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-    "--pids-limit",
-    "512",
-    "--memory",
-    "1g",
-    "--cpus",
-    "2",
-    "--read-only",
-    "--tmpfs",
-    "/tmp:rw,noexec,nosuid,size=256m,mode=1777",
-    "--publish",
-    "0.0.0.0::8096",
-    "--mount",
-    `type=bind,src=${context.configDirectory},dst=/config`,
-    "--mount",
-    `type=bind,src=${context.cacheDirectory},dst=/cache`,
-    "--mount",
-    `type=bind,src=${context.mediaDirectory},dst=/media,readonly`,
-    context.target.image,
-  ]);
+  docker(
+    [
+      "run",
+      "--detach",
+      "--rm",
+      "--name",
+      context.containerName,
+      "--network",
+      context.networkName,
+      "--user",
+      context.containerUser,
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--pids-limit",
+      "512",
+      "--memory",
+      "1g",
+      "--cpus",
+      "2",
+      "--read-only",
+      "--tmpfs",
+      "/tmp:rw,noexec,nosuid,size=256m,mode=1777",
+      "--publish",
+      "0.0.0.0::8096",
+      "--mount",
+      `type=bind,src=${context.configDirectory},dst=/config`,
+      "--mount",
+      `type=bind,src=${context.cacheDirectory},dst=/cache`,
+      "--mount",
+      `type=bind,src=${context.mediaDirectory},dst=/media,readonly`,
+      context.target.image,
+    ],
+    { failureCode: "container_start_failed" },
+  );
+}
+
+function containerServer(context) {
   const port = publishedPort(context.containerName);
   return {
     connectorUrl: new URL(`http://${context.connectorAddress}:${port}/`),
@@ -352,7 +519,7 @@ function startContainer(context) {
   };
 }
 
-function stopContainer(containerName) {
+function stopContainer(containerName, failureCode) {
   try {
     execFileSync("docker", ["stop", "--time", "15", containerName], {
       cwd: REPOSITORY_ROOT,
@@ -360,8 +527,8 @@ function stopContainer(containerName) {
       stdio: ["ignore", "ignore", "ignore"],
       timeout: 30_000,
     });
-  } catch {
-    // A failed or already-exited --rm container has no state left to preserve.
+  } catch (error) {
+    throw new JellyfinFixtureFailure(failureCode, { cause: error });
   }
 }
 
@@ -850,11 +1017,17 @@ async function serverInfo(baseUrl, expectedVersion) {
 }
 
 async function prepareContext(fixturePath, target) {
-  const fixtureMetadata = await lstat(fixturePath);
+  let fixtureMetadata;
+  let fixtureSize;
+  try {
+    fixtureMetadata = await lstat(fixturePath);
+    fixtureSize = (await stat(fixturePath)).size;
+  } catch (error) {
+    throw new JellyfinFixtureFailure("fixture_invalid", { cause: error });
+  }
   if (!fixtureMetadata.isFile() || fixtureMetadata.isSymbolicLink()) {
     throw new JellyfinFixtureFailure("fixture_invalid");
   }
-  const fixtureSize = (await stat(fixturePath)).size;
   if (fixtureSize < 100_000 || fixtureSize > 12 * 1_024 * 1_024) {
     throw new JellyfinFixtureFailure("fixture_invalid");
   }
@@ -916,12 +1089,17 @@ async function main(options) {
   const password = randomBytes(32).toString("base64url");
   let running = false;
   let networkCreated = false;
+  let primaryFailure = null;
+  let successfulReport;
   try {
-    docker(["network", "create", "--driver", "bridge", context.networkName]);
+    docker(["network", "create", "--driver", "bridge", context.networkName], {
+      failureCode: "network_create_failed",
+    });
     networkCreated = true;
-    const firstServer = startContainer(context);
+    startContainer(context);
     running = true;
-    await waitForHealthy(firstServer.loopbackUrl);
+    const firstServer = containerServer(context);
+    await verifyServerReadiness(firstServer.loopbackUrl);
     const firstInfo = await serverInfo(firstServer.loopbackUrl, context.target.version);
     await initializeServer(firstServer.loopbackUrl, username, password, context.deviceId);
     const identity = await verifyIdentity(context, firstServer, username, password, firstInfo.id);
@@ -935,11 +1113,12 @@ async function main(options) {
       item.id,
     );
 
-    stopContainer(context.containerName);
+    stopContainer(context.containerName, "container_stop_failed");
     running = false;
-    const secondServer = startContainer(context);
+    startContainer(context);
     running = true;
-    await waitForHealthy(secondServer.loopbackUrl);
+    const secondServer = containerServer(context);
+    await verifyServerReadiness(secondServer.loopbackUrl);
     const secondInfo = await serverInfo(secondServer.loopbackUrl, context.target.version);
     if (secondInfo.id !== firstInfo.id) throw new JellyfinFixtureFailure("restart_state_invalid");
     const secondAuthentication = await authenticate(
@@ -978,7 +1157,7 @@ async function main(options) {
       throw new JellyfinFixtureFailure("restart_playback_invalid");
     }
 
-    const report = jellyfinCompatibilityReport({
+    successfulReport = jellyfinCompatibilityReport({
       identityChecks: identity.checks,
       image: context.target.image,
       persistedSeconds,
@@ -987,21 +1166,79 @@ async function main(options) {
       restartPosition,
       version: secondInfo.version,
     });
-    await writeReport(options.outputPath, report);
-    process.stdout.write(`${JSON.stringify(report)}\n`);
+  } catch (error) {
+    primaryFailure = normalizedFixtureFailure(error);
+    throw primaryFailure;
   } finally {
-    if (running) stopContainer(context.containerName);
-    if (networkCreated) docker(["network", "rm", context.networkName]);
-    await rm(context.temporaryDirectory, { force: true, recursive: true });
+    const cleanupFailures = [];
+    if (running) {
+      try {
+        stopContainer(context.containerName, "container_teardown_failed");
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (networkCreated) {
+      try {
+        docker(["network", "rm", context.networkName], {
+          failureCode: "network_teardown_failed",
+        });
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    try {
+      await rm(context.temporaryDirectory, { force: true, recursive: true });
+    } catch (error) {
+      cleanupFailures.push(
+        new JellyfinFixtureFailure("temporary_teardown_failed", { cause: error }),
+      );
+    }
+    const cleanupFailure = cleanupFailures[0];
+    if (cleanupFailure) {
+      if (primaryFailure) {
+        preserveFixtureFailure(primaryFailure, cleanupFailure);
+      } else {
+        throw normalizedFixtureFailure(cleanupFailure);
+      }
+    }
   }
+  if (!successfulReport) throw new JellyfinFixtureFailure("compatibility_report_invalid");
+  await writeReport(options.outputPath, successfulReport);
+  process.stdout.write(`${JSON.stringify(successfulReport)}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let options;
   try {
-    await main(parseArguments(process.argv.slice(2)));
+    options = parseArguments(process.argv.slice(2));
+    await main(options);
   } catch (error) {
-    const code = error instanceof JellyfinFixtureFailure ? error.code : "jellyfin_fixture_failed";
-    process.stderr.write(`${JSON.stringify({ code, status: "failed" })}\n`);
+    let failure = normalizedFixtureFailure(error);
+    let report;
+    if (options) {
+      report = jellyfinFailureReport({
+        error: failure,
+        image: options.target.image,
+        version: options.target.version,
+      });
+      try {
+        await writeReport(options.outputPath, report);
+      } catch (writeError) {
+        failure = preserveFixtureFailure(
+          failure,
+          new JellyfinFixtureFailure("report_write_failed", { cause: writeError }),
+        );
+        report = jellyfinFailureReport({
+          error: failure,
+          image: options.target.image,
+          version: options.target.version,
+        });
+      }
+    }
+    process.stderr.write(
+      `${JSON.stringify({ ...(report?.error ?? { code: reportableFailureCode(failure), stage: failureStage(reportableFailureCode(failure)) }), status: "failed" })}\n`,
+    );
     process.exitCode = 1;
   }
 }
