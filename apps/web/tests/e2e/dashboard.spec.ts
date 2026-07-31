@@ -442,9 +442,18 @@ test("request composer delegates a bounded request through the verified session"
   const composer = page.getByRole("dialog", { name: "Compose request" });
   await expect(composer).toBeVisible();
   await expect(composer.getByText("Mina’s Jellyfin")).toBeVisible();
-  await composer.getByRole("button", { name: /Send request/i }).click();
+  const submitAction = composer.getByRole("button", { name: /Send request/i });
+  await expectStationaryPointerTarget(submitAction);
+  const rootScrollBeforeSubmission = await page.evaluate(() => document.documentElement.scrollTop);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).toBe(
+    "clip",
+  );
+  await submitAction.click();
 
   await expect(composer.getByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollTop)).toBe(
+    rootScrollBeforeSubmission,
+  );
   expect(capture.body).toEqual({ is4k: false, kind: "movie", tmdbId: 603 });
   expect(capture.csrfToken).toBe(mediaRequestCsrfToken);
   expect(capture.idempotencyKey).toMatch(/^media-[0-9a-f-]{36}$/u);

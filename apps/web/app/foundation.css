@@ -250,6 +250,11 @@ html {
   text-rendering: optimizeLegibility;
 }
 
+html:has(dialog[open]) {
+  overflow: clip;
+  scroll-behavior: auto;
+}
+
 body {
   background: var(--ink-0);
   color: var(--paper-0);
