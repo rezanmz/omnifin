@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { systemStatusResponseSchema } from "../src/system.js";
+import {
+  systemStatusEventCursorSchema,
+  systemStatusResponseSchema,
+  systemStatusSnapshotEventSchema,
+} from "../src/system.js";
 
 const generatedAt = "2026-07-28T23:40:00.000Z";
 const sourceId = "source_1234567890123456789012";
@@ -52,6 +56,20 @@ function response() {
 }
 
 describe("system status contracts", () => {
+  it("accepts one strict resumable system-status snapshot event", () => {
+    const event = {
+      cursor: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+      kind: "snapshot",
+      status: response(),
+    };
+
+    expect(systemStatusSnapshotEventSchema.parse(event)).toEqual(event);
+    expect(systemStatusEventCursorSchema.safeParse("private-upstream-cursor").success).toBe(false);
+    expect(
+      systemStatusSnapshotEventSchema.safeParse({ ...event, privatePath: "/srv/media" }).success,
+    ).toBe(false);
+  });
+
   it("accepts a normalized source with bounded health and storage signals", () => {
     expect(systemStatusResponseSchema.parse(response())).toEqual(response());
   });

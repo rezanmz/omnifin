@@ -56,7 +56,7 @@ system-health, download-queue, and acquisition-calendar flows are pre-release de
 surfaces. The same is
 true of Jellyfin playback and progress, Continue Watching, issue reporting, Bazarr subtitle search
 and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
-broader acquisition mutations and other live monitoring evidence remain unavailable.
+broader acquisition mutations, and release-grade live compatibility evidence remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the

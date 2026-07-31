@@ -1,5 +1,7 @@
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
-import type { SystemStatusResponse } from "@omnifin/contracts/system";
+import type { SystemStatusResponse, SystemStatusSnapshotEvent } from "@omnifin/contracts/system";
+
+const MAX_SYSTEM_STATUS_EVENT_CHARACTERS = 512_000;
 
 interface ResponseSchema<T> {
   safeParse(input: unknown): { data: T; success: true } | { success: false };
@@ -45,6 +47,22 @@ export interface SystemStatusSnapshot {
 export type SystemStatusLoadOutcome =
   | { snapshot: SystemStatusSnapshot; status: "ready" }
   | { status: "forbidden" | "signed_out" | "unavailable" };
+
+export type SystemStatusLiveStatus = "connecting" | "fallback" | "live";
+
+export interface SystemStatusWatchCallbacks {
+  onSnapshot(event: SystemStatusSnapshotEvent): void;
+  onStatus(status: SystemStatusLiveStatus): void;
+}
+
+interface SystemStatusEventSource {
+  close(): void;
+  onerror: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  onopen: ((event: Event) => void) | null;
+}
+
+type SystemStatusEventSourceFactory = (url: string) => SystemStatusEventSource;
 
 async function safeJson(response: Response): Promise<unknown> {
   try {
@@ -144,6 +162,71 @@ export async function loadSystemStatus(signal?: AbortSignal): Promise<SystemStat
 
 export interface SystemStatusClient {
   load(signal?: AbortSignal): Promise<SystemStatusLoadOutcome>;
+  watch?(callbacks: SystemStatusWatchCallbacks): () => void;
 }
 
-export const systemStatusClient: SystemStatusClient = { load: loadSystemStatus };
+export function watchSystemStatusEvents(
+  callbacks: SystemStatusWatchCallbacks,
+  createEventSource: SystemStatusEventSourceFactory = (url) => new EventSource(url),
+) {
+  let active = true;
+  let failedClosed = false;
+  let source: SystemStatusEventSource;
+  callbacks.onStatus("connecting");
+  try {
+    source = createEventSource("/api/system/status/events");
+  } catch {
+    callbacks.onStatus("fallback");
+    return () => {
+      active = false;
+    };
+  }
+
+  const failClosed = () => {
+    if (!active || failedClosed) return;
+    failedClosed = true;
+    source.close();
+    callbacks.onStatus("fallback");
+  };
+  source.onopen = () => {
+    if (active && !failedClosed) callbacks.onStatus("connecting");
+  };
+  source.onerror = () => {
+    if (active && !failedClosed) callbacks.onStatus("fallback");
+  };
+  source.onmessage = (message) => {
+    void (async () => {
+      if (message.data.length > MAX_SYSTEM_STATUS_EVENT_CHARACTERS) {
+        failClosed();
+        return;
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(message.data);
+      } catch {
+        failClosed();
+        return;
+      }
+      const { system } = await contractSchemas();
+      if (!active || failedClosed) return;
+      const parsed = system.systemStatusSnapshotEventSchema.safeParse(body);
+      if (!parsed.success || message.lastEventId !== parsed.data.cursor) {
+        failClosed();
+        return;
+      }
+      callbacks.onSnapshot(parsed.data);
+      callbacks.onStatus("live");
+    })();
+  };
+
+  return () => {
+    if (!active) return;
+    active = false;
+    source.close();
+  };
+}
+
+export const systemStatusClient: SystemStatusClient = {
+  load: loadSystemStatus,
+  watch: watchSystemStatusEvents,
+};

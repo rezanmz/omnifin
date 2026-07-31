@@ -140,6 +140,7 @@ export interface CreateAppOptions {
   manualReleaseDependencies?: ManualReleaseRoutesOptions["dependencies"];
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
   systemStatusDependencies?: SystemStatusRoutesOptions["dependencies"];
+  systemStatusEventDependencies?: SystemStatusRoutesOptions["eventDependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -513,6 +514,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.systemStatusDependencies === undefined
         ? {}
         : { dependencies: options.systemStatusDependencies }),
+      ...(options.systemStatusEventDependencies === undefined
+        ? {}
+        : { eventDependencies: options.systemStatusEventDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

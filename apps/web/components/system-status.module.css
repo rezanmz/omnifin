@@ -334,6 +334,37 @@
   gap: 7px;
 }
 
+.heroMeta .liveState {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--paper-1);
+  font-variant-numeric: tabular-nums;
+  min-height: 32px;
+  padding: 0 11px;
+}
+
+.liveState i {
+  background: currentColor;
+  border-radius: 50%;
+  box-shadow: 0 0 9px currentColor;
+  height: 6px;
+  width: 6px;
+}
+
+.liveState[data-state="live"] {
+  color: var(--success);
+}
+
+.liveState[data-state="connecting"] {
+  color: var(--warning);
+}
+
+.liveState[data-state="fallback"],
+.liveState[data-state="snapshot"] {
+  color: var(--paper-2);
+}
+
 .heroMeta button {
   background: var(--surface-recessed);
   border: 1px solid var(--line-soft);

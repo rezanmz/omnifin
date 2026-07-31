@@ -1,8 +1,12 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { SystemStatusClient, SystemStatusLoadOutcome } from "../lib/system-status";
+import type {
+  SystemStatusClient,
+  SystemStatusLoadOutcome,
+  SystemStatusWatchCallbacks,
+} from "../lib/system-status";
 import {
   demoSystemStatus,
   demoSystemStatusGeneratedAt,
@@ -55,6 +59,74 @@ describe("SystemStatus", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("heading", { name: "Room to keep moving" })).toBeVisible();
+  });
+
+  it("replaces the verified reading from a strict live snapshot and closes on unmount", async () => {
+    let callbacks: SystemStatusWatchCallbacks | undefined;
+    const unsubscribe = vi.fn();
+    const client: SystemStatusClient = {
+      load: async () => ready,
+      watch: (nextCallbacks) => {
+        callbacks = nextCallbacks;
+        nextCallbacks.onStatus("connecting");
+        return unsubscribe;
+      },
+    };
+    const view = renderStatus(ready, { client, live: true });
+
+    expect(screen.getByText("Connecting")).toBeVisible();
+    act(() => {
+      callbacks?.onSnapshot({
+        cursor: "system_event_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "snapshot",
+        status: { ...demoSystemStatus, generatedAt: "2026-07-28T23:55:00.000Z" },
+      });
+      callbacks?.onStatus("live");
+    });
+
+    expect(await screen.findByText("Live")).toBeVisible();
+    expect(screen.getByText("Updated 11:55 PM UTC")).toBeVisible();
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("shows the polling fallback and refreshes only after its visible 30-second interval", async () => {
+    vi.useFakeTimers();
+    const visibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    const load = vi.fn(async () => ready);
+    const client: SystemStatusClient = {
+      load,
+      watch: (callbacks) => {
+        callbacks.onStatus("fallback");
+        return vi.fn();
+      },
+    };
+    try {
+      renderStatus(ready, { client, live: true });
+      expect(screen.getByText("30s polling")).toBeVisible();
+      expect(load).not.toHaveBeenCalled();
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(load).not.toHaveBeenCalled();
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      if (visibility) Object.defineProperty(document, "visibilityState", visibility);
+      else Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
+  it("labels fixture-backed views as a stable snapshot", () => {
+    renderStatus();
+    expect(screen.getByText("Snapshot")).toBeVisible();
   });
 
   it("retains the last verified reading when a later refresh is unavailable", async () => {

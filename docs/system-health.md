@@ -11,9 +11,9 @@ versions and dates.
 
 ## Authorization and connector selection
 
-`GET /v1/system/status` requires an active session with `acquisition.manage`. The route and service
-repeat the permission check before connector selection or credential decryption. Recovery sessions
-and lower-privilege roles cannot use the endpoint.
+`GET /v1/system/status` and `GET /v1/system/status/events` require an active session with
+`acquisition.manage`. The routes and service repeat the permission check before connector selection
+or credential decryption. Recovery sessions and lower-privilege roles cannot use either endpoint.
 
 An eligible source must be enabled, have a current validated health snapshot, identify itself as
 Radarr, Sonarr, or Prowlarr, and advertise `system.health`. Radarr and Sonarr sources may also
@@ -46,11 +46,24 @@ source. A storage timeout does not discard verified health signals. A health fai
 discard verified storage capacity. A source becomes unavailable only when it has no verified
 telemetry, while healthy sources remain visible beside the safe failure context.
 
-No eligible sources produces an explicit `unconfigured` response. The route is abort-aware,
-rate-limited to 30 reads per minute, and marked `no-store`. The live workspace polls every 30
-seconds only while the document is visible and supports explicit refresh. If a later poll fails,
-the interface keeps the last verified result and labels it stale; it never invents new service or
-capacity state.
+No eligible sources produces an explicit `unconfigured` response. The snapshot and event routes
+are rate-limited and marked `no-store`. The event route shares one upstream refresh loop across
+subscribers rather than opening one connector poller per browser. It permits at most 64 concurrent
+connections and two per session, polls upstream no more often than every 10 seconds, emits a
+heartbeat every 15 seconds, and ends each connection after about 45 seconds so native reconnection
+re-enters session rotation and authorization checks.
+
+Each event contains only a strict normalized status response plus an opaque cursor. A reconnect may
+resume within a 30-second single-snapshot window; invalid cursors fail before connector access. The
+response uses `Cache-Control: no-store, no-transform`, `Vary: Cookie`, and
+`X-Accel-Buffering: no` so intermediaries do not cache, transform, or batch the stream.
+
+The browser validates every event and its matching `Last-Event-ID` before replacing the verified
+reading. Malformed, oversized, or mismatched events fail closed. A transient transport error keeps
+native EventSource reconnection available while the interface visibly switches to a 30-second poll
+that runs only while the document is visible. Live snapshots stop that fallback poll. Explicit
+refresh remains available, and any failed refresh keeps the last verified result labelled stale;
+the interface never invents new service or capacity state.
 
 ## Interface states and verification
 
@@ -59,11 +72,12 @@ dark, and system appearance preferences. Ready, degraded, unconfigured, loading,
 signed-out, forbidden, and unavailable states are deliberate. Service signals and storage meters
 retain semantic labels independently of color.
 
-Component and Storybook tests cover normalized rendering, refresh recovery, stale-data retention,
-theme controls, and access boundaries. Desktop and mobile visual baselines are committed for macOS
-and Linux, including light, degraded, and onboarding states. Representative routes are checked for
-automatic accessibility violations, responsive behavior, Content Security Policy, and production
-rendering.
+Component and Storybook tests cover normalized rendering, live replacement, polling fallback,
+refresh recovery, stale-data retention, theme controls, and access boundaries. Broker and route
+tests cover shared reads, connection bounds, replay, teardown, authorization, private SSE headers,
+and payload redaction. Desktop and mobile visual baselines are committed for macOS and Linux,
+including light, degraded, and onboarding states. Representative routes are checked for automatic
+accessibility violations, responsive behavior, Content Security Policy, and production rendering.
 
 ## Intentionally absent mutations
 

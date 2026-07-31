@@ -77,7 +77,8 @@ Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whol
 and qBittorrent/SABnzbd queue reads with exact-item pause/resume and downloaded-file-preserving
 removal through normalized, browser-safe contracts and responsive operational workspaces. An
 operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
-with path-free Radarr/Sonarr capacity telemetry and preserves verified partial results.
+with path-free Radarr/Sonarr capacity telemetry, preserves verified partial results, and receives
+shared bounded live snapshots with an explicit foreground-polling fallback.
 The interface supports light, dark, and live system appearance preferences through an
 adaptive liquid-material hierarchy that keeps navigation and floating controls
 translucent while preserving solid, readable content surfaces. Continue Watching uses
@@ -99,7 +100,7 @@ provides Jellyfin playback negotiation and protected media proxying, progress re
 Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
 maintenance. Operator request review and the unified player/Seerr issue lifecycle are also
 available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
-available to operators; broader acquisition mutations and live events remain later pre-release work.
+available to operators; broader acquisition mutations remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the

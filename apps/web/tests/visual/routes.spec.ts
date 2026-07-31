@@ -654,6 +654,13 @@ test("system health visual baseline", async ({ page }, testInfo) => {
   await page.getByRole("heading", { name: "2 clear things to check." }).waitFor();
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("system-health.png", { fullPage: true });
+
+  const updateMode = page.getByLabel("System status updates: snapshot").locator("..");
+  await page.addStyleTag({
+    content:
+      '[data-liquid-glass]:has([aria-label="System status updates: snapshot"]) { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--surface-card-solid) !important; }',
+  });
+  await expect(updateMode).toHaveScreenshot("system-health-update-mode.png");
 });
 
 test("light system health visual baseline", async ({ page }, testInfo) => {
