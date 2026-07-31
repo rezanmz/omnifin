@@ -53,10 +53,19 @@ const FALLBACK_HERO = {
   accent: "#8de9d5",
   actions: "none" as const,
   description:
-    "Continue Watching remains private and ready while Omnifin checks the connected discovery signal.",
+    "Your private media state stays behind the gateway while Omnifin checks the connected services.",
   eyebrow: "Your library, in focus",
-  facts: ["Jellyfin linked", "Private by design", "No telemetry"],
+  facts: ["Protected upstreams", "Private by design", "No telemetry"],
   title: "Ready when you are",
+};
+const SIGNED_OUT_HERO = {
+  accent: "#8de9d5",
+  actions: "none" as const,
+  description:
+    "Sign in with OIDC or Jellyfin to restore your private library, watch state, and personalized discovery without exposing upstream credentials.",
+  eyebrow: "Your library, private",
+  facts: ["OIDC or Jellyfin", "Private by design", "No telemetry"],
+  title: "Welcome back",
 };
 const discoveryRefreshIntervalMs = 5 * 60_000;
 
@@ -286,7 +295,7 @@ function FailedRail({ onRetry, rail }: { onRetry: () => void; rail: DiscoveryFee
         <span className="quiet-state__icon" aria-hidden="true">
           <CloudOff />
         </span>
-        <span>
+        <span className="quiet-state__copy">
           <strong>This rail missed the latest refresh</strong>
           <span>The rest of discovery remains available while Seerr reconnects this source.</span>
         </span>
@@ -438,7 +447,9 @@ function DiscoveryDashboardContent({
   if (authorizationErrorKind) {
     return (
       <>
-        <HeroSpotlight hero={FALLBACK_HERO} />
+        <HeroSpotlight
+          hero={authorizationErrorKind === "signed_out" ? SIGNED_OUT_HERO : FALLBACK_HERO}
+        />
         {showContinueWatching ? <LazyContinueWatchingRail /> : null}
         <DiscoveryBoundary
           errorKind={authorizationErrorKind}

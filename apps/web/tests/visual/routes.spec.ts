@@ -99,6 +99,27 @@ async function mockQuietContinueWatching(page: Page) {
   });
 }
 
+async function mockSignedOutDashboard(page: Page) {
+  await page.route("**/api/discovery/feed**", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        error: { code: "authentication_required", message: "Authentication is required." },
+      }),
+      contentType: "application/json",
+      status: 401,
+    });
+  });
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        error: { code: "authentication_required", message: "Authentication is required." },
+      }),
+      contentType: "application/json",
+      status: 401,
+    });
+  });
+}
+
 async function waitForVisibleDiscoveryArtwork(page: Page) {
   const artwork = page
     .getByRole("region", { name: "Trending now" })
@@ -113,6 +134,36 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
     )
     .toBe(true);
 }
+
+test("light signed-out dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Light signed-out boundaries cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await mockSignedOutDashboard(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "Welcome back" }).waitFor();
+  await page.getByText("Your progress is waiting", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Your discovery signal is waiting" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-signed-out-light.png", { fullPage: true });
+});
+
+test("signed-out dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Signed-out boundaries cover representative desktop and phone geometry",
+  );
+  await mockSignedOutDashboard(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page.getByRole("heading", { level: 1, name: "Welcome back" }).waitFor();
+  await page.getByText("Your progress is waiting", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Your discovery signal is waiting" }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("dashboard-signed-out.png", { fullPage: true });
+});
 
 test("dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(

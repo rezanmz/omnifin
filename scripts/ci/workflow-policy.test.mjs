@@ -103,9 +103,11 @@ test("visual comparisons retain PNG evidence without retry, trace, or video ampl
 
   assert.match(packageDocument.scripts["test:visual"], /OMNIFIN_VISUAL_TEST=true/u);
   assert.match(config, /const visualTestMode = process\.env\.OMNIFIN_VISUAL_TEST === "true"/u);
+  assert.match(config, /fullyParallel: !visualTestMode/u);
   assert.match(config, /retries: process\.env\.CI && !visualTestMode \? 2 : 0/u);
   assert.match(config, /trace: visualTestMode \? "off" : "retain-on-failure"/u);
   assert.match(config, /video: visualTestMode \? "off" : "retain-on-failure"/u);
+  assert.match(config, /\.\.\.\(visualTestMode \? \{ workers: 1 \} : \{\}\)/u);
   assert.equal(generate.env.OMNIFIN_VISUAL_TEST, "true");
 });
 
