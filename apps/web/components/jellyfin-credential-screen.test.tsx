@@ -244,10 +244,9 @@ describe("JellyfinCredentialScreen", () => {
     const passwordTab = screen.getByRole("tab", { name: "Password sign in" });
     passwordTab.focus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "Quick Connect" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    const quickConnectTab = screen.getByRole("tab", { name: "Quick Connect" });
+    expect(quickConnectTab).toHaveAttribute("aria-selected", "true");
+    expect(quickConnectTab).toHaveFocus();
     expect(screen.getByRole("tabpanel")).toHaveAccessibleName("Quick Connect panel");
 
     await user.click(screen.getByRole("button", { name: "Generate a code" }));

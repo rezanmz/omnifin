@@ -487,10 +487,8 @@ export function JellyfinCredentialScreen({
   const selectMethod = (nextMethod: AuthenticationMethod) => {
     if (nextMethod === method) return;
     if (nextMethod === "password") requestGeneration.current += 1;
+    (nextMethod === "password" ? passwordTab : quickConnectTab).current?.focus();
     setMethod(nextMethod);
-    window.requestAnimationFrame(() => {
-      (nextMethod === "password" ? passwordTab : quickConnectTab).current?.focus();
-    });
   };
 
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
