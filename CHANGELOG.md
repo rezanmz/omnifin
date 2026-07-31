@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.1](https://github.com/rezanmz/omnifin/compare/v0.4.0...v0.4.1) (2026-07-31)
+
+
+### Fixes
+
+* **ui:** stabilize request completion action ([#119](https://github.com/rezanmz/omnifin/issues/119)) ([9745cdb](https://github.com/rezanmz/omnifin/commit/9745cdbd9b65666952ca4075a56b1dddd5c344d1)), closes [#118](https://github.com/rezanmz/omnifin/issues/118)
+
+
+### Continuous integration
+
+* **release:** rehearse upgrades and rollback ([#116](https://github.com/rezanmz/omnifin/issues/116)) ([f12bb4a](https://github.com/rezanmz/omnifin/commit/f12bb4a1461a1bfd0d65d7281ef16e9815643532)), closes [#113](https://github.com/rezanmz/omnifin/issues/113)
+* run disposable compatibility canary ([#121](https://github.com/rezanmz/omnifin/issues/121)) ([98ad89b](https://github.com/rezanmz/omnifin/commit/98ad89b1dcb0421dc5761d3d896e3f634801b8c9)), closes [#117](https://github.com/rezanmz/omnifin/issues/117)
+
 ## [0.4.0](https://github.com/rezanmz/omnifin/compare/v0.3.0...v0.4.0) (2026-07-31)
 
 
