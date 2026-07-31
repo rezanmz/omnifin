@@ -115,7 +115,8 @@ browser behavior.
 
 - Full compatibility matrix, threat-model-driven security review, load testing,
   container scans, backup and restore (implemented; protected release evidence pending),
-  migration and rollback rehearsals
+  migration and rollback rehearsals (release automation implemented; protected release evidence
+  pending)
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 

@@ -122,11 +122,18 @@ The release sequence is:
 6. From a fresh job with an empty Docker credential directory, resolve the candidate
    tag, pull the digest anonymously, verify its signature and platforms, and run the
    container smoke harness.
-7. Recheck release ordering and full-version-tag absence, then point the full, minor,
+7. On a GitHub-hosted runner, resolve the current `latest` image to its immutable
+   digest, seed bounded encrypted identity state through the previous image's recovery
+   API, verify a private backup, migrate that state with the candidate, restore the
+   previous backup, and boot the exact previous digest again. Retain only the closed
+   sanitized rehearsal report. Only when neither stable image tags nor published
+   GitHub Releases exist may the workflow record the explicit first-release exception. Before
+   executing either digest, the rehearsal verifies its keyless workflow signature.
+8. Recheck release ordering and full-version-tag absence, then point the full, minor,
    major, and `latest` tags at that exact verified digest.
-8. From another anonymous job, resolve every stable tag and pull the full version.
-9. Publish the GitHub Release and record the coverage profile and container digest in
-   its notes.
+9. From another anonymous job, resolve every stable tag and pull the full version.
+10. Publish the GitHub Release and record the coverage profile and container digest in
+    its notes.
 
 For version `1.4.2`, successful promotion creates:
 
@@ -137,7 +144,8 @@ For version `1.4.2`, successful promotion creates:
 
 The workflow refuses to overwrite an existing full-version tag, including on a
 rerun. Moving aliases are never created before candidate SBOM, signature, two-platform
-vulnerability policy, smoke, and public-access verification succeed.
+vulnerability policy, smoke, public-access verification, and the upgrade/rollback
+rehearsal succeed.
 
 ## Verification coverage
 
@@ -145,19 +153,25 @@ The digest smoke harness verifies the rootless runtime, gateway liveness and
 readiness, a representative versioned API read, migration-backed startup, and web
 health. Pull-request CI also loads its locally built image and runs this same harness,
 so an image that merely compiles cannot satisfy `CI`. The reviewed phase fixture matrix
-and migration rehearsal run as source gates before a stable image is built. Strict mode
+and migration rehearsal run as source gates before a stable image is built. The separate
+release rehearsal uses the prior and candidate images only by digest, creates synthetic
+OIDC-provider state through a short-lived recovery session, verifies candidate startup and
+state, verifies the automatically preserved candidate rollback backup, restores the prior
+backup, and proves the prior digest can read that state again. All containers, networks,
+volumes, generated credentials, databases, and backups must be removed before the job can
+succeed. Strict mode
 rejects every selected service/profile still marked `pending` in `readiness.json`, even
 if URLs or credentials are present. Pending future-phase capabilities do not block a
 `v0.x` release that does not claim them. Conversely, `1.0.0` and later structurally
 require the explicit `v1` profile, whose fixture and live lists must contain every
-service. Compatibility, backup/restore, and broader release rehearsals remain
-phase-gate requirements documented in the roadmap.
+service. Compatibility and deployment-specific release rehearsals remain phase-gate
+requirements documented in the roadmap.
 
 The retained release evidence includes the portable SPDX document and checksum,
 two-platform candidate scan reports, sanitized fixture and applicable live integration
-reports, BuildKit provenance, the keyless signature, GitHub attestations, the coverage
-profile in the image metadata, and both the profile and digest in the GitHub Release
-notes.
+reports, the closed upgrade/rollback report, BuildKit provenance, the keyless signature,
+GitHub attestations, the coverage profile in the image metadata, and both the profile and
+digest in the GitHub Release notes.
 
 ## Failure and recovery
 
