@@ -437,6 +437,40 @@ test("Jellyfin Quick Connect visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("jellyfin-login-quick-connect.png", { fullPage: true });
 });
 
+test("recovery secret entry visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !visualProjects.has(testInfo.project.name),
+    "Recovery entry baselines use representative Chromium viewports",
+  );
+  await page.goto(routeForProject("/recovery?test-view=entry", testInfo.project.name));
+  await page.getByLabel("Recovery secret").waitFor();
+  await expect(page).toHaveScreenshot("recovery-secret-entry.png", { fullPage: true });
+});
+
+test("light recovery secret entry visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light recovery entry covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/recovery?test-view=entry");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByLabel("Recovery secret").waitFor();
+  await expect(page).toHaveScreenshot("recovery-secret-entry-light.png", { fullPage: true });
+});
+
+test("first administrator proof visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Administrator proof covers representative desktop and phone geometry",
+  );
+  await page.goto("/recovery?test-view=bootstrap");
+  await page.getByRole("heading", { name: "Establish trusted control." }).waitFor();
+  await expect(page).toHaveScreenshot("recovery-jellyfin-administrator.png", {
+    fullPage: true,
+  });
+});
+
 test("Jellyfin account pairing visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !visualProjects.has(testInfo.project.name),
