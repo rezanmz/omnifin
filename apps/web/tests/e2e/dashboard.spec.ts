@@ -194,7 +194,45 @@ test("operators can explicitly pause whole-title monitoring without touching fil
     .click();
 
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  const monitoringAction = timeline.getByRole("button", {
+    name: "Pause monitoring for The Far Meridian",
+  });
+  await expect(monitoringAction).toBeVisible();
+  await monitoringAction.scrollIntoViewIfNeeded();
+  const interactionBoundary = await monitoringAction.evaluate((action) => {
+    const scrollRegion = action.closest<HTMLElement>(".acquisition-timeline__body");
+    if (!scrollRegion) throw new Error("acquisition_scroll_region_missing");
+
+    const dialog = action.closest("dialog");
+    if (!dialog) throw new Error("acquisition_dialog_missing");
+    const footer = scrollRegion.querySelector<HTMLElement>(".acquisition-timeline__footer");
+    if (!footer) throw new Error("acquisition_footer_missing");
+    const hasSpatialEntrance = dialog.getAnimations().some((animation) => {
+      if (!(animation.effect instanceof KeyframeEffect)) return false;
+      return animation.effect
+        .getKeyframes()
+        .some((frame) => typeof frame.transform === "string" && frame.transform !== "none");
+    });
+
+    const bounds = action.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2,
+    );
+    return {
+      footerPointerEvents: getComputedStyle(footer).pointerEvents,
+      hasSpatialEntrance,
+      overflowAnchor: getComputedStyle(scrollRegion).overflowAnchor,
+      targetable: hit === action || action.contains(hit),
+    };
+  });
+  expect(interactionBoundary).toEqual({
+    footerPointerEvents: "none",
+    hasSpatialEntrance: false,
+    overflowAnchor: "none",
+    targetable: true,
+  });
+  await monitoringAction.click();
   await expect(timeline.getByText("Pause monitoring for The Far Meridian?")).toBeVisible();
   await expect(timeline.getByRole("button", { name: "Cancel" })).toBeFocused();
   await expect(timeline.getByText(/Existing files and downloads stay intact/u)).toBeVisible();
