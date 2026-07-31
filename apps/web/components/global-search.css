@@ -838,7 +838,7 @@
 
 @media (max-width: 760px) {
   .search-console {
-    --search-console-base: color-mix(in srgb, var(--glass-popover) 10%, var(--surface-card-solid));
+    --search-console-base: var(--surface-card-solid);
     border-radius: var(--radius-sm);
     max-height: calc(100dvh - 164px - env(safe-area-inset-bottom));
     top: calc(100% + 7px);
