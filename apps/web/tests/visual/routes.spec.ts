@@ -1103,11 +1103,13 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
   await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
-  await page.getByRole("button", { name: "Review search" }).click();
-  await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
+  await timeline.getByRole("button", { name: "Review search" }).click();
+  await expect(timeline.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot("acquisition-recovery-confirmation.png");
+  // Keep the component-state baseline independent from native backdrop sampling.
+  await expect(timeline).toHaveScreenshot("acquisition-recovery-confirmation.png");
 });
 
 test("acquisition monitoring confirmation visual baseline", async ({ page }, testInfo) => {
@@ -1120,11 +1122,13 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
   await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
-  await page.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
-  await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
+  await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
+  await expect(timeline.getByRole("button", { name: "Pause" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot("acquisition-monitoring-confirmation.png");
+  // Keep the component-state baseline independent from native backdrop sampling.
+  await expect(timeline).toHaveScreenshot("acquisition-monitoring-confirmation.png");
 });
 
 async function prepareManualReleaseWorkbench(page: Page) {
