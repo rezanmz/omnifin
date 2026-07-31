@@ -46,9 +46,9 @@ export function OnboardingDashboard({
             <p className="eyebrow">A private control plane</p>
             <h1 id="onboarding-title">Your media control room is being prepared.</h1>
             <p>
-              Secure sign-in, Jellyfin Quick Connect, account pairing, and self-service session
-              controls are now in place. Provider administration and media-service connections stay
-              locked until their security and integration gates pass.
+              Secure sign-in, Jellyfin Quick Connect, account pairing, service connections, and
+              local authorization are ready for configuration. Start with identity, then connect
+              each media service and validate it before enablement.
             </p>
             <a className="button button--primary" href="/settings">
               Review account access <ArrowRight aria-hidden="true" size={17} />

@@ -78,7 +78,11 @@ function authentication(
   return {
     AccessToken: "private-quick-connect-access-token",
     ServerId: "server-1",
-    User: { Id: "jellyfin-user-1", Name: "Riley" },
+    User: {
+      Id: "jellyfin-user-1",
+      Name: "Riley",
+      Policy: { IsAdministrator: true },
+    },
     ...overrides,
   };
 }
@@ -101,6 +105,7 @@ function fixture(
   options: {
     authenticated?: boolean;
     enabled?: boolean;
+    isAdministrator?: boolean;
     onPoll?: () => void;
     serverId?: string;
   } = {},
@@ -128,7 +133,14 @@ function fixture(
     createClient: () => ({
       authenticateWithQuickConnect: async () => {
         calls.authenticate += 1;
-        return authentication({ ServerId: options.serverId ?? "server-1" });
+        return authentication({
+          ServerId: options.serverId ?? "server-1",
+          User: {
+            Id: "jellyfin-user-1",
+            Name: "Riley",
+            Policy: { IsAdministrator: options.isAdministrator ?? true },
+          },
+        });
       },
       getPublicSystemInfo: async () => {
         calls.publicInfo += 1;
@@ -223,7 +235,91 @@ function seedPendingOidcSession(handle: DatabaseHandle, sessions: SessionService
   return { session, validated };
 }
 
+function seedRecoverySession(sessions: SessionService) {
+  const session = sessions.createSession({ attribution: { authMethod: "recovery" } });
+  const validated = sessions.validateSessionCsrf(session.sessionToken, session.csrfToken);
+  if (!validated) throw new Error("Expected a validated recovery session.");
+  return { session, validated };
+}
+
 describe("JellyfinQuickConnectService", () => {
+  it("binds first-admin Quick Connect to recovery and replaces it after admin proof", async () => {
+    const handle = database();
+    const test = fixture(handle, { authenticated: true });
+    try {
+      const recovery = seedRecoverySession(test.sessions);
+      const started = await test.service.startBootstrap({
+        validatedSession: recovery.validated,
+      });
+      test.advance(JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS);
+
+      const result = await test.service.pollBootstrap({
+        ...pollInput(started.transactionId),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result.status).toBe("bootstrapped");
+      if (result.status !== "bootstrapped") throw new Error("Expected bootstrap success.");
+      expect(result.session.principal).toMatchObject({
+        authenticationMethod: { kind: "jellyfin" },
+        role: "admin",
+      });
+      expect(test.sessions.resolveAndRefresh(recovery.session.sessionToken)).toBeNull();
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ role: "admin", roleSource: "recovery_bootstrap" }),
+      ]);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("will not start administrator Quick Connect without a recovery session", async () => {
+    const handle = database();
+    const test = fixture(handle);
+    try {
+      await expect(
+        test.service.startBootstrap({ validatedSession: undefined }),
+      ).rejects.toMatchObject({ reason: "recovery_session_required" });
+      expect(test.calls).toEqual({
+        authenticate: 0,
+        enabled: 0,
+        initiate: 0,
+        poll: 0,
+        publicInfo: 0,
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("retains recovery access when Quick Connect proves a non-administrator account", async () => {
+    const handle = database();
+    const test = fixture(handle, { authenticated: true, isAdministrator: false });
+    try {
+      const recovery = seedRecoverySession(test.sessions);
+      const started = await test.service.startBootstrap({
+        validatedSession: recovery.validated,
+      });
+      test.advance(JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS);
+
+      const result = await test.service.pollBootstrap({
+        ...pollInput(started.transactionId),
+        validatedSession: recovery.validated,
+      });
+
+      expect(result).toMatchObject({
+        reason: "jellyfin_admin_required",
+        status: "denied",
+      });
+      expect(
+        test.sessions.resolveAndRefresh(recovery.session.sessionToken)?.principal,
+      ).toMatchObject({ accountState: "recovery" });
+      expect(handle.db.select().from(users).all()).toEqual([]);
+    } finally {
+      handle.close();
+    }
+  });
+
   it("stores only encrypted protocol material and returns a browser-bound display code", async () => {
     const handle = database();
     const test = fixture(handle);

@@ -467,8 +467,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0018_discovery_artwork_references",
-  "Current migration journal must end at migration 0018_discovery_artwork_references.",
+    currentMigrationTag === "0019_jellyfin_admin_bootstrap",
+  "Current migration journal must end at migration 0019_jellyfin_admin_bootstrap.",
 );
 
 try {
@@ -520,6 +520,14 @@ try {
         throw new Error(`Migration indexes missing from ${table}: ${missingIndexes.join(", ")}.`);
       }
     }
+
+    const quickConnectTable = database.sqlite
+      .prepare("select sql from sqlite_master where type = 'table' and name = ?")
+      .get("jellyfin_quick_connect_transactions") as { sql: string } | undefined;
+    assertCondition(
+      quickConnectTable?.sql.includes("'bootstrap'") === true,
+      "Migration is missing the recovery-bound Quick Connect bootstrap purpose.",
+    );
 
     const availableTriggers = new Set(
       (
@@ -839,7 +847,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0015.",
+      "Production migration did not advance the historical fixture exactly through migration 0019.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1004,7 +1012,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0015, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0019, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

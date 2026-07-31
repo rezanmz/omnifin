@@ -168,7 +168,9 @@ The current checkpoint supports configured OIDC issuers, immutable issuer-and-su
 identity keys, explicit claim-to-role mapping, viewer-default JIT provisioning, opaque
 sessions, and recovery access. Direct Jellyfin authentication and the user-controlled
 password and Quick Connect pairing paths and the self-service link lifecycle are
-implemented. Media access requires a
+implemented. A fresh database establishes its first local administrator only through a
+CSRF-proven recovery session plus current Jellyfin administrator proof; the immediate
+transaction enforces a single winner and records its role provenance. Media access requires a
 separately proven Jellyfin account link; matching email addresses is never sufficient
 proof. The full flow and recovery model are documented in
 [Authentication](authentication.md).

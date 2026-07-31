@@ -822,6 +822,33 @@ export type JellyfinQuickConnectPairingPollResponse = z.infer<
   typeof jellyfinQuickConnectPairingPollResponseSchema
 >;
 
+const bootstrappedJellyfinAdminPrincipalSchema = sessionPrincipalSchema.refine(
+  (principal) =>
+    principal.accountState === "active" &&
+    principal.authenticationMethod.kind === "jellyfin" &&
+    principal.role === "admin",
+  "Administrator bootstrap requires an active Jellyfin-attributed admin principal",
+);
+
+export const jellyfinQuickConnectBootstrapPollResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("pending"),
+    expiresAt: z.iso.datetime({ offset: true }),
+    pollAfterMs: z.int().min(1_000).max(30_000),
+  }),
+  z.strictObject({
+    status: z.literal("bootstrapped"),
+    principal: bootstrappedJellyfinAdminPrincipalSchema,
+    csrfToken: csrfTokenSchema,
+  }),
+  z.strictObject({
+    status: z.literal("expired"),
+  }),
+]);
+export type JellyfinQuickConnectBootstrapPollResponse = z.infer<
+  typeof jellyfinQuickConnectBootstrapPollResponseSchema
+>;
+
 export const sessionResponseSchema = z.union([
   authenticatedSessionResponseSchema,
   z.object({

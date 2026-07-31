@@ -32,7 +32,9 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
   };
 }
 
-function dependencyFixture(options: { authenticationError?: Error; serverId?: string } = {}) {
+function dependencyFixture(
+  options: { authenticationError?: Error; isAdministrator?: boolean; serverId?: string } = {},
+) {
   const calls = { authentication: 0, publicInfo: 0 };
   const dependencies: JellyfinSignInServiceDependencies = {
     createClient: () => ({
@@ -42,7 +44,11 @@ function dependencyFixture(options: { authenticationError?: Error; serverId?: st
         return {
           AccessToken: "private-jellyfin-access-token",
           ServerId: options.serverId ?? "server-1",
-          User: { Id: "jellyfin-user-1", Name: "Riley" },
+          User: {
+            Id: "jellyfin-user-1",
+            Name: "Riley",
+            Policy: { IsAdministrator: options.isAdministrator ?? false },
+          },
         };
       },
       getPublicSystemInfo: async () => {
@@ -116,6 +122,10 @@ function pendingOidcSession(app: Awaited<ReturnType<typeof createApp>>) {
       userId: "oidc-user-1",
     },
   });
+}
+
+function recoverySession(app: Awaited<ReturnType<typeof createApp>>) {
+  return app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
 }
 
 describe("POST /v1/auth/jellyfin/password", () => {
@@ -277,6 +287,111 @@ describe("POST /v1/auth/jellyfin/password", () => {
       expect(auditPayload).not.toMatch(/private-password|riley/);
       expect(auditPayload).toContain("authentication_denied");
       expect(auditPayload).toContain("rate_limited");
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("POST /v1/auth/bootstrap/jellyfin/password", () => {
+  it("requires CSRF-proven recovery access and replaces it with the first admin session", async () => {
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = authenticatedSessionResponseSchema.parse(response.json());
+      expect(body.principal).toMatchObject({
+        accountState: "active",
+        authenticationMethod: { kind: "jellyfin" },
+        role: "admin",
+      });
+      expect(cookieHeader(response.headers["set-cookie"])).not.toContain(recovery.sessionToken);
+      expect(response.body).not.toMatch(/private-password|private-jellyfin-access-token/);
+      expect(fixture.calls).toEqual({ authentication: 1, publicInfo: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects missing CSRF proof before parsing credentials or contacting Jellyfin", async () => {
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+        },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "csrf_denied" } });
+      expect(fixture.calls).toEqual({ authentication: 0, publicInfo: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed for a non-administrator Jellyfin account", async () => {
+    const fixture = dependencyFixture({ isAdministrator: false });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "jellyfin_admin_required" } });
+      expect(app.sessionService.resolveAndRefresh(recovery.sessionToken)?.principal).toMatchObject({
+        accountState: "recovery",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not let an ordinary Jellyfin session invoke the recovery bootstrap", async () => {
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const signedIn = await app.inject(request());
+      const body = authenticatedSessionResponseSchema.parse(signedIn.json());
+      expect(body.principal.role).toBe("viewer");
+
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: cookieHeader(signedIn.headers["set-cookie"]),
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": body.csrfToken,
+        },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "permission_denied" } });
+      expect(fixture.calls).toEqual({ authentication: 1, publicInfo: 1 });
     } finally {
       await app.close();
     }

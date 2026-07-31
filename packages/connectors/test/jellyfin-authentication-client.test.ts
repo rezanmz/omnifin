@@ -18,7 +18,11 @@ describe("JellyfinAuthenticationClient", () => {
       jsonResponse({
         AccessToken: "private-access-token",
         ServerId: "server-1",
-        User: { Id: "user-1", Name: "Riley" },
+        User: {
+          Id: "user-1",
+          Name: "Riley",
+          Policy: { IsAdministrator: true },
+        },
       }),
     ]);
     const client = new JellyfinAuthenticationClient(target(mock.transport), {
@@ -34,7 +38,11 @@ describe("JellyfinAuthenticationClient", () => {
     expect(result).toEqual({
       AccessToken: "private-access-token",
       ServerId: "server-1",
-      User: { Id: "user-1", Name: "Riley" },
+      User: {
+        Id: "user-1",
+        Name: "Riley",
+        Policy: { IsAdministrator: true },
+      },
     });
     expect(mock.requests).toHaveLength(1);
     expect(mock.requests[0]?.url.href).toBe(
@@ -63,7 +71,11 @@ describe("JellyfinAuthenticationClient", () => {
       jsonResponse({
         AccessToken: "private-access-token",
         ServerId: "server-1",
-        User: { Id: "user-1", Name: "Riley" },
+        User: {
+          Id: "user-1",
+          Name: "Riley",
+          Policy: { IsAdministrator: true },
+        },
       }),
     ]);
     const client = new JellyfinAuthenticationClient(target(mock.transport));
@@ -98,6 +110,25 @@ describe("JellyfinAuthenticationClient", () => {
     const mock = createMockTransport([
       jsonResponse({
         AccessToken: "",
+        ServerId: "server-1",
+        User: { Id: "user-1", Name: "Riley" },
+      }),
+    ]);
+    const client = new JellyfinAuthenticationClient(target(mock.transport));
+
+    await expect(
+      client.authenticateByName({
+        deviceId: "device-1",
+        password: "private-password",
+        username: "riley",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+  });
+
+  it("rejects authentication results that omit the administrator policy proof", async () => {
+    const mock = createMockTransport([
+      jsonResponse({
+        AccessToken: "private-access-token",
         ServerId: "server-1",
         User: { Id: "user-1", Name: "Riley" },
       }),

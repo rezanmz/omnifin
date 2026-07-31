@@ -1,0 +1,93 @@
+# First-run runbook
+
+This runbook takes a fresh source checkout to its first local Omnifin administrator. Omnifin is
+pre-release software until a tagged release says otherwise; use an immutable release digest for a
+persistent installation once one is published.
+
+## 1. Prepare the deployment
+
+Choose a canonical public origin and a Jellyfin server that Omnifin can reach. Production cookies
+and OIDC require HTTPS. The bundled Compose file publishes only the web process on loopback; place a
+maintained TLS reverse proxy in front of it and do not publish the gateway.
+
+Create the local environment file and two independent secrets:
+
+```sh
+cp .env.example .env
+openssl rand -base64 32
+openssl rand -base64 48
+```
+
+Put the first output in `OMNIFIN_ENCRYPTION_KEY` and the second in
+`OMNIFIN_RECOVERY_SECRET`. Also set:
+
+```dotenv
+OMNIFIN_BASE_URL=https://omnifin.example.net
+OMNIFIN_JELLYFIN_URL=https://jellyfin.example.net
+OMNIFIN_SECURE_COOKIES=true
+OMNIFIN_INSECURE_LOOPBACK_PREVIEW=false
+```
+
+For a deliberately trusted private-network Jellyfin URL using plain HTTP, set
+`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. Prefer HTTPS and restrict network paths in either
+case. Keep `.env` mode `0600`, never commit it, and store the encryption key and recovery secret
+separately from the SQLite backup.
+
+## 2. Start and verify
+
+Until a supported image is published, build the exact reviewed checkout:
+
+```sh
+docker compose up -d --build --wait
+curl --fail --silent --show-error http://127.0.0.1:3000/healthz
+docker compose exec -T gateway /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs
+```
+
+The web check proves liveness. The private gateway check additionally reaches the process that owns
+SQLite and upstream secrets. Inspect `docker compose ps` and sanitized logs if either check fails.
+
+## 3. Establish the first administrator
+
+Open `<OMNIFIN_BASE_URL>/recovery` directly. It is intentionally absent from the ordinary login
+screen, sitemap, and application navigation.
+
+1. Enter the recovery secret from the deployment.
+2. Choose password or Jellyfin Quick Connect.
+3. Authenticate as an account that is currently an administrator in Jellyfin.
+4. Confirm that Omnifin opens an active session and reports the local role as `admin`.
+
+Password proof is exchanged directly with Jellyfin and discarded immediately. Quick Connect is
+bound to the exact recovery browser session. In both cases, Omnifin verifies Jellyfin's explicit
+administrator policy, stores only the returned token encrypted at rest, and performs user creation,
+role assignment, recovery-session replacement, and auditing in one SQLite transaction.
+
+If Jellyfin is unavailable or the account is not an administrator, Omnifin leaves the short-lived
+recovery session intact for another attempt. If an active Omnifin administrator already exists, the
+bootstrap is refused. Signing in through the normal Jellyfin button does not bootstrap authority;
+new direct accounts are local viewers regardless of their upstream Jellyfin role.
+
+## 4. Configure identity and services
+
+From the administrator session:
+
+1. Open **Account & access → Identity providers** to configure Authentik or another standards-based
+   OIDC issuer. Register the exact callback and logout URLs shown before enabling the provider.
+2. Add exact claim-to-role mappings only after a viewer-default sign-in succeeds. Never map a broad
+   group to `admin` as a first test.
+3. Open **Service connections**, add one upstream service at a time, run its safe validation, inspect
+   the capability snapshot, and only then enable it.
+4. Sign out and verify both ordinary Jellyfin and OIDC login paths. OIDC users must prove control of
+   their Jellyfin account before media access.
+
+## 5. Rehearse recovery and backups
+
+Recovery sessions expire after 15 minutes, are rate-limited, and are revoked whenever the gateway
+starts. Verify that `/recovery` remains unlinked, incorrect secrets receive an opaque denial, and a
+gateway restart invalidates an issued recovery session. Rotate the recovery secret and recreate the
+gateway after an incident or any possible disclosure.
+
+Create and verify a database backup only after the first administrator exists. A usable recovery set
+contains the SQLite backup and manifest, the immutable image digest, deployment configuration, and
+the matching encryption key and recovery secret stored separately. Follow the
+[backup and restore runbook](operations/backup-and-restore.md) before the installation holds data you
+cannot replace.

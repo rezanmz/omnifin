@@ -21,6 +21,7 @@ const SECRET_RESERVATION_COLLISION = "session_secret_reservation_collision";
 const VALIDATED_SESSION_BRAND = Symbol("validated-session");
 const SESSION_REPLACEMENT_CAPABILITY_BRAND = Symbol("session-replacement-capability");
 const VALIDATED_OIDC_PAIRING_SESSION_BRAND = Symbol("validated-oidc-pairing-session");
+const VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND = Symbol("validated-recovery-bootstrap-session");
 const OIDC_LOGOUT_MATERIAL_BRAND = Symbol("oidc-logout-material");
 
 export const MAX_ACTIVE_SESSIONS_PER_USER = 16;
@@ -110,6 +111,13 @@ export interface ValidatedOidcPairingSession {
   readonly sessionId: string;
   readonly userId: string;
   readonly [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true;
+}
+
+/** @internal A transaction-ready proof of the exact recovery session authorizing bootstrap. */
+export interface ValidatedRecoveryBootstrapSession {
+  readonly operationTime: number;
+  readonly sessionId: string;
+  readonly [VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND]: true;
 }
 
 /** @internal Non-serializable provider material released only after local session revocation. */
@@ -1013,6 +1021,43 @@ export class SessionService {
     });
   }
 
+  /** @internal Resolves only a live, CSRF-proven recovery session for first-admin bootstrap. */
+  public beginValidatedRecoveryBootstrapSession(
+    validatedSession: unknown,
+  ): ValidatedRecoveryBootstrapSession | null {
+    if (
+      !validatedSession ||
+      typeof validatedSession !== "object" ||
+      (validatedSession as Partial<ValidatedSession>)[VALIDATED_SESSION_BRAND] !== true ||
+      !SESSION_ID_PATTERN.test((validatedSession as Partial<ValidatedSession>).sessionId ?? "")
+    ) {
+      return null;
+    }
+    const operationTime = this.currentTime();
+    const row = this.loadJoinedSessionById((validatedSession as ValidatedSession).sessionId);
+    const principalRecord = row && mapPrincipalRecord(row);
+    const principal = principalRecord && buildSessionPrincipal(principalRecord, operationTime);
+    if (
+      !row ||
+      !principal ||
+      !this.sessionLifecycleIsActive(row, operationTime) ||
+      row.authMethod !== "recovery" ||
+      row.sessionUserId !== null ||
+      row.externalIdentityId !== null ||
+      row.oidcProviderId !== null ||
+      row.serviceIdentityLinkId !== null ||
+      principal.accountState !== "recovery" ||
+      principal.authenticationMethod.kind !== "recovery"
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      [VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND]: true as const,
+      operationTime: operationTime.getTime(),
+      sessionId: row.sessionId,
+    });
+  }
+
   /** @internal Atomically replaces a proven pending OIDC session after its link is established. */
   public completeValidatedOidcPairingSession(
     pairingSession: unknown,
@@ -1104,6 +1149,83 @@ export class SessionService {
     const replaced = revoked.find((candidate) => candidate.sessionId === row.sessionId);
     if (!replaced) throw new Error("The pending OIDC session could not be replaced.");
     this.auditSessionReplacement(replaced, issued, sessionInput, now, "identity_pairing");
+    return issued;
+  }
+
+  /** @internal Replaces exact recovery access with a normal Jellyfin-attributed user session. */
+  public completeValidatedRecoveryBootstrapSession(
+    bootstrapSession: unknown,
+    userId: string,
+    serviceIdentityLinkId: string,
+    input: Omit<CreateSessionInput, "attribution"> = {},
+  ): IssuedSession {
+    if (!this.database.sqlite.inTransaction) {
+      throw new Error("A surrounding administrator bootstrap transaction is required.");
+    }
+    if (
+      !bootstrapSession ||
+      typeof bootstrapSession !== "object" ||
+      (bootstrapSession as Partial<ValidatedRecoveryBootstrapSession>)[
+        VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND
+      ] !== true
+    ) {
+      throw new Error("The recovery bootstrap session is invalid.");
+    }
+    const proof = bootstrapSession as ValidatedRecoveryBootstrapSession;
+    assertIdentifier(userId, "User identifier");
+    assertIdentifier(serviceIdentityLinkId, "Service identity link identifier");
+    const now = new Date(proof.operationTime);
+    const row = this.loadJoinedSessionById(proof.sessionId);
+    if (
+      !row ||
+      !this.sessionLifecycleIsActive(row, now) ||
+      row.authMethod !== "recovery" ||
+      row.sessionUserId !== null ||
+      row.externalIdentityId !== null ||
+      row.oidcProviderId !== null ||
+      row.serviceIdentityLinkId !== null
+    ) {
+      throw new Error("The recovery bootstrap session could not be upgraded.");
+    }
+
+    const sessionInput: CreateSessionInput = {
+      attribution: {
+        authMethod: "jellyfin",
+        serviceIdentityLinkId,
+        userId,
+      },
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+    };
+    const issued = this.issueSessionInCurrentTransaction(
+      sessionInput,
+      new Set([row.tokenHash]),
+      now,
+      row.sessionId,
+    );
+    const revoked = this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where id <> @replacementSessionId
+           and revoked_at is null
+           and (id = @recoverySessionId or user_id = @userId)
+         returning
+           id as sessionId,
+           user_id as userId,
+           auth_method as authMethod,
+           created_at as createdAt`,
+      )
+      .all({
+        now: now.getTime(),
+        recoverySessionId: proof.sessionId,
+        replacementSessionId: issued.principal.sessionId,
+        userId,
+      }) as RevokedSessionRow[];
+    const replaced = revoked.find((candidate) => candidate.sessionId === row.sessionId);
+    if (!replaced) throw new Error("The recovery bootstrap session could not be replaced.");
+    this.auditSessionReplacement(replaced, issued, sessionInput, now, "recovery_bootstrap");
     return issued;
   }
 

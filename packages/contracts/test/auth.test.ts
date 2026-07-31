@@ -28,6 +28,7 @@ import {
   jellyfinPasswordPairingRequestSchema,
   jellyfinQuickConnectInitiationRequestSchema,
   jellyfinQuickConnectInitiationResponseSchema,
+  jellyfinQuickConnectBootstrapPollResponseSchema,
   jellyfinQuickConnectPairingPollResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
   roleMappingSchema,
@@ -202,6 +203,39 @@ describe("Jellyfin authentication contracts", () => {
         csrfToken: "c".repeat(43),
         principal: activePrincipal,
         status: "paired",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts only an active Jellyfin administrator after bootstrap", () => {
+    const administrator = {
+      ...activePrincipal,
+      permissions: ROLE_PERMISSIONS.admin,
+      role: "admin" as const,
+    };
+    expect(
+      jellyfinQuickConnectBootstrapPollResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        principal: administrator,
+        status: "bootstrapped",
+      }),
+    ).toMatchObject({ status: "bootstrapped" });
+    expect(
+      jellyfinQuickConnectBootstrapPollResponseSchema.safeParse({
+        csrfToken: "c".repeat(43),
+        principal: activePrincipal,
+        status: "bootstrapped",
+      }).success,
+    ).toBe(false);
+    expect(
+      jellyfinQuickConnectBootstrapPollResponseSchema.safeParse({
+        csrfToken: "c".repeat(43),
+        principal: {
+          ...administrator,
+          authenticationMethod: { kind: "oidc", providerId: "authentik" },
+          externalIdentity: oidcIdentity,
+        },
+        status: "bootstrapped",
       }).success,
     ).toBe(false);
   });

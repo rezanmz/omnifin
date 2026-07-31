@@ -62,7 +62,8 @@ app-local until the design-system API stabilizes during Phase 2. The current
 development checkpoint provides storage-backed health checks, browser-safe provider
 discovery, an OIDC Authorization Code flow with PKCE, opaque local sessions,
 break-glass recovery, direct Jellyfin password and Quick Connect authentication with
-encrypted identity links, CSRF-protected password and Quick Connect pairing for pending OIDC users,
+encrypted identity links, a recovery-bound first-administrator bootstrap, CSRF-protected password
+and Quick Connect pairing for pending OIDC users,
 RP-initiated provider logout and provider-initiated back- and front-channel logout,
 normalized contracts, connector probes, migration tooling, and the application shell
 and sign-in experience. The gateway also provides a permission-checked connector
@@ -124,9 +125,11 @@ container release is published, run Omnifin from source:
 pnpm install --frozen-lockfile
 cp .env.example .env
 openssl rand -base64 32
+openssl rand -base64 48
 ```
 
-Place the generated value in `OMNIFIN_ENCRYPTION_KEY` before starting. The example
+Place the 32-byte value in `OMNIFIN_ENCRYPTION_KEY` and the distinct 48-byte value in
+`OMNIFIN_RECOVERY_SECRET` before starting. The example
 environment file documents local-only defaults; do not reuse its settings for an
 internet-accessible installation. The application processes do not load the root
 environment file automatically, so export it into the development shell before
@@ -138,6 +141,13 @@ set -a
 set +a
 pnpm dev
 ```
+
+Set `OMNIFIN_JELLYFIN_URL` before the first start. Once both processes are healthy,
+open the private `/recovery` route and prove control of an administrator account on
+that Jellyfin server. Omnifin discards the password, encrypts the resulting Jellyfin
+token, creates the first local administrator atomically, and replaces the short-lived
+recovery session. See the [first-run guide](docs/first-run.md) for password and Quick
+Connect instructions, proxy requirements, and failure recovery.
 
 See the [development guide](docs/development.md) for checks and repository conventions,
 or the [deployment guide](docs/deployment.md) for the intended production model.
@@ -172,6 +182,7 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy
 - [Deployment](docs/deployment.md) — secrets, TLS, backups, upgrades, and rollback
+- [First run](docs/first-run.md) — source/Compose startup and first-administrator bootstrap
 - [Development](docs/development.md) — local setup, checks, and contribution workflow
 - [Roadmap](docs/roadmap.md) — phased delivery and release gates
 - [Release process](docs/release-process.md) — versions, images, provenance, and

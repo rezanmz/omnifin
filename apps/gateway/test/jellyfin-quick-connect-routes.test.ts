@@ -1,4 +1,5 @@
 import {
+  jellyfinQuickConnectBootstrapPollResponseSchema,
   jellyfinQuickConnectInitiationResponseSchema,
   jellyfinQuickConnectPairingPollResponseSchema,
   jellyfinQuickConnectPollResponseSchema,
@@ -35,7 +36,9 @@ function config(): AppConfig {
   };
 }
 
-function fixture(options: { authenticated?: boolean; enabled?: boolean } = {}) {
+function fixture(
+  options: { authenticated?: boolean; enabled?: boolean; isAdministrator?: boolean } = {},
+) {
   let now = new Date(START);
   let authenticated = options.authenticated ?? false;
   const calls = { authenticate: 0, enabled: 0, initiate: 0, poll: 0, publicInfo: 0 };
@@ -48,7 +51,11 @@ function fixture(options: { authenticated?: boolean; enabled?: boolean } = {}) {
         return {
           AccessToken: "private-jellyfin-access-token",
           ServerId: "server-1",
-          User: { Id: "jellyfin-user-1", Name: "Riley" },
+          User: {
+            Id: "jellyfin-user-1",
+            Name: "Riley",
+            Policy: { IsAdministrator: options.isAdministrator ?? false },
+          },
         };
       },
       getPublicSystemInfo: async () => {
@@ -164,6 +171,10 @@ function pendingOidcSession(app: Awaited<ReturnType<typeof createApp>>) {
       userId: "oidc-user-1",
     },
   });
+}
+
+function recoverySession(app: Awaited<ReturnType<typeof createApp>>) {
+  return app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
 }
 
 describe("Jellyfin Quick Connect browser routes", () => {
@@ -399,6 +410,95 @@ describe("Jellyfin Quick Connect browser routes", () => {
         /private-jellyfin-access-token|private-quick-connect-secret/,
       );
       expect(test.calls).toMatchObject({ authenticate: 1, poll: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("bootstraps the first admin through recovery-bound Quick Connect", async () => {
+    const test = fixture({ isAdministrator: true });
+    const app = await createApp({
+      config: config(),
+      jellyfinQuickConnectDependencies: test.dependencies,
+      sessionDependencies: { clock: () => new Date(START) },
+    });
+    try {
+      const recovery = recoverySession(app);
+      const sessionCookie = `__Host-omnifin_session=${recovery.sessionToken}`;
+      const startedResponse = await app.inject({
+        headers: {
+          cookie: sessionCookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        payload: {},
+        url: "/v1/auth/bootstrap/jellyfin/quick-connect",
+      });
+      expect(startedResponse.statusCode).toBe(200);
+      const started = jellyfinQuickConnectInitiationResponseSchema.parse(startedResponse.json());
+      const bindingCookie = cookieHeader(startedResponse.headers["set-cookie"]);
+
+      test.advance(2_000);
+      test.setAuthenticated(true);
+      const completed = await app.inject({
+        headers: {
+          cookie: `${sessionCookie}; ${bindingCookie}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        payload: {},
+        url: `/v1/auth/bootstrap/jellyfin/quick-connect/${started.transactionId}/poll`,
+      });
+
+      expect(completed.statusCode).toBe(200);
+      expect(jellyfinQuickConnectBootstrapPollResponseSchema.parse(completed.json())).toMatchObject(
+        {
+          principal: {
+            authenticationMethod: { kind: "jellyfin" },
+            role: "admin",
+          },
+          status: "bootstrapped",
+        },
+      );
+      expect(completed.body).not.toMatch(
+        /private-jellyfin-access-token|private-quick-connect-secret/,
+      );
+      expect(app.sessionService.resolveAndRefresh(recovery.sessionToken)).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects administrator Quick Connect without CSRF before contacting Jellyfin", async () => {
+    const test = fixture({ isAdministrator: true });
+    const app = await createApp({
+      config: config(),
+      jellyfinQuickConnectDependencies: test.dependencies,
+      sessionDependencies: { clock: () => new Date(START) },
+    });
+    try {
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        payload: {},
+        url: "/v1/auth/bootstrap/jellyfin/quick-connect",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: "csrf_denied" } });
+      expect(test.calls).toEqual({
+        authenticate: 0,
+        enabled: 0,
+        initiate: 0,
+        poll: 0,
+        publicInfo: 0,
+      });
     } finally {
       await app.close();
     }
