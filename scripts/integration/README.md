@@ -77,6 +77,12 @@ current digest-pinned qBittorrent and SABnzbd images. These checks use synthetic
 metadata on internal Docker networks, call the production adapters, and upload only a closed,
 identifier-free pass report.
 
+The aggregate separately runs the
+[isolated Seerr request fixture](../../docs/operations/seerr-service-fixture.md). A fresh official
+Seerr instance uses one private HTTPS metadata fixture while the production adapter resolves a
+delegated identity, creates one pending request, rejects its duplicate, reviews it, and declines it.
+The internal network has no external route, and passing evidence is written only after teardown.
+
 Run the focused generic identity-provider gate with:
 
 ```sh

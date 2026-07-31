@@ -13,7 +13,7 @@ combination is described as supported.
 | Jellyfin                          | Identity, libraries, playback, watch state, scans, metadata     | Identity/playback isolated gates ready; live pending            |
 | Authentik                         | OIDC sign-in, group claims, front/back-channel logout           | Isolated gate ready; live baseline pending                      |
 | Standards-compliant OIDC provider | Discovery, code flow with PKCE, claims, logout when advertised  | Isolated standards gate ready; live baseline pending            |
-| Seerr                             | Discovery, routed requests, approvals, issues, user context     | Search/request/routing fixtures ready; live baseline pending    |
+| Seerr                             | Discovery, routed requests, approvals, issues, user context     | Contracts plus isolated request/review gate ready; live pending |
 | Radarr                            | Movie monitoring, calendar, search, releases, queue, history    | Isolated reads plus monitoring restore gate ready; live pending |
 | Sonarr                            | Series monitoring, calendar, search, releases, queue, history   | Isolated reads plus monitoring restore gate ready; live pending |
 | Bazarr                            | Subtitle status, search, and download                           | Isolated embedded search/download gate ready; live pending      |
@@ -65,7 +65,13 @@ ratings, validated YouTube trailer references, recommendations, person biographi
 credits, and partial optional-intelligence failure. Gateway evidence separately proves that
 raw paths and numeric routing identifiers are replaced with expiring, user-bound opaque
 references before reaching the browser, and that provider URLs and raw upstream payloads do
-not cross the gateway. Live routing and intelligence compatibility remain pending.
+not cross the gateway. A separate fresh Seerr 3.4.1 instance runs on an internal network with one
+bounded HTTPS metadata fixture. The production adapter must resolve the exact delegated identity,
+create one pending request, reject its duplicate, list it for review, decline it, and verify the
+fresh declined state. The closed report is written only after all service, identity, metadata,
+database, credential, certificate, and request state is removed. See the
+[isolated Seerr request runbook](operations/seerr-service-fixture.md). Live routing and intelligence
+compatibility remain pending.
 
 The protected connector aggregate also creates a deterministic, copyright-free media fixture and
 imports it into a fresh digest-pinned Jellyfin instance. Omnifin's production connector must then

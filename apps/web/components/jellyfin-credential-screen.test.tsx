@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AuthenticatedSessionResponse } from "@omnifin/contracts/auth";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { JellyfinCredentialScreen } from "./jellyfin-credential-screen";
@@ -9,6 +10,26 @@ describe("JellyfinCredentialScreen", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("keeps authentication controls disabled in server markup until hydration", () => {
+    const passwordMarkup = document.createElement("div");
+    passwordMarkup.innerHTML = renderToString(<JellyfinCredentialScreen />);
+
+    expect(passwordMarkup.querySelector('input[name="username"]')).toBeDisabled();
+    expect(passwordMarkup.querySelector('input[name="password"]')).toBeDisabled();
+    expect(passwordMarkup.querySelector('button[type="submit"]')).toBeDisabled();
+    expect(passwordMarkup.querySelector("#jellyfin-quick-connect-tab")).toBeDisabled();
+
+    const quickConnectMarkup = document.createElement("div");
+    quickConnectMarkup.innerHTML = renderToString(
+      <JellyfinCredentialScreen initialMethod="quick-connect" />,
+    );
+    expect(
+      quickConnectMarkup.querySelector(
+        ".jellyfin-quick-connect__start .jellyfin-login-form__submit",
+      ),
+    ).toBeDisabled();
   });
 
   it("checks the OIDC session before revealing pairing controls", async () => {

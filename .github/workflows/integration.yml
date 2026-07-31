@@ -347,6 +347,58 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  seerr-service-fixture:
+    name: Isolated Seerr request integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Seerr connector
+        run: pnpm --filter @omnifin/connectors... build
+      - name: Exercise isolated Seerr request mutation
+        run: >-
+          pnpm fixture:seerr-service
+          --output artifacts/integration/seerr-service/report.json
+      - name: Report sanitized Seerr fixture failure
+        if: failure()
+        shell: bash
+        run: |
+          report="artifacts/integration/seerr-service/report.json"
+          code="failure_report_missing"
+          if [[ -f "$report" ]]; then
+            parsed=$(jq -r '
+              if type == "object" and length == 4
+                and .schemaVersion == 1 and .status == "failed" and .service == "seerr"
+                and (.code | type == "string" and test("^[a-z][a-z0-9_]{0,63}$"))
+              then .code else "failure_report_invalid" end
+            ' "$report") || parsed="failure_report_invalid"
+            code="$parsed"
+          fi
+          printf '::error title=Seerr fixture::%s\n' "$code"
+      - name: Upload sanitized Seerr fixture evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: isolated-seerr-service-report
+          path: artifacts/integration/seerr-service/report.json
+          if-no-files-found: error
+          retention-days: 7
+
   gate:
     name: Connector integration
     if: always()
@@ -357,6 +409,7 @@ jobs:
       - integration
       - oidc-provider
       - playback-fixture
+      - seerr-service-fixture
       - servarr-service-fixtures
     runs-on: ubuntu-latest
     timeout-minutes: 5
