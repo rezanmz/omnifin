@@ -559,7 +559,7 @@ async function rejectsQuickConnectSecret(client, context, secret) {
   }
 }
 
-async function verifyIdentity(context, server, adminAuthentication, username, password, serverId) {
+async function verifyIdentity(context, server, username, password, serverId) {
   const client = authenticationClient(context, server);
   const info = await connectorOperation("identity_public_info", () => client.getPublicSystemInfo());
   if (info.Id !== serverId || info.Version !== context.target.version) {
@@ -607,11 +607,11 @@ async function verifyIdentity(context, server, adminAuthentication, username, pa
   }
   const authorizationQuery = quickConnectAuthorizationQuery(
     quickConnect.Code,
-    adminAuthentication.userId,
+    passwordAuthentication.userId,
   );
   const authorized = await connectorOperation("quick_connect_authorize", () =>
     requestJson(server.loopbackUrl, `QuickConnect/Authorize?${authorizationQuery}`, {
-      headers: tokenHeaders(adminAuthentication.accessToken),
+      headers: tokenHeaders(passwordAuthentication.accessToken),
       method: "POST",
     }),
   );
@@ -905,20 +905,8 @@ async function main(options) {
     running = true;
     await waitForHealthy(firstServer.loopbackUrl);
     const firstInfo = await serverInfo(firstServer.loopbackUrl, context.target.version);
-    const adminAuthentication = await initializeServer(
-      firstServer.loopbackUrl,
-      username,
-      password,
-      context.deviceId,
-    );
-    const identity = await verifyIdentity(
-      context,
-      firstServer,
-      adminAuthentication,
-      username,
-      password,
-      firstInfo.id,
-    );
+    await initializeServer(firstServer.loopbackUrl, username, password, context.deviceId);
+    const identity = await verifyIdentity(context, firstServer, username, password, firstInfo.id);
     const authentication = identity.authentication;
     await configureFixtureServer(firstServer.loopbackUrl, authentication);
     const item = await importFixture(firstServer.loopbackUrl, authentication);
