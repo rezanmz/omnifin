@@ -40,19 +40,25 @@ test("accepts only immutable public Omnifin image digests", () => {
 
 test("accepts exactly one structured IPv4 loopback port binding", () => {
   assert.equal(
-    publishedLoopbackPort('[{"HostIp":"127.0.0.1","HostPort":"32768"}]', "gateway_port"),
+    publishedLoopbackPort(
+      '{"3000/tcp":null,"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
+      "gateway_port",
+    ),
     32_768,
   );
 
   for (const binding of [
     "null",
     "[]",
-    '[{"HostIp":"0.0.0.0","HostPort":"32768"}]',
-    '[{"HostIp":"::1","HostPort":"32768"}]',
-    '[{"HostIp":"127.0.0.1","HostPort":"0"}]',
-    '[{"HostIp":"127.0.0.1","HostPort":"65536"}]',
-    '[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]',
-    '[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]',
+    "{}",
+    '{"4000/tcp":null}',
+    '{"4000/tcp":[{"HostIp":"0.0.0.0","HostPort":"32768"}]}',
+    '{"4000/tcp":[{"HostIp":"::1","HostPort":"32768"}]}',
+    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"0"}]}',
+    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"65536"}]}',
+    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"not-a-port"}]}',
+    '{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"},{"HostIp":"127.0.0.1","HostPort":"32769"}]}',
+    '{"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32769"}],"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32768"}]}',
     "not-json",
   ]) {
     assert.throws(() => publishedLoopbackPort(binding, "gateway_port"), /gateway_port/u);
@@ -212,7 +218,7 @@ test("isolates and resource-bounds every rehearsal runtime", () => {
   }
   assert.equal((HARNESS_SOURCE.match(/"127\.0\.0\.1::4000"/gu) ?? []).length, 1);
   assert.doesNotMatch(HARNESS_SOURCE, /"0\.0\.0\.0:/u);
-  assert.match(HARNESS_SOURCE, /\.NetworkSettings\.Ports "4000\/tcp"/u);
+  assert.match(HARNESS_SOURCE, /json \.NetworkSettings\.Ports/u);
   assert.doesNotMatch(HARNESS_SOURCE, /docker\(\["port"/u);
   assert.match(
     HARNESS_SOURCE,

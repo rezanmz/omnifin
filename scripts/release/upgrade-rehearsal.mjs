@@ -226,13 +226,23 @@ async function waitForHealthy(container, operation) {
 }
 
 export function publishedLoopbackPort(value, operation) {
-  let bindings;
+  let ports;
   try {
-    bindings = JSON.parse(value);
+    ports = JSON.parse(value);
   } catch {
     throw new RehearsalFailure(operation);
   }
+  if (!ports || typeof ports !== "object" || Array.isArray(ports)) {
+    throw new RehearsalFailure(operation);
+  }
+  const bindings = ports["4000/tcp"];
+  const hasOtherPublishedPort = Object.entries(ports).some(
+    ([port, portBindings]) =>
+      port !== "4000/tcp" &&
+      !(portBindings === null || (Array.isArray(portBindings) && portBindings.length === 0)),
+  );
   if (
+    hasOtherPublishedPort ||
     !Array.isArray(bindings) ||
     bindings.length !== 1 ||
     !bindings[0] ||
@@ -250,13 +260,7 @@ export function publishedLoopbackPort(value, operation) {
 
 function publishedGatewayUrl(container, operation) {
   const bindings = docker(
-    [
-      "container",
-      "inspect",
-      "--format",
-      '{{json (index .NetworkSettings.Ports "4000/tcp")}}',
-      container,
-    ],
+    ["container", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container],
     operation,
   );
   const port = publishedLoopbackPort(bindings, operation);
