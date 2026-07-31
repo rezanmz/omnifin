@@ -22,6 +22,7 @@
   isolation: isolate;
   margin: 8px 0 13px;
   min-height: 84px;
+  overflow-anchor: none;
   overflow: hidden;
   padding: 13px;
   position: relative;

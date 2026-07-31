@@ -1,16 +1,16 @@
-@keyframes request-composer-enter {
+@keyframes acquisition-timeline-enter {
   from {
+    filter: blur(7px) saturate(92%);
     opacity: 0;
-    transform: translateX(34px) scale(0.975);
   }
 
   to {
+    filter: blur(0) saturate(100%);
     opacity: 1;
-    transform: translateX(0) scale(1);
   }
 }
 
-@keyframes request-composer-backdrop {
+@keyframes acquisition-timeline-backdrop {
   from {
     opacity: 0;
   }
@@ -35,11 +35,11 @@
 }
 
 .acquisition-timeline[open] {
-  animation: request-composer-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: acquisition-timeline-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .acquisition-timeline::backdrop {
-  animation: request-composer-backdrop 220ms ease-out both;
+  animation: acquisition-timeline-backdrop 220ms ease-out both;
   -webkit-backdrop-filter: blur(13px) saturate(125%);
   backdrop-filter: blur(13px) saturate(125%);
   background:
@@ -168,6 +168,7 @@
 
 .acquisition-timeline__body {
   min-height: 0;
+  overflow-anchor: none;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -685,6 +686,7 @@
   justify-content: space-between;
   margin-top: 4px;
   padding: 15px 3px 16px;
+  pointer-events: none;
   position: sticky;
   bottom: -22px;
   background: linear-gradient(transparent, var(--glass-popover) 26%);
@@ -881,10 +883,6 @@
     width: auto;
   }
 
-  .acquisition-timeline[open] {
-    animation-name: request-composer-mobile-enter;
-  }
-
   .acquisition-timeline__glass {
     border-radius: 30px;
   }
@@ -988,18 +986,6 @@
     gap: 7px;
     bottom: calc(-19px - env(safe-area-inset-bottom));
     padding-bottom: calc(15px + env(safe-area-inset-bottom));
-  }
-}
-
-@keyframes request-composer-mobile-enter {
-  from {
-    opacity: 0;
-    transform: translateY(34px) scale(0.985);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
