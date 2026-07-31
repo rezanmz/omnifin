@@ -1204,6 +1204,17 @@ export class SessionService {
       now,
       row.sessionId,
     );
+    if (
+      issued.principal.accountState !== "active" ||
+      issued.principal.userId !== userId ||
+      issued.principal.role !== "admin" ||
+      issued.principal.authenticationMethod.kind !== "jellyfin" ||
+      issued.principal.linkedServices.length !== 1 ||
+      issued.principal.linkedServices[0]?.id !== serviceIdentityLinkId ||
+      issued.principal.linkedServices[0].health !== "linked"
+    ) {
+      throw new Error("The recovery bootstrap identity could not be established.");
+    }
     const revoked = this.database.sqlite
       .prepare(
         `update sessions

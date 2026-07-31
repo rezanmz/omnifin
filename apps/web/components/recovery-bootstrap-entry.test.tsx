@@ -76,4 +76,15 @@ describe("RecoveryBootstrapEntry", () => {
     expect(secret).toHaveValue("");
     expect(document.body).not.toHaveTextContent("private-recovery-secret");
   });
+
+  it("distinguishes an unavailable control plane from a signed-out browser", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    render(<RecoveryBootstrapEntry />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Recovery access is temporarily unavailable.",
+    );
+    expect(screen.getByLabelText("Recovery secret")).toBeDisabled();
+  });
 });

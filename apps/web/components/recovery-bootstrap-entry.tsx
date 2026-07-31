@@ -36,16 +36,23 @@ function recoverySessionProof(value: unknown): RecoverySessionProof | null {
   return { csrfToken: String(value.csrfToken) };
 }
 
-async function loadExistingRecoverySession(): Promise<RecoverySessionProof | null> {
+type ExistingRecoverySessionResult =
+  { proof: RecoverySessionProof | null; status: "ready" } | { status: "unavailable" };
+
+async function loadExistingRecoverySession(): Promise<ExistingRecoverySessionResult> {
   try {
     const response = await fetch("/api/auth/session", {
       cache: "no-store",
       credentials: "same-origin",
     });
-    if (!response.ok) return null;
-    return recoverySessionProof((await response.json()) as unknown);
+    if (response.status === 401) return { proof: null, status: "ready" };
+    if (!response.ok) return { status: "unavailable" };
+    return {
+      proof: recoverySessionProof((await response.json()) as unknown),
+      status: "ready",
+    };
   } catch {
-    return null;
+    return { status: "unavailable" };
   }
 }
 
@@ -72,10 +79,14 @@ export function RecoveryBootstrapEntry({
   useEffect(() => {
     if (initialProof || initialState) return;
     let active = true;
-    void loadExistingRecoverySession().then((existingProof) => {
+    void loadExistingRecoverySession().then((result) => {
       if (!active) return;
-      if (existingProof) {
-        setProof(existingProof);
+      if (result.status === "unavailable") {
+        setEntryState("unavailable");
+        return;
+      }
+      if (result.proof) {
+        setProof(result.proof);
         return;
       }
       setEntryState("idle");
@@ -133,6 +144,7 @@ export function RecoveryBootstrapEntry({
   }
 
   const busy = entryState === "checking" || entryState === "submitting";
+  const formDisabled = busy || entryState === "unavailable";
   const error =
     entryState === "denied" || entryState === "rate_limited" || entryState === "unavailable"
       ? failureMessage[entryState]
@@ -193,7 +205,7 @@ export function RecoveryBootstrapEntry({
               <input
                 autoCapitalize="none"
                 autoComplete="off"
-                disabled={busy}
+                disabled={formDisabled}
                 maxLength={RECOVERY_SECRET_MAX_LENGTH}
                 name="recovery-secret"
                 onChange={(event) => setSecret(event.currentTarget.value)}
@@ -217,7 +229,7 @@ export function RecoveryBootstrapEntry({
                 <p>This route is intentionally absent from ordinary sign-in navigation.</p>
               )}
             </div>
-            <button className="jellyfin-login-form__submit" disabled={busy} type="submit">
+            <button className="jellyfin-login-form__submit" disabled={formDisabled} type="submit">
               {entryState === "submitting" ? (
                 <>
                   <LoaderCircle

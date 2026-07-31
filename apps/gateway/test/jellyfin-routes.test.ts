@@ -396,6 +396,114 @@ describe("POST /v1/auth/bootstrap/jellyfin/password", () => {
       await app.close();
     }
   });
+
+  it("returns an opaque conflict once a local administrator already exists", async () => {
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      app.database.db
+        .insert(users)
+        .values({
+          displayName: "Existing administrator",
+          id: "existing-admin",
+          role: "admin",
+          roleSource: "manual",
+          status: "active",
+        })
+        .run();
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        ...request(),
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: { code: "bootstrap_not_available" } });
+      expect(response.body).not.toMatch(/existing-admin|private-password/u);
+      expect(app.sessionService.resolveAndRefresh(recovery.sessionToken)?.principal).toMatchObject({
+        accountState: "recovery",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps rejected credentials and upstream failure to distinct safe bootstrap errors", async () => {
+    const testCases = [
+      {
+        error: new SafeConnectorError({
+          code: "invalid_credentials",
+          message: "Jellyfin rejected connector credentials.",
+          operation: "password_authentication",
+          retryable: false,
+          service: "jellyfin",
+          status: 401,
+        }),
+        expectedCode: "authentication_denied",
+        expectedStatus: 401,
+      },
+      {
+        error: new Error("private upstream failure"),
+        expectedCode: "authentication_unavailable",
+        expectedStatus: 503,
+      },
+    ] as const;
+
+    for (const testCase of testCases) {
+      const fixture = dependencyFixture({ authenticationError: testCase.error });
+      const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+      try {
+        const recovery = recoverySession(app);
+        const response = await app.inject({
+          ...request(),
+          headers: {
+            cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+            origin: "https://omnifin.example",
+            "x-omnifin-csrf": recovery.csrfToken,
+          },
+          url: "/v1/auth/bootstrap/jellyfin/password",
+        });
+
+        expect(response.statusCode).toBe(testCase.expectedStatus);
+        expect(response.json()).toMatchObject({ error: { code: testCase.expectedCode } });
+        expect(response.body).not.toMatch(/private-password|private upstream failure/u);
+        expect(
+          app.sessionService.resolveAndRefresh(recovery.sessionToken)?.principal,
+        ).toMatchObject({ accountState: "recovery" });
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it("rejects malformed bootstrap credentials before contacting Jellyfin", async () => {
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({ config: config(), jellyfinDependencies: fixture.dependencies });
+    try {
+      const recovery = recoverySession(app);
+      const response = await app.inject({
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        payload: { password: "private-password" },
+        url: "/v1/auth/bootstrap/jellyfin/password",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: "invalid_request" } });
+      expect(fixture.calls).toEqual({ authentication: 0, publicInfo: 0 });
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("POST /v1/auth/jellyfin/link/password", () => {
