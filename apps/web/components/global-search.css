@@ -21,7 +21,7 @@
 }
 
 .search-console::before {
-  background: linear-gradient(90deg, var(--accent), transparent 72%);
+  background: linear-gradient(90deg, var(--acid), transparent 72%);
   content: "";
   height: 1px;
   left: 20px;
@@ -93,7 +93,7 @@
     rgb(255 255 255 / 4%);
   border: 1px solid rgb(216 255 112 / 16%);
   border-radius: var(--radius-sm);
-  color: var(--accent);
+  color: var(--acid);
   display: flex;
   height: 58px;
   justify-content: center;
@@ -157,7 +157,7 @@
   background:
     radial-gradient(
       circle at 12% 12%,
-      color-mix(in srgb, var(--accent) 9%, transparent),
+      color-mix(in srgb, var(--acid) 9%, transparent),
       transparent 34%
     ),
     linear-gradient(110deg, var(--glass-highlight), transparent 58%);
@@ -175,13 +175,13 @@
   backdrop-filter: blur(18px) saturate(160%);
   background:
     linear-gradient(145deg, rgb(255 255 255 / 22%), transparent 46%),
-    color-mix(in srgb, var(--accent) 11%, var(--glass-soft));
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--glass-edge));
+    color-mix(in srgb, var(--acid) 11%, var(--glass));
+  border: 1px solid color-mix(in srgb, var(--acid) 22%, var(--glass-edge));
   border-radius: 18px;
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 30%),
     0 10px 28px color-mix(in srgb, var(--glass-cast-shadow) 40%, transparent);
-  color: var(--accent);
+  color: var(--acid);
   display: flex;
   height: 54px;
   justify-content: center;
@@ -215,7 +215,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px;
-  scrollbar-color: color-mix(in srgb, var(--accent) 24%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--acid) 24%, transparent) transparent;
   scrollbar-width: thin;
 }
 
@@ -259,11 +259,11 @@
   background:
     linear-gradient(
       130deg,
-      color-mix(in srgb, var(--accent) 9%, var(--glass-highlight)),
+      color-mix(in srgb, var(--acid) 9%, var(--glass-highlight)),
       transparent 58%
     ),
     var(--fill-subtle);
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--glass-edge));
+  border-color: color-mix(in srgb, var(--acid) 22%, var(--glass-edge));
   box-shadow:
     inset 0 1px 0 var(--glass-specular),
     0 8px 18px color-mix(in srgb, var(--glass-cast-shadow) 32%, transparent);
@@ -271,7 +271,7 @@
 }
 
 .command-option:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--acid);
   outline-offset: 2px;
 }
 
@@ -281,10 +281,10 @@
 
 .command-option__icon {
   align-items: center;
-  background: color-mix(in srgb, var(--accent) 8%, var(--glass-soft));
-  border: 1px solid color-mix(in srgb, var(--accent) 13%, var(--glass-edge));
+  background: color-mix(in srgb, var(--acid) 8%, var(--glass));
+  border: 1px solid color-mix(in srgb, var(--acid) 13%, var(--glass-edge));
   border-radius: 12px;
-  color: color-mix(in srgb, var(--accent) 78%, var(--paper-0));
+  color: color-mix(in srgb, var(--acid) 78%, var(--paper-0));
   display: flex;
   height: 38px;
   justify-content: center;
@@ -330,7 +330,7 @@
 
 .command-option:hover .command-option__arrow,
 .command-option:focus-visible .command-option__arrow {
-  color: var(--accent);
+  color: var(--acid);
   transform: translate(1px, -1px);
 }
 
@@ -465,7 +465,7 @@
 }
 
 .search-result {
-  --search-accent: var(--accent);
+  --search-accent: var(--acid);
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
@@ -568,7 +568,7 @@
 }
 
 .search-preview {
-  --search-accent: var(--accent);
+  --search-accent: var(--acid);
   background:
     radial-gradient(
       circle at 72% 18%,

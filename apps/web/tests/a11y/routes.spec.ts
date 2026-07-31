@@ -252,6 +252,22 @@ test("open discovery search has no automatically detectable accessibility violat
   expect(results.violations).toEqual([]);
 });
 
+test("permission-aware command palette has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "Search media and commands" }).click();
+  await expect(page.getByRole("option", { name: /Calendar/i })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("media detail drawer has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {
