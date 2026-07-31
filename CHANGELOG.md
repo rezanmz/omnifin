@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/rezanmz/omnifin/compare/v0.3.0...v0.4.0) (2026-07-31)
+
+
+### Features
+
+* **gateway:** stream live health snapshots ([#110](https://github.com/rezanmz/omnifin/issues/110)) ([6585984](https://github.com/rezanmz/omnifin/commit/658598429affca43948b551046a7d3e4f2fa0a4b)), closes [#109](https://github.com/rezanmz/omnifin/issues/109)
+* **ui:** add permission-aware command palette ([#107](https://github.com/rezanmz/omnifin/issues/107)) ([188abcf](https://github.com/rezanmz/omnifin/commit/188abcfedf972e4c0f27d2ec0e3adddbeadd9936))
+
+
+### Fixes
+
+* **auth:** read mapped sessions from browser ([#102](https://github.com/rezanmz/omnifin/issues/102)) ([16e10eb](https://github.com/rezanmz/omnifin/commit/16e10eb4fb9b6aeaaa55ce8f99b318e3c416adb4))
+* **ui:** make system pulse actionable ([#108](https://github.com/rezanmz/omnifin/issues/108)) ([e98a8be](https://github.com/rezanmz/omnifin/commit/e98a8be01a1d3730b7eb7baec9c3bc5da56559fc)), closes [#105](https://github.com/rezanmz/omnifin/issues/105)
+* **ui:** stabilize acquisition recovery action ([#104](https://github.com/rezanmz/omnifin/issues/104)) ([ece59a2](https://github.com/rezanmz/omnifin/commit/ece59a279a59648acd05a9b2372b5c92bddbf609))
+
 ## [0.3.0](https://github.com/rezanmz/omnifin/compare/v0.2.0...v0.3.0) (2026-07-31)
 
 
