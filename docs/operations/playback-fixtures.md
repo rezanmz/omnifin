@@ -41,6 +41,14 @@ other starts Jellyfin 10.11.11 as the latest version verified on 2026-07-31. Bot
 images are pinned by their multi-architecture digest and run with fresh private
 configuration and cache directories.
 
+Container creation normally runs once. A narrowly allowlisted Docker daemon, networking,
+or host-port allocation failure may receive one retry after 250 milliseconds. The harness
+force-removes any partial container before retrying and again after retry exhaustion; stable
+configuration and policy failures stop immediately. Public evidence exposes only the bounded
+`container_start_failed`, `container_start_retry_exhausted`, and applicable cleanup categories.
+Raw daemon diagnostics, runner paths, generated container names, ports, and network identifiers
+remain private.
+
 Each version completes the first-run flow with ephemeral credentials and then calls
 Omnifin's production identity and playback connectors. The gate requires public version
 discovery, password authentication, invalid-password rejection, Quick Connect
