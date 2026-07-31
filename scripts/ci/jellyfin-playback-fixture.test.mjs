@@ -10,6 +10,7 @@ import {
   hlsSegmentFormat,
   hostContainerUser,
   isLibraryProbePending,
+  jellyfinCompatibilityReport,
   jellyfinTarget,
   restartPlaybackNegotiation,
   selectConnectorAddress,
@@ -42,6 +43,53 @@ test("accepts only immutable official Jellyfin images bound to their exact versi
         "10.10.7",
       ),
     /jellyfin_target_invalid/u,
+  );
+});
+
+test("builds a closed compatibility report without retaining supplied secrets", () => {
+  const report = jellyfinCompatibilityReport({
+    accessToken: "private-access-token",
+    identityChecks: {
+      invalidPasswordRejected: true,
+      mismatchedQuickConnectSecretRejected: true,
+      password: true,
+      publicInfo: true,
+      quickConnect: true,
+      secret: "private-quick-connect-secret",
+    },
+    image: LATEST_IMAGE,
+    persistedSeconds: 6,
+    playback: {
+      direct: { bytes: 4_096, status: 206, token: "private-direct-token" },
+      hls: { bytes: 8_192, format: "fmp4", status: 200, path: "/private/media" },
+      seekSeconds: 4,
+      selectedAudio: "fra",
+      selectedSubtitle: "eng",
+    },
+    reconnectDelivery: "direct",
+    restartPosition: 6,
+    version: "10.11.11",
+  });
+
+  assert.deepEqual(Object.keys(report).sort(), [
+    "checks",
+    "image",
+    "schemaVersion",
+    "serverVersion",
+    "status",
+  ]);
+  assert.deepEqual(report.checks.identity, {
+    invalidPasswordRejected: true,
+    mismatchedQuickConnectSecretRejected: true,
+    password: true,
+    publicInfo: true,
+    quickConnect: true,
+  });
+  assert.deepEqual(report.checks.directRange, { bytes: 4_096, status: 206 });
+  assert.deepEqual(report.checks.hlsTranscode, { bytes: 8_192, format: "fmp4", status: 200 });
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
   );
 });
 

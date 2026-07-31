@@ -120,6 +120,52 @@ export function jellyfinTarget(image, expectedVersion) {
   return { image, version: expectedVersion };
 }
 
+export function jellyfinCompatibilityReport(input) {
+  const target = jellyfinTarget(input.image, input.version);
+  const identity = {
+    invalidPasswordRejected: input.identityChecks?.invalidPasswordRejected === true,
+    mismatchedQuickConnectSecretRejected:
+      input.identityChecks?.mismatchedQuickConnectSecretRejected === true,
+    password: input.identityChecks?.password === true,
+    publicInfo: input.identityChecks?.publicInfo === true,
+    quickConnect: input.identityChecks?.quickConnect === true,
+  };
+  if (Object.values(identity).some((passed) => !passed)) {
+    throw new JellyfinFixtureFailure("compatibility_report_invalid");
+  }
+  return {
+    checks: {
+      directRange: {
+        bytes: input.playback.direct.bytes,
+        status: input.playback.direct.status,
+      },
+      hlsTranscode: {
+        bytes: input.playback.hls.bytes,
+        format: input.playback.hls.format,
+        status: input.playback.hls.status,
+      },
+      identity,
+      progress: {
+        persistedSeconds: input.persistedSeconds,
+        reportedSeconds: 6,
+      },
+      reconnect: {
+        delivery: input.reconnectDelivery,
+        persistedSeconds: input.restartPosition,
+      },
+      tracks: {
+        audio: input.playback.selectedAudio,
+        subtitle: input.playback.selectedSubtitle,
+      },
+      transcodeSeekSeconds: input.playback.seekSeconds,
+    },
+    image: target.image,
+    schemaVersion: 1,
+    serverVersion: target.version,
+    status: "passed",
+  };
+}
+
 function argumentValue(arguments_, name) {
   const indexes = arguments_.flatMap((argument, index) => (argument === name ? [index] : []));
   if (indexes.length !== 1 || !arguments_[indexes[0] + 1]) {
@@ -918,24 +964,15 @@ async function main(options) {
       throw new JellyfinFixtureFailure("restart_playback_invalid");
     }
 
-    const report = {
-      checks: {
-        directRange: playback.direct,
-        hlsTranscode: playback.hls,
-        identity: identity.checks,
-        progress: { persistedSeconds, reportedSeconds: 6 },
-        reconnect: { delivery: reconnected.delivery, persistedSeconds: restartPosition },
-        tracks: {
-          audio: playback.selectedAudio,
-          subtitle: playback.selectedSubtitle,
-        },
-        transcodeSeekSeconds: playback.seekSeconds,
-      },
+    const report = jellyfinCompatibilityReport({
+      identityChecks: identity.checks,
       image: context.target.image,
-      schemaVersion: 1,
-      serverVersion: secondInfo.version,
-      status: "passed",
-    };
+      persistedSeconds,
+      playback,
+      reconnectDelivery: reconnected.delivery,
+      restartPosition,
+      version: secondInfo.version,
+    });
     await writeReport(options.outputPath, report);
     process.stdout.write(`${JSON.stringify(report)}\n`);
   } finally {
