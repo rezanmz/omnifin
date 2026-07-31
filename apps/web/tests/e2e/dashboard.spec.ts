@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import {
   demoContinueWatchingFeed,
   emptyContinueWatchingFeed,
@@ -43,6 +43,42 @@ async function mockQuietContinueWatching(page: Parameters<typeof mockDiscoveryFe
       status: 200,
     });
   });
+}
+
+async function expectStationaryPointerTarget(action: Locator) {
+  await expect(action).toBeVisible();
+  await action.scrollIntoViewIfNeeded();
+  await action.hover();
+  await expect
+    .poll(() => action.evaluate((element) => getComputedStyle(element).transform))
+    .toBe("none");
+
+  const settled = await action.boundingBox();
+  expect(settled).not.toBeNull();
+  await action.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  const afterFrames = await action.boundingBox();
+  expect(afterFrames).not.toBeNull();
+  expect(afterFrames?.x).toBeCloseTo(settled!.x, 2);
+  expect(afterFrames?.y).toBeCloseTo(settled!.y, 2);
+  expect(afterFrames?.width).toBeCloseTo(settled!.width, 2);
+  expect(afterFrames?.height).toBeCloseTo(settled!.height, 2);
+  await expect
+    .poll(() =>
+      action.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          bounds.x + bounds.width / 2,
+          bounds.y + bounds.height / 2,
+        );
+        return hit === element || element.contains(hit);
+      }),
+    )
+    .toBe(true);
 }
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
@@ -260,7 +296,9 @@ test("operators can queue one exact-target acquisition search", async ({ page })
     .click();
 
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await timeline.getByRole("button", { name: "Review search" }).click();
+  const recoveryAction = timeline.getByRole("button", { name: "Review search" });
+  await expectStationaryPointerTarget(recoveryAction);
+  await recoveryAction.click();
   await expect(timeline.getByText(/library files remain untouched/u)).toBeVisible();
   await expect(timeline.getByRole("button", { name: /delete|blocklist|remove/i })).toHaveCount(0);
   await timeline.getByRole("button", { name: "Queue search" }).click();
@@ -309,7 +347,7 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await mockDiscoverySearch(page);
   await page.goto("/");
 
-  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
   await search.click();
   await expect(search).toHaveAttribute("aria-expanded", "true");
   await search.fill("matrix");
@@ -328,6 +366,28 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await expect(search).toHaveValue("matrix");
 });
 
+test("command palette reveals only destinations allowed by the current session", async ({
+  page,
+}) => {
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
+  await search.click();
+  await expect(page.getByRole("option", { name: /Calendar/i })).toHaveAttribute(
+    "href",
+    "/calendar",
+  );
+  await expect(page.getByRole("option", { name: /Download queue/i })).toHaveCount(0);
+
+  await search.fill("d");
+  await expect(page.getByRole("option", { name: /Discover/i })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Download queue/i })).toHaveCount(0);
+  await expect(
+    page.getByText(/Keep typing to search movies, series, and people too/i),
+  ).toBeVisible();
+});
+
 test("media details preserve search context and expose a guarded request handoff", async ({
   page,
 }) => {
@@ -335,7 +395,7 @@ test("media details preserve search context and expose a guarded request handoff
   await mockDiscoveryDetails(page);
   await page.goto("/");
 
-  const search = page.getByRole("combobox", { name: "Search movies, series, and people" });
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
   await search.fill("matrix");
   await page.getByRole("button", { name: "View details for The Matrix" }).click();
   const drawer = page.locator("dialog.media-detail");

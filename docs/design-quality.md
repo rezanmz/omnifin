@@ -101,7 +101,10 @@ A feature is incomplete when only its populated happy path is designed.
 
 - Drawers preserve browsing context for deep comparison and technical work.
 - Modals are reserved for short decisions that genuinely block progress.
-- A command palette exposes expert shortcuts without crowding ordinary navigation.
+- The command palette shares the lazy-loaded global-search surface, opens with
+  `Command/Ctrl-K`, filters destinations against the normalized same-origin session,
+  and fails closed to unprivileged routes when access cannot be read. Local commands
+  match from the first character; remote media discovery begins only after two.
 - Poster rails, tables, calendars, drawers, and player controls support keyboard,
   touch, mouse, and directional navigation.
 - Directional focus is scoped to a visible control group: left and right move within
