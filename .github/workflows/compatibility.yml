@@ -32,7 +32,7 @@ jobs:
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
         with:
           version: ${{ env.ORAS_VERSION }}
-      - name: Resolve allowlisted aliases before image acquisition
+      - name: Resolve newest allowlisted stable tags before image acquisition
         run: >-
           node scripts/integration/compatibility-targets.mjs resolve
           --output artifacts/compatibility/targets.json

@@ -371,7 +371,7 @@ export function validateAggregateCompatibilityReport(report) {
         validateServiceCompatibilityReport(service, {
           image: service.image,
           service: definition.service,
-          source: `${definition.repository}:${definition.alias}`,
+          source: service.image.slice(0, service.image.lastIndexOf("@")),
           version: service.upstreamVersion,
         });
         return true;

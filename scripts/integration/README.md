@@ -104,8 +104,9 @@ protected configuration. All live entries intentionally remain pending; no live 
 is claimed.
 
 `.github/workflows/compatibility.yml` is a separate secret-free latest-stable canary. It resolves
-only reviewed upstream repositories and stable tag formats, binds each mutable alias to an immutable
-digest before any pull, and reuses these harnesses in disposable GitHub-hosted jobs. Its closed
+only reviewed upstream repositories and stable tag formats, selects the newest stable version tag,
+binds that exact tag to an immutable digest before any pull, and reuses these harnesses in disposable
+GitHub-hosted jobs. Its closed
 aggregate records exact images, versions, checks, outcomes, verification time, and bounded failure
 categories. It never turns fixture evidence into a live installation support claim.
 

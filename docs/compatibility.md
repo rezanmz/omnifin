@@ -121,7 +121,8 @@ profiles enter the same protected environment for every capability they claim, a
 
 The weekly and manually dispatched compatibility canary is separate from that protected live
 installation baseline. It uses no repository or environment secrets. At the start of each run it
-resolves an allowlisted `latest` alias to a stable version tag at the same immutable digest, then
+selects the newest product-specific stable version tag from each allowlisted repository, resolves
+that exact tag to an immutable digest, then
 starts fresh Jellyfin, Seerr, Servarr, download-client, Authentik, and generic OIDC fixtures on
 GitHub-hosted runners. The production adapters perform the established identity, playback,
 request, acquisition, subtitle, indexer, and queue checks. Each job fails if its container,

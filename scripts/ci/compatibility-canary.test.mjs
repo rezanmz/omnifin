@@ -129,40 +129,27 @@ test("defines exactly the public latest-stable upstream repositories", () => {
     "seerr",
     "sonarr",
   ]);
-  assert.deepEqual(
-    COMPATIBILITY_TARGET_DEFINITIONS.map(({ alias, repository, service }) => ({
-      alias,
-      repository,
-      service,
-    })),
-    [
-      {
-        alias: "latest",
-        repository: "ghcr.io/goauthentik/server",
-        service: "authentik",
-      },
-      { alias: "latest", repository: "ghcr.io/linuxserver/bazarr", service: "bazarr" },
-      { alias: "latest", repository: "ghcr.io/jellyfin/jellyfin", service: "jellyfin" },
-      { alias: "latest", repository: "ghcr.io/dexidp/dex", service: "oidc" },
-      {
-        alias: "latest",
-        repository: "ghcr.io/linuxserver/prowlarr",
-        service: "prowlarr",
-      },
-      {
-        alias: "latest",
-        repository: "ghcr.io/linuxserver/qbittorrent",
-        service: "qbittorrent",
-      },
-      { alias: "latest", repository: "ghcr.io/linuxserver/radarr", service: "radarr" },
-      { alias: "latest", repository: "ghcr.io/linuxserver/sabnzbd", service: "sabnzbd" },
-      { alias: "latest", repository: "ghcr.io/seerr-team/seerr", service: "seerr" },
-      { alias: "latest", repository: "ghcr.io/linuxserver/sonarr", service: "sonarr" },
-    ],
-  );
+  assert.deepEqual(COMPATIBILITY_TARGET_DEFINITIONS, [
+    { repository: "ghcr.io/goauthentik/server", service: "authentik" },
+    { repository: "ghcr.io/linuxserver/bazarr", service: "bazarr" },
+    { repository: "ghcr.io/jellyfin/jellyfin", service: "jellyfin" },
+    { repository: "ghcr.io/dexidp/dex", service: "oidc" },
+    {
+      repository: "ghcr.io/linuxserver/prowlarr",
+      service: "prowlarr",
+    },
+    {
+      repository: "ghcr.io/linuxserver/qbittorrent",
+      service: "qbittorrent",
+    },
+    { repository: "ghcr.io/linuxserver/radarr", service: "radarr" },
+    { repository: "ghcr.io/linuxserver/sabnzbd", service: "sabnzbd" },
+    { repository: "ghcr.io/seerr-team/seerr", service: "seerr" },
+    { repository: "ghcr.io/linuxserver/sonarr", service: "sonarr" },
+  ]);
 });
 
-test("resolves mutable stable aliases to matching version tags and immutable digests", () => {
+test("resolves newest stable version tags to immutable digests", () => {
   const report = resolveCompatibilityTargets({
     execute: successfulResolver,
     now: () => new Date("2026-07-31T14:00:00.000Z"),
@@ -177,21 +164,25 @@ test("resolves mutable stable aliases to matching version tags and immutable dig
       target.image,
       `${definition.repository}:${TAGS[target.service]}@${DIGESTS[target.service]}`,
     );
-    assert.equal(target.source, `${definition.repository}:latest`);
+    assert.equal(target.source, `${definition.repository}:${TAGS[target.service]}`);
     assert.match(target.version, /^(?:\d+\.)+\d+$/u);
   }
   assert.deepEqual(validateCompatibilityTargets(report), report);
 });
 
-test("fails closed when latest has no stable version tag at the same digest", () => {
+test("fails closed when a repository has no stable version tag", () => {
   assert.throws(
     () =>
       resolveCompatibilityTargets({
         execute(arguments_) {
-          const execution = successfulResolver(arguments_);
-          if (arguments_[0] === "resolve" && !arguments_[1].endsWith(":latest")) {
-            return { ...execution, stdout: `sha256:${"f".repeat(64)}\n` };
+          if (
+            arguments_[0] === "repo" &&
+            arguments_[1] === "tags" &&
+            arguments_[2] === "ghcr.io/goauthentik/server"
+          ) {
+            return { status: 0, stderr: "", stdout: "latest\nrelease-candidate\n" };
           }
+          const execution = successfulResolver(arguments_);
           return execution;
         },
       }),

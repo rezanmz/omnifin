@@ -10,7 +10,6 @@ import { pathToFileURL } from "node:url";
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const MAX_REGISTRY_OUTPUT_BYTES = 1 * 1_024 * 1_024;
-const MAX_STABLE_TAG_CANDIDATES = 16;
 const TARGET_KEYS = "image,service,source,version";
 
 export class CompatibilityTargetError extends Error {
@@ -25,35 +24,30 @@ export class CompatibilityTargetError extends Error {
 
 export const COMPATIBILITY_TARGET_DEFINITIONS = Object.freeze([
   Object.freeze({
-    alias: "latest",
     repository: "ghcr.io/goauthentik/server",
     service: "authentik",
   }),
-  Object.freeze({ alias: "latest", repository: "ghcr.io/linuxserver/bazarr", service: "bazarr" }),
+  Object.freeze({ repository: "ghcr.io/linuxserver/bazarr", service: "bazarr" }),
   Object.freeze({
-    alias: "latest",
     repository: "ghcr.io/jellyfin/jellyfin",
     service: "jellyfin",
   }),
-  Object.freeze({ alias: "latest", repository: "ghcr.io/dexidp/dex", service: "oidc" }),
+  Object.freeze({ repository: "ghcr.io/dexidp/dex", service: "oidc" }),
   Object.freeze({
-    alias: "latest",
     repository: "ghcr.io/linuxserver/prowlarr",
     service: "prowlarr",
   }),
   Object.freeze({
-    alias: "latest",
     repository: "ghcr.io/linuxserver/qbittorrent",
     service: "qbittorrent",
   }),
-  Object.freeze({ alias: "latest", repository: "ghcr.io/linuxserver/radarr", service: "radarr" }),
+  Object.freeze({ repository: "ghcr.io/linuxserver/radarr", service: "radarr" }),
   Object.freeze({
-    alias: "latest",
     repository: "ghcr.io/linuxserver/sabnzbd",
     service: "sabnzbd",
   }),
-  Object.freeze({ alias: "latest", repository: "ghcr.io/seerr-team/seerr", service: "seerr" }),
-  Object.freeze({ alias: "latest", repository: "ghcr.io/linuxserver/sonarr", service: "sonarr" }),
+  Object.freeze({ repository: "ghcr.io/seerr-team/seerr", service: "seerr" }),
+  Object.freeze({ repository: "ghcr.io/linuxserver/sonarr", service: "sonarr" }),
 ]);
 
 export const COMPATIBILITY_SERVICES = Object.freeze(
@@ -176,26 +170,21 @@ function repositoryTags(execute, definition) {
   const candidates = lines
     .map((tag) => stableTag(definition.service, tag))
     .filter(Boolean)
-    .sort((left, right) => compareOrders(left.order, right.order))
-    .slice(0, MAX_STABLE_TAG_CANDIDATES);
+    .sort((left, right) => compareOrders(left.order, right.order));
   if (candidates.length < 1) throw new CompatibilityTargetError("stable_tag_unresolved");
   return candidates;
 }
 
 function targetForDefinition(definition, execute) {
-  const source = `${definition.repository}:${definition.alias}`;
-  const aliasDigest = resolvedDigest(execute, source);
-  for (const candidate of repositoryTags(execute, definition)) {
-    const versionReference = `${definition.repository}:${candidate.tag}`;
-    if (resolvedDigest(execute, versionReference) !== aliasDigest) continue;
-    return {
-      image: `${versionReference}@${aliasDigest}`,
-      service: definition.service,
-      source,
-      version: candidate.version,
-    };
-  }
-  throw new CompatibilityTargetError("stable_tag_unresolved");
+  const [candidate] = repositoryTags(execute, definition);
+  const source = `${definition.repository}:${candidate.tag}`;
+  const digest = resolvedDigest(execute, source);
+  return {
+    image: `${source}@${digest}`,
+    service: definition.service,
+    source,
+    version: candidate.version,
+  };
 }
 
 export function resolveCompatibilityTargets({
@@ -253,11 +242,10 @@ export function validateCompatibilityTarget(target) {
   ) {
     throw new CompatibilityTargetError("compatibility_target_invalid");
   }
-  const definition = definitionFor(target.service);
-  if (target.source !== `${definition.repository}:${definition.alias}`) {
+  parsedImageTarget(target.service, target.image, target.version);
+  if (target.source !== target.image.slice(0, target.image.lastIndexOf("@"))) {
     throw new CompatibilityTargetError("compatibility_target_invalid");
   }
-  parsedImageTarget(target.service, target.image, target.version);
   return structuredClone(target);
 }
 
