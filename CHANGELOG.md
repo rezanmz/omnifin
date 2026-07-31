@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0](https://github.com/rezanmz/omnifin/compare/v0.2.0...v0.3.0) (2026-07-31)
+
+
+### Features
+
+* **ci:** verify Bazarr subtitle mutation ([#83](https://github.com/rezanmz/omnifin/issues/83)) ([83de76c](https://github.com/rezanmz/omnifin/commit/83de76c6f28018bfd9e8d2d871ec0bc5d103d379))
+* **ci:** verify isolated Seerr requests ([#87](https://github.com/rezanmz/omnifin/issues/87)) ([21cd3ab](https://github.com/rezanmz/omnifin/commit/21cd3ab17bbc6139ffe27832c19db4d8bb134e83))
+* **ci:** verify safe connector mutations ([#78](https://github.com/rezanmz/omnifin/issues/78)) ([5858692](https://github.com/rezanmz/omnifin/commit/585869219a1dffb53daf0799b8d380a5c0cb241d))
+* **connectors:** derive Jellyfin artwork accents ([#100](https://github.com/rezanmz/omnifin/issues/100)) ([238c6b2](https://github.com/rezanmz/omnifin/commit/238c6b2fcc6ded1fcb4b3d586c95bcefe9906dd4)), closes [#99](https://github.com/rezanmz/omnifin/issues/99)
+
+
+### Fixes
+
+* **auth:** await mapped session convergence ([#94](https://github.com/rezanmz/omnifin/issues/94)) ([9213029](https://github.com/rezanmz/omnifin/commit/9213029fceaf9a8977b71508263f71e978349954))
+* **ci:** harden connector fixture startup ([#76](https://github.com/rezanmz/omnifin/issues/76)) ([16eea89](https://github.com/rezanmz/omnifin/commit/16eea89a240e7c18a5f497313c2483d7ca13895b))
+* **connectors:** bound Jellyfin restart readiness ([#96](https://github.com/rezanmz/omnifin/issues/96)) ([dad3be6](https://github.com/rezanmz/omnifin/commit/dad3be67d19eaddfa58dc4096ae2c3e8c80dd702))
+* **ui:** make lazy actions hydration-safe ([#81](https://github.com/rezanmz/omnifin/issues/81)) ([fbc1f21](https://github.com/rezanmz/omnifin/commit/fbc1f21ccc871d840230435973bfbee43ef53862))
+* **ui:** polish signed-out dashboard boundaries ([#98](https://github.com/rezanmz/omnifin/issues/98)) ([182780d](https://github.com/rezanmz/omnifin/commit/182780d49e114756e2dea71c11439caf391d38d7))
+* **ui:** stabilize acquisition monitoring action ([#95](https://github.com/rezanmz/omnifin/issues/95)) ([d3bfd8e](https://github.com/rezanmz/omnifin/commit/d3bfd8e623af726e4edd6240c0d0c089a19e3da0))
+
 ## [0.2.0](https://github.com/rezanmz/omnifin/compare/v0.1.0...v0.2.0) (2026-07-30)
 
 
