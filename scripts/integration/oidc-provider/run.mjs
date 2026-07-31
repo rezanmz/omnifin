@@ -455,6 +455,7 @@ async function main(options) {
     writeFile(
       environmentFile,
       dotenv({
+        OMNIFIN_OIDC_PROVIDER_IMAGE: oidcProviderFixture.image,
         OMNIFIN_OIDC_PROVIDER_CONFIG: providerConfig,
         OMNIFIN_OIDC_PROVIDER_HTTP_PORT: String(providerHttpPort),
       }),

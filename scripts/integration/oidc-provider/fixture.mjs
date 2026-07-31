@@ -1,6 +1,14 @@
 import { networkInterfaces } from "node:os";
 
-const OIDC_PROVIDER_VERSION = "2.45.1";
+import { applyCompatibilityTargetOverride } from "../compatibility-targets.mjs";
+
+const oidcProviderTarget = applyCompatibilityTargetOverride({
+  oidc: {
+    image:
+      "ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462",
+    version: "2.45.1",
+  },
+}).oidc;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
 const CHECKS = Object.freeze([
   "authorization_code_pkce",
@@ -87,11 +95,12 @@ export function reportFor(checks = CHECKS) {
   }
   return {
     checks: [...CHECKS],
+    image: oidcProviderTarget.image,
     mode: "isolated_fixture",
     passed: true,
     schemaVersion: 1,
     service: "oidc",
-    upstreamVersion: OIDC_PROVIDER_VERSION,
+    upstreamVersion: oidcProviderTarget.version,
   };
 }
 
@@ -102,15 +111,17 @@ export function failureReportFor(category) {
   return {
     checks: [],
     errorCategory: category,
+    image: oidcProviderTarget.image,
     mode: "isolated_fixture",
     passed: false,
     schemaVersion: 1,
     service: "oidc",
-    upstreamVersion: OIDC_PROVIDER_VERSION,
+    upstreamVersion: oidcProviderTarget.version,
   };
 }
 
 export const oidcProviderFixture = Object.freeze({
   checks: CHECKS,
-  version: OIDC_PROVIDER_VERSION,
+  image: oidcProviderTarget.image,
+  version: oidcProviderTarget.version,
 });

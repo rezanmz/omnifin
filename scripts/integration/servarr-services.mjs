@@ -34,28 +34,46 @@ import {
   DockerImagePullError,
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
+import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
 import { FIXTURE_MOVIE_TMDB_ID, FIXTURE_SERIES_TVDB_ID } from "./servarr-fixture-server.mjs";
 
 export const SERVARR_FIXTURE_SERVER_IMAGE =
   "docker.io/library/node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
 
-export const SERVARR_SERVICE_IMAGES = Object.freeze({
-  bazarr:
-    "ghcr.io/linuxserver/bazarr:v1.6.0-ls356@sha256:ab401a0f361cfad328e444838b13d5b334b189d0f556fc91a3623eb581df36df",
-  prowlarr:
-    "ghcr.io/linuxserver/prowlarr:2.5.2.5491-ls155@sha256:2f3d31307beba3ba2dd226d191f5f5c14ee3b4d8b49277c64683f5ed97083179",
-  radarr:
-    "ghcr.io/linuxserver/radarr:6.3.0.10514-ls312@sha256:e35056574cdc695a9ee745aa1ecda9eab3842450bf4b7b8471b023790fa3861d",
-  sonarr:
-    "ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320@sha256:24acea2956a0ccb11f103877d9f4f8576600fb34bff34820ed749c2256dab89f",
+const servarrTargets = applyCompatibilityTargetOverride({
+  bazarr: {
+    image:
+      "ghcr.io/linuxserver/bazarr:v1.6.0-ls356@sha256:ab401a0f361cfad328e444838b13d5b334b189d0f556fc91a3623eb581df36df",
+    version: "1.6.0",
+  },
+  prowlarr: {
+    image:
+      "ghcr.io/linuxserver/prowlarr:2.5.2.5491-ls155@sha256:2f3d31307beba3ba2dd226d191f5f5c14ee3b4d8b49277c64683f5ed97083179",
+    version: "2.5.2.5491",
+  },
+  radarr: {
+    image:
+      "ghcr.io/linuxserver/radarr:6.3.0.10514-ls312@sha256:e35056574cdc695a9ee745aa1ecda9eab3842450bf4b7b8471b023790fa3861d",
+    version: "6.3.0.10514",
+  },
+  sonarr: {
+    image:
+      "ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320@sha256:24acea2956a0ccb11f103877d9f4f8576600fb34bff34820ed749c2256dab89f",
+    version: "4.0.19.2979",
+  },
 });
 
-export const SERVARR_SERVICE_VERSIONS = Object.freeze({
-  bazarr: "1.6.0",
-  prowlarr: "2.5.2.5491",
-  radarr: "6.3.0.10514",
-  sonarr: "4.0.19.2979",
-});
+export const SERVARR_SERVICE_IMAGES = Object.freeze(
+  Object.fromEntries(
+    Object.entries(servarrTargets).map(([service, target]) => [service, target.image]),
+  ),
+);
+
+export const SERVARR_SERVICE_VERSIONS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(servarrTargets).map(([service, target]) => [service, target.version]),
+  ),
+);
 
 const SERVICE_PORTS = Object.freeze({ bazarr: 6767, prowlarr: 9696, radarr: 7878, sonarr: 8989 });
 const SERVICE_CHECKS = Object.freeze({
@@ -372,6 +390,8 @@ export function containerIsolationArguments(uid, gid) {
     `${uid}:${gid}`,
     "--security-opt",
     "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "--tmpfs",
     `/run:uid=${uid},gid=${gid},exec`,
   ];
@@ -611,8 +631,6 @@ export function fixtureServerContainerArguments(context) {
     "--network-alias",
     "fixture-indexer.omnifin.invalid",
     ...containerIsolationArguments(uid, gid),
-    "--cap-drop",
-    "ALL",
     "--read-only",
     "--pids-limit",
     "64",

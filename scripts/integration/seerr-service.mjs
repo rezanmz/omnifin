@@ -14,13 +14,20 @@ import {
   DockerImagePullError,
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
+import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
 import { SEERR_FIXTURE_TMDB_ID } from "./seerr-fixture-server.mjs";
 
-export const SEERR_SERVICE_IMAGE =
-  "ghcr.io/seerr-team/seerr:v3.4.1@sha256:f4768de5f616248d723e05891f3345a1402123775d03bf0890dbfedc0831bda1";
+const seerrTargets = applyCompatibilityTargetOverride({
+  seerr: {
+    image:
+      "ghcr.io/seerr-team/seerr:v3.4.1@sha256:f4768de5f616248d723e05891f3345a1402123775d03bf0890dbfedc0831bda1",
+    version: "3.4.1",
+  },
+});
+export const SEERR_SERVICE_IMAGE = seerrTargets.seerr.image;
 export const SEERR_FIXTURE_SERVER_IMAGE =
   "docker.io/library/node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
-export const SEERR_SERVICE_VERSION = "3.4.1";
+export const SEERR_SERVICE_VERSION = seerrTargets.seerr.version;
 export const SEERR_CHECK_NAMES = Object.freeze([
   "authentication",
   "credentialRejection",

@@ -38,6 +38,11 @@ environment. Similarly, live integration remains pending until
 coverage ledger. Exact protected configuration names are listed in the
 [integration runner guide](../scripts/integration/README.md).
 
+The weekly latest-stable compatibility canary does not consume that protected configuration. It
+runs disposable upstream services without secrets on GitHub-hosted runners and publishes only a
+schema-validated sanitized artifact. Its result is fixture evidence; release profiles with live
+requirements still require the protected integration gate.
+
 GHCR may initially create a package as private even when its linked repository is
 public. If the first candidate stops at anonymous verification, a package owner must
 change its visibility to public before retrying. Stable tags will not have been

@@ -116,6 +116,8 @@ test("runs LinuxServer fixtures as the host user with a private writable runtime
     "1001:127",
     "--security-opt",
     "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "--tmpfs",
     "/run:uid=1001,gid=127,exec",
   ]);

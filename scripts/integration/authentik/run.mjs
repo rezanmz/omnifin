@@ -413,6 +413,7 @@ async function main(options) {
       OMNIFIN_AUTHENTIK_CLIENT_ID: clientId,
       OMNIFIN_AUTHENTIK_CLIENT_SECRET: secrets.clientSecret,
       OMNIFIN_AUTHENTIK_HTTP_PORT: String(authentikHttpPort),
+      OMNIFIN_AUTHENTIK_IMAGE: authentikFixture.image,
       OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL: `${webOrigin}/login?loggedOut=1`,
       OMNIFIN_AUTHENTIK_POSTGRES_PASSWORD: secrets.postgresPassword,
       OMNIFIN_AUTHENTIK_SECRET_KEY: secrets.authentikSecretKey,

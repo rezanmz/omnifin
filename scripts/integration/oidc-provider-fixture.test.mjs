@@ -86,13 +86,18 @@ test("serializes a deterministic private Compose environment", () => {
 test("pins and hardens the isolated standards provider", () => {
   const compose = parse(composeSource);
   const provider = compose.services.provider;
-  assert.match(provider.image, /^ghcr\.io\/dexidp\/dex:v2\.45\.1@sha256:[a-f0-9]{64}$/u);
+  assert.equal(
+    provider.image,
+    "${OMNIFIN_OIDC_PROVIDER_IMAGE:?immutable OIDC provider image required}",
+  );
+  assert.match(oidcProviderFixture.image, /^ghcr\.io\/dexidp\/dex:v2\.45\.1@sha256:[a-f0-9]{64}$/u);
   assert.equal(provider.read_only, true);
   assert.equal(provider.restart, "no");
   assert.deepEqual(provider.cap_drop, ["ALL"]);
   assert.deepEqual(provider.security_opt, ["no-new-privileges:true"]);
   assert.ok(provider.tmpfs.includes("/var/dex:uid=1001,gid=1001,mode=0700"));
-  assert.deepEqual(compose.networks.fixture, {});
+  assert.deepEqual(compose.networks.fixture, { internal: true });
+  assert.match(runnerSource, /OMNIFIN_OIDC_PROVIDER_IMAGE: oidcProviderFixture\.image/u);
   assert.match(JSON.stringify(provider.ports), /127\.0\.0\.1/u);
   assert.doesNotMatch(composeSource, /:\s*latest(?:\s|$)|docker\.sock/u);
 });
@@ -101,22 +106,25 @@ test("emits only the closed sanitized generic OIDC report", () => {
   const report = reportFor();
   assert.equal(report.passed, true);
   assert.equal(report.upstreamVersion, oidcProviderFixture.version);
+  assert.equal(report.image, oidcProviderFixture.image);
   assert.deepEqual(report.checks, oidcProviderFixture.checks);
   assert.deepEqual(Object.keys(report).sort(), [
     "checks",
+    "image",
     "mode",
     "passed",
     "schemaVersion",
     "service",
     "upstreamVersion",
   ]);
-  assert.doesNotMatch(JSON.stringify(report), /https?:\/\/|@|-----BEGIN/iu);
+  assert.doesNotMatch(JSON.stringify(report), /https?:\/\/|-----BEGIN|private-token/iu);
   assert.throws(() => reportFor(["authorization_code_pkce"]), /fixture_checks_incomplete/u);
 
   const failure = failureReportFor("provider_start_failed");
   assert.equal(failure.passed, false);
   assert.deepEqual(failure.checks, []);
-  assert.doesNotMatch(JSON.stringify(failure), /https?:\/\/|@|-----BEGIN/iu);
+  assert.equal(failure.image, oidcProviderFixture.image);
+  assert.doesNotMatch(JSON.stringify(failure), /https?:\/\/|-----BEGIN|private-token/iu);
 });
 
 test("detects generated secrets without retaining runtime logs", () => {

@@ -25,13 +25,20 @@ services:
       retries: 20
       start_period: 10s
     restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
     tmpfs:
       - /tmp
     volumes:
       - database:/var/lib/postgresql/data
+    networks:
+      - fixture
 
   server:
-    image: ghcr.io/goauthentik/server:2026.5.6@sha256:ed120caf710ccf82ef0026f0bc74e51615bc95ebff228a7a2d6fc60c441c3868
+    image: ${OMNIFIN_AUTHENTIK_IMAGE:?immutable Authentik image required}
     command: server
     depends_on:
       postgresql:
@@ -40,12 +47,21 @@ services:
     ports:
       - "127.0.0.1:${OMNIFIN_AUTHENTIK_HTTP_PORT:?http port required}:9000"
     restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 1.5
     shm_size: 256mb
     volumes:
       - ${OMNIFIN_AUTHENTIK_CA_FILE:?fixture CA required}:/etc/ssl/certs/omnifin-fixture-ca.pem:ro
+    networks:
+      - fixture
 
   worker:
-    image: ghcr.io/goauthentik/server:2026.5.6@sha256:ed120caf710ccf82ef0026f0bc74e51615bc95ebff228a7a2d6fc60c441c3868
+    image: ${OMNIFIN_AUTHENTIK_IMAGE:?immutable Authentik image required}
     command: worker
     depends_on:
       postgresql:
@@ -60,11 +76,24 @@ services:
       OMNIFIN_AUTHENTIK_CALLBACK_URL: ${OMNIFIN_AUTHENTIK_CALLBACK_URL:?callback URL required}
       OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL: ${OMNIFIN_AUTHENTIK_LOGOUT_REDIRECT_URL:?logout redirect required}
     restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 1.5
     shm_size: 256mb
     volumes:
       - ${OMNIFIN_AUTHENTIK_CA_FILE:?fixture CA required}:/etc/ssl/certs/omnifin-fixture-ca.pem:ro
       - ./blueprint.yaml:/blueprints/omnifin-fixture.yaml:ro
       - ./dispatch-backchannel.py:/blueprints/omnifin-dispatch-backchannel.py:ro
+    networks:
+      - fixture
 
 volumes:
   database:
+
+networks:
+  fixture:
+    internal: true

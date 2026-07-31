@@ -318,6 +318,8 @@ function startContainer(context) {
     "--rm",
     "--name",
     context.containerName,
+    "--network",
+    context.networkName,
     "--user",
     context.containerUser,
     "--cap-drop",
@@ -867,6 +869,7 @@ async function prepareContext(fixturePath, target) {
     containerUser: hostContainerUser(process.getuid?.(), process.getgid?.()),
     deviceId: `omnifin-integration-${randomUUID()}`,
     mediaDirectory: resolve(temporaryDirectory, "media"),
+    networkName: `omnifin-jellyfin-network-${process.pid}-${randomBytes(4).toString("hex")}`,
     target,
     temporaryDirectory,
   };
@@ -912,7 +915,10 @@ async function main(options) {
   const username = `fixture-${randomBytes(6).toString("hex")}`;
   const password = randomBytes(32).toString("base64url");
   let running = false;
+  let networkCreated = false;
   try {
+    docker(["network", "create", "--driver", "bridge", "--internal", context.networkName]);
+    networkCreated = true;
     const firstServer = startContainer(context);
     running = true;
     await waitForHealthy(firstServer.loopbackUrl);
@@ -985,6 +991,7 @@ async function main(options) {
     process.stdout.write(`${JSON.stringify(report)}\n`);
   } finally {
     if (running) stopContainer(context.containerName);
+    if (networkCreated) docker(["network", "rm", context.networkName]);
     await rm(context.temporaryDirectory, { force: true, recursive: true });
   }
 }

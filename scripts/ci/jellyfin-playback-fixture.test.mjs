@@ -48,6 +48,16 @@ test("accepts only immutable official Jellyfin images bound to their exact versi
   );
 });
 
+test("keeps the disposable Jellyfin server on a private network with deterministic teardown", () => {
+  const source = readFileSync(
+    new URL("../integration/jellyfin/playback.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /\["network", "create", "--driver", "bridge", "--internal"/u);
+  assert.match(source, /"--network",\s*context\.networkName/u);
+  assert.match(source, /\["network", "rm", context\.networkName\]/u);
+});
+
 test("builds a closed compatibility report without retaining supplied secrets", () => {
   const report = jellyfinCompatibilityReport({
     accessToken: "private-access-token",

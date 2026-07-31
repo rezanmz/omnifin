@@ -99,10 +99,15 @@ Scheduled and manual live checks run separately in
 `.github/workflows/integration-live.yml`. They execute only from `main`, enter
 the protected `integration` environment, and activate only after the repository
 variable `OMNIFIN_LIVE_INTEGRATION_ENABLED=true` confirms that the isolated
-upstream environment has been provisioned. The weekly compatibility canary and
-any release profile that requires live evidence use the same protected
-configuration. All live entries intentionally remain pending; no live support
-baseline is claimed.
+upstream environment has been provisioned. Release profiles that require live evidence use that
+protected configuration. All live entries intentionally remain pending; no live support baseline
+is claimed.
+
+`.github/workflows/compatibility.yml` is a separate secret-free latest-stable canary. It resolves
+only reviewed upstream repositories and stable tag formats, binds each mutable alias to an immutable
+digest before any pull, and reuses these harnesses in disposable GitHub-hosted jobs. Its closed
+aggregate records exact images, versions, checks, outcomes, verification time, and bounded failure
+categories. It never turns fixture evidence into a live installation support claim.
 
 `release-coverage.json` separately declares which ready capabilities a phase
 release claims. Coverage is cumulative and validated against `readiness.json`:
