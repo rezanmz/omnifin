@@ -59,6 +59,17 @@ const meta = {
     client: client(async () => readyResponse),
     debounceMs: 0,
     initialOpen: true,
+    initialPermissions: [
+      "media.view",
+      "library.manage",
+      "request.review",
+      "downloads.manage",
+      "acquisition.manage",
+      "issue.manage",
+      "connectors.manage",
+      "roles.manage",
+      "recovery.oidc.manage",
+    ],
     initialQuery: "matrix",
   },
   component: GlobalSearch,
@@ -87,6 +98,14 @@ export const Results: Story = {
 };
 
 export const Prompt: Story = { args: { initialQuery: "" } };
+
+export const CommandFilter: Story = {
+  args: { initialPermissions: ["downloads.manage"], initialQuery: "d" },
+  play: async ({ canvasElement }) => {
+    const command = await within(canvasElement).findByRole("option", { name: /Download queue/i });
+    await waitFor(() => expect(command).toBeVisible());
+  },
+};
 
 export const Loading: Story = {
   args: {

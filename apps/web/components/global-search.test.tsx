@@ -137,7 +137,7 @@ describe("global search", () => {
     const user = userEvent.setup();
     render(<GlobalSearch client={client(search)} debounceMs={0} />);
 
-    const input = screen.getByRole("combobox", { name: "Search movies, series, and people" });
+    const input = screen.getByRole("combobox", { name: "Search media and commands" });
     await user.click(input);
     expect(input).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Search the whole signal")).toBeVisible();
@@ -147,6 +147,111 @@ describe("global search", () => {
       screen.getByText("Type at least two characters to find movies, series, and people."),
     ).toBeVisible();
     expect(search).not.toHaveBeenCalled();
+  });
+
+  it("offers permission-filtered destinations without exposing privileged commands", async () => {
+    const user = userEvent.setup();
+    render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        initialOpen
+        initialPermissions={["media.view", "library.manage"]}
+      />,
+    );
+
+    const input = screen.getByRole("combobox");
+    const discover = screen.getByRole("option", { name: /Discover/i });
+    expect(discover).toHaveAttribute("href", "/");
+    expect(screen.getByRole("option", { name: /Library/i })).toHaveAttribute("href", "/library");
+    expect(screen.getByRole("option", { name: /Calendar/i })).toHaveAttribute("href", "/calendar");
+    expect(screen.queryByRole("option", { name: /Manage connectors/i })).not.toBeInTheDocument();
+
+    input.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(discover).toHaveFocus();
+  });
+
+  it("filters permission-aware commands before starting remote media search", async () => {
+    const search = vi.fn(async () => searchResponse);
+    const user = userEvent.setup();
+    render(
+      <GlobalSearch
+        client={client(search)}
+        debounceMs={0}
+        initialOpen
+        initialPermissions={["downloads.manage"]}
+      />,
+    );
+
+    await user.type(screen.getByRole("combobox"), "d");
+    expect(screen.getByRole("option", { name: /Download queue/i })).toHaveAttribute(
+      "href",
+      "/operations/downloads",
+    );
+    expect(screen.queryByRole("option", { name: /User access/i })).not.toBeInTheDocument();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("loads access once on activation and fails closed when access cannot be read", async () => {
+    const permissionLoader = vi.fn(async () => ["connectors.manage"] as const);
+    const loaded = render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        initialOpen
+        permissionLoader={permissionLoader}
+      />,
+    );
+
+    expect(await screen.findByRole("option", { name: /Manage connectors/i })).toHaveAttribute(
+      "href",
+      "/settings/connectors",
+    );
+    expect(permissionLoader).toHaveBeenCalledOnce();
+    expect(permissionLoader).toHaveBeenCalledWith(expect.any(AbortSignal));
+    loaded.unmount();
+
+    render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        initialOpen
+        permissionLoader={async () => Promise.reject(new Error("offline"))}
+      />,
+    );
+    expect(await screen.findByText("Showing safe destinations")).toBeVisible();
+    expect(screen.getByRole("option", { name: /Discover/i })).toBeVisible();
+    expect(screen.queryByRole("option", { name: /Manage connectors/i })).not.toBeInTheDocument();
+  });
+
+  it("reads command access from the same-origin no-store session boundary", async () => {
+    const fetchMock = vi.fn(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ csrfToken: null, principal: null }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<GlobalSearch client={client()} debounceMs={0} initialOpen />);
+      await waitFor(() => expect(screen.queryByText("Checking access…")).not.toBeInTheDocument());
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/auth/session",
+        expect.objectContaining({
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { accept: "application/json" },
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(screen.getByRole("option", { name: /Discover/i })).toBeVisible();
+      expect(screen.queryByRole("option", { name: /Manage connectors/i })).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("loads normalized results and supports listbox keyboard navigation", async () => {

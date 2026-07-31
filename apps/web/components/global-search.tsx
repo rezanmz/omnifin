@@ -2,19 +2,31 @@
 
 import "./global-search.css";
 
+import type { Permission } from "@omnifin/contracts/auth";
 import type { DiscoverySearchResult } from "@omnifin/contracts/discovery";
 import {
+  CalendarDays,
+  CircleAlert,
+  ClipboardCheck,
   Command,
+  Compass,
+  Download,
   Film,
+  Gauge,
+  KeyRound,
+  Library,
   LoaderCircle,
   PanelRightOpen,
   Search,
+  Settings2,
   Sparkles,
   Tv,
+  UsersRound,
   UserRound,
   WifiOff,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -42,6 +54,145 @@ const MediaDetailDrawer = dynamic(
 const SEARCH_RESULT_LIMIT = 12;
 const SEARCH_ACCENTS = ["#d8ff70", "#75d8c8", "#e8a575", "#a88be4", "#7eb6e8", "#e27f9f"];
 
+type PaletteCommandGroup = "Navigate" | "Operate" | "Administer";
+
+interface PaletteCommand {
+  description: string;
+  group: PaletteCommandGroup;
+  href: string;
+  icon: LucideIcon;
+  id: string;
+  keywords: readonly string[];
+  label: string;
+  permission?: Permission;
+}
+
+const PALETTE_COMMANDS: readonly PaletteCommand[] = [
+  {
+    description: "Return to your cinematic dashboard",
+    group: "Navigate",
+    href: "/",
+    icon: Compass,
+    id: "discover",
+    keywords: ["home", "dashboard", "discover"],
+    label: "Discover",
+  },
+  {
+    description: "Theme, sessions, and linked identities",
+    group: "Navigate",
+    href: "/settings",
+    icon: Settings2,
+    id: "account",
+    keywords: ["account", "appearance", "theme", "session", "settings"],
+    label: "Account & appearance",
+  },
+  {
+    description: "Scans, metadata, artwork, and subtitles",
+    group: "Operate",
+    href: "/library",
+    icon: Library,
+    id: "library",
+    keywords: ["library", "scan", "metadata", "artwork", "subtitle"],
+    label: "Library care",
+    permission: "library.manage",
+  },
+  {
+    description: "Upcoming releases across your stack",
+    group: "Navigate",
+    href: "/calendar",
+    icon: CalendarDays,
+    id: "calendar",
+    keywords: ["calendar", "upcoming", "release", "schedule"],
+    label: "Calendar",
+    permission: "media.view",
+  },
+  {
+    description: "Review and decide pending requests",
+    group: "Operate",
+    href: "/operations/requests",
+    icon: ClipboardCheck,
+    id: "requests",
+    keywords: ["request", "approval", "review", "pending"],
+    label: "Request review",
+    permission: "request.review",
+  },
+  {
+    description: "Inspect progress, rates, and queue health",
+    group: "Operate",
+    href: "/operations/downloads",
+    icon: Download,
+    id: "downloads",
+    keywords: ["download", "queue", "transfer", "torrent", "usenet"],
+    label: "Download queue",
+    permission: "downloads.manage",
+  },
+  {
+    description: "Indexer performance and failure history",
+    group: "Operate",
+    href: "/operations/indexers",
+    icon: Gauge,
+    id: "indexers",
+    keywords: ["indexer", "prowlarr", "failure", "statistics"],
+    label: "Indexer intelligence",
+    permission: "acquisition.manage",
+  },
+  {
+    description: "Resolve playback and media reports",
+    group: "Operate",
+    href: "/operations/issues",
+    icon: CircleAlert,
+    id: "issues",
+    keywords: ["issue", "report", "playback", "resolve"],
+    label: "Issue workbench",
+    permission: "issue.manage",
+  },
+  {
+    description: "Service health, storage, and live signals",
+    group: "Operate",
+    href: "/operations/health",
+    icon: Gauge,
+    id: "health",
+    keywords: ["health", "status", "storage", "service", "operation"],
+    label: "System health",
+    permission: "acquisition.manage",
+  },
+  {
+    description: "Configure and verify upstream services",
+    group: "Administer",
+    href: "/settings/connectors",
+    icon: Settings2,
+    id: "connectors",
+    keywords: ["connector", "service", "configure", "jellyfin", "seerr"],
+    label: "Manage connectors",
+    permission: "connectors.manage",
+  },
+  {
+    description: "Roles, access, and active accounts",
+    group: "Administer",
+    href: "/settings/users",
+    icon: UsersRound,
+    id: "users",
+    keywords: ["user", "role", "access", "permission", "account"],
+    label: "User access",
+    permission: "roles.manage",
+  },
+  {
+    description: "OIDC issuers and claim mappings",
+    group: "Administer",
+    href: "/settings/identity-providers",
+    icon: KeyRound,
+    id: "identity-providers",
+    keywords: ["oidc", "authentik", "identity", "provider", "mapping"],
+    label: "Identity providers",
+    permission: "recovery.oidc.manage",
+  },
+];
+
+export type CommandPermissionLoader = (signal?: AbortSignal) => Promise<readonly Permission[]>;
+
+type PermissionState =
+  { kind: "loading" | "unavailable" } | { kind: "ready"; permissions: readonly Permission[] };
+
 type SearchState =
   | { kind: "idle" }
   | { kind: "loading"; requestKey: string }
@@ -59,8 +210,41 @@ export interface GlobalSearchProperties {
   detailClient?: DiscoveryMediaDetailClient;
   initialFocus?: boolean;
   initialOpen?: boolean;
+  initialPermissions?: readonly Permission[];
   initialQuery?: string;
+  permissionLoader?: CommandPermissionLoader;
   requestClient?: MediaRequestClient;
+}
+
+async function loadPalettePermissions(signal?: AbortSignal): Promise<readonly Permission[]> {
+  const response = await fetch("/api/auth/session", {
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (response.status === 401) return [];
+  if (!response.ok) throw new Error("Command access could not be read.");
+  await import("../lib/zod-browser");
+  const { sessionResponseSchema } = await import("@omnifin/contracts/auth");
+  const parsed = sessionResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Command access did not match the public contract.");
+  return parsed.data.principal ? parsed.data.principal.permissions : [];
+}
+
+function matchingCommands(
+  permissions: readonly Permission[],
+  query: string,
+): readonly PaletteCommand[] {
+  const allowed = new Set(permissions);
+  const terms = query.toLowerCase().split(/\s+/u).filter(Boolean);
+  return PALETTE_COMMANDS.filter((command) => {
+    if (command.permission && !allowed.has(command.permission)) return false;
+    const haystack = [command.label, command.description, ...command.keywords]
+      .join(" ")
+      .toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
 }
 
 function searchLanguage() {
@@ -126,25 +310,131 @@ function accentStyle(result: DiscoverySearchResult): CSSProperties {
   return { "--search-accent": accent } as CSSProperties;
 }
 
-function SearchPrompt() {
+function CommandOption({
+  command,
+  index,
+  onDismiss,
+  onKeyDown,
+}: {
+  command: PaletteCommand;
+  index: number;
+  onDismiss: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>, index: number) => void;
+}) {
+  const Icon = command.icon;
   return (
-    <div className="search-console__prompt">
-      <div className="search-console__prompt-mark" aria-hidden="true">
-        <Search />
+    <a
+      aria-label={`${command.label}. ${command.description}`}
+      aria-selected="false"
+      className="command-option"
+      data-search-option
+      href={command.href}
+      onClick={onDismiss}
+      onKeyDown={(event) => onKeyDown(event, index)}
+      role="option"
+    >
+      <span className="command-option__icon">
+        <Icon aria-hidden="true" />
+      </span>
+      <span className="command-option__copy">
+        <strong>{command.label}</strong>
+        <small>{command.description}</small>
+      </span>
+      <span className="command-option__arrow" aria-hidden="true">
+        ↗
+      </span>
+    </a>
+  );
+}
+
+function CommandPaletteHome({
+  commands,
+  onDismiss,
+  onKeyDown,
+  permissionState,
+  query,
+}: {
+  commands: readonly PaletteCommand[];
+  onDismiss: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>, index: number) => void;
+  permissionState: PermissionState;
+  query: string;
+}) {
+  let optionIndex = 0;
+  return (
+    <div className="command-palette">
+      <div className="command-palette__intro">
+        <div className="command-palette__orb" aria-hidden="true">
+          <Command />
+        </div>
+        <div>
+          <p>{query ? `Commands matching “${query}”` : "Move through Omnifin"}</p>
+          <span>
+            {query
+              ? "Keep typing to search movies, series, and people too."
+              : "Jump to the work you can access. Restricted destinations stay out of view."}
+          </span>
+        </div>
+        <div className="search-console__key-guide" aria-label="Keyboard guidance">
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> Navigate
+          </span>
+          <span>
+            <kbd>↵</kbd> Open
+          </span>
+        </div>
       </div>
-      <div>
-        <p>Search the whole signal</p>
+      {commands.length > 0 ? (
+        <div
+          aria-label="Available destinations"
+          className="command-palette__groups"
+          id="global-search-listbox"
+          role="listbox"
+        >
+          {(["Navigate", "Operate", "Administer"] as const).map((group) => {
+            const groupedCommands = commands.filter((command) => command.group === group);
+            if (groupedCommands.length === 0) return null;
+            const groupId = `command-group-${group.toLowerCase()}`;
+            return (
+              <div
+                aria-labelledby={groupId}
+                className="command-palette__group"
+                key={group}
+                role="group"
+              >
+                <p id={groupId}>{group}</p>
+                {groupedCommands.map((command) => {
+                  const index = optionIndex++;
+                  return (
+                    <CommandOption
+                      command={command}
+                      index={index}
+                      key={command.id}
+                      onDismiss={onDismiss}
+                      onKeyDown={onKeyDown}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="command-palette__empty" role="status">
+          <Search aria-hidden="true" />
+          <p>No matching destination</p>
+          <span>Type a second character to search your media library.</span>
+        </div>
+      )}
+      <footer className="command-palette__footer">
+        <span>
+          <Search aria-hidden="true" /> Search the whole signal
+        </span>
         <span>Type at least two characters to find movies, series, and people.</span>
-      </div>
-      <div className="search-console__key-guide" aria-label="Keyboard guidance">
-        <span>
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> Navigate
-        </span>
-        <span>
-          <kbd>Esc</kbd> Close
-        </span>
-      </div>
+        {permissionState.kind === "loading" ? <i>Checking access…</i> : null}
+        {permissionState.kind === "unavailable" ? <i>Showing safe destinations</i> : null}
+      </footer>
     </div>
   );
 }
@@ -240,7 +530,9 @@ export function GlobalSearch({
   detailClient,
   initialFocus = false,
   initialOpen = false,
+  initialPermissions,
   initialQuery = "",
+  permissionLoader = loadPalettePermissions,
   requestClient,
 }: GlobalSearchProperties) {
   const [open, setOpen] = useState(initialOpen);
@@ -253,6 +545,9 @@ export function GlobalSearch({
   const [detailOpen, setDetailOpen] = useState(false);
   const [requestedIds, setRequestedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<SearchState>({ kind: "idle" });
+  const [permissionState, setPermissionState] = useState<PermissionState>(() =>
+    initialPermissions ? { kind: "ready", permissions: initialPermissions } : { kind: "loading" },
+  );
   const rootReference = useRef<HTMLDivElement>(null);
   const inputReference = useRef<HTMLInputElement>(null);
   const suppressFocusOpenReference = useRef(false);
@@ -283,6 +578,24 @@ export function GlobalSearch({
       document.removeEventListener("pointerdown", dismiss);
     };
   }, []);
+
+  useEffect(() => {
+    if (!open || permissionState.kind !== "loading") return;
+    const controller = new AbortController();
+    let current = true;
+    void permissionLoader(controller.signal)
+      .then((permissions) => {
+        if (current) setPermissionState({ kind: "ready", permissions });
+      })
+      .catch((error: unknown) => {
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+        setPermissionState({ kind: "unavailable" });
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [open, permissionLoader, permissionState.kind]);
 
   useEffect(() => {
     if (!open || normalizedQuery.length < 2) return;
@@ -329,6 +642,8 @@ export function GlobalSearch({
     selectedResult.kind !== "person" &&
     !selectedLocallyRequested &&
     (selectedResult.availability === "unavailable" || selectedResult.availability === "partial");
+  const permissions = permissionState.kind === "ready" ? permissionState.permissions : [];
+  const commandMatches = matchingCommands(permissions, normalizedQuery);
 
   const focusResult = useCallback((position: "first" | "last") => {
     const options = rootReference.current?.querySelectorAll<HTMLElement>("[data-search-option]");
@@ -343,14 +658,17 @@ export function GlobalSearch({
       setOpen(false);
       return;
     }
-    if (event.key === "ArrowDown" && searchState.kind === "ready" && searchState.items.length > 0) {
+    const hasVisibleOptions =
+      (normalizedQuery.length < 2 && commandMatches.length > 0) ||
+      (searchState.kind === "ready" && (searchState.items.length > 0 || commandMatches.length > 0));
+    if (event.key === "ArrowDown" && hasVisibleOptions) {
       event.preventDefault();
       event.stopPropagation();
       focusResult("first");
     }
   }
 
-  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLElement>, index: number) {
     const options = rootReference.current?.querySelectorAll<HTMLElement>("[data-search-option]");
     if (!options || options.length === 0) return;
     let target: HTMLElement | undefined;
@@ -382,7 +700,7 @@ export function GlobalSearch({
     >
       <Search aria-hidden="true" className="global-search__icon" size={18} strokeWidth={1.7} />
       <label className="sr-only" htmlFor="global-search">
-        Search movies, series, and people
+        Search media and commands
       </label>
       <input
         aria-autocomplete="list"
@@ -433,7 +751,7 @@ export function GlobalSearch({
       {open ? (
         <section aria-label="Search results" className="search-console" id="global-search-results">
           <header className="search-console__header">
-            <span>Discovery signal</span>
+            <span>Command &amp; discovery</span>
             {searchState.kind === "loading" ? (
               <span className="search-console__searching">
                 <LoaderCircle aria-hidden="true" /> Searching
@@ -442,14 +760,23 @@ export function GlobalSearch({
               <span role="status">
                 {searchState.totalResults.toLocaleString()} result
                 {searchState.totalResults === 1 ? "" : "s"}
+                {commandMatches.length > 0
+                  ? ` · ${commandMatches.length.toLocaleString()} command${commandMatches.length === 1 ? "" : "s"}`
+                  : ""}
               </span>
             ) : (
-              <span>Seerr · Live</span>
+              <span>Local · Seerr</span>
             )}
           </header>
 
           {normalizedQuery.length < 2 ? (
-            <SearchPrompt />
+            <CommandPaletteHome
+              commands={commandMatches}
+              onDismiss={() => setOpen(false)}
+              onKeyDown={handleOptionKeyDown}
+              permissionState={permissionState}
+              query={normalizedQuery}
+            />
           ) : searchState.kind === "loading" || searchState.kind === "idle" ? (
             <SearchLoading />
           ) : searchState.kind === "error" ? (
@@ -457,16 +784,28 @@ export function GlobalSearch({
               errorKind={searchState.errorKind}
               onRetry={() => setRetry((value) => value + 1)}
             />
-          ) : searchState.items.length === 0 ? (
+          ) : searchState.items.length === 0 && commandMatches.length === 0 ? (
             <SearchEmpty query={normalizedQuery} />
           ) : (
-            <div className="search-console__results">
+            <div
+              className="search-console__results"
+              data-command-only={selectedResult === null ? true : undefined}
+            >
               <div
-                aria-label="Matching titles and people"
+                aria-label="Matching commands, titles, and people"
                 className="search-console__list"
                 id="global-search-listbox"
                 role="listbox"
               >
+                {commandMatches.map((command, index) => (
+                  <CommandOption
+                    command={command}
+                    index={index}
+                    key={command.id}
+                    onDismiss={() => setOpen(false)}
+                    onKeyDown={handleOptionKeyDown}
+                  />
+                ))}
                 {searchState.items.map((result, index) => (
                   <button
                     aria-selected={selectedResult?.id === result.id}
@@ -475,7 +814,7 @@ export function GlobalSearch({
                     key={result.id}
                     onClick={() => setSelectedId(result.id)}
                     onFocus={() => setSelectedId(result.id)}
-                    onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                    onKeyDown={(event) => handleOptionKeyDown(event, commandMatches.length + index)}
                     onPointerEnter={() => setSelectedId(result.id)}
                     role="option"
                     style={accentStyle(result)}

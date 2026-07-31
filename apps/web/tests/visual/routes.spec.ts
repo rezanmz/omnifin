@@ -239,6 +239,19 @@ test("open discovery search visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("dashboard-discovery-search.png", { fullPage: true });
 });
 
+test("permission-aware command palette visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "The command surface covers representative desktop and phone geometry",
+  );
+  await mockMediaRequestSession(page);
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "Search media and commands" }).click();
+  await page.getByRole("option", { name: /Calendar/i }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("dashboard-command-palette.png", { fullPage: true });
+});
+
 async function openMediaDetails(page: Page) {
   await mockDiscoverySearch(page);
   await mockDiscoveryDetails(page);
