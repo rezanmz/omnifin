@@ -12,6 +12,7 @@ const DIAGNOSTIC_LOG_CHARACTERS = 12_000;
 const DIAGNOSTIC_ERROR_CHARACTERS = 4_000;
 const DIAGNOSTIC_DOCKER_TIMEOUT = 5_000;
 const DIAGNOSTIC_DOCKER_MAX_BUFFER = 512 * 1_024;
+const IMMUTABLE_IMAGE_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/u;
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 
 const secretAssignmentPattern =
@@ -164,28 +165,35 @@ function dockerExpectExit(arguments_, operation, expectedExitCode) {
   throw new SmokeFailure(operation);
 }
 
-export function parseDoctorSmokeReport(rawReport) {
+export function parseDoctorSmokeReport(rawReport, imageReference) {
+  if (typeof imageReference !== "string" || imageReference.length === 0) {
+    throw new Error("maintenance_doctor_image_reference_invalid");
+  }
   let report;
   try {
     report = JSON.parse(rawReport);
   } catch {
     throw new Error("maintenance_doctor_report_invalid");
   }
+  const imageCheck = IMMUTABLE_IMAGE_PATTERN.test(imageReference)
+    ? ["image", "ready", null]
+    : ["image", "attention", "image_reference_not_immutable"];
   const expected = [
     ["runtime", "ready", null],
-    ["image", "attention", "image_reference_not_immutable"],
+    imageCheck,
     ["gateway", "ready", null],
     ["public_boundary", "attention", "public_origin_invalid"],
     ["storage", "ready", null],
     ["backup", "ready", null],
   ];
+  const expectedReadyCount = expected.filter(([, state]) => state === "ready").length;
   if (
     !report ||
     report.operation !== "doctor" ||
     report.status !== "attention" ||
     report.schemaVersion !== 1 ||
     report.state !== "attention" ||
-    report.readyCount !== 4 ||
+    report.readyCount !== expectedReadyCount ||
     report.total !== expected.length ||
     typeof report.generatedAt !== "string" ||
     report.generatedAt.length > 32 ||
@@ -538,6 +546,7 @@ async function main() {
     );
     parseDoctorSmokeReport(
       dockerExpectExit([...maintenanceRuntime, "doctor"], "maintenance_doctor", 78),
+      image,
     );
     dockerExpectExit(
       [...maintenanceRuntime, "doctor", "--input", "/backups/container-smoke.sqlite"],

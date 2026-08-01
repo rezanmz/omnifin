@@ -10,6 +10,7 @@ import {
 } from "../container-smoke.mjs";
 
 test("deployment doctor smoke reports accept only the bounded preview posture", () => {
+  const mutableImage = "omnifin:smoke-fixture";
   const report = {
     operation: "doctor",
     status: "attention",
@@ -27,12 +28,13 @@ test("deployment doctor smoke reports accept only the bounded preview posture", 
       { id: "backup", state: "ready" },
     ],
   };
-  assert.deepEqual(parseDoctorSmokeReport(JSON.stringify(report)), report);
+  assert.deepEqual(parseDoctorSmokeReport(JSON.stringify(report), mutableImage), report);
 
   assert.throws(
     () =>
       parseDoctorSmokeReport(
         JSON.stringify({ ...report, publicUrl: "https://private.example.test" }),
+        mutableImage,
       ),
     /maintenance_doctor_report_invalid/u,
   );
@@ -45,8 +47,55 @@ test("deployment doctor smoke reports accept only the bounded preview posture", 
             index === 0 ? { ...check, detail: "/private/runtime/path" } : check,
           ),
         }),
+        mutableImage,
       ),
     /maintenance_doctor_report_invalid/u,
+  );
+});
+
+test("deployment doctor smoke reports bind image posture to the exercised reference", () => {
+  const mutableImage = "omnifin:smoke-fixture";
+  const immutableImage = `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`;
+  const mutableReport = {
+    operation: "doctor",
+    status: "attention",
+    schemaVersion: 1,
+    state: "attention",
+    readyCount: 4,
+    total: 6,
+    generatedAt: "2026-08-01T12:00:00.000Z",
+    checks: [
+      { id: "runtime", state: "ready" },
+      { code: "image_reference_not_immutable", id: "image", state: "attention" },
+      { id: "gateway", state: "ready" },
+      { code: "public_origin_invalid", id: "public_boundary", state: "attention" },
+      { id: "storage", state: "ready" },
+      { id: "backup", state: "ready" },
+    ],
+  };
+  const immutableReport = {
+    ...mutableReport,
+    readyCount: 5,
+    checks: mutableReport.checks.map((check) =>
+      check.id === "image" ? { id: "image", state: "ready" } : check,
+    ),
+  };
+
+  assert.deepEqual(
+    parseDoctorSmokeReport(JSON.stringify(immutableReport), immutableImage),
+    immutableReport,
+  );
+  assert.throws(
+    () => parseDoctorSmokeReport(JSON.stringify(immutableReport), mutableImage),
+    /maintenance_doctor_report_invalid/u,
+  );
+  assert.throws(
+    () => parseDoctorSmokeReport(JSON.stringify(mutableReport), immutableImage),
+    /maintenance_doctor_report_invalid/u,
+  );
+  assert.throws(
+    () => parseDoctorSmokeReport(JSON.stringify(mutableReport)),
+    /maintenance_doctor_image_reference_invalid/u,
   );
 });
 
