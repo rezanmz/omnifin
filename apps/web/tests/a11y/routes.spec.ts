@@ -199,6 +199,7 @@ const routes = [
   { label: "quiet dashboard", path: "/?test-view=quiet" },
   { label: "offline dashboard", path: "/?test-view=offline" },
   { label: "terminal dashboard error", path: "/?test-view=terminal-error" },
+  { label: "unexpected route error", path: "/?test-view=route-error" },
 ] as const;
 
 for (const route of routes) {
@@ -214,6 +215,16 @@ for (const route of routes) {
     await expect(page.locator("main")).toHaveCount(1);
     await expect(page.locator("main")).toBeVisible();
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    const deferredLoadingLabel = route.path.startsWith("/settings/users")
+      ? "Loading user access administration"
+      : route.path.startsWith("/settings/connectors")
+        ? "Loading service connections"
+        : route.path.startsWith("/calendar")
+          ? "Loading acquisition calendar"
+          : undefined;
+    if (deferredLoadingLabel) {
+      await page.getByLabel(deferredLoadingLabel).waitFor({ state: "hidden" });
+    }
     await page.evaluate(() => document.fonts.ready);
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);

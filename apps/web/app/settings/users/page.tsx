@@ -5,7 +5,8 @@ import {
 } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 
-import { UserAccessControl } from "../../../components/user-access-control";
+import { UserAccessControlLoader } from "../../../components/user-access-control-loader";
+import { UserAccessPageShell } from "../../../components/user-access-page-shell";
 import type { UserAccessAdminLoadOutcome } from "../../../lib/user-access-admin";
 
 export const metadata: Metadata = { title: "User access" };
@@ -118,9 +119,11 @@ export default async function UserAccessPage({ searchParams }: UserAccessPagePro
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   const initialOutcome = testOutcome(parameters["test-view"]);
   return (
-    <UserAccessControl
-      displayProfile={displayProfile}
-      {...(initialOutcome === undefined ? {} : { initialOutcome })}
-    />
+    <UserAccessPageShell displayProfile={displayProfile}>
+      <UserAccessControlLoader
+        embedded
+        {...(initialOutcome === undefined ? {} : { initialOutcome })}
+      />
+    </UserAccessPageShell>
   );
 }
