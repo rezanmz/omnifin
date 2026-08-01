@@ -66,7 +66,7 @@ test("release pull requests are normalized through a verified exact-tree commit"
   assert.equal(normalize.env.GH_TOKEN, "${{ secrets.RELEASE_PLEASE_TOKEN }}");
   assert.equal(normalize.env.RELEASE_PR_JSON, "${{ steps.release.outputs.pr }}");
   assert.equal(normalize.run, "node scripts/ci/normalize-release-commit.mjs");
-  assert.equal(release.outputs["normalized-sha"], "${{ steps.normalize.outputs.normalized_sha }}");
+  assert.equal(release.outputs["normalized-sha"], undefined);
   assert.doesNotMatch(JSON.stringify(release), /contents:\s*write|pull-requests:\s*write/u);
 });
 

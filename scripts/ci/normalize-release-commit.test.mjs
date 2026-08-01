@@ -47,7 +47,6 @@ function configuration(overrides = {}) {
     apiUrl: "https://api.github.com",
     expectedBaseSha: baseSha,
     graphqlUrl: "https://api.github.com/graphql",
-    outputPath: "/tmp/output",
     releasePullRequest: releaseOutput(),
     repository,
     runAttempt: "1",
@@ -118,9 +117,7 @@ function contentResponse(filename, overrides = {}) {
 function dependencies(options = {}) {
   let currentHead = headSha;
   const calls = [];
-  const outputs = [];
   const dependencySet = {
-    appendOutput: async (line) => outputs.push(line),
     createReference: async (branch, sha) => {
       calls.push(["createReference", branch, sha]);
       return { object: { sha: baseSha }, ref: `refs/heads/${branch}` };
@@ -172,7 +169,7 @@ function dependencies(options = {}) {
       currentHead = input.signedSha;
     },
   };
-  return { calls, dependencySet, outputs };
+  return { calls, dependencySet };
 }
 
 test("parses only the exact release workflow context", () => {
@@ -181,7 +178,6 @@ test("parses only the exact release workflow context", () => {
     GH_TOKEN: "secret",
     GITHUB_API_URL: "https://api.github.com",
     GITHUB_GRAPHQL_URL: "https://api.github.com/graphql",
-    GITHUB_OUTPUT: "/tmp/output",
     GITHUB_REPOSITORY: repository,
     GITHUB_RUN_ATTEMPT: "1",
     GITHUB_RUN_ID: "42",
@@ -198,7 +194,6 @@ test("parses only the exact release workflow context", () => {
 test("rejects missing credentials and credential-bearing GitHub URLs", () => {
   const environment = {
     EXPECTED_BASE_SHA: baseSha,
-    GITHUB_OUTPUT: "/tmp/output",
     GITHUB_REPOSITORY: repository,
     GITHUB_RUN_ATTEMPT: "1",
     GITHUB_RUN_ID: "42",
@@ -461,11 +456,10 @@ test("requires both GraphQL and REST GitHub signature evidence and an exact tree
 });
 
 test("creates a verified replacement and moves the release branch with an exact lease", async () => {
-  const { calls, dependencySet, outputs } = dependencies();
+  const { calls, dependencySet } = dependencies();
   const result = await normalizeReleaseCommit(configuration(), dependencySet);
 
   assert.deepEqual(result, { normalized: true, sha: signedSha });
-  assert.deepEqual(outputs, [`normalized_sha=${signedSha}`]);
   const signedInput = calls.find(([name]) => name === "createSignedCommit")[1];
   assert.deepEqual(
     signedInput.additions.map(({ path }) => path),
@@ -481,7 +475,7 @@ test("creates a verified replacement and moves the release branch with an exact 
 });
 
 test("does not rewrite an already verified exact release commit", async () => {
-  const { calls, dependencySet, outputs } = dependencies({
+  const { calls, dependencySet } = dependencies({
     originalCommit: {
       commit: {
         message: releaseTitle,
@@ -492,7 +486,6 @@ test("does not rewrite an already verified exact release commit", async () => {
   });
   const result = await normalizeReleaseCommit(configuration(), dependencySet);
   assert.deepEqual(result, { normalized: false, sha: headSha });
-  assert.deepEqual(outputs, [`normalized_sha=${headSha}`]);
   assert.equal(
     calls.some(([name]) => name === "createReference"),
     false,

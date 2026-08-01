@@ -1,6 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -94,10 +93,6 @@ export function releaseConfiguration(environment = process.env) {
   if (!environment.GITHUB_WORKSPACE || !path.isAbsolute(environment.GITHUB_WORKSPACE)) {
     throw new Error("GITHUB_WORKSPACE must be an absolute path.");
   }
-  if (!environment.GITHUB_OUTPUT || !path.isAbsolute(environment.GITHUB_OUTPUT)) {
-    throw new Error("GITHUB_OUTPUT must be an absolute path.");
-  }
-
   let releasePullRequest;
   try {
     releasePullRequest = JSON.parse(environment.RELEASE_PR_JSON ?? "");
@@ -123,7 +118,6 @@ export function releaseConfiguration(environment = process.env) {
     apiUrl,
     expectedBaseSha: requireFullSha(environment.EXPECTED_BASE_SHA, "EXPECTED_BASE_SHA"),
     graphqlUrl,
-    outputPath: environment.GITHUB_OUTPUT,
     releasePullRequest: validateReleasePleaseOutput(releasePullRequest),
     repository,
     runAttempt,
@@ -372,7 +366,6 @@ function makeProductionDependencies(config) {
   }
 
   return {
-    appendOutput: (line) => appendFile(config.outputPath, `${line}\n`, { encoding: "utf8" }),
     createReference: (branch, sha) =>
       request("POST", `/repos/${config.repository}/git/refs`, {
         ref: `refs/heads/${branch}`,
@@ -480,7 +473,6 @@ export async function normalizeReleaseCommit(
   const additions = prepareAdditions(files, contentResponses);
 
   if (originalCommit.verified && originalCommit.verificationReason === "valid") {
-    await dependencies.appendOutput(`normalized_sha=${release.headSha}`);
     return { normalized: false, sha: release.headSha };
   }
 
@@ -543,7 +535,6 @@ export async function normalizeReleaseCommit(
     if (finalRelease.headSha !== signedSha) {
       throw new Error("The release pull request did not resolve to the normalized commit.");
     }
-    await dependencies.appendOutput(`normalized_sha=${signedSha}`);
     return { normalized: true, sha: signedSha };
   } finally {
     if (temporaryCreated) await dependencies.deleteReference(temporaryBranch);

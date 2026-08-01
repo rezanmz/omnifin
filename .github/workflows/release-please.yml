@@ -94,7 +94,6 @@ jobs:
       tag-name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
       release-sha: ${{ steps.release.outputs.sha }}
-      normalized-sha: ${{ steps.normalize.outputs.normalized_sha }}
     steps:
       - name: Check out the exact protected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
