@@ -333,7 +333,7 @@ describe("deployment doctor", () => {
     const options = readyOptions(storage);
     const fetchImplementation: typeof fetch = async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
-      if (url.origin !== "http://gateway:4000") return healthyFetch()(input, init);
+      if (url.origin !== "http://gateway:4000") return healthyFetch()(input);
       const body = new ReadableStream({
         start(controller) {
           init?.signal?.addEventListener(
