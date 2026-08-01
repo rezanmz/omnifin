@@ -6,6 +6,7 @@ import {
   normalizeReleaseCommit,
   prepareAdditions,
   pullRequestBaseReadAttempts,
+  pullRequestHeadReadAttempts,
   releaseConfiguration,
   validateComparison,
   validateGitHubEndpoints,
@@ -14,6 +15,7 @@ import {
   validateReleasePleaseOutput,
   validateSignedCommit,
   waitForExpectedPullRequest,
+  waitForSignedPullRequest,
 } from "./normalize-release-commit.mjs";
 
 const repository = "rezanmz/omnifin";
@@ -119,7 +121,9 @@ function contentResponse(filename, overrides = {}) {
 function dependencies(options = {}) {
   let currentHead = headSha;
   let expectedBaseReads = 0;
+  let finalHeadReads = 0;
   let pullRequestReads = 0;
+  let referenceReads = 0;
   const calls = [];
   const dependencySet = {
     createReference: async (branch, sha) => {
@@ -167,9 +171,26 @@ function dependencies(options = {}) {
       if (options.moveBeforePush && expectedBaseReads === 2) {
         return pullRequest("9".repeat(40));
       }
+      if (currentHead === signedSha) {
+        finalHeadReads += 1;
+        if (options.unexpectedFinalHead) return pullRequest("8".repeat(40));
+        if (finalHeadReads <= (options.staleFinalHeadReads ?? 0)) {
+          return pullRequest(headSha);
+        }
+      }
       return pullRequest(currentHead, options.pullRequest);
     },
-    fetchReference: async () => ({ object: { sha: currentHead } }),
+    fetchReference: async () => {
+      referenceReads += 1;
+      return {
+        object: {
+          sha:
+            options.moveReferenceAfterFinalHead && referenceReads === 2
+              ? "8".repeat(40)
+              : currentHead,
+        },
+      };
+    },
     pause: async (milliseconds) => calls.push(["pause", milliseconds]),
     replaceWithLease: async (input) => {
       calls.push(["replaceWithLease", input]);
@@ -364,6 +385,59 @@ test("fails closed when the pull request base never becomes exact", async () => 
   );
 });
 
+test("waits through bounded signed-head propagation without accepting a third SHA", async () => {
+  let reads = 0;
+  const pauses = [];
+  const result = await waitForSignedPullRequest(
+    configuration(),
+    { previousHeadSha: headSha, signedSha },
+    {
+      fetchPullRequest: async () => {
+        reads += 1;
+        return pullRequest(reads <= 2 ? headSha : signedSha);
+      },
+      pause: async (milliseconds) => pauses.push(milliseconds),
+    },
+  );
+
+  assert.equal(result.headSha, signedSha);
+  assert.equal(reads, 3);
+  assert.deepEqual(pauses, [2_000, 2_000]);
+
+  await assert.rejects(
+    waitForSignedPullRequest(
+      configuration(),
+      { previousHeadSha: headSha, signedSha },
+      {
+        fetchPullRequest: async () => pullRequest("8".repeat(40)),
+        pause: async () => assert.fail("unexpected head must not be retried"),
+      },
+    ),
+    /unexpected commit after replacement/u,
+  );
+});
+
+test("fails closed when signed-head propagation never converges", async () => {
+  let reads = 0;
+  const pauses = [];
+  await assert.rejects(
+    waitForSignedPullRequest(
+      configuration(),
+      { previousHeadSha: headSha, signedSha },
+      {
+        fetchPullRequest: async () => {
+          reads += 1;
+          return pullRequest(headSha);
+        },
+        pause: async (milliseconds) => pauses.push(milliseconds),
+      },
+    ),
+    /did not report the normalized commit/u,
+  );
+  assert.equal(reads, pullRequestHeadReadAttempts);
+  assert.equal(pauses.length, pullRequestHeadReadAttempts - 1);
+});
+
 test("requires one release commit on the exact base with the reviewed title", () => {
   assert.equal(
     validateOriginalCommit(commit(), { expectedBaseSha: baseSha, headSha, title: releaseTitle })
@@ -533,6 +607,37 @@ test("creates a verified replacement and moves the release branch with an exact 
     signedSha,
     temporaryBranch: calls.find(([name]) => name === "createReference")[1],
   });
+  assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
+});
+
+test("waits for the pull request head after the exact release ref is replaced", async () => {
+  const { calls, dependencySet } = dependencies({ staleFinalHeadReads: 2 });
+  const result = await normalizeReleaseCommit(configuration(), dependencySet);
+
+  assert.deepEqual(result, { normalized: true, sha: signedSha });
+  assert.equal(
+    calls.filter(([name, milliseconds]) => name === "pause" && milliseconds === 2_000).length,
+    2,
+  );
+});
+
+test("rejects an unexpected pull request head after the exact release ref is replaced", async () => {
+  const { calls, dependencySet } = dependencies({ unexpectedFinalHead: true });
+  await assert.rejects(
+    normalizeReleaseCommit(configuration(), dependencySet),
+    /unexpected commit after replacement/u,
+  );
+  assert.equal(calls.filter(([name]) => name === "replaceWithLease").length, 1);
+  assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
+});
+
+test("rejects a release ref that moves after pull request propagation", async () => {
+  const { calls, dependencySet } = dependencies({ moveReferenceAfterFinalHead: true });
+  await assert.rejects(
+    normalizeReleaseCommit(configuration(), dependencySet),
+    /did not remain on the verified commit/u,
+  );
+  assert.equal(calls.filter(([name]) => name === "replaceWithLease").length, 1);
   assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
 });
 
