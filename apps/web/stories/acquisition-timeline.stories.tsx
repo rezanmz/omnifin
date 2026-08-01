@@ -9,7 +9,10 @@ import {
   type AcquisitionProvenanceClient,
   type AcquisitionProvenanceStreamCallbacks,
 } from "../lib/acquisition-provenance";
-import type { AcquisitionRecoveryClient } from "../lib/acquisition-recovery";
+import {
+  AcquisitionRecoveryClientError,
+  type AcquisitionRecoveryClient,
+} from "../lib/acquisition-recovery";
 import { demoDashboard, type OperationModel } from "../lib/dashboard-data";
 
 const previewOperation = demoDashboard.operations[0]!;
@@ -42,6 +45,27 @@ const degraded: AcquisitionProvenanceResponse = {
     },
   ],
   state: "degraded",
+};
+const queueRecoveryReference = `aqr_v2.${"A".repeat(100)}`;
+const stalledOperation: OperationModel = {
+  ...previewOperation,
+  id: "story-stalled-operation",
+  provenance: {
+    ...previewOperation.provenance!,
+    events: [
+      {
+        ...previewOperation.provenance!.events[0]!,
+        id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "stalled",
+        recovery: {
+          expiresAt: "2026-07-27T19:05:00.000Z",
+          reference: queueRecoveryReference,
+        },
+        state: "warning",
+        summary: "Download needs operator attention before import can continue.",
+      },
+    ],
+  },
 };
 const operator: SessionPrincipal = {
   absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
@@ -186,6 +210,142 @@ export const RecoverySuccess: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Review search" }));
     await userEvent.click(canvas.getByRole("button", { name: "Queue search" }));
     await waitFor(() => expect(canvas.getByText("Acquisition search is in motion")).toBeVisible());
+  },
+};
+
+export const QueueRecoveryConfirmation: Story = {
+  args: {
+    operation: stalledOperation,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Recover stalled download" }));
+    await waitFor(() => expect(canvas.getByLabelText("Type REMOVE to confirm")).toBeVisible());
+    await waitFor(() => expect(canvas.getByText(/Future searches remain allowed/u)).toBeVisible());
+  },
+};
+
+export const QueueRecoveryConfirmationLight: Story = {
+  args: {
+    operation: stalledOperation,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  globals: { theme: "light" },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Recover stalled download" }));
+    await waitFor(() => expect(canvas.getByLabelText("Type REMOVE to confirm")).toBeVisible());
+    await waitFor(() => expect(canvas.getByText(/Future searches remain allowed/u)).toBeVisible());
+  },
+};
+
+export const QueueRecoveryIdle: Story = {
+  args: {
+    operation: stalledOperation,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "Recover stalled download" })).toBeVisible(),
+    );
+  },
+};
+
+export const QueueRecoverySubmitting: Story = {
+  args: {
+    operation: stalledOperation,
+    recoveryClient: {
+      loadEligibility: async () => ({
+        snapshot: {
+          csrfToken: "story_queue_recovery_csrf_0123456789abcdefghijklmnop",
+          principal: operator,
+        },
+        status: "ready" as const,
+      }),
+      queueSearch: async () => {
+        throw new Error("Search is separate from queue recovery.");
+      },
+      recoverQueueItem: async () => new Promise<never>(() => undefined),
+    } satisfies AcquisitionRecoveryClient,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Recover stalled download" }));
+    await userEvent.type(canvas.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await userEvent.click(canvas.getByRole("button", { name: "Remove and blocklist" }));
+    await waitFor(() => expect(canvas.getByText("Confirming exact queue state")).toBeVisible());
+  },
+};
+
+export const QueueRecoveryStale: Story = {
+  args: {
+    operation: stalledOperation,
+    recoveryClient: {
+      loadEligibility: async () => ({
+        snapshot: {
+          csrfToken: "story_queue_recovery_csrf_0123456789abcdefghijklmnop",
+          principal: operator,
+        },
+        status: "ready" as const,
+      }),
+      queueSearch: async () => {
+        throw new Error("Search is separate from queue recovery.");
+      },
+      recoverQueueItem: async () => {
+        throw new AcquisitionRecoveryClientError(
+          "stale",
+          "acquisition_queue_recovery_stale",
+          "Refresh required.",
+        );
+      },
+    } satisfies AcquisitionRecoveryClient,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Recover stalled download" }));
+    await userEvent.type(canvas.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await userEvent.click(canvas.getByRole("button", { name: "Remove and blocklist" }));
+    await waitFor(() => expect(canvas.getByText("Queue item changed")).toBeVisible());
+  },
+};
+
+export const QueueRecoverySuccess: Story = {
+  args: {
+    operation: stalledOperation,
+    recoveryClient: {
+      loadEligibility: async () => ({
+        snapshot: {
+          csrfToken: "story_queue_recovery_csrf_0123456789abcdefghijklmnop",
+          principal: operator,
+        },
+        status: "ready" as const,
+      }),
+      queueSearch: async () => {
+        throw new Error("Search is separate from queue recovery.");
+      },
+      recoverQueueItem: async () => ({
+        recovery: {
+          completedAt: "2026-07-27T19:02:00.000Z",
+          eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+          operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+          service: "radarr" as const,
+          state: "removed_and_blocklisted" as const,
+        },
+        replayed: false,
+      }),
+    } satisfies AcquisitionRecoveryClient,
+    watchEvents: stream("live", stalledOperation.provenance),
+  },
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Recover stalled download" }));
+    await userEvent.type(canvas.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await userEvent.click(canvas.getByRole("button", { name: "Remove and blocklist" }));
+    await waitFor(() => expect(canvas.getByText("Removed and blocklisted")).toBeVisible());
   },
 };
 

@@ -46,8 +46,9 @@ tooling. Account and provider administration are available as pre-release develo
 The versioned gateway API can administer encrypted connector records, validate capabilities, and
 guard enablement and deletion. It exposes normalized Seerr search and media details for principals with
 `media.view`, identity-delegated, idempotent Seerr request creation for principals with
-`request.create`, live target-scoped Radarr/Sonarr title provenance, and exact whole-title monitoring for
-principals with `acquisition.manage`. It also exposes permission-gated qBittorrent and SABnzbd queue
+`request.create`, live identity-and-target-scoped Radarr/Sonarr title provenance, exact stalled-item
+queue recovery, and exact whole-title monitoring for principals with `acquisition.manage`. It also
+exposes permission-gated qBittorrent and SABnzbd queue
 telemetry plus exact-item pause, resume, and downloaded-file-preserving removal controls for
 principals with `downloads.manage`, and a bounded Radarr/Sonarr acquisition calendar
 for principals with `media.view`. Recovery access can inspect and repair Jellyfin connector records
@@ -59,8 +60,9 @@ and global discovery, request, acquisition-provenance, manual release, Indexer I
 system-health, download-queue, and acquisition-calendar flows are pre-release development
 surfaces. The same is
 true of Jellyfin playback and progress, Continue Watching, the paired-user library catalogue, issue
-reporting, Bazarr subtitle search and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
-broader acquisition mutations, and release-grade live compatibility evidence remain unavailable.
+reporting, Bazarr subtitle search and download, and guarded Jellyfin library maintenance. The
+protected live compatibility baseline, broader acquisition mutations, and release-grade live
+compatibility evidence remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still
 follow the intended same-origin route through the web application; bypassing the

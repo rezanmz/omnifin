@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { emptyContinueWatchingFeed } from "../../lib/continue-watching-demo";
 import {
+  mockAcquisitionQueueRecovery,
+  mockAcquisitionRecoverySession,
+} from "../fixtures/acquisition-recovery";
+import {
   mockDiscoveryDetails,
   mockDiscoveryFeed,
   mockDiscoverySearch,
@@ -1241,6 +1245,64 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
   await page.evaluate(() => document.fonts.ready);
   await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-recovery-confirmation.png");
+});
+
+async function openQueueRecoveryTimeline(page: Page) {
+  await page.goto("/?test-view=queue-recovery");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  return timeline;
+}
+
+test("failed queue recovery confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Failed queue recovery covers representative desktop and phone geometry",
+  );
+  const timeline = await openQueueRecoveryTimeline(page);
+  await timeline.getByRole("button", { name: "Recover stalled download" }).click();
+  await expect(timeline.getByLabel("Type REMOVE to confirm")).toBeFocused();
+  await page.evaluate(() => document.fonts.ready);
+  await stabilizeAcquisitionTimelineVisual(page);
+  await expect(timeline).toHaveScreenshot("acquisition-queue-recovery-confirmation.png");
+});
+
+test("failed queue recovery success visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Failed queue recovery covers representative desktop and phone geometry",
+  );
+  await mockAcquisitionRecoverySession(page);
+  await mockAcquisitionQueueRecovery(page);
+  const timeline = await openQueueRecoveryTimeline(page);
+  await timeline.getByRole("button", { name: "Recover stalled download" }).click();
+  await timeline.getByLabel("Type REMOVE to confirm").fill("REMOVE");
+  await timeline.getByRole("button", { name: "Remove and blocklist" }).click();
+  await expect(timeline.getByText("Removed and blocklisted")).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await stabilizeAcquisitionTimelineVisual(page);
+  await expect(timeline).toHaveScreenshot("acquisition-queue-recovery-success.png");
+});
+
+test("failed queue recovery stale visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Failed queue recovery covers representative desktop and phone geometry",
+  );
+  await mockAcquisitionRecoverySession(page);
+  await mockAcquisitionQueueRecovery(page, "stale");
+  const timeline = await openQueueRecoveryTimeline(page);
+  await timeline.getByRole("button", { name: "Recover stalled download" }).click();
+  await timeline.getByLabel("Type REMOVE to confirm").fill("REMOVE");
+  await timeline.getByRole("button", { name: "Remove and blocklist" }).click();
+  await expect(timeline.getByText("Queue item changed")).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await stabilizeAcquisitionTimelineVisual(page);
+  await expect(timeline).toHaveScreenshot("acquisition-queue-recovery-stale.png");
 });
 
 test("acquisition monitoring confirmation visual baseline", async ({ page }, testInfo) => {

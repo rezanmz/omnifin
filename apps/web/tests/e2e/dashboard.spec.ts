@@ -9,7 +9,9 @@ import {
   mockAcquisitionMonitoringUpdate,
 } from "../fixtures/acquisition-monitoring";
 import {
+  acquisitionQueueRecoveryReference,
   acquisitionRecoveryCsrfToken,
+  mockAcquisitionQueueRecovery,
   mockAcquisitionRecoverySession,
   mockAcquisitionSearch,
 } from "../fixtures/acquisition-recovery";
@@ -324,6 +326,33 @@ test("operators can queue one exact-target acquisition search", async ({ page })
   expect(capture.body).toEqual({ mediaId: 42, service: "radarr" });
   expect(capture.csrfToken).toBe(acquisitionRecoveryCsrfToken);
   expect(capture.idempotencyKey).toMatch(/^acquisition-[0-9a-f-]{36}$/u);
+});
+
+test("operators can remove and blocklist one exact stalled queue item", async ({ page }) => {
+  test.setTimeout(60_000);
+  await mockAcquisitionRecoverySession(page);
+  const capture = await mockAcquisitionQueueRecovery(page);
+  await page.goto("/?test-view=queue-recovery");
+  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await page
+    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
+    .click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await timeline.getByRole("button", { name: "Recover stalled download" }).click();
+  await expect(
+    timeline.getByText(/removes the item and its data from the download client/u),
+  ).toBeVisible();
+  const confirmation = timeline.getByLabel("Type REMOVE to confirm");
+  await confirmation.fill("remove");
+  await expect(confirmation).toHaveValue("REMOVE");
+  await timeline.getByRole("button", { name: "Remove and blocklist" }).click();
+
+  await expect(timeline.getByText("Removed and blocklisted")).toBeVisible();
+  await expect(timeline.getByText("No new search was started automatically.")).toBeVisible();
+  expect(capture.body).toEqual({ reference: acquisitionQueueRecoveryReference });
+  expect(capture.csrfToken).toBe(acquisitionRecoveryCsrfToken);
+  expect(capture.idempotencyKey).toMatch(/^queue-recovery-[0-9a-f-]{36}$/u);
 });
 
 test("operators can compare and explicitly override one exact manual release", async ({ page }) => {

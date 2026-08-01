@@ -1,10 +1,14 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
-import type { AcquisitionSearchResponse } from "@omnifin/contracts/acquisition";
+import type {
+  AcquisitionQueueRecoveryResponse,
+  AcquisitionSearchResponse,
+} from "@omnifin/contracts/acquisition";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AcquisitionRecoveryClientError,
   acquisitionRecoveryClient,
+  createAcquisitionQueueRecoveryIdempotencyKey,
   createAcquisitionSearchIdempotencyKey,
 } from "./acquisition-recovery";
 
@@ -44,6 +48,14 @@ const queuedSearch: AcquisitionSearchResponse = {
   operationId: "sonarr:command:77",
   state: "queued",
   target: { kind: "series", mediaId: 8, seasonNumber: 2, service: "sonarr" },
+};
+const recoveryReference = `aqr_v2.${"A".repeat(100)}`;
+const recoveredQueueItem: AcquisitionQueueRecoveryResponse = {
+  completedAt: "2026-07-27T12:02:00.000Z",
+  eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+  operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+  service: "radarr",
+  state: "removed_and_blocklisted",
 };
 
 function jsonResponse(body: unknown, status = 200, headers?: HeadersInit) {
@@ -185,6 +197,65 @@ describe("acquisition recovery client", () => {
     ).rejects.toBeInstanceOf(AcquisitionRecoveryClientError);
   });
 
+  it("sends only an opaque queue reference with current CSRF and idempotency proof", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse(recoveredQueueItem, 201, { "idempotency-replayed": "false" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      acquisitionRecoveryClient.recoverQueueItem?.(
+        { reference: recoveryReference },
+        {
+          csrfToken,
+          idempotencyKey: "queue-recovery-01234567-89ab-cdef-0123-456789abcdef",
+        },
+      ),
+    ).resolves.toEqual({ recovery: recoveredQueueItem, replayed: false });
+    const [path, request] = fetchMock.mock.calls[0]!;
+    expect(path).toBe("/api/acquisitions/queue-recoveries");
+    expect(request?.method).toBe("POST");
+    expect(new Headers(request?.headers).get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(new Headers(request?.headers).get("idempotency-key")).toBe(
+      "queue-recovery-01234567-89ab-cdef-0123-456789abcdef",
+    );
+    expect(JSON.parse(String(request?.body))).toEqual({ reference: recoveryReference });
+    expect(String(request?.body)).not.toContain("radarr:queue");
+  });
+
+  it.each([
+    { code: "acquisition_queue_recovery_stale", expected: "stale", status: 409 },
+    { code: "acquisition_queue_recovery_reference_invalid", expected: "stale", status: 400 },
+    { code: "acquisition_queue_recovery_failed", expected: "stale", status: 409 },
+    { code: "acquisition_queue_recovery_pending", expected: "pending", status: 409 },
+    {
+      code: "acquisition_queue_recovery_unconfirmed",
+      expected: "unconfirmed",
+      status: 502,
+    },
+    {
+      code: "acquisition_queue_recovery_configuration_unavailable",
+      expected: "configuration",
+      status: 503,
+    },
+  ])("maps the queue recovery failure $code", async ({ code, expected, status }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          { error: { code, message: "Safe recovery message.", requestId: "recovery-error" } },
+          status,
+        ),
+      ),
+    );
+    await expect(
+      acquisitionRecoveryClient.recoverQueueItem?.(
+        { reference: recoveryReference },
+        { csrfToken, idempotencyKey: "queue-recovery-error-0123456789" },
+      ),
+    ).rejects.toMatchObject({ kind: expected });
+  });
+
   it.each([
     { code: "session_required", expected: "signed_out", status: 401 },
     { code: "permission_denied", expected: "forbidden", status: 403 },
@@ -261,6 +332,9 @@ describe("acquisition recovery client", () => {
     });
     expect(createAcquisitionSearchIdempotencyKey()).toBe(
       "acquisition-01234567-89ab-cdef-0123-456789abcdef",
+    );
+    expect(createAcquisitionQueueRecoveryIdempotencyKey()).toBe(
+      "queue-recovery-01234567-89ab-cdef-0123-456789abcdef",
     );
   });
 

@@ -1,7 +1,7 @@
 # Acquisition provenance
 
 Omnifin exposes a normalized title trace across Radarr and Sonarr history and queue
-data, plus a narrowly scoped automatic-search recovery action. It is a pre-release
+data, plus narrowly scoped automatic-search and failed-queue recovery actions. It is a pre-release
 development surface; the
 [compatibility matrix](compatibility.md) remains authoritative for supported upstream
 versions.
@@ -22,7 +22,8 @@ The query names exactly one service and upstream title identifier:
 Exactly one enabled matching connector must exist. Its most recent validated health
 snapshot must identify the same connector and service, report healthy state, and
 advertise the capability required by the operation: `acquisition.history` for the
-trace and `acquisition.search` for recovery. Missing, ambiguous, stale, malformed, or
+trace, `acquisition.search` for automatic search, and `acquisition.queue.mutate` for
+failed-queue recovery. Missing, ambiguous, stale, malformed, or
 capability-incompatible configuration fails closed. The API key and optional trusted
 connector CA are decrypted only inside the gateway for the duration of the request.
 
@@ -40,7 +41,9 @@ upgrade, and ignored states. A successful recovery returns a normalized queued-s
 receipt; the drawer presents it immediately while later upstream history and queue
 reads remain authoritative.
 
-Each event may contain a bounded release title, quality, protocol, indexer, download
+Each event has an opaque `acquisition_*` identifier. A currently stalled queue event may
+also include a five-minute, user-bound encrypted recovery reference. Each event may contain a
+bounded release title, quality, protocol, indexer, download
 client, size, season, and episode numbers. It never contains API keys, download hashes,
 storage or media paths, raw history data, raw queue status, arbitrary upstream fields,
 or private error messages.
@@ -63,7 +66,7 @@ failures map to stable public error codes without forwarding upstream messages.
 While the signal-history drawer is open, the browser connects to
 `GET /v1/acquisitions/provenance/events` with the same exact target query. This is a
 short-lived, authenticated Server-Sent Events stream. The gateway coalesces polling
-only for subscribers inspecting the same target; a Radarr movie, a Sonarr series, and
+only for subscribers from the same Omnifin identity inspecting the same target; a Radarr movie, a Sonarr series, and
 each selected Sonarr season remain separate groups. The normalized response is parsed
 again and matched to the requested target before it is published.
 
@@ -104,19 +107,44 @@ body, storage path, username, or private error. Because a connection can fail af
 upstream server receives a command, the interface preserves the current key and tells
 the operator to verify history before explicitly creating a fresh attempt.
 
+`POST /v1/acquisitions/queue-recoveries` is deliberately separate. The browser can submit only
+the opaque reference shown on a stalled queue event. The reference is authenticated encryption
+bound to the active user and contains the exact connector, target, upstream queue identifier,
+event fingerprint, and expiry; none of those private routing values are independently
+browser-selectable. The gateway re-reads the queue and requires one exact item with the same
+stalled state and fingerprint before mutation.
+
+The adapter then issues an exact Radarr or Sonarr queue deletion with
+`removeFromClient=true`, `blocklist=true`, `skipRedownload=false`, and
+`changeCategory=false`. This removes the download-client item and its data, blocklists that
+release, leaves future searches permitted, and does not itself start a search. The interface
+requires the operator to type `REMOVE` after displaying those consequences. A new automatic or
+manual search remains a separate action.
+
+The mutation requires an active user with `acquisition.manage`, same-origin and CSRF validation,
+a bounded per-user idempotency key, a currently healthy connector advertising
+`acquisition.queue.mutate`, and a durable pre-mutation snapshot. Known success is replayed without
+another delete. Stale references, changed items, duplicate queue evidence, uncertain outcomes,
+and abandoned post-mutation leases fail closed and require a fresh timeline. Stored operations and
+audits contain only the opaque event identifier, normalized state, service, and safe outcome; raw
+queue identifiers, release titles, hashes, paths, credentials, references, and download-client
+responses are excluded.
+
 ## Signal-history drawer
 
 Selecting an expanded operation opens a lazy-loaded native modal drawer. The
 interface shows summary counts, event chronology, release context, verified degraded
 data, and a persistent verification label. Its contextual-recovery card uses a
-two-step exact-target confirmation. The only mutation offered is the bounded automatic
-search described above; destructive recovery controls remain absent.
+two-step exact-target confirmation. Only a recoverable stalled queue event offers the separate
+typed-confirmation remove-and-blocklist control; ordinary history, failures no longer in the
+queue, and active downloads do not expose it.
 
 The Liquid Glass surface retains focus containment, Escape dismissal, background
 inertness, keyboard-scrollable history, at least 44-pixel controls, reduced motion,
 and adaptive light, dark, system, phone, tablet, desktop, and 10-foot presentation.
 Storybook covers complete, degraded, empty, loading, offline, permission-denied,
-connecting, live, polling-fallback, recovery-confirmation, monitoring, and queued-success states.
+connecting, live, polling-fallback, search confirmation, queue-recovery idle, confirmation,
+submitting, stale, and success states, monitoring, and queued-success states.
 Component, browser, accessibility, and deterministic visual tests cover the assembled interaction. The separate
 [acquisition-monitoring boundary](acquisition-monitoring.md) documents the exact whole-title
 mutation available inside the same drawer.
@@ -125,12 +153,13 @@ mutation available inside the same drawer.
 
 Deterministic connector fixtures cover Radarr and Sonarr filtering, history and queue
 normalization, degraded reads, cancellation-compatible requests, malformed upstream
-responses, exact Radarr/Sonarr search payloads, and secret/path isolation. Gateway
+responses, exact Radarr/Sonarr search payloads, explicit queue deletion flags, and secret/path isolation. Gateway
 tests cover authorization before storage access, CSRF and origin enforcement,
 idempotency conflicts and replay, exact connector selection, capability health,
 encrypted credentials, transactional audit outcomes, safe errors, response headers,
 abort propagation, target-scoped stream coalescing, replay bounds, connection limits,
-failure isolation, teardown, and secret-free SSE output.
+failure isolation, per-identity stream isolation, queue recovery expiry and stale-state checks,
+exact-item revalidation, mutation verification, teardown, and secret-free SSE output.
 
 Live version support is not inferred from fixture success. It requires the protected
 integration environment to record exact upstream versions and dates according to the

@@ -108,7 +108,9 @@ playback, player issue reports, Bazarr subtitle operations, and guarded Jellyfin
 maintenance at `/operations/library`. Operator request review and the unified player/Seerr issue
 lifecycle are also
 available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
-available to operators; broader acquisition mutations remain later pre-release work.
+available to operators. Exact stalled Radarr/Sonarr queue recovery uses a short-lived opaque
+reference, typed confirmation, revalidation, blocklisting, and idempotent audit; broader
+acquisition mutations remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
 API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
 carry the provider's transient, one-time `code`, `state`, or error parameters to the
