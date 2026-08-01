@@ -37,7 +37,7 @@ describe("AcquisitionCalendarPage", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1, name: "See what arrives next." })).toBeVisible();
-    expect(screen.getByRole("button", { name: /Inspect The Far Meridian/i })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /Inspect The Far Meridian/i })).toBeVisible();
     expect(screen.getByText("Opaque by design")).toBeVisible();
   });
 
@@ -50,7 +50,9 @@ describe("AcquisitionCalendarPage", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Connect your release horizon." })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Connect your release horizon." }),
+    ).toBeVisible();
     expect(screen.getByRole("link", { name: "Configure services" })).toHaveAttribute(
       "href",
       "/settings/connectors",

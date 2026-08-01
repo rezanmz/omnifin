@@ -92,6 +92,22 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await expect(page.getByRole("button", { name: /Signal · S01E07/i })).toBeVisible();
 });
 
+test("unexpected route failures provide private, keyboard-usable recovery", async ({ page }) => {
+  await page.goto("/?test-view=route-error");
+
+  const recovery = page.getByRole("main");
+  await expect(recovery).toBeFocused();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "This view lost its signal." }),
+  ).toBeVisible();
+  await expect(page.getByText("Deterministic browser-only route failure")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Return home" }).click();
+  await expect(page).toHaveURL(/\/$/u);
+  await expect(page.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
+});
+
 test("authenticated Continue Watching renders normalized progress and private artwork", async ({
   page,
 }) => {

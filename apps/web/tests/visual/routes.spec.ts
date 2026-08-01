@@ -841,6 +841,7 @@ test("acquisition calendar visual baseline", async ({ page }, testInfo) => {
   );
   await page.goto("/calendar?test-view=ready");
   await page.getByRole("heading", { name: "See what arrives next." }).waitFor();
+  await page.getByRole("button", { name: /Inspect The Far Meridian/i }).waitFor();
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("acquisition-calendar.png", { fullPage: true });
 });
@@ -853,6 +854,7 @@ test("light acquisition calendar visual baseline", async ({ page }, testInfo) =>
   await useLightTheme(page);
   await page.goto("/calendar?test-view=ready");
   await page.getByRole("heading", { name: "See what arrives next." }).waitFor();
+  await page.getByRole("button", { name: /Inspect The Far Meridian/i }).waitFor();
   await removeDevelopmentIndicator(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page).toHaveScreenshot("acquisition-calendar-light.png", { fullPage: true });

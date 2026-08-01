@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { AcquisitionCalendar } from "../../components/acquisition-calendar";
+import { AcquisitionCalendarLoader } from "../../components/acquisition-calendar-loader";
 import {
   AcquisitionCalendarFrame,
   AcquisitionCalendarHero,
@@ -13,7 +13,7 @@ import {
 } from "../../lib/acquisition-calendar-demo";
 import type { AcquisitionCalendarLoadOutcome } from "../../lib/acquisition-calendar";
 import { readThemePreference } from "../../lib/theme-server";
-import "./calendar.css";
+import "../control-room.css";
 
 export const metadata: Metadata = { title: "Acquisition calendar" };
 export const dynamic = "force-dynamic";
@@ -57,7 +57,7 @@ export default async function AcquisitionCalendarPage({
   return (
     <AcquisitionCalendarFrame initialPreference={preference}>
       {outcome?.status === "ready" ? <AcquisitionCalendarHero calendar={outcome.calendar} /> : null}
-      <AcquisitionCalendar
+      <AcquisitionCalendarLoader
         embedded
         hideHero={outcome?.status === "ready"}
         {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}

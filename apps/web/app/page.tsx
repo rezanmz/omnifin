@@ -37,6 +37,10 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       ? false
       : process.env.OMNIFIN_DEMO_MODE === "true";
 
+  if (requestedTestView === "route-error") {
+    throw new Error("Deterministic browser-only route failure");
+  }
+
   if (requestedTestView && dashboardStateKinds.has(requestedTestView as DashboardStateKind)) {
     const preference = await readThemePreference();
     return (

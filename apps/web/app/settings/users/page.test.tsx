@@ -35,7 +35,7 @@ describe("UserAccessPage", () => {
     render(await UserAccessPage({ searchParams: Promise.resolve({ "test-view": "ready" }) }));
 
     const user = userEvent.setup();
-    expect(screen.getByRole("heading", { name: "Rezan" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Rezan" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: /Sloane Park/i }));
     expect(screen.getByText(/role comes from an OIDC claim mapping/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /operator.*Manage requests/i })).toBeDisabled();

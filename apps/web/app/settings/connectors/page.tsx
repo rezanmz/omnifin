@@ -2,10 +2,10 @@ import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth
 import type { ConnectorAdmin } from "@omnifin/contracts/connectors";
 import type { Metadata } from "next";
 
-import { ConnectorControlRoom } from "../../../components/connector-control-room";
+import { ConnectorControlRoomLoader } from "../../../components/connector-control-room-loader";
 import { ConnectorPageShell } from "../../../components/connector-page-shell";
 import type { ConnectorAdminLoadOutcome } from "../../../lib/connector-admin";
-import "../../globals.css";
+import "../../control-room.css";
 
 export const metadata: Metadata = { title: "Service connections" };
 export const dynamic = "force-dynamic";
@@ -156,7 +156,7 @@ export default async function ConnectorsPage({ searchParams }: ConnectorsPagePro
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   return (
     <ConnectorPageShell displayProfile={displayProfile}>
-      <ConnectorControlRoom embedded initialOutcome={testOutcome(parameters["test-view"])} />
+      <ConnectorControlRoomLoader embedded initialOutcome={testOutcome(parameters["test-view"])} />
     </ConnectorPageShell>
   );
 }
