@@ -190,7 +190,7 @@ describe("StackVerificationService", () => {
         return {
           kind: "completed",
           value: health(connectorId, "radarr", {
-            version: "1.2.3 https://private.example.test/?token=secret",
+            version: "private-db01.local",
           }),
         };
       },
@@ -222,7 +222,7 @@ describe("StackVerificationService", () => {
       expect(report.checks.find(({ id }) => id === "sonarr")?.findings).toEqual([
         { code: "verification_unavailable", count: 1 },
       ]);
-      expect(JSON.stringify(report)).not.toMatch(/private|example\.test|token|secret/u);
+      expect(JSON.stringify(report)).not.toContain("private-db01.local");
     } finally {
       fixture.database.close();
     }

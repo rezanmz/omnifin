@@ -118,6 +118,13 @@ recommended or optional extensions, so a deliberately smaller home stack is neve
 The browser receives only normalized readiness state; connector URLs, credentials, identity
 subjects, recovery access, and raw upstream responses stay outside the guide.
 
+After services are configured, the same guide offers an explicit **Post-install flight check**.
+It performs fresh, upstream-read-only OIDC and connector validations with bounded concurrency and
+partial-failure isolation. The assembled report exists only in memory and can be downloaded as a
+strict privacy-safe JSON snapshot. Run it after installation, connector changes, and upgrades; see
+the [stack verification runbook](operations/stack-verification.md) for report semantics and privacy
+limits. This local result is diagnostic evidence, not a public service-version support claim.
+
 The same guide includes a separate **Deployment flight check** for the host boundary. It reports only
 four ordered ready-or-attention results: production runtime, canonical HTTPS with secure sessions,
 configured recovery access, and persistent SQLite storage. Only a full administrator can request the
@@ -255,7 +262,8 @@ database backup and protect backup access as carefully as live access.
 2. Back up and verify the recovery set.
 3. Pull the immutable version tag and record its digest.
 4. Let the release's migration step complete before serving traffic.
-5. Check readiness, authentication, a representative read, and a safe mutation.
+5. Run the setup guide's stack verification, then check authentication, a representative read, and
+   a safe mutation.
 6. Retain the previous verified digest and pre-upgrade backup until the observation
    period ends.
 

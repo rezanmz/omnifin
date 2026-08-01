@@ -181,7 +181,7 @@ const normalizedVersionSchema = z
   .string()
   .min(1)
   .max(64)
-  .regex(/^[0-9A-Za-z](?:[0-9A-Za-z._+-]{0,62}[0-9A-Za-z])?$/u);
+  .regex(/^v?[0-9]{1,8}(?:\.[0-9]{1,8}){1,5}$/u);
 
 export const stackVerificationFindingSchema = z.strictObject({
   code: z.enum(stackVerificationFindingCodes),

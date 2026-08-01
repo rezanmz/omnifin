@@ -5,6 +5,7 @@ import {
   setupReadinessStepIds,
   stackVerificationCheckIds,
   stackVerificationResponseSchema,
+  type StackVerificationResponse,
 } from "../src/setup.js";
 
 function response() {
@@ -53,7 +54,7 @@ describe("setupReadinessResponseSchema", () => {
   });
 });
 
-function verification() {
+function verification(): StackVerificationResponse {
   return {
     checks: stackVerificationCheckIds.map((id, index) => ({
       attemptedCount: index < 2 ? 1 : 0,
@@ -86,12 +87,15 @@ describe("stackVerificationResponseSchema", () => {
     expect(stackVerificationResponseSchema.parse(verification())).toEqual(verification());
   });
 
-  it("rejects private or unnormalized upstream version values", () => {
-    const value = verification();
-    value.checks[1]!.versions = ["10.10.7 https://private.example.test/token"];
+  it.each(["10.10.7 https://private.example.test/token", "private-db01.local"])(
+    "rejects private or unnormalized upstream version value %s",
+    (version) => {
+      const value = verification();
+      value.checks[1]!.versions = [version];
 
-    expect(stackVerificationResponseSchema.safeParse(value).success).toBe(false);
-  });
+      expect(stackVerificationResponseSchema.safeParse(value).success).toBe(false);
+    },
+  );
 
   it("rejects reordered, duplicate, or dishonest details", () => {
     const value = verification();

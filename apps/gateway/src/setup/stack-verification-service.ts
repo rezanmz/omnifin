@@ -28,7 +28,7 @@ const MAX_CONNECTORS = 100;
 const MAX_OIDC_PROVIDERS = 50;
 const PROBE_CONCURRENCY = 4;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const SAFE_VERSION_PATTERN = /^[0-9A-Za-z](?:[0-9A-Za-z._+-]{0,62}[0-9A-Za-z])?$/u;
+const SAFE_VERSION_PATTERN = /^v?[0-9]{1,8}(?:\.[0-9]{1,8}){1,5}$/u;
 
 interface ConnectorRow {
   enabled: number;
