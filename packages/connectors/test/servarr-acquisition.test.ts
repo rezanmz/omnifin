@@ -369,6 +369,60 @@ describe("Servarr acquisition provenance", () => {
     expect(JSON.stringify(result)).not.toContain("must-not-leak");
   });
 
+  it("re-reads an exact stalled item and sends the explicit remove-and-blocklist semantics", async () => {
+    const { adapter, requests } = radarrWithResponses([
+      jsonResponse({
+        records: [
+          {
+            added: "2026-07-25T11:55:00.000Z",
+            id: 91,
+            movieId: 42,
+            status: "completed",
+            title: "Example.Movie.2026.1080p",
+            trackedDownloadState: "importPending",
+            trackedDownloadStatus: "warning",
+          },
+          {
+            added: "2026-07-25T11:54:00.000Z",
+            id: 92,
+            movieId: 43,
+            status: "completed",
+            trackedDownloadStatus: "warning",
+          },
+        ],
+        totalRecords: 2,
+      }),
+      jsonResponse({}, { status: 200 }),
+    ]);
+
+    const queue = await adapter.readAcquisitionQueue({ mediaId: 42, service: "radarr" });
+    expect(queue).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({ kind: "stalled", state: "warning" }),
+        externalId: 91,
+      }),
+    ]);
+    await adapter.removeAndBlocklistAcquisitionQueueItem(91);
+
+    expect(requests[0]?.url.pathname).toBe("/api/v3/queue");
+    expect(requests[0]?.url.searchParams.get("movieIds")).toBe("42");
+    expect(requests[1]?.url.pathname).toBe("/api/v3/queue/91");
+    expect(requests[1]?.init.method).toBe("DELETE");
+    expect(Object.fromEntries(requests[1]?.url.searchParams ?? [])).toEqual({
+      blocklist: "true",
+      changeCategory: "false",
+      removeFromClient: "true",
+      skipRedownload: "false",
+    });
+  });
+
+  it("rejects unsafe queue identifiers before transport", async () => {
+    const { adapter, requests } = sonarrWithResponses([]);
+
+    await expect(adapter.removeAndBlocklistAcquisitionQueueItem(0)).rejects.toBeDefined();
+    expect(requests).toHaveLength(0);
+  });
+
   it("fails safely when neither history nor queue can provide evidence", async () => {
     const { adapter } = radarrWithResponses([
       jsonResponse({ privateHistoryFailure: "must-not-leak" }, { status: 503 }),

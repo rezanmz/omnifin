@@ -6,6 +6,8 @@ import {
   acquisitionMonitoringUpdateInputSchema,
   acquisitionProvenanceSnapshotEventSchema,
   acquisitionProvenanceResponseSchema,
+  acquisitionEventSchema,
+  acquisitionQueueRecoveryResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchResponseSchema,
   acquisitionTargetInputSchema,
@@ -104,6 +106,48 @@ describe("acquisition provenance contracts", () => {
     });
 
     expect(result.events).toHaveLength(2);
+  });
+
+  it("offers recovery only on an opaque stalled event and returns no upstream identifier", () => {
+    const recovery = {
+      expiresAt: "2026-07-27T12:15:00.000Z",
+      reference: `aqr_v2.${"A".repeat(100)}`,
+    };
+    expect(
+      acquisitionEventSchema.parse({
+        episodeNumbers: [],
+        id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "stalled",
+        occurredAt: "2026-07-27T12:10:00.000Z",
+        recovery,
+        release,
+        seasonNumber: null,
+        state: "warning",
+        summary: "Download needs operator attention.",
+      }),
+    ).toMatchObject({ recovery });
+    expect(() =>
+      acquisitionEventSchema.parse({
+        episodeNumbers: [],
+        id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "downloading",
+        occurredAt: "2026-07-27T12:10:00.000Z",
+        recovery,
+        release,
+        seasonNumber: null,
+        state: "active",
+        summary: "Download is active.",
+      }),
+    ).toThrow();
+    expect(
+      acquisitionQueueRecoveryResponseSchema.parse({
+        completedAt: "2026-07-27T12:12:00.000Z",
+        eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+        service: "radarr",
+        state: "removed_and_blocklisted",
+      }),
+    ).not.toHaveProperty("queueId");
   });
 
   it("binds a live snapshot to one opaque resumable cursor", () => {

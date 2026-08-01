@@ -245,6 +245,11 @@ export interface ManualReleaseSearchResult {
   target: ManualReleaseTarget;
 }
 
+export interface AcquisitionQueueItem {
+  event: AcquisitionEvent;
+  externalId: number;
+}
+
 function optionalLabel(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized ? normalized : null;
@@ -653,6 +658,7 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     "acquisition.grab",
     "acquisition.calendar",
     "acquisition.monitoring",
+    "acquisition.queue.mutate",
     "system.health",
     "storage.read",
   ];
@@ -905,6 +911,55 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
         seasonNumber: target.seasonNumber ?? null,
         service: this.service,
       },
+    });
+  }
+
+  async readAcquisitionQueue(
+    input: AcquisitionTargetInput,
+    signal?: AbortSignal,
+  ): Promise<readonly AcquisitionQueueItem[]> {
+    const target = acquisitionTargetInputSchema.parse(input);
+    if (target.service !== this.service) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "The acquisition target does not match the connector service.",
+        operation: "acquisition.queue.read",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const generatedAt = this.clock.now().toISOString();
+    const queue = await this.client.requestJson("api/v3/queue", queueResponseSchema, {
+      headers: { "X-Api-Key": this.apiKey },
+      operation: "acquisition.queue.read",
+      query: this.queueQuery(target),
+      ...(signal ? { signal } : {}),
+    });
+    return (queue.records ?? [])
+      .filter((record) => matchesTarget(record, target))
+      .map((record) => ({
+        event: queueEvent(this.service, record, generatedAt),
+        externalId: record.id,
+      }));
+  }
+
+  async removeAndBlocklistAcquisitionQueueItem(
+    externalId: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const id = safeIdentifierSchema.parse(externalId);
+    await this.client.requestText(`api/v3/queue/${id}`, {
+      acceptedStatuses: [200, 202, 204],
+      headers: { "X-Api-Key": this.apiKey },
+      method: "DELETE",
+      operation: "acquisition.queue.remove_and_blocklist",
+      query: {
+        blocklist: "true",
+        changeCategory: "false",
+        removeFromClient: "true",
+        skipRedownload: "false",
+      },
+      ...(signal ? { signal } : {}),
     });
   }
 
