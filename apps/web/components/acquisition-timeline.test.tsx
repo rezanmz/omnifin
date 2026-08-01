@@ -35,6 +35,27 @@ const liveOperation: OperationModel = {
   target: { mediaId: 77, seasonNumber: 1, service: "sonarr" },
   title: "Signal · S01E07",
 };
+const queueRecoveryReference = `aqr_v2.${"A".repeat(100)}`;
+const stalledOperation: OperationModel = {
+  ...operation,
+  id: "op-stalled",
+  provenance: {
+    ...operation.provenance!,
+    events: [
+      {
+        ...operation.provenance!.events[0]!,
+        id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        kind: "stalled",
+        recovery: {
+          expiresAt: "2026-07-27T19:05:00.000Z",
+          reference: queueRecoveryReference,
+        },
+        state: "warning",
+        summary: "Download needs operator attention before import can continue.",
+      },
+    ],
+  },
+};
 const operator: SessionPrincipal = {
   absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
   accountState: "active",
@@ -223,6 +244,157 @@ describe("acquisition timeline", () => {
         idempotencyKey: expect.stringMatching(/^acquisition-/u),
       }),
     );
+  });
+
+  it("requires typed confirmation before removing and blocklisting one exact stalled item", async () => {
+    const user = userEvent.setup();
+    const recoverQueueItem = vi.fn<NonNullable<AcquisitionRecoveryClient["recoverQueueItem"]>>(
+      async () => ({
+        recovery: {
+          completedAt: "2026-07-27T19:02:00.000Z",
+          eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+          operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+          service: "radarr",
+          state: "removed_and_blocklisted",
+        },
+        replayed: false,
+      }),
+    );
+    const recoveryClient: AcquisitionRecoveryClient = {
+      loadEligibility: vi.fn(async () => ({
+        snapshot: {
+          csrfToken: "queue_recovery_csrf_0123456789abcdefghijklmnop",
+          principal: operator,
+        },
+        status: "ready" as const,
+      })),
+      queueSearch: vi.fn(),
+      recoverQueueItem,
+    };
+    render(
+      <AcquisitionTimeline
+        operation={stalledOperation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={recoveryClient}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Recover stalled download" }));
+    expect(
+      screen.getByText(/removes the item and its data from the download client/u),
+    ).toBeVisible();
+    expect(screen.getByText(/Future searches remain allowed/u)).toBeVisible();
+    const confirmation = screen.getByLabelText("Type REMOVE to confirm");
+    const remove = screen.getByRole("button", { name: "Remove and blocklist" });
+    expect(remove).toBeDisabled();
+    await user.type(confirmation, "remove");
+    expect(confirmation).toHaveValue("REMOVE");
+    await user.click(remove);
+
+    expect(await screen.findByText("Removed and blocklisted")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveFocus();
+    expect(screen.getByText("No new search was started automatically.")).toBeVisible();
+    expect(recoverQueueItem).toHaveBeenCalledWith(
+      { reference: queueRecoveryReference },
+      expect.objectContaining({
+        csrfToken: "queue_recovery_csrf_0123456789abcdefghijklmnop",
+        idempotencyKey: expect.stringMatching(/^queue-recovery-/u),
+      }),
+    );
+  });
+
+  it("requires a fresh timeline after an exact queue recovery becomes stale", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const recoverQueueItem = vi.fn<NonNullable<AcquisitionRecoveryClient["recoverQueueItem"]>>(
+      async () =>
+        Promise.reject(
+          new AcquisitionRecoveryClientError(
+            "stale",
+            "acquisition_queue_recovery_stale",
+            "Refresh required.",
+          ),
+        ),
+    );
+    render(
+      <AcquisitionTimeline
+        operation={stalledOperation}
+        onOpenChange={onOpenChange}
+        open
+        recoveryClient={{
+          loadEligibility: async () => ({
+            snapshot: {
+              csrfToken: "queue_recovery_csrf_0123456789abcdefghijklmnop",
+              principal: operator,
+            },
+            status: "ready",
+          }),
+          queueSearch: vi.fn(),
+          recoverQueueItem,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Recover stalled download" }));
+    await user.type(screen.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await user.click(screen.getByRole("button", { name: "Remove and blocklist" }));
+    expect(await screen.findByText("Queue item changed")).toBeVisible();
+    expect(screen.getByText(/queue item changed or expired/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh history" })).toBeVisible();
+  });
+
+  it("reuses one exact reference and idempotency key after an explicit rate-limit retry", async () => {
+    const user = userEvent.setup();
+    const recoverQueueItem = vi
+      .fn<NonNullable<AcquisitionRecoveryClient["recoverQueueItem"]>>()
+      .mockRejectedValueOnce(
+        new AcquisitionRecoveryClientError(
+          "rate_limited",
+          "acquisition_queue_recovery_rate_limited",
+          "Pause before retrying.",
+        ),
+      )
+      .mockResolvedValueOnce({
+        recovery: {
+          completedAt: "2026-07-27T19:02:00.000Z",
+          eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+          operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+          service: "radarr",
+          state: "removed_and_blocklisted",
+        },
+        replayed: false,
+      });
+    render(
+      <AcquisitionTimeline
+        operation={stalledOperation}
+        onOpenChange={vi.fn()}
+        open
+        recoveryClient={{
+          loadEligibility: async () => ({
+            snapshot: {
+              csrfToken: "queue_recovery_csrf_0123456789abcdefghijklmnop",
+              principal: operator,
+            },
+            status: "ready",
+          }),
+          queueSearch: vi.fn(),
+          recoverQueueItem,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Recover stalled download" }));
+    await user.type(screen.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await user.click(screen.getByRole("button", { name: "Remove and blocklist" }));
+    expect(await screen.findByText("Recovery is cooling down")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Review again" }));
+    await user.type(screen.getByLabelText("Type REMOVE to confirm"), "REMOVE");
+    await user.click(screen.getByRole("button", { name: "Remove and blocklist" }));
+    expect(await screen.findByText("Removed and blocklisted")).toBeVisible();
+
+    expect(recoverQueueItem).toHaveBeenCalledTimes(2);
+    expect(recoverQueueItem.mock.calls[1]).toEqual(recoverQueueItem.mock.calls[0]);
   });
 
   it("lets an operator cancel the exact-target confirmation without a session lookup", async () => {

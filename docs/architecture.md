@@ -20,8 +20,8 @@ the roadmap records when each area has passed its verification gate.
 > Indexer Intelligence are implemented. Exact-target manual release search and grabs plus
 > normalized qBittorrent/SABnzbd queue reads and the read-only Radarr/Sonarr acquisition calendar
 > are also implemented. Operator request review and the normalized Seerr issue lifecycle are
-> available. Exact whole-title Radarr/Sonarr monitoring controls are implemented; broader
-> acquisition mutations remain incomplete.
+> available. Exact whole-title Radarr/Sonarr monitoring and exact stalled-queue recovery are
+> implemented; broader acquisition mutations remain incomplete.
 > The implemented API surfaces enforce their local role or narrowly scoped recovery
 > permissions at both route and service boundaries. The roadmap, not branch availability,
 > determines supported-release status.
@@ -61,8 +61,10 @@ download workspace reads bounded, normalized qBittorrent and SABnzbd queues with
 upstream identifiers or credentials. The system-health workspace concurrently reads bounded
 Radarr, Sonarr, and Prowlarr health signals plus path-free Radarr/Sonarr capacity, retaining
 verified telemetry when one source or subsection fails. An operator can inspect and explicitly
-change exact whole-movie or whole-series monitoring through a read-before-write, audited control;
-broader acquisition mutations remain unavailable. The system-health workspace and operator-only
+change exact whole-movie or whole-series monitoring through a read-before-write, audited control.
+A separate user-bound, read-before-write recovery removes and blocklists one exact stalled Servarr
+queue item without automatically starting another search; broader acquisition mutations remain
+unavailable. The system-health workspace and operator-only
 acquisition drawer receive normalized snapshots through bounded SSE channels, share upstream work,
 and visibly fall back to foreground polling when a channel is unavailable.
 A viewer-accessible

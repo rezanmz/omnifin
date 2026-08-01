@@ -12,6 +12,7 @@ const currentMigrationDirectory = path.resolve(import.meta.dirname, "../drizzle"
 const historicalMigrationDirectory = path.join(temporaryDirectory, "migrations-through-0002");
 const requiredTables = [
   "acquisition_grab_operations",
+  "acquisition_queue_recovery_operations",
   "acquisition_search_operations",
   "audit_budget_entries",
   "audit_budget_scopes",
@@ -48,6 +49,19 @@ const requiredColumns = {
     "failure_code",
     "fingerprint_hash",
     "idempotency_key_hash",
+    "response_json",
+    "state",
+    "user_id",
+  ],
+  acquisition_queue_recovery_operations: [
+    "completed_at",
+    "connector_id",
+    "event_id",
+    "event_snapshot_json",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "mutation_started_at",
     "response_json",
     "state",
     "user_id",
@@ -246,6 +260,11 @@ const requiredIndexes = {
   acquisition_grab_operations: [
     "acquisition_grab_operations_state_created_idx",
     "acquisition_grab_operations_user_key_unique",
+  ],
+  acquisition_queue_recovery_operations: [
+    "acquisition_queue_recovery_operations_event_idx",
+    "acquisition_queue_recovery_operations_state_created_idx",
+    "acquisition_queue_recovery_operations_user_key_unique",
   ],
   acquisition_search_operations: [
     "acquisition_search_operations_state_created_idx",
@@ -467,8 +486,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0019_jellyfin_admin_bootstrap",
-  "Current migration journal must end at migration 0019_jellyfin_admin_bootstrap.",
+    currentMigrationTag === "0020_acquisition_queue_recovery",
+  "Current migration journal must end at migration 0020_acquisition_queue_recovery.",
 );
 
 try {
@@ -847,7 +866,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0019.",
+      "Production migration did not advance the historical fixture exactly through migration 0020.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1012,7 +1031,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0019, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0020, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -22,6 +22,7 @@ import {
   Search,
   ShieldCheck,
   ShieldAlert,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -41,6 +42,7 @@ import {
 import {
   AcquisitionRecoveryClientError,
   acquisitionRecoveryClient,
+  createAcquisitionQueueRecoveryIdempotencyKey,
   createAcquisitionSearchIdempotencyKey,
   type AcquisitionRecoveryClient,
   type AcquisitionRecoveryClientErrorKind,
@@ -82,6 +84,13 @@ type RecoveryState =
   | { kind: "submitting" }
   | { kind: "success"; operationId: string; replayed: boolean }
   | { errorKind: AcquisitionRecoveryClientErrorKind; kind: "error" };
+
+type QueueRecoveryState =
+  | { kind: "idle" }
+  | { phrase: string; kind: "confirming"; reference: string }
+  | { kind: "submitting"; reference: string }
+  | { kind: "success"; replayed: boolean }
+  | { errorKind: AcquisitionRecoveryClientErrorKind; kind: "error"; reference: string };
 
 interface MonitoringSnapshot {
   operationId: string;
@@ -152,6 +161,57 @@ const ERROR_COPY: Record<
   },
 };
 
+const QUEUE_RECOVERY_ERROR_COPY: Record<
+  AcquisitionRecoveryClientErrorKind,
+  { action: "none" | "refresh" | "retry" | "sign_in"; detail: string; title: string }
+> = {
+  configuration: {
+    action: "refresh",
+    detail: "Refresh the verified timeline after the connector configuration has been checked.",
+    title: "Recovery is unavailable",
+  },
+  forbidden: {
+    action: "none",
+    detail: "Your current role cannot remove or blocklist acquisition queue items.",
+    title: "Operator access required",
+  },
+  invalid_response: {
+    action: "refresh",
+    detail: "Refresh history to verify the outcome before taking another action.",
+    title: "Recovery receipt could not be verified",
+  },
+  pending: {
+    action: "refresh",
+    detail: "That exact recovery is already running. Refresh history to verify its outcome.",
+    title: "Recovery is already in progress",
+  },
+  rate_limited: {
+    action: "retry",
+    detail: "No additional request will be sent until you explicitly review the same action again.",
+    title: "Recovery is cooling down",
+  },
+  signed_out: {
+    action: "sign_in",
+    detail: "Your session ended before the recovery could be authorized.",
+    title: "Sign in to continue",
+  },
+  stale: {
+    action: "refresh",
+    detail: "The queue item changed or expired. Refresh before taking another action.",
+    title: "Queue item changed",
+  },
+  unconfirmed: {
+    action: "refresh",
+    detail: "The previous outcome is unknown and will not be guessed or repeated. Refresh history.",
+    title: "Recovery outcome needs verification",
+  },
+  unavailable: {
+    action: "refresh",
+    detail: "The connection was interrupted. Refresh history before deciding what to do next.",
+    title: "Recovery connection was interrupted",
+  },
+};
+
 function formatBytes(bytes: number | null) {
   if (bytes === null) return null;
   if (bytes < 1_000_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
@@ -193,7 +253,214 @@ function TimelineSkeleton() {
   );
 }
 
-function TimelineEvent({ event }: { event: AcquisitionEvent }) {
+function QueueRecoveryControl({
+  client,
+  event,
+  onRefresh,
+}: {
+  client: AcquisitionRecoveryClient;
+  event: AcquisitionEvent;
+  onRefresh: () => void;
+}) {
+  const triggerReference = useRef<HTMLButtonElement>(null);
+  const statusReference = useRef<HTMLDivElement>(null);
+  const idempotencyKeyReference = useRef<string | null>(null);
+  const confirmationDescriptionId = useId();
+  const confirmationTitleId = useId();
+  const [state, setState] = useState<QueueRecoveryState>({ kind: "idle" });
+  useEffect(() => {
+    if (["error", "submitting", "success"].includes(state.kind)) {
+      statusReference.current?.focus();
+    }
+  }, [state.kind]);
+  if (!event.recovery || !client.recoverQueueItem) return null;
+
+  if (state.kind === "idle") {
+    return (
+      <div className="acquisition-event__recovery">
+        <button
+          onClick={() =>
+            setState({ kind: "confirming", phrase: "", reference: event.recovery!.reference })
+          }
+          ref={triggerReference}
+          type="button"
+        >
+          <Trash2 aria-hidden="true" /> Recover stalled download
+        </button>
+      </div>
+    );
+  }
+
+  if (state.kind === "confirming") {
+    return (
+      <form
+        aria-labelledby={confirmationTitleId}
+        className="acquisition-event__recovery-confirmation"
+        onSubmit={(submitEvent) => {
+          submitEvent.preventDefault();
+          if (state.phrase !== "REMOVE") return;
+          void (async () => {
+            setState({ kind: "submitting", reference: state.reference });
+            try {
+              const eligibility = await client.loadEligibility();
+              if (eligibility.status !== "ready") {
+                setState({
+                  errorKind:
+                    eligibility.status === "signed_out"
+                      ? "signed_out"
+                      : eligibility.status === "forbidden"
+                        ? "forbidden"
+                        : "unavailable",
+                  kind: "error",
+                  reference: state.reference,
+                });
+                return;
+              }
+              idempotencyKeyReference.current ??= createAcquisitionQueueRecoveryIdempotencyKey();
+              const result = await client.recoverQueueItem!(
+                { reference: state.reference },
+                {
+                  csrfToken: eligibility.snapshot.csrfToken,
+                  idempotencyKey: idempotencyKeyReference.current,
+                },
+              );
+              setState({ kind: "success", replayed: result.replayed });
+            } catch (error) {
+              setState({
+                errorKind:
+                  error instanceof AcquisitionRecoveryClientError ? error.kind : "unavailable",
+                kind: "error",
+                reference: state.reference,
+              });
+            }
+          })();
+        }}
+      >
+        <strong id={confirmationTitleId}>Remove this exact queue item?</strong>
+        <p id={confirmationDescriptionId}>
+          This removes the item and its data from the download client, then blocklists the release.{" "}
+          Future searches remain allowed and library files are not changed.
+        </p>
+        <label>
+          <span>Type REMOVE to confirm</span>
+          <input
+            aria-describedby={confirmationDescriptionId}
+            autoComplete="off"
+            autoCapitalize="characters"
+            autoFocus
+            maxLength={6}
+            onChange={(changeEvent) =>
+              setState({
+                kind: "confirming",
+                phrase: changeEvent.target.value.toUpperCase(),
+                reference: state.reference,
+              })
+            }
+            spellCheck={false}
+            value={state.phrase}
+          />
+        </label>
+        <span className="acquisition-event__recovery-actions">
+          <button
+            className="acquisition-event__recovery-cancel"
+            onClick={() => {
+              idempotencyKeyReference.current = null;
+              setState({ kind: "idle" });
+              requestAnimationFrame(() => triggerReference.current?.focus());
+            }}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button disabled={state.phrase !== "REMOVE"} type="submit">
+            Remove and blocklist
+          </button>
+        </span>
+      </form>
+    );
+  }
+
+  if (state.kind === "submitting") {
+    return (
+      <div
+        className="acquisition-event__recovery-status"
+        data-state="loading"
+        ref={statusReference}
+        role="status"
+        tabIndex={-1}
+      >
+        <RefreshCw aria-hidden="true" />
+        <span>
+          <strong>Confirming exact queue state</strong>
+          The item is being re-read before any upstream change.
+        </span>
+      </div>
+    );
+  }
+
+  if (state.kind === "success") {
+    return (
+      <div
+        className="acquisition-event__recovery-status"
+        data-state="success"
+        ref={statusReference}
+        role="status"
+        tabIndex={-1}
+      >
+        <Check aria-hidden="true" />
+        <span>
+          <strong>
+            {state.replayed ? "Recovery receipt verified" : "Removed and blocklisted"}
+          </strong>
+          No new search was started automatically.
+        </span>
+        <button onClick={onRefresh} type="button">
+          Refresh history
+        </button>
+      </div>
+    );
+  }
+
+  const errorCopy = QUEUE_RECOVERY_ERROR_COPY[state.errorKind];
+  return (
+    <div
+      className="acquisition-event__recovery-status"
+      data-state="error"
+      ref={statusReference}
+      role="alert"
+      tabIndex={-1}
+    >
+      <ShieldAlert aria-hidden="true" />
+      <span>
+        <strong>{errorCopy.title}</strong>
+        {errorCopy.detail}
+      </span>
+      {errorCopy.action === "sign_in" ? (
+        <a href="/login">Sign in</a>
+      ) : errorCopy.action === "none" ? null : (
+        <button
+          onClick={() => {
+            if (errorCopy.action === "refresh") onRefresh();
+            else setState({ kind: "confirming", phrase: "", reference: state.reference });
+          }}
+          type="button"
+        >
+          {errorCopy.action === "refresh" ? "Refresh history" : "Review again"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TimelineEvent({
+  event,
+  onRefresh,
+  recoveryClient,
+}: {
+  event: AcquisitionEvent;
+  onRefresh: () => void;
+  recoveryClient: AcquisitionRecoveryClient;
+}) {
   const presentation = EVENT_COPY[event.kind];
   const Icon = presentation.icon;
   const releaseDetails = [
@@ -225,6 +492,7 @@ function TimelineEvent({ event }: { event: AcquisitionEvent }) {
             {event.release.protocol !== "unknown" && <li>{event.release.protocol}</li>}
           </ul>
         )}
+        <QueueRecoveryControl client={recoveryClient} event={event} onRefresh={onRefresh} />
       </article>
     </li>
   );
@@ -233,11 +501,15 @@ function TimelineEvent({ event }: { event: AcquisitionEvent }) {
 function TimelineReady({
   data,
   monitoring,
+  onRefresh,
   recovery,
+  recoveryClient,
 }: {
   data: AcquisitionProvenanceResponse;
   monitoring: ReactNode;
+  onRefresh: () => void;
   recovery: ReactNode;
+  recoveryClient: AcquisitionRecoveryClient;
 }) {
   const active = data.events.filter((event) => event.state === "active").length;
   const attention = data.events.filter(
@@ -289,7 +561,12 @@ function TimelineReady({
       ) : (
         <ol className="acquisition-timeline__events">
           {data.events.map((event) => (
-            <TimelineEvent event={event} key={event.id} />
+            <TimelineEvent
+              event={event}
+              key={event.id}
+              onRefresh={onRefresh}
+              recoveryClient={recoveryClient}
+            />
           ))}
         </ol>
       )}
@@ -825,6 +1102,10 @@ export function AcquisitionTimeline({
                   title={operation.title}
                 />
               }
+              onRefresh={() => {
+                setState({ kind: "loading", operationId: operation.id });
+                setAttempt((value) => value + 1);
+              }}
               recovery={
                 <RecoveryPanel
                   onConfirm={() => {
@@ -880,6 +1161,7 @@ export function AcquisitionTimeline({
                   targetLabel={targetLabel}
                 />
               }
+              recoveryClient={recoveryClient}
             />
           )}
         </div>

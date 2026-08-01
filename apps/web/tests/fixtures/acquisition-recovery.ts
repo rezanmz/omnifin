@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 export const acquisitionRecoveryCsrfToken =
   "acquisition_recovery_fixture_csrf_0123456789abcdefghijklmnop";
+export const acquisitionQueueRecoveryReference = `aqr_v2.${"A".repeat(100)}`;
 
 export const acquisitionRecoveryPrincipal = {
   absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
@@ -81,6 +82,50 @@ export async function mockAcquisitionSearch(page: Page) {
         operationId: "radarr:command:88",
         state: "queued",
         target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
+      }),
+      contentType: "application/json",
+      headers: { "idempotency-replayed": "false" },
+      status: 201,
+    });
+  });
+  return capture;
+}
+
+export async function mockAcquisitionQueueRecovery(
+  page: Page,
+  outcome: "stale" | "success" = "success",
+) {
+  const capture: AcquisitionRecoveryCapture = {
+    body: null,
+    csrfToken: "",
+    idempotencyKey: "",
+  };
+  await page.route("**/api/acquisitions/queue-recoveries", async (route) => {
+    const request = route.request();
+    capture.body = request.postDataJSON();
+    capture.csrfToken = request.headers()["x-omnifin-csrf"] ?? "";
+    capture.idempotencyKey = request.headers()["idempotency-key"] ?? "";
+    if (outcome === "stale") {
+      await route.fulfill({
+        body: JSON.stringify({
+          error: {
+            code: "acquisition_queue_recovery_stale",
+            message: "That queue item changed or expired. Refresh before continuing.",
+            requestId: "visual-queue-recovery-stale",
+          },
+        }),
+        contentType: "application/json",
+        status: 409,
+      });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        completedAt: "2026-07-27T19:02:00.000Z",
+        eventId: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+        operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+        service: "radarr",
+        state: "removed_and_blocklisted",
       }),
       contentType: "application/json",
       headers: { "idempotency-replayed": "false" },

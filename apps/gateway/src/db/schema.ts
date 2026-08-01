@@ -1758,6 +1758,108 @@ export const acquisitionSearchOperations = sqliteTable(
   ],
 );
 
+export const acquisitionQueueRecoveryOperations = sqliteTable(
+  "acquisition_queue_recovery_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    eventSnapshotJson: text("event_snapshot_json"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    mutationStartedAt: integer("mutation_started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("acquisition_queue_recovery_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("acquisition_queue_recovery_operations_state_created_idx").on(
+      table.state,
+      table.createdAt,
+    ),
+    index("acquisition_queue_recovery_operations_event_idx").on(
+      table.connectorId,
+      table.eventId,
+      table.createdAt,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_id_check",
+      sql`length(${table.id}) = 43
+        and substr(${table.id}, 1, 21) = 'acquisition_recovery_'
+        and substr(${table.id}, 22) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_event_id_check",
+      sql`length(${table.eventId}) = 34
+        and substr(${table.eventId}, 1, 12) = 'acquisition_'
+        and substr(${table.eventId}, 13) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_event_snapshot_check",
+      sql`${table.eventSnapshotJson} is null
+        or (json_valid(${table.eventSnapshotJson}) and json_type(${table.eventSnapshotJson}) = 'object')`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.eventSnapshotJson} is not null
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.mutationStartedAt} is not null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "acquisition_queue_recovery_operations_timestamp_order_check",
+      sql`(${table.mutationStartedAt} is null or ${table.mutationStartedAt} >= ${table.createdAt})
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
 export const acquisitionGrabOperations = sqliteTable(
   "acquisition_grab_operations",
   {

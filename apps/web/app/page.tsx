@@ -1,6 +1,6 @@
 import { DashboardScreen, DashboardStateScreen } from "../components/dashboard-screen";
 import type { DashboardStateKind } from "../components/dashboard-state";
-import { connectedDashboard, demoDashboard } from "../lib/dashboard-data";
+import { connectedDashboard, demoDashboard, type DashboardModel } from "../lib/dashboard-data";
 import { demoDiscoveryFeed } from "../lib/discovery-feed-demo";
 import { readThemePreference } from "../lib/theme-server";
 import "./dashboard.css";
@@ -22,6 +22,37 @@ const dashboardStateKinds = new Set<DashboardStateKind>([
   "unsupported",
 ]);
 
+function queueRecoveryTestDashboard(): DashboardModel {
+  return {
+    ...demoDashboard,
+    operations: demoDashboard.operations.map((operation, operationIndex) => {
+      const provenance = operation.provenance;
+      const event = provenance?.events[0];
+      if (operationIndex !== 0 || !provenance || !event) return operation;
+      return {
+        ...operation,
+        provenance: {
+          ...provenance,
+          events: [
+            {
+              ...event,
+              id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
+              kind: "stalled",
+              recovery: {
+                expiresAt: "2026-07-27T19:05:00.000Z",
+                reference: `aqr_v2.${"A".repeat(100)}`,
+              },
+              state: "warning",
+              summary: "Download needs operator attention before import can continue.",
+            },
+            ...provenance.events.slice(1),
+          ],
+        },
+      };
+    }),
+  };
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProperties) {
   const testParameters = process.env.OMNIFIN_TEST_MODE === "true" ? await searchParams : {};
   const requestedTestView = testParameters["test-view"];
@@ -31,6 +62,7 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       ? "ten-foot"
       : "standard";
   const showLiveDashboard = requestedTestView === "continue-watching-live";
+  const showQueueRecoveryDashboard = requestedTestView === "queue-recovery";
   const showDiscoveryPerformanceProfile = requestedTestView === "discovery-performance";
   const showDemoDashboard =
     requestedTestView === "onboarding" || showLiveDashboard || showDiscoveryPerformanceProfile
@@ -70,9 +102,14 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
   }
 
   const preference = await readThemePreference();
+  const dashboardData = showQueueRecoveryDashboard
+    ? queueRecoveryTestDashboard()
+    : showDemoDashboard
+      ? demoDashboard
+      : connectedDashboard;
   return (
     <DashboardScreen
-      data={showDemoDashboard ? demoDashboard : connectedDashboard}
+      data={dashboardData}
       {...(showDiscoveryPerformanceProfile
         ? {
             discoveryInitialFeed: demoDiscoveryFeed,
@@ -81,8 +118,10 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
           }
         : {})}
       displayProfile={displayProfile}
-      liveContinueWatching={showLiveDashboard || !showDemoDashboard}
-      liveDiscovery={!showDemoDashboard}
+      liveContinueWatching={
+        showLiveDashboard || (!showDemoDashboard && !showQueueRecoveryDashboard)
+      }
+      liveDiscovery={!showDemoDashboard && !showQueueRecoveryDashboard}
       themePreference={preference}
     />
   );

@@ -106,6 +106,8 @@ const SERVICE_CHECKS = Object.freeze({
     "monitoringRead",
     "monitoringRestore",
     "monitoringUpdate",
+    "queueMutationGuard",
+    "queueRead",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -118,6 +120,8 @@ const SERVICE_CHECKS = Object.freeze({
     "monitoringRead",
     "monitoringRestore",
     "monitoringUpdate",
+    "queueMutationGuard",
+    "queueRead",
     "storageRead",
     "systemHealthRead",
     "versionDiscovery",
@@ -1267,6 +1271,28 @@ async function verifyMonitoringMutation(context, adapter, mediaId) {
   assertMonitoringState(finalState, context, mediaId, true, "monitoring_restore_read_invalid");
 }
 
+async function verifyQueueMutationBoundary(context, adapter, mediaId) {
+  const target = { mediaId, service: context.service };
+  const initial = await connectorOperation("queue_read", () =>
+    adapter.readAcquisitionQueue(target),
+  );
+  assertEmptyArray(initial, "queue_empty_state_invalid");
+  let rejected = false;
+  try {
+    await adapter.removeAndBlocklistAcquisitionQueueItem(2_147_483_647);
+  } catch (error) {
+    rejected =
+      error?.code === "upstream_error" &&
+      error?.operation === "acquisition.queue.remove_and_blocklist" &&
+      error?.status === 404;
+  }
+  if (!rejected) throw new ServarrFixtureFailure("queue_mutation_guard_invalid");
+  const finalQueue = await connectorOperation("queue_restore_read", () =>
+    adapter.readAcquisitionQueue(target),
+  );
+  assertEmptyArray(finalQueue, "queue_restore_invalid");
+}
+
 async function verifyRadarrOrSonarr(context, server, apiKey, adapter) {
   const systemHealth = await connectorOperation("system_health_read", () =>
     adapter.readSystemHealth(),
@@ -1283,6 +1309,7 @@ async function verifyRadarrOrSonarr(context, server, apiKey, adapter) {
   if (!Array.isArray(storage)) throw new ServarrFixtureFailure("storage_read_invalid");
   const mediaId = await provisionMediaFixture(context, server, apiKey);
   await verifyMonitoringMutation(context, adapter, mediaId);
+  await verifyQueueMutationBoundary(context, adapter, mediaId);
 }
 
 async function verifyProwlarr(context, server, apiKey, adapter) {

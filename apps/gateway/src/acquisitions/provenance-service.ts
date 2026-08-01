@@ -4,10 +4,14 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { ApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
+  acquisitionEventSchema,
   acquisitionMonitoringStateSchema,
   acquisitionMonitoringTargetInputSchema,
   acquisitionMonitoringUpdateInputSchema,
   acquisitionProvenanceResponseSchema,
+  acquisitionQueueRecoveryIdempotencyKeySchema,
+  acquisitionQueueRecoveryInputSchema,
+  acquisitionQueueRecoveryResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchInputSchema,
   acquisitionSearchResponseSchema,
@@ -15,7 +19,10 @@ import {
   type AcquisitionMonitoringState,
   type AcquisitionMonitoringTargetInput,
   type AcquisitionMonitoringUpdateInput,
+  type AcquisitionEvent,
   type AcquisitionProvenanceResponse,
+  type AcquisitionQueueRecoveryInput,
+  type AcquisitionQueueRecoveryResponse,
   type AcquisitionSearchInput,
   type AcquisitionSearchResponse,
   type AcquisitionService,
@@ -27,14 +34,36 @@ import {
   connectorHealthSchema,
 } from "@omnifin/contracts/connectors";
 import { randomUUID, X509Certificate } from "node:crypto";
+import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher, hashToken, privacyHash } from "../security/crypto.js";
+import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const QUEUE_EVENT_PATTERN = /^(radarr|sonarr):queue:([1-9][0-9]*)$/u;
+const RECOVERY_REFERENCE_TTL_MS = 5 * 60 * 1_000;
+const RECOVERY_LEASE_MS = 30_000;
+const RECOVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const MAX_RECOVERY_OPERATIONS_PER_USER = 1_000;
+
+const recoveryReferencePayloadSchema = z.strictObject({
+  connectorId: z.string().regex(CONNECTOR_IDENTIFIER_PATTERN),
+  eventFingerprint: z
+    .string()
+    .length(43)
+    .regex(/^[A-Za-z0-9_-]+$/u),
+  eventId: z.string().regex(/^acquisition_[A-Za-z0-9_-]{22}$/u),
+  expiresAt: z.int().nonnegative(),
+  externalId: z.int().positive().max(2_147_483_647),
+  mediaId: z.int().positive().max(2_147_483_647),
+  schemaVersion: z.literal(1),
+  seasonNumber: z.int().nonnegative().max(10_000).nullable(),
+  service: z.enum(["radarr", "sonarr"]),
+  userId: z.string().trim().min(1).max(128),
+});
 
 interface AcquisitionConnectorRow {
   baseUrl: string;
@@ -62,6 +91,34 @@ interface AcquisitionSearchOperationRow {
   state: string;
 }
 
+interface AcquisitionQueueItem {
+  event: AcquisitionEvent;
+  externalId: number;
+}
+
+interface AcquisitionQueueRecoveryOperationRow {
+  failureCode: string | null;
+  fingerprintHash: string;
+  id: string;
+  mutationStartedAt: number | null;
+  responseJson: string | null;
+  state: string;
+  updatedAt: number;
+}
+
+interface AcquisitionQueueRecoveryReferencePayload {
+  connectorId: string;
+  eventFingerprint: string;
+  eventId: string;
+  expiresAt: number;
+  externalId: number;
+  mediaId: number;
+  schemaVersion: 1;
+  seasonNumber: number | null;
+  service: AcquisitionService;
+  userId: string;
+}
+
 export interface AcquisitionProvenanceContext {
   ipAddress?: string;
   principal: SessionPrincipal;
@@ -81,6 +138,11 @@ export interface AcquisitionProvenanceAdapter {
     input: AcquisitionTargetInput,
     signal?: AbortSignal,
   ): Promise<AcquisitionProvenanceResponse>;
+  readAcquisitionQueue?(
+    input: AcquisitionTargetInput,
+    signal?: AbortSignal,
+  ): Promise<readonly AcquisitionQueueItem[]>;
+  removeAndBlocklistAcquisitionQueueItem?(externalId: number, signal?: AbortSignal): Promise<void>;
   updateAcquisitionMonitoring(
     input: AcquisitionMonitoringUpdateInput,
     signal?: AbortSignal,
@@ -90,15 +152,22 @@ export interface AcquisitionProvenanceAdapter {
 export interface AcquisitionProvenanceDependencies {
   clock?: () => Date;
   createId?: () => string;
+  createOperationId?: () => string;
   createAdapter?: (
     service: AcquisitionService,
     config: ApiKeyConnectorConfig,
   ) => AcquisitionProvenanceAdapter;
+  wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface AcquisitionSearchResult {
   replayed: boolean;
   search: AcquisitionSearchResponse;
+}
+
+export interface AcquisitionQueueRecoveryResult {
+  recovery: AcquisitionQueueRecoveryResponse;
+  replayed: boolean;
 }
 
 export type AcquisitionSearchFailureCode =
@@ -119,6 +188,12 @@ export type AcquisitionProvenanceErrorReason =
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "identity_required"
+  | "operation_failed"
+  | "operation_limit_reached"
+  | "outcome_unconfirmed"
+  | "reference_expired"
+  | "reference_invalid"
+  | "stale_state"
   | "storage_failure";
 
 export class AcquisitionProvenanceError extends Error {
@@ -184,7 +259,10 @@ function hasAcquisitionCapability(
   service: AcquisitionService,
   capability: Extract<
     ConnectorCapability,
-    "acquisition.history" | "acquisition.monitoring" | "acquisition.search"
+    | "acquisition.history"
+    | "acquisition.monitoring"
+    | "acquisition.queue.mutate"
+    | "acquisition.search"
   >,
 ) {
   try {
@@ -208,6 +286,25 @@ function hasAcquisitionCapability(
 
 function defaultAdapter(service: AcquisitionService, config: ApiKeyConnectorConfig) {
   return service === "radarr" ? new RadarrAdapter(config) : new SonarrAdapter(config);
+}
+
+async function defaultWait(milliseconds: number, signal?: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function knownSearchFailure(error: unknown): AcquisitionSearchFailureCode {
@@ -238,7 +335,9 @@ export class AcquisitionProvenanceService {
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<AcquisitionProvenanceDependencies["createAdapter"]>;
   readonly #createId: () => string;
+  readonly #createOperationId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #wait: NonNullable<AcquisitionProvenanceDependencies["wait"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -250,7 +349,10 @@ export class AcquisitionProvenanceService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createId = dependencies.createId ?? randomUUID;
+    this.#createOperationId =
+      dependencies.createOperationId ?? (() => `acquisition_recovery_${randomToken(16)}`);
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
+    this.#wait = dependencies.wait ?? defaultWait;
   }
 
   public async read(
@@ -258,12 +360,13 @@ export class AcquisitionProvenanceService {
     context: AcquisitionProvenanceContext,
     signal?: AbortSignal,
   ) {
-    requirePermission(context.principal, "acquisition.manage");
+    const principal = requirePermission(context.principal, "acquisition.manage");
     const input = acquisitionTargetInputSchema.parse(rawInput);
-    const adapter = this.#adapter(input.service, "acquisition.history");
-    return acquisitionProvenanceResponseSchema.parse(
+    const { adapter, row } = this.#adapterWithRow(input.service, "acquisition.history");
+    const provenance = acquisitionProvenanceResponseSchema.parse(
       await adapter.readAcquisitionProvenance(input, signal),
     );
+    return this.#publicProvenance(provenance, row, principal);
   }
 
   public async readMonitoring(
@@ -375,11 +478,521 @@ export class AcquisitionProvenanceService {
     return { replayed: false, search: response };
   }
 
+  public async recoverQueueItem(
+    rawInput: AcquisitionQueueRecoveryInput,
+    rawIdempotencyKey: string,
+    context: AcquisitionProvenanceContext,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionQueueRecoveryResult> {
+    const principal = requirePermission(context.principal, "acquisition.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new AcquisitionProvenanceError("identity_required");
+    }
+    const input = acquisitionQueueRecoveryInputSchema.parse(rawInput);
+    const idempotencyKey = acquisitionQueueRecoveryIdempotencyKeySchema.parse(rawIdempotencyKey);
+    const reference = this.#recoveryReference(input.reference, principal.userId);
+    const now = this.#now();
+    if (reference.expiresAt < now) throw new AcquisitionProvenanceError("reference_expired");
+    const fingerprintHash = hashToken(
+      JSON.stringify({
+        eventFingerprint: reference.eventFingerprint,
+        eventId: reference.eventId,
+        reference: hashToken(input.reference),
+      }),
+    );
+    const keyHash = hashToken(`${principal.userId}\u0000${idempotencyKey}`);
+    const reservation = this.#reserveRecovery(
+      principal.userId,
+      reference.connectorId,
+      reference.eventId,
+      keyHash,
+      fingerprintHash,
+    );
+    if (reservation.kind === "replay") {
+      return { recovery: reservation.response, replayed: true };
+    }
+    if (reservation.kind === "conflict") {
+      throw new AcquisitionProvenanceError("idempotency_conflict");
+    }
+    if (reservation.kind === "pending") {
+      throw new AcquisitionProvenanceError("idempotency_in_progress");
+    }
+    if (reservation.kind === "failure") {
+      throw new AcquisitionProvenanceError("operation_failed");
+    }
+
+    const target = acquisitionTargetInputSchema.parse({
+      mediaId: reference.mediaId,
+      ...(reference.seasonNumber === null ? {} : { seasonNumber: reference.seasonNumber }),
+      service: reference.service,
+    });
+    let mutationStarted = false;
+    try {
+      const { adapter, row } = this.#adapterWithRow(reference.service, "acquisition.queue.mutate");
+      if (
+        row.id !== reference.connectorId ||
+        !adapter.readAcquisitionQueue ||
+        !adapter.removeAndBlocklistAcquisitionQueueItem
+      ) {
+        throw new AcquisitionProvenanceError("reference_invalid");
+      }
+      const exact = await this.#exactQueueItem(adapter, target, reference.externalId, signal);
+      if (!exact) throw new AcquisitionProvenanceError("stale_state");
+      if (
+        exact.event.kind !== "stalled" ||
+        !["failure", "warning"].includes(exact.event.state) ||
+        this.#eventFingerprint(exact.event) !== reference.eventFingerprint ||
+        this.#publicEventId(row.id, exact.event.id) !== reference.eventId
+      ) {
+        throw new AcquisitionProvenanceError("stale_state");
+      }
+      this.#prepareRecovery(reservation.operationId, reference, exact.event, context);
+      mutationStarted = true;
+      await adapter.removeAndBlocklistAcquisitionQueueItem(reference.externalId, signal);
+
+      let removed = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (attempt > 0) await this.#wait(200 * attempt, signal);
+        const remaining = await this.#exactQueueItem(adapter, target, reference.externalId, signal);
+        if (!remaining) {
+          removed = true;
+          break;
+        }
+      }
+      if (!removed) throw new AcquisitionProvenanceError("outcome_unconfirmed");
+      const response = acquisitionQueueRecoveryResponseSchema.parse({
+        completedAt: new Date(this.#now()).toISOString(),
+        eventId: reference.eventId,
+        operationId: reservation.operationId,
+        service: reference.service,
+        state: "removed_and_blocklisted",
+      });
+      this.#completeRecoverySuccess(reservation.operationId, response, context);
+      return { recovery: response, replayed: false };
+    } catch (error) {
+      const reason = this.#recoveryFailure(error, mutationStarted);
+      this.#completeRecoveryFailure(reservation.operationId, reference, reason, context);
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (error instanceof AcquisitionProvenanceError && reason === error.reason) throw error;
+      throw new AcquisitionProvenanceError(reason, { cause: error });
+    }
+  }
+
+  #publicProvenance(
+    provenance: AcquisitionProvenanceResponse,
+    row: AcquisitionConnectorRow,
+    principal: SessionPrincipal,
+  ) {
+    const canRecover =
+      principal.accountState === "active" &&
+      Boolean(principal.userId) &&
+      hasAcquisitionCapability(row, provenance.target.service, "acquisition.queue.mutate");
+    const expiresAt = this.#now() + RECOVERY_REFERENCE_TTL_MS;
+    return acquisitionProvenanceResponseSchema.parse({
+      ...provenance,
+      events: provenance.events.map((event) => {
+        const publicId = this.#publicEventId(row.id, event.id);
+        const queueMatch = QUEUE_EVENT_PATTERN.exec(event.id);
+        if (
+          !canRecover ||
+          !principal.userId ||
+          !queueMatch ||
+          queueMatch[1] !== provenance.target.service ||
+          event.kind !== "stalled" ||
+          !["failure", "warning"].includes(event.state)
+        ) {
+          return { ...event, id: publicId };
+        }
+        const externalId = Number(queueMatch[2]);
+        if (!Number.isSafeInteger(externalId) || externalId < 1) {
+          return { ...event, id: publicId };
+        }
+        const payload: AcquisitionQueueRecoveryReferencePayload = {
+          connectorId: row.id,
+          eventFingerprint: this.#eventFingerprint(event),
+          eventId: publicId,
+          expiresAt,
+          externalId,
+          mediaId: provenance.target.mediaId,
+          schemaVersion: 1,
+          seasonNumber: provenance.target.seasonNumber,
+          service: provenance.target.service,
+          userId: principal.userId,
+        };
+        return acquisitionEventSchema.parse({
+          ...event,
+          id: publicId,
+          recovery: {
+            expiresAt: new Date(expiresAt).toISOString(),
+            reference: `aqr_${this.#cipher.encrypt(
+              JSON.stringify(payload),
+              this.#recoveryReferenceContext(principal.userId),
+            )}`,
+          },
+        });
+      }),
+    });
+  }
+
+  #publicEventId(connectorId: string, upstreamEventId: string) {
+    return `acquisition_${privacyHash(
+      "acquisition_event",
+      `${connectorId}\u0000${upstreamEventId}`,
+      this.#config.encryptionKey,
+    )}`;
+  }
+
+  #eventFingerprint(event: AcquisitionEvent) {
+    const { id: ignoredId, recovery: ignoredRecovery, ...snapshot } = event;
+    void ignoredId;
+    void ignoredRecovery;
+    return hashToken(JSON.stringify(snapshot));
+  }
+
+  #recoveryReferenceContext(userId: string) {
+    return `acquisition_queue_recovery:${userId}`;
+  }
+
+  #recoveryReference(reference: string, userId: string) {
+    try {
+      const parsed = recoveryReferencePayloadSchema.parse(
+        JSON.parse(
+          this.#cipher.decrypt(
+            reference.slice("aqr_".length),
+            this.#recoveryReferenceContext(userId),
+          ),
+        ),
+      );
+      if (parsed.userId !== userId) throw new Error("identity mismatch");
+      return parsed;
+    } catch (error) {
+      throw new AcquisitionProvenanceError("reference_invalid", { cause: error });
+    }
+  }
+
+  async #exactQueueItem(
+    adapter: AcquisitionProvenanceAdapter,
+    target: AcquisitionTargetInput,
+    externalId: number,
+    signal?: AbortSignal,
+  ) {
+    if (!adapter.readAcquisitionQueue) {
+      throw new AcquisitionProvenanceError("connector_integrity_failure");
+    }
+    const matches = (await adapter.readAcquisitionQueue(target, signal)).filter(
+      (item) => item.externalId === externalId,
+    );
+    if (matches.length > 1) throw new AcquisitionProvenanceError("response_invalid");
+    const match = matches[0];
+    if (!match) return null;
+    return {
+      event: acquisitionEventSchema.parse(match.event),
+      externalId: match.externalId,
+    };
+  }
+
+  #reserveRecovery(
+    userId: string,
+    connectorId: string,
+    eventId: string,
+    keyHash: string,
+    fingerprintHash: string,
+  ) {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const now = this.#now();
+          this.#database.sqlite
+            .prepare(
+              `delete from acquisition_queue_recovery_operations
+               where user_id = ? and state <> 'pending' and completed_at <= ?`,
+            )
+            .run(userId, now - RECOVERY_RETENTION_MS);
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      response_json as responseJson, failure_code as failureCode,
+                      mutation_started_at as mutationStartedAt, updated_at as updatedAt
+               from acquisition_queue_recovery_operations
+               where user_id = ? and idempotency_key_hash = ?
+               limit 1`,
+            )
+            .get(userId, keyHash) as AcquisitionQueueRecoveryOperationRow | undefined;
+          if (existing) {
+            if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" as const };
+            if (existing.state === "succeeded" && existing.responseJson) {
+              return {
+                kind: "replay" as const,
+                response: acquisitionQueueRecoveryResponseSchema.parse(
+                  JSON.parse(existing.responseJson),
+                ),
+              };
+            }
+            if (existing.state === "failed") return { kind: "failure" as const };
+            if (existing.state !== "pending") {
+              throw new AcquisitionProvenanceError("storage_failure");
+            }
+            if (
+              !Number.isSafeInteger(existing.updatedAt) ||
+              existing.updatedAt < 0 ||
+              existing.updatedAt > now ||
+              now - existing.updatedAt < RECOVERY_LEASE_MS
+            ) {
+              return { kind: "pending" as const };
+            }
+            if (existing.mutationStartedAt !== null) {
+              this.#database.sqlite
+                .prepare(
+                  `update acquisition_queue_recovery_operations
+                   set state = 'failed', failure_code = 'outcome_unconfirmed',
+                       completed_at = ?, updated_at = ?
+                   where id = ? and state = 'pending'`,
+                )
+                .run(now, now, existing.id);
+              return { kind: "failure" as const };
+            }
+            const claimed = this.#database.sqlite
+              .prepare(
+                `update acquisition_queue_recovery_operations
+                 set updated_at = ?
+                 where id = ? and state = 'pending' and updated_at = ?`,
+              )
+              .run(now, existing.id, existing.updatedAt);
+            return claimed.changes === 1
+              ? { kind: "reserved" as const, operationId: existing.id }
+              : { kind: "pending" as const };
+          }
+          const existingReference = this.#database.sqlite
+            .prepare(
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      response_json as responseJson, failure_code as failureCode,
+                      mutation_started_at as mutationStartedAt, updated_at as updatedAt
+               from acquisition_queue_recovery_operations
+               where user_id = ? and fingerprint_hash = ?
+               limit 1`,
+            )
+            .get(userId, fingerprintHash) as AcquisitionQueueRecoveryOperationRow | undefined;
+          if (existingReference?.state === "succeeded" && existingReference.responseJson) {
+            return {
+              kind: "replay" as const,
+              response: acquisitionQueueRecoveryResponseSchema.parse(
+                JSON.parse(existingReference.responseJson),
+              ),
+            };
+          }
+          if (existingReference?.state === "failed") return { kind: "failure" as const };
+          if (existingReference) return { kind: "pending" as const };
+          const count = this.#database.sqlite
+            .prepare(
+              "select count(*) as count from acquisition_queue_recovery_operations where user_id = ?",
+            )
+            .get(userId) as { count: number };
+          if (count.count >= MAX_RECOVERY_OPERATIONS_PER_USER) {
+            throw new AcquisitionProvenanceError("operation_limit_reached");
+          }
+          const operationId = this.#recoveryOperationId();
+          this.#database.sqlite
+            .prepare(
+              `insert into acquisition_queue_recovery_operations (
+                 id, user_id, connector_id, event_id, idempotency_key_hash,
+                 fingerprint_hash, state, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(operationId, userId, connectorId, eventId, keyHash, fingerprintHash, now, now);
+          return { kind: "reserved" as const, operationId };
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof AcquisitionProvenanceError) throw error;
+      throw new AcquisitionProvenanceError("storage_failure", { cause: error });
+    }
+  }
+
+  #prepareRecovery(
+    operationId: string,
+    reference: AcquisitionQueueRecoveryReferencePayload,
+    event: AcquisitionEvent,
+    context: AcquisitionProvenanceContext,
+  ) {
+    const snapshot = {
+      eventId: reference.eventId,
+      kind: event.kind,
+      service: reference.service,
+      state: event.state,
+    };
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .transaction(() => {
+          const update = this.#database.sqlite
+            .prepare(
+              `update acquisition_queue_recovery_operations
+               set event_snapshot_json = ?, mutation_started_at = ?, updated_at = ?
+               where id = ? and state = 'pending' and mutation_started_at is null`,
+            )
+            .run(JSON.stringify(snapshot), now, now, operationId);
+          if (update.changes !== 1) throw new AcquisitionProvenanceError("storage_failure");
+          this.#auditRecovery(
+            "acquisition.queue.recovery.requested",
+            "success",
+            operationId,
+            reference.eventId,
+            reference.service,
+            context,
+            now,
+            { previousState: event.state },
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof AcquisitionProvenanceError) throw error;
+      throw new AcquisitionProvenanceError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeRecoverySuccess(
+    operationId: string,
+    response: AcquisitionQueueRecoveryResponse,
+    context: AcquisitionProvenanceContext,
+  ) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .transaction(() => {
+          const update = this.#database.sqlite
+            .prepare(
+              `update acquisition_queue_recovery_operations
+               set state = 'succeeded', response_json = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending' and mutation_started_at is not null`,
+            )
+            .run(JSON.stringify(response), now, now, operationId);
+          if (update.changes !== 1) throw new AcquisitionProvenanceError("storage_failure");
+          this.#auditRecovery(
+            "acquisition.queue.recovery.completed",
+            "success",
+            operationId,
+            response.eventId,
+            response.service,
+            context,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof AcquisitionProvenanceError) throw error;
+      throw new AcquisitionProvenanceError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeRecoveryFailure(
+    operationId: string,
+    reference: AcquisitionQueueRecoveryReferencePayload,
+    reason: AcquisitionProvenanceErrorReason,
+    context: AcquisitionProvenanceContext,
+  ) {
+    try {
+      const now = this.#now();
+      const failureCode = reason.slice(0, 64);
+      this.#database.sqlite
+        .transaction(() => {
+          const update = this.#database.sqlite
+            .prepare(
+              `update acquisition_queue_recovery_operations
+               set state = 'failed', failure_code = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(failureCode, now, now, operationId);
+          if (update.changes !== 1) throw new AcquisitionProvenanceError("storage_failure");
+          this.#auditRecovery(
+            "acquisition.queue.recovery.failed",
+            "failure",
+            operationId,
+            reference.eventId,
+            reference.service,
+            context,
+            now,
+            { failureCode },
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof AcquisitionProvenanceError) throw error;
+      throw new AcquisitionProvenanceError("storage_failure", { cause: error });
+    }
+  }
+
+  #auditRecovery(
+    eventType: string,
+    outcome: "failure" | "success",
+    operationId: string,
+    eventId: string,
+    service: AcquisitionService,
+    context: AcquisitionProvenanceContext,
+    createdAt: number,
+    metadata: Record<string, unknown> = {},
+  ) {
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method, event_type, outcome,
+           target_type, target_id, request_id, metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, ?, ?, 'acquisition_queue_recovery', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        this.#id(),
+        context.principal.userId,
+        context.principal.sessionId,
+        context.principal.authenticationMethod.kind,
+        eventType,
+        outcome,
+        operationId,
+        context.requestId ?? null,
+        JSON.stringify({ eventId, service, ...metadata }),
+        context.ipAddress
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        createdAt,
+      );
+  }
+
+  #recoveryFailure(error: unknown, mutationStarted: boolean): AcquisitionProvenanceErrorReason {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return mutationStarted ? "outcome_unconfirmed" : "temporarily_unavailable";
+    }
+    if (error instanceof AcquisitionProvenanceError) return error.reason;
+    if (mutationStarted) return "outcome_unconfirmed";
+    return knownSearchFailure(error);
+  }
+
+  #recoveryOperationId() {
+    const value = this.#createOperationId();
+    if (!/^acquisition_recovery_[A-Za-z0-9_-]{22}$/u.test(value)) {
+      throw new AcquisitionProvenanceError("connector_integrity_failure");
+    }
+    return value;
+  }
+
   #adapter(
     service: AcquisitionService,
     capability: Extract<
       ConnectorCapability,
-      "acquisition.history" | "acquisition.monitoring" | "acquisition.search"
+      | "acquisition.history"
+      | "acquisition.monitoring"
+      | "acquisition.queue.mutate"
+      | "acquisition.search"
+    >,
+  ) {
+    return this.#adapterWithRow(service, capability).adapter;
+  }
+
+  #adapterWithRow(
+    service: AcquisitionService,
+    capability: Extract<
+      ConnectorCapability,
+      | "acquisition.history"
+      | "acquisition.monitoring"
+      | "acquisition.queue.mutate"
+      | "acquisition.search"
     >,
   ) {
     const row = this.#connector(service);
@@ -400,7 +1013,7 @@ export class AcquisitionProvenanceService {
       throw new AcquisitionProvenanceError("connector_integrity_failure");
     }
     try {
-      return this.#createAdapter(service, {
+      const adapter = this.#createAdapter(service, {
         apiKey: secrets.apiKey,
         baseUrl: row.baseUrl,
         connectorId: row.id,
@@ -412,6 +1025,7 @@ export class AcquisitionProvenanceService {
           : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
         clock: { now: this.#clock, monotonicNow: () => performance.now() },
       });
+      return { adapter, row };
     } catch (error) {
       throw new AcquisitionProvenanceError("connector_integrity_failure", { cause: error });
     }

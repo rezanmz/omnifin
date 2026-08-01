@@ -91,8 +91,11 @@ function boundedPositiveInteger(value: number | undefined, fallback: number) {
   return Number.isInteger(value) && value !== undefined && value > 0 ? value : fallback;
 }
 
-function targetKey(target: AcquisitionTargetInput) {
-  return `${target.service}:${target.mediaId}:${target.seasonNumber ?? "all"}`;
+function targetKey(target: AcquisitionTargetInput, principal: SessionPrincipal) {
+  const identityKey = principal.userId
+    ? `user:${principal.userId}`
+    : `session:${principal.sessionId}`;
+  return `${identityKey}:${target.service}:${target.mediaId}:${target.seasonNumber ?? "all"}`;
 }
 
 function responseMatchesTarget(
@@ -167,7 +170,7 @@ export class AcquisitionProvenanceEventBroker {
     }
 
     const target = acquisitionTargetInputSchema.parse(subscriber.target);
-    const key = targetKey(target);
+    const key = targetKey(target, subscriber.principal);
     const id = ++this.#nextSubscriberId;
     const retained: RetainedSubscriber = { ...subscriber, id, target, targetKey: key };
     const group = this.#groups.get(key) ?? {

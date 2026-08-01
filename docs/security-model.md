@@ -161,6 +161,8 @@ application boundary; operators must still patch and isolate the host.
   not cross the gateway boundary.
 - Live provenance uses a short-lived, target-scoped SSE connection with opaque cursors, bounded
   replay, heartbeats, global and per-session capacity limits, and periodic session revalidation.
+  Polling groups and replay entries include the Omnifin identity, so an encrypted recovery offer
+  bound to one user is never reused for another user viewing the same title.
   The browser accepts a snapshot only when its schema, cursor, size, and exact selected target all
   match; otherwise it preserves the last verified view and falls back to bounded foreground polling.
 
@@ -181,6 +183,29 @@ application boundary; operators must still patch and isolate the host.
 - `POST /v1/acquisitions/searches` is abort-aware, rate-limited, and explicitly non-cacheable. Its
   exact-target body cannot express direct release selection, grabs, blocklisting, deletion, or
   arbitrary retry commands.
+
+## Acquisition failed-queue recovery controls
+
+- Failed-queue recovery requires an active user with `acquisition.manage` at both the session
+  route and service boundary, same-origin validation, session-bound CSRF, mutation rate limiting,
+  a bounded body, and per-user idempotency.
+- The browser receives a five-minute authenticated-encryption reference only for a currently
+  stalled queue event. It is bound to the user and exact connector, target, upstream queue item,
+  normalized event fingerprint, and expiry. Public event IDs are keyed privacy hashes; raw queue
+  IDs never cross the gateway boundary.
+- The gateway selects the single healthy connector advertising `acquisition.queue.mutate`,
+  decrypts the reference, then re-reads and uniquely matches the exact queue item. Expired,
+  tampered, missing, duplicate, recovered, or state-changed items fail before mutation.
+- The only adapter mutation is exact-item deletion with `removeFromClient=true`, `blocklist=true`,
+  `skipRedownload=false`, and `changeCategory=false`. The contract cannot express a bulk target,
+  arbitrary queue ID, category change, library deletion, or automatic retry search.
+- A durable normalized snapshot and requested audit event commit before the upstream write. The
+  item must disappear from a bounded follow-up read before success is recorded. Ambiguous
+  post-mutation failures and abandoned post-mutation leases are never retried automatically.
+- Operation rows and audits exclude the encrypted reference, raw queue ID, release title,
+  download hash, path, credentials, upstream response, cookies, and CSRF value. Known success is
+  replayed without another write; key conflicts, pending operations, and failed attempts fail
+  closed.
 
 ## Acquisition-monitoring mutation controls
 

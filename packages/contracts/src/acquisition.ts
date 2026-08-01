@@ -93,21 +93,76 @@ export const acquisitionReleaseSchema = z.strictObject({
 });
 export type AcquisitionRelease = z.infer<typeof acquisitionReleaseSchema>;
 
-export const acquisitionEventSchema = z.strictObject({
-  episodeNumbers: z.array(z.int().positive().max(100_000)).max(100),
-  id: z
-    .string()
-    .min(8)
-    .max(180)
-    .regex(/^(?:radarr|sonarr):(?:command|history|queue):[A-Za-z0-9._:-]+$/u),
-  kind: acquisitionEventKindSchema,
-  occurredAt: z.iso.datetime({ offset: true }),
-  release: acquisitionReleaseSchema,
-  seasonNumber: seasonNumberSchema.nullable(),
-  state: acquisitionEventStateSchema,
-  summary: z.string().trim().min(1).max(240),
+export const acquisitionQueueRecoveryReferenceSchema = z
+  .string()
+  .min(96)
+  .max(2_048)
+  .regex(/^aqr_v2\.[A-Za-z0-9_.-]+$/u);
+
+export const acquisitionQueueRecoveryOfferSchema = z.strictObject({
+  expiresAt: z.iso.datetime({ offset: true }),
+  reference: acquisitionQueueRecoveryReferenceSchema,
 });
+export type AcquisitionQueueRecoveryOffer = z.infer<typeof acquisitionQueueRecoveryOfferSchema>;
+
+export const acquisitionEventSchema = z
+  .strictObject({
+    episodeNumbers: z.array(z.int().positive().max(100_000)).max(100),
+    id: z
+      .string()
+      .min(8)
+      .max(180)
+      .regex(
+        /^(?:(?:radarr|sonarr):(?:command|history|queue):[A-Za-z0-9._:-]+|acquisition_[A-Za-z0-9_-]{22})$/u,
+      ),
+    kind: acquisitionEventKindSchema,
+    occurredAt: z.iso.datetime({ offset: true }),
+    release: acquisitionReleaseSchema,
+    recovery: acquisitionQueueRecoveryOfferSchema.optional(),
+    seasonNumber: seasonNumberSchema.nullable(),
+    state: acquisitionEventStateSchema,
+    summary: z.string().trim().min(1).max(240),
+  })
+  .superRefine((event, context) => {
+    if (
+      event.recovery &&
+      (event.kind !== "stalled" ||
+        !["failure", "warning"].includes(event.state) ||
+        !event.id.startsWith("acquisition_"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Queue recovery is available only for an opaque stalled event.",
+        path: ["recovery"],
+      });
+    }
+  });
 export type AcquisitionEvent = z.infer<typeof acquisitionEventSchema>;
+
+export const acquisitionQueueRecoveryInputSchema = z.strictObject({
+  reference: acquisitionQueueRecoveryReferenceSchema,
+});
+export type AcquisitionQueueRecoveryInput = z.infer<typeof acquisitionQueueRecoveryInputSchema>;
+
+export const acquisitionQueueRecoveryIdempotencyKeySchema = idempotencyKeySchema;
+export type AcquisitionQueueRecoveryIdempotencyKey = z.infer<
+  typeof acquisitionQueueRecoveryIdempotencyKeySchema
+>;
+
+export const acquisitionQueueRecoveryResponseSchema = z.strictObject({
+  completedAt: z.iso.datetime({ offset: true }),
+  eventId: z.string().regex(/^acquisition_[A-Za-z0-9_-]{22}$/u),
+  operationId: z
+    .string()
+    .min(43)
+    .max(64)
+    .regex(/^acquisition_recovery_[A-Za-z0-9_-]+$/u),
+  service: acquisitionServiceSchema,
+  state: z.literal("removed_and_blocklisted"),
+});
+export type AcquisitionQueueRecoveryResponse = z.infer<
+  typeof acquisitionQueueRecoveryResponseSchema
+>;
 
 export const acquisitionProvenanceResponseSchema = z
   .strictObject({
@@ -394,6 +449,12 @@ export const acquisitionProvenanceResponseJsonSchema = withoutSchemaDialect(
 );
 export const acquisitionProvenanceSnapshotEventJsonSchema = withoutSchemaDialect(
   acquisitionProvenanceSnapshotEventSchema,
+);
+export const acquisitionQueueRecoveryInputJsonSchema = withoutSchemaDialect(
+  acquisitionQueueRecoveryInputSchema,
+);
+export const acquisitionQueueRecoveryResponseJsonSchema = withoutSchemaDialect(
+  acquisitionQueueRecoveryResponseSchema,
 );
 export const acquisitionSearchInputJsonSchema = withoutSchemaDialect(acquisitionSearchInputSchema);
 export const acquisitionSearchResponseJsonSchema = withoutSchemaDialect(
