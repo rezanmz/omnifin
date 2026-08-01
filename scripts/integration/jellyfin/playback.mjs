@@ -20,6 +20,8 @@ const MAX_SEGMENT_BYTES = 8 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SERVER_READY_TIMEOUT_MS = 90_000;
 const LIBRARY_READY_TIMEOUT_MS = 60_000;
+const LIBRARY_CATALOG_READY_TIMEOUT_MS = 30_000;
+const LIBRARY_CATALOG_RETRY_INTERVAL_MS = 500;
 const RESTART_NEGOTIATION_READY_TIMEOUT_MS = 10_000;
 const RESTART_NEGOTIATION_RETRY_INTERVAL_MS = 250;
 const CONTAINER_START_RETRY_INTERVAL_MS = 250;
@@ -744,6 +746,32 @@ export function validateLibraryCatalog(result, expectedItemId) {
   return { itemCount: 1, kind: "movie", userScoped: true };
 }
 
+export function isLibraryCatalogPending(error) {
+  return error instanceof JellyfinFixtureFailure && error.code === "library_catalog_empty";
+}
+
+export async function waitForLibraryCatalog(operation, expectedItemId, options = {}) {
+  const now = options.now ?? Date.now;
+  const pause = options.pause ?? sleep;
+  const timeoutMs = options.timeoutMs ?? LIBRARY_CATALOG_READY_TIMEOUT_MS;
+  const retryIntervalMs = options.retryIntervalMs ?? LIBRARY_CATALOG_RETRY_INTERVAL_MS;
+  const deadline = now() + timeoutMs;
+  let lastPendingFailure = new JellyfinFixtureFailure("library_catalog_empty");
+
+  while (now() < deadline) {
+    const result = await operation();
+    try {
+      return validateLibraryCatalog(result, expectedItemId);
+    } catch (error) {
+      if (!isLibraryCatalogPending(error)) throw error;
+      lastPendingFailure = error;
+    }
+    await pause(Math.min(retryIntervalMs, Math.max(0, deadline - now())));
+  }
+
+  throw lastPendingFailure;
+}
+
 export function isLibraryProbePending(error) {
   return error instanceof JellyfinFixtureFailure && error.code === "library_streams_invalid";
 }
@@ -824,17 +852,20 @@ function userMediaClient(server, accessToken, deviceId) {
 
 async function verifyLibraryCatalog(server, authentication, deviceId, expectedItemId) {
   const client = userMediaClient(server, authentication.accessToken, deviceId);
-  const result = await connectorOperation("library_catalog", () =>
-    client.readLibrary({
-      kind: "movies",
-      limit: 1,
-      query: "Omnifin Fixture",
-      sort: "title",
-      startIndex: 0,
-      userId: authentication.userId,
-    }),
+  return waitForLibraryCatalog(
+    () =>
+      connectorOperation("library_catalog", () =>
+        client.readLibrary({
+          kind: "movies",
+          limit: 1,
+          query: "Omnifin Fixture",
+          sort: "title",
+          startIndex: 0,
+          userId: authentication.userId,
+        }),
+      ),
+    expectedItemId,
   );
-  return validateLibraryCatalog(result, expectedItemId);
 }
 
 function authenticationClient(context, server) {

@@ -14,6 +14,7 @@ import {
   hlsSegmentFormat,
   hostContainerUser,
   isLibraryProbePending,
+  isLibraryCatalogPending,
   jellyfinCompatibilityReport,
   jellyfinFailureReport,
   jellyfinTarget,
@@ -25,6 +26,7 @@ import {
   startContainerWithRetry,
   validateImportedItem,
   validateLibraryCatalog,
+  waitForLibraryCatalog,
   verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
 
@@ -591,6 +593,85 @@ test("accepts only a normalized user-scoped production catalogue result", () => 
       ),
     /library_catalog_runtime_invalid/u,
   );
+});
+
+test("waits only for Jellyfin search indexing to expose the catalogue item", async () => {
+  const expectedItemId = "a".repeat(32);
+  const indexedResult = {
+    items: [
+      {
+        externalId: expectedItemId,
+        kind: "movie",
+        runtimeSeconds: 16,
+        title: "Omnifin Fixture",
+      },
+    ],
+    nextStartIndex: null,
+    truncated: false,
+  };
+  let attempts = 0;
+  let now = 0;
+  const result = await waitForLibraryCatalog(
+    async () => {
+      attempts += 1;
+      return attempts < 3 ? { ...indexedResult, items: [] } : indexedResult;
+    },
+    expectedItemId,
+    {
+      now: () => now,
+      pause: async (milliseconds) => {
+        now += milliseconds;
+      },
+      retryIntervalMs: 250,
+      timeoutMs: 1_000,
+    },
+  );
+  assert.deepEqual(result, { itemCount: 1, kind: "movie", userScoped: true });
+  assert.equal(attempts, 3);
+
+  let pendingError;
+  try {
+    validateLibraryCatalog({ ...indexedResult, items: [] }, expectedItemId);
+  } catch (error) {
+    pendingError = error;
+  }
+  assert.equal(isLibraryCatalogPending(pendingError), true);
+  assert.equal(isLibraryCatalogPending(new Error("unrelated")), false);
+});
+
+test("does not retry stable catalogue contract failures", async () => {
+  const expectedItemId = "a".repeat(32);
+  let attempts = 0;
+  let pauses = 0;
+  await assert.rejects(
+    waitForLibraryCatalog(
+      async () => {
+        attempts += 1;
+        return {
+          items: [
+            {
+              externalId: expectedItemId,
+              kind: "movie",
+              runtimeSeconds: 16,
+              title: "Unexpected",
+            },
+          ],
+          nextStartIndex: null,
+          truncated: false,
+        };
+      },
+      expectedItemId,
+      {
+        now: () => 0,
+        pause: async () => {
+          pauses += 1;
+        },
+      },
+    ),
+    /library_catalog_title_invalid/u,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(pauses, 0);
 });
 
 test("retries only transient post-restart negotiation failures", async () => {
