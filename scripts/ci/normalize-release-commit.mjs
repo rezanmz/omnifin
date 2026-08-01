@@ -16,6 +16,8 @@ const allowedFiles = Object.freeze([
 ]);
 const maximumFileBytes = 512 * 1_024;
 const maximumTotalBytes = 1_024 * 1_024;
+export const pullRequestBaseReadAttempts = 15;
+const pullRequestBaseReadDelayMs = 2_000;
 export const gitSafetyArguments = Object.freeze([
   "-c",
   "core.hooksPath=/dev/null",
@@ -24,6 +26,13 @@ export const gitSafetyArguments = Object.freeze([
   "-c",
   "credential.helper=!gh auth git-credential",
 ]);
+
+export class PullRequestBaseNotReadyError extends Error {
+  constructor() {
+    super("The release pull request does not yet report the exact protected main SHA.");
+    this.name = "PullRequestBaseNotReadyError";
+  }
+}
 
 function requireFullSha(value, label) {
   if (!fullShaPattern.test(value ?? "")) throw new Error(`${label} must be a full lowercase SHA.`);
@@ -163,11 +172,12 @@ export function validatePullRequest(pullRequestValue, config) {
   }
   if (
     pullRequest.base.ref !== "main" ||
-    pullRequest.base.ref !== config.releasePullRequest.baseBranchName ||
-    pullRequest.base.sha !== config.expectedBaseSha
+    pullRequest.base.ref !== config.releasePullRequest.baseBranchName
   ) {
-    throw new Error("The release pull request is not based on the exact protected main SHA.");
+    throw new Error("The release pull request does not target the expected protected branch.");
   }
+  const baseSha = requireFullSha(pullRequest.base.sha, "Release pull request base");
+  if (baseSha !== config.expectedBaseSha) throw new PullRequestBaseNotReadyError();
   if (
     pullRequest.head.ref !== config.releasePullRequest.headBranchName ||
     !releaseBranchPattern.test(pullRequest.head.ref ?? "")
@@ -185,6 +195,26 @@ export function validatePullRequest(pullRequestValue, config) {
     headSha: requireFullSha(pullRequest.head.sha, "Release pull request head"),
     title: pullRequest.title,
   };
+}
+
+export async function waitForExpectedPullRequest(config, dependencies) {
+  for (let attempt = 1; attempt <= pullRequestBaseReadAttempts; attempt += 1) {
+    try {
+      return validatePullRequest(
+        await dependencies.fetchPullRequest(config.releasePullRequest.number),
+        config,
+      );
+    } catch (error) {
+      if (!(error instanceof PullRequestBaseNotReadyError)) throw error;
+      if (attempt === pullRequestBaseReadAttempts) {
+        throw new Error(
+          "The release pull request did not report the exact protected main SHA within the bounded propagation window.",
+        );
+      }
+      await dependencies.pause(pullRequestBaseReadDelayMs);
+    }
+  }
+  throw new Error("The release pull request propagation check ended unexpectedly.");
 }
 
 export function validateOriginalCommit(commitValue, { expectedBaseSha, headSha, title }) {
@@ -416,6 +446,7 @@ function makeProductionDependencies(config) {
     fetchPullRequest: (number) => request("GET", `/repos/${config.repository}/pulls/${number}`),
     fetchReference: (branch) =>
       request("GET", `/repos/${config.repository}/git/ref/heads/${encodedReference(branch)}`),
+    pause: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     replaceWithLease: async ({ branch, expectedHeadSha, signedSha, temporaryBranch }) => {
       const remote = `${config.serverUrl}/${config.repository}.git`;
       const gitEnvironment = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
@@ -451,8 +482,7 @@ export async function normalizeReleaseCommit(
   config,
   dependencies = makeProductionDependencies(config),
 ) {
-  const pullRequest = await dependencies.fetchPullRequest(config.releasePullRequest.number);
-  const release = validatePullRequest(pullRequest, config);
+  const release = await waitForExpectedPullRequest(config, dependencies);
   const originalCommit = validateOriginalCommit(await dependencies.fetchCommit(release.headSha), {
     expectedBaseSha: config.expectedBaseSha,
     headSha: release.headSha,
