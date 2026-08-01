@@ -5,6 +5,7 @@ import {
   gitSafetyArguments,
   normalizeReleaseCommit,
   prepareAdditions,
+  pullRequestBaseReadAttempts,
   releaseConfiguration,
   validateComparison,
   validateGitHubEndpoints,
@@ -12,6 +13,7 @@ import {
   validatePullRequest,
   validateReleasePleaseOutput,
   validateSignedCommit,
+  waitForExpectedPullRequest,
 } from "./normalize-release-commit.mjs";
 
 const repository = "rezanmz/omnifin";
@@ -116,6 +118,8 @@ function contentResponse(filename, overrides = {}) {
 
 function dependencies(options = {}) {
   let currentHead = headSha;
+  let expectedBaseReads = 0;
+  let pullRequestReads = 0;
   const calls = [];
   const dependencySet = {
     createReference: async (branch, sha) => {
@@ -152,16 +156,21 @@ function dependencies(options = {}) {
     fetchComparison: async () => comparison(options.comparison),
     fetchContent: async (filename) => contentResponse(filename, options.contents?.[filename]),
     fetchPullRequest: async () => {
+      pullRequestReads += 1;
       calls.push(["fetchPullRequest", currentHead]);
-      if (
-        options.moveBeforePush &&
-        calls.filter(([name]) => name === "fetchPullRequest").length === 2
-      ) {
+      if (pullRequestReads <= (options.staleBaseReads ?? 0)) {
+        return pullRequest(currentHead, {
+          base: { ref: "main", repo: { full_name: repository }, sha: "9".repeat(40) },
+        });
+      }
+      expectedBaseReads += 1;
+      if (options.moveBeforePush && expectedBaseReads === 2) {
         return pullRequest("9".repeat(40));
       }
       return pullRequest(currentHead, options.pullRequest);
     },
     fetchReference: async () => ({ object: { sha: currentHead } }),
+    pause: async (milliseconds) => calls.push(["pause", milliseconds]),
     replaceWithLease: async (input) => {
       calls.push(["replaceWithLease", input]);
       if (options.leaseFailure) throw new Error("stale lease");
@@ -299,6 +308,59 @@ test("binds the pull request to the same repository, branch, base, and title", (
   assert.throws(
     () => validatePullRequest(pullRequest(headSha, { state: "closed" }), configuration()),
     /expected open pull request/u,
+  );
+});
+
+test("waits through bounded GitHub base propagation without weakening pull request identity", async () => {
+  const { calls, dependencySet } = dependencies({ staleBaseReads: 2 });
+  assert.deepEqual(await waitForExpectedPullRequest(configuration(), dependencySet), {
+    branch: releaseBranch,
+    headSha,
+    title: releaseTitle,
+  });
+  assert.equal(calls.filter(([name]) => name === "fetchPullRequest").length, 3);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "pause"),
+    [
+      ["pause", 2_000],
+      ["pause", 2_000],
+    ],
+  );
+});
+
+test("does not retry a pull request identity mismatch", async () => {
+  const { calls, dependencySet } = dependencies({
+    pullRequest: {
+      head: { ref: releaseBranch, repo: { full_name: "fork/omnifin" }, sha: headSha },
+    },
+  });
+  await assert.rejects(
+    waitForExpectedPullRequest(configuration(), dependencySet),
+    /originate in this repository/u,
+  );
+  assert.equal(calls.filter(([name]) => name === "fetchPullRequest").length, 1);
+  assert.equal(
+    calls.some(([name]) => name === "pause"),
+    false,
+  );
+});
+
+test("fails closed when the pull request base never becomes exact", async () => {
+  const { calls, dependencySet } = dependencies({
+    staleBaseReads: pullRequestBaseReadAttempts,
+  });
+  await assert.rejects(
+    waitForExpectedPullRequest(configuration(), dependencySet),
+    /bounded propagation window/u,
+  );
+  assert.equal(
+    calls.filter(([name]) => name === "fetchPullRequest").length,
+    pullRequestBaseReadAttempts,
+  );
+  assert.equal(calls.filter(([name]) => name === "pause").length, pullRequestBaseReadAttempts - 1);
+  assert.equal(
+    calls.some(([name]) => name === "createReference"),
+    false,
   );
 });
 
