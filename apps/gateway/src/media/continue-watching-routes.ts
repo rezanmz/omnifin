@@ -3,6 +3,12 @@ import {
   continueWatchingResponseSchema,
   mediaReferenceIdSchema,
 } from "@omnifin/contracts/dashboard";
+import {
+  libraryBrowseQueryJsonSchema,
+  libraryBrowseQuerySchema,
+  libraryBrowseResponseJsonSchema,
+  libraryBrowseResponseSchema,
+} from "@omnifin/contracts/library";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
@@ -14,6 +20,7 @@ import {
   ContinueWatchingService,
   type ContinueWatchingDependencies,
   MediaArtworkError,
+  MediaLibraryError,
 } from "./continue-watching-service.js";
 
 const artworkParamsSchema = z.strictObject({
@@ -81,6 +88,61 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
             cause: error,
             code: "continue_watching_unavailable",
             message: "Continue Watching is temporarily unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        querystring: libraryBrowseQueryJsonSchema,
+        response: { 200: libraryBrowseResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const query = libraryBrowseQuerySchema.parse(request.query);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return libraryBrowseResponseSchema.parse(
+          await service.browse(query, { principal }, controller.signal),
+        );
+      } catch (error) {
+        if (error instanceof MediaLibraryError && error.reason === "cursor_invalid") {
+          throw new SafeHttpError({
+            cause: error,
+            code: "media_library_cursor_invalid",
+            message: "The library continuation cursor is invalid or no longer current.",
+            statusCode: 400,
+          });
+        }
+        if (error instanceof ContinueWatchingError || error instanceof MediaLibraryError) {
+          throw new SafeHttpError({
+            cause: error,
+            code: "media_library_unavailable",
+            message: "The Jellyfin library is temporarily unavailable.",
             statusCode: 503,
           });
         }

@@ -9,9 +9,17 @@ import {
   continueWatchingResponseSchema,
   type ContinueWatchingResponse,
 } from "@omnifin/contracts/dashboard";
+import {
+  libraryBrowseKindSchema,
+  libraryBrowseQuerySchema,
+  libraryBrowseResponseSchema,
+  libraryBrowseSortSchema,
+  type LibraryBrowseQuery,
+  type LibraryBrowseResponse,
+} from "@omnifin/contracts/library";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import { createHash, X509Certificate } from "node:crypto";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
@@ -24,6 +32,17 @@ import {
 } from "./media-reference-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const libraryCursorPayloadSchema = z.strictObject({
+  kind: libraryBrowseKindSchema,
+  limit: z.int().positive().max(50),
+  linkId: z.string().regex(IDENTIFIER_PATTERN),
+  linkRevision: z.int().nonnegative().max(2_147_483_647),
+  query: z.string().min(1).max(100).nullable(),
+  sort: libraryBrowseSortSchema,
+  startIndex: z.int().nonnegative().max(1_000_000),
+  version: z.literal(1),
+});
+type LibraryCursorPayload = z.infer<typeof libraryCursorPayloadSchema>;
 
 interface ContinueWatchingSourceRow {
   baseUrl: string;
@@ -34,6 +53,7 @@ interface ContinueWatchingSourceRow {
   deviceId: string;
   encryptedAccessToken: string;
   encryptedCredentials: string;
+  externalUserId: string;
   insecureHttpApproved: number;
   linkHealthState: string;
   linkId: string;
@@ -62,7 +82,8 @@ export interface ContinueWatchingDependencies {
   clock?: () => Date;
   createClient?: (
     input: ContinueWatchingClientFactoryInput,
-  ) => Pick<JellyfinUserMediaClient, "readContinueWatching" | "readImage">;
+  ) => Pick<JellyfinUserMediaClient, "readContinueWatching" | "readImage"> &
+    Partial<Pick<JellyfinUserMediaClient, "readLibrary">>;
   mediaReferences?: MediaReferenceDependencies;
 }
 
@@ -72,6 +93,24 @@ export class ContinueWatchingError extends Error {
   public constructor(options?: ErrorOptions) {
     super("Continue Watching is temporarily unavailable.", options);
     this.name = "ContinueWatchingError";
+  }
+}
+
+export type MediaLibraryErrorReason = "cursor_invalid" | "unavailable";
+
+export class MediaLibraryError extends Error {
+  public readonly code = "media_library_unavailable";
+  public readonly reason: MediaLibraryErrorReason;
+
+  public constructor(reason: MediaLibraryErrorReason, options?: ErrorOptions) {
+    super(
+      reason === "cursor_invalid"
+        ? "The library continuation cursor is invalid or no longer current."
+        : "The Jellyfin library is temporarily unavailable.",
+      options,
+    );
+    this.name = "MediaLibraryError";
+    this.reason = reason;
   }
 }
 
@@ -158,7 +197,13 @@ function defaultClient(input: ContinueWatchingClientFactoryInput) {
   return new JellyfinUserMediaClient({ accessToken, deviceId, target });
 }
 
-function safeFailure(error: unknown, occurredAt: Date): PartialFailure {
+type UserMediaOperation = "media.continue_watching" | "media.library";
+
+function safeFailure(
+  error: unknown,
+  occurredAt: Date,
+  operation: UserMediaOperation,
+): PartialFailure {
   if (error instanceof SafeConnectorError && error.service === "jellyfin") {
     return error.toPartialFailure(occurredAt);
   }
@@ -167,7 +212,7 @@ function safeFailure(error: unknown, occurredAt: Date): PartialFailure {
       code: "configuration_invalid",
       message: "The Jellyfin media connection could not be used.",
       occurredAt: occurredAt.toISOString(),
-      operation: "media.continue_watching",
+      operation,
       retryable: false,
       service: "jellyfin",
     };
@@ -177,7 +222,7 @@ function safeFailure(error: unknown, occurredAt: Date): PartialFailure {
       code: "response_invalid",
       message: "Jellyfin returned media data that could not be safely interpreted.",
       occurredAt: occurredAt.toISOString(),
-      operation: "media.continue_watching",
+      operation,
       retryable: false,
       service: "jellyfin",
     };
@@ -186,10 +231,14 @@ function safeFailure(error: unknown, occurredAt: Date): PartialFailure {
     code: "upstream_error",
     message:
       error instanceof MediaReferenceError
-        ? "Continue Watching references are temporarily unavailable."
-        : "Jellyfin Continue Watching is temporarily unavailable.",
+        ? operation === "media.library"
+          ? "Library references are temporarily unavailable."
+          : "Continue Watching references are temporarily unavailable."
+        : operation === "media.library"
+          ? "The Jellyfin library is temporarily unavailable."
+          : "Jellyfin Continue Watching is temporarily unavailable.",
     occurredAt: occurredAt.toISOString(),
-    operation: error instanceof MediaReferenceError ? "media.reference" : "media.continue_watching",
+    operation: error instanceof MediaReferenceError ? "media.reference" : operation,
     retryable: true,
     service: "jellyfin",
   };
@@ -212,6 +261,24 @@ function unavailableResponse(
     },
     state: "unavailable",
     truncated: false,
+  });
+}
+
+function unavailableLibraryResponse(
+  row: ContinueWatchingSourceRow,
+  failure: PartialFailure,
+  occurredAt: Date,
+) {
+  return libraryBrowseResponseSchema.parse({
+    generatedAt: occurredAt.toISOString(),
+    items: [],
+    nextCursor: null,
+    source: {
+      displayName: safeDisplayName(row.connectorDisplayName),
+      failure,
+      status: "unavailable",
+    },
+    state: "unavailable",
   });
 }
 
@@ -248,7 +315,45 @@ export class ContinueWatchingService {
       const result = await client.readContinueWatching(signal);
       return this.#response(row, result, occurredAt);
     } catch (error) {
-      return unavailableResponse(row, safeFailure(error, occurredAt), occurredAt);
+      return unavailableResponse(
+        row,
+        safeFailure(error, occurredAt, "media.continue_watching"),
+        occurredAt,
+      );
+    }
+  }
+
+  public async browse(
+    rawQuery: LibraryBrowseQuery,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryBrowseResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const query = libraryBrowseQuerySchema.parse(rawQuery);
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    const startIndex = query.cursor ? this.#decodeLibraryCursor(query.cursor, query, row) : 0;
+    try {
+      const client = this.#client(row);
+      if (!client.readLibrary) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibrary(
+        {
+          kind: query.kind,
+          limit: query.limit,
+          ...(query.query === undefined ? {} : { query: query.query }),
+          sort: query.sort,
+          startIndex,
+          userId: row.externalUserId,
+        },
+        signal,
+      );
+      return this.#libraryResponse(row, query, result, occurredAt);
+    } catch (error) {
+      return unavailableLibraryResponse(
+        row,
+        safeFailure(error, occurredAt, "media.library"),
+        occurredAt,
+      );
     }
   }
 
@@ -377,6 +482,102 @@ export class ContinueWatchingService {
     });
   }
 
+  #libraryResponse(
+    row: ContinueWatchingSourceRow,
+    query: LibraryBrowseQuery,
+    result: Awaited<ReturnType<JellyfinUserMediaClient["readLibrary"]>>,
+    occurredAt: Date,
+  ) {
+    const referenceIds = this.#references.createOrRefresh(
+      { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId },
+      result.items.map((item) => ({
+        artwork: {
+          backdropItemId: item.artwork.backdrop?.itemId ?? null,
+          posterItemId: item.artwork.poster?.itemId ?? null,
+        },
+        episodeNumber: item.episodeNumber,
+        itemId: item.externalId,
+        kind: item.kind,
+        seasonNumber: item.seasonNumber,
+        title: item.title,
+        year: item.year,
+      })),
+    );
+    const items = result.items.map((item, index) => {
+      const id = referenceIds[index]!;
+      return {
+        durationSeconds: item.runtimeSeconds,
+        media: {
+          artwork: {
+            accentColor: item.artwork.accentColor,
+            backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
+            blurHash: item.artwork.blurHash,
+            posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+          },
+          availability: "available" as const,
+          contentRating: item.contentRating,
+          id,
+          kind: item.kind,
+          overview: item.overview,
+          runtimeMinutes: Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+          subtitle: item.subtitle,
+          title: item.title,
+          year: item.year,
+        },
+        played: item.played,
+        positionSeconds: item.positionSeconds,
+      };
+    });
+    return libraryBrowseResponseSchema.parse({
+      generatedAt: occurredAt.toISOString(),
+      items,
+      nextCursor:
+        result.nextStartIndex === null
+          ? null
+          : this.#encodeLibraryCursor({
+              kind: query.kind,
+              limit: query.limit,
+              linkId: row.linkId,
+              linkRevision: row.linkRevision,
+              query: query.query ?? null,
+              sort: query.sort,
+              startIndex: result.nextStartIndex,
+              version: 1,
+            }),
+      source: {
+        displayName: safeDisplayName(row.connectorDisplayName),
+        failure: null,
+        status: "healthy",
+      },
+      state: items.length === 0 ? "empty" : "complete",
+    });
+  }
+
+  #encodeLibraryCursor(value: LibraryCursorPayload) {
+    return this.#cipher.encrypt(JSON.stringify(value), "media_library_cursor");
+  }
+
+  #decodeLibraryCursor(value: string, query: LibraryBrowseQuery, row: ContinueWatchingSourceRow) {
+    try {
+      const decoded = libraryCursorPayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(value, "media_library_cursor")),
+      );
+      if (
+        decoded.linkId !== row.linkId ||
+        decoded.linkRevision !== row.linkRevision ||
+        decoded.kind !== query.kind ||
+        decoded.limit !== query.limit ||
+        decoded.query !== (query.query ?? null) ||
+        decoded.sort !== query.sort
+      ) {
+        throw new Error("invalid");
+      }
+      return decoded.startIndex;
+    } catch (error) {
+      throw new MediaLibraryError("cursor_invalid", { cause: error });
+    }
+  }
+
   #source(principal: SessionPrincipal) {
     const userId = principal.userId;
     const linkedService = principal.linkedServices.find(({ service }) => service === "jellyfin");
@@ -388,6 +589,7 @@ export class ContinueWatchingService {
           l.user_id as linkUserId,
           l.service as linkService,
           l.device_id as deviceId,
+          l.external_user_id as externalUserId,
           l.encrypted_access_token as encryptedAccessToken,
           l.health_state as linkHealthState,
           l.revision as linkRevision,
@@ -415,6 +617,7 @@ export class ContinueWatchingService {
       !IDENTIFIER_PATTERN.test(row.connectorId) ||
       !IDENTIFIER_PATTERN.test(row.linkId) ||
       !IDENTIFIER_PATTERN.test(row.deviceId) ||
+      !IDENTIFIER_PATTERN.test(row.externalUserId) ||
       !Number.isSafeInteger(row.linkRevision) ||
       row.linkRevision < 0 ||
       (row.insecureHttpApproved !== 0 && row.insecureHttpApproved !== 1)

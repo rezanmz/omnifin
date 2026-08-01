@@ -14,6 +14,7 @@ import {
   hlsSegmentFormat,
   hostContainerUser,
   isLibraryProbePending,
+  isLibraryCatalogPending,
   jellyfinCompatibilityReport,
   jellyfinFailureReport,
   jellyfinTarget,
@@ -24,6 +25,8 @@ import {
   selectConnectorAddress,
   startContainerWithRetry,
   validateImportedItem,
+  validateLibraryCatalog,
+  waitForLibraryCatalog,
   verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
 
@@ -70,7 +73,7 @@ test("keeps the disposable Jellyfin server on a private network with determinist
 });
 
 test("builds a closed compatibility report without retaining supplied secrets", () => {
-  const report = jellyfinCompatibilityReport({
+  const input = {
     accessToken: "private-access-token",
     identityChecks: {
       invalidPasswordRejected: true,
@@ -81,6 +84,12 @@ test("builds a closed compatibility report without retaining supplied secrets", 
       secret: "private-quick-connect-secret",
     },
     image: LATEST_IMAGE,
+    libraryCatalog: {
+      itemCount: 1,
+      kind: "movie",
+      secret: "private-library-identifier",
+      userScoped: true,
+    },
     persistedSeconds: 6,
     playback: {
       direct: { bytes: 4_096, status: 206, token: "private-direct-token" },
@@ -92,7 +101,8 @@ test("builds a closed compatibility report without retaining supplied secrets", 
     reconnectDelivery: "direct",
     restartPosition: 6,
     version: "10.11.11",
-  });
+  };
+  const report = jellyfinCompatibilityReport(input);
 
   assert.deepEqual(Object.keys(report).sort(), [
     "checks",
@@ -110,9 +120,22 @@ test("builds a closed compatibility report without retaining supplied secrets", 
   });
   assert.deepEqual(report.checks.directRange, { bytes: 4_096, status: 206 });
   assert.deepEqual(report.checks.hlsTranscode, { bytes: 8_192, format: "fmp4", status: 200 });
+  assert.deepEqual(report.checks.libraryCatalog, {
+    itemCount: 1,
+    kind: "movie",
+    userScoped: true,
+  });
   assert.doesNotMatch(
     JSON.stringify(report),
-    /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
+    /private-access-token|private-quick-connect-secret|private-direct-token|private-library-identifier|private\/media/u,
+  );
+  assert.throws(
+    () =>
+      jellyfinCompatibilityReport({
+        ...input,
+        libraryCatalog: { ...input.libraryCatalog, userScoped: false },
+      }),
+    /compatibility_report_invalid/u,
   );
 });
 
@@ -489,6 +512,166 @@ test("waits for Jellyfin to finish probing imported media streams", () => {
   }
   assert.equal(isLibraryProbePending(probeError), true);
   assert.equal(isLibraryProbePending(new Error("unrelated")), false);
+});
+
+test("accepts only a normalized user-scoped production catalogue result", () => {
+  const expectedItemId = "a".repeat(32);
+  const validResult = {
+    items: [
+      {
+        externalId: expectedItemId,
+        kind: "movie",
+        runtimeSeconds: 16,
+        title: "Omnifin Fixture",
+      },
+    ],
+    nextStartIndex: null,
+    truncated: false,
+  };
+  assert.deepEqual(validateLibraryCatalog(validResult, expectedItemId), {
+    itemCount: 1,
+    kind: "movie",
+    userScoped: true,
+  });
+  assert.throws(
+    () => validateLibraryCatalog({ ...validResult, items: [] }, expectedItemId),
+    /library_catalog_empty/u,
+  );
+  assert.throws(
+    () => validateLibraryCatalog({ ...validResult, truncated: true }, expectedItemId),
+    /library_catalog_pagination_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          items: [
+            {
+              externalId: "b".repeat(32),
+              kind: "movie",
+              runtimeSeconds: 16,
+              title: "Omnifin Fixture",
+            },
+          ],
+          nextStartIndex: null,
+          truncated: false,
+        },
+        expectedItemId,
+      ),
+    /library_catalog_identity_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], kind: "episode" }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_kind_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], title: "Unexpected" }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_title_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], runtimeSeconds: 0 }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_runtime_invalid/u,
+  );
+});
+
+test("waits only for Jellyfin search indexing to expose the catalogue item", async () => {
+  const expectedItemId = "a".repeat(32);
+  const indexedResult = {
+    items: [
+      {
+        externalId: expectedItemId,
+        kind: "movie",
+        runtimeSeconds: 16,
+        title: "Omnifin Fixture",
+      },
+    ],
+    nextStartIndex: null,
+    truncated: false,
+  };
+  let attempts = 0;
+  let now = 0;
+  const result = await waitForLibraryCatalog(
+    async () => {
+      attempts += 1;
+      return attempts < 3 ? { ...indexedResult, items: [] } : indexedResult;
+    },
+    expectedItemId,
+    {
+      now: () => now,
+      pause: async (milliseconds) => {
+        now += milliseconds;
+      },
+      retryIntervalMs: 250,
+      timeoutMs: 1_000,
+    },
+  );
+  assert.deepEqual(result, { itemCount: 1, kind: "movie", userScoped: true });
+  assert.equal(attempts, 3);
+
+  let pendingError;
+  try {
+    validateLibraryCatalog({ ...indexedResult, items: [] }, expectedItemId);
+  } catch (error) {
+    pendingError = error;
+  }
+  assert.equal(isLibraryCatalogPending(pendingError), true);
+  assert.equal(isLibraryCatalogPending(new Error("unrelated")), false);
+});
+
+test("does not retry stable catalogue contract failures", async () => {
+  const expectedItemId = "a".repeat(32);
+  let attempts = 0;
+  let pauses = 0;
+  await assert.rejects(
+    waitForLibraryCatalog(
+      async () => {
+        attempts += 1;
+        return {
+          items: [
+            {
+              externalId: expectedItemId,
+              kind: "movie",
+              runtimeSeconds: 16,
+              title: "Unexpected",
+            },
+          ],
+          nextStartIndex: null,
+          truncated: false,
+        };
+      },
+      expectedItemId,
+      {
+        now: () => 0,
+        pause: async () => {
+          pauses += 1;
+        },
+      },
+    ),
+    /library_catalog_title_invalid/u,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(pauses, 0);
 });
 
 test("retries only transient post-restart negotiation failures", async () => {

@@ -56,6 +56,7 @@ export const COMPATIBILITY_CHECKS = Object.freeze({
     "identity_password",
     "identity_public_info",
     "identity_quick_connect",
+    "library_catalog",
     "progress_persistence",
     "restart_reconnect",
     "track_audio",
@@ -182,7 +183,7 @@ function validateJellyfinFixture(fixtureReport, target) {
     typeof checks === "object" &&
     !Array.isArray(checks) &&
     sortedKeys(checks) ===
-      "directRange,hlsTranscode,identity,progress,reconnect,tracks,transcodeSeekSeconds" &&
+      "directRange,hlsTranscode,identity,libraryCatalog,progress,reconnect,tracks,transcodeSeekSeconds" &&
     Number.isSafeInteger(checks.directRange?.bytes) &&
     checks.directRange.bytes > 0 &&
     checks.directRange.bytes <= 8 * 1_024 * 1_024 &&
@@ -196,6 +197,9 @@ function validateJellyfinFixture(fixtureReport, target) {
     sortedKeys(identity) ===
       "invalidPasswordRejected,mismatchedQuickConnectSecretRejected,password,publicInfo,quickConnect" &&
     Object.values(identity).every((value) => value === true) &&
+    checks.libraryCatalog?.itemCount === 1 &&
+    checks.libraryCatalog?.kind === "movie" &&
+    checks.libraryCatalog?.userScoped === true &&
     checks.progress?.persistedSeconds === 6 &&
     checks.progress?.reportedSeconds === 6 &&
     checks.reconnect?.delivery === "direct" &&

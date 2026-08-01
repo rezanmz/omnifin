@@ -96,6 +96,7 @@ function passingFixtureReport(target) {
           publicInfo: true,
           quickConnect: true,
         },
+        libraryCatalog: { itemCount: 1, kind: "movie", userScoped: true },
         progress: { persistedSeconds: 6, reportedSeconds: 6 },
         reconnect: { delivery: "direct", persistedSeconds: 6 },
         tracks: { audio: "fra", subtitle: "eng" },

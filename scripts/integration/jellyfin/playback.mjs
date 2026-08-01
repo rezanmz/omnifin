@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { JellyfinAuthenticationClient } from "../../../packages/connectors/dist/auth/jellyfin-authentication-client.js";
 import { JellyfinPlaybackClient } from "../../../packages/connectors/dist/media/jellyfin-playback-client.js";
+import { JellyfinUserMediaClient } from "../../../packages/connectors/dist/media/jellyfin-user-media-client.js";
 
 import { JELLYFIN_FIXTURE_IMAGE } from "../../media/playback-fixture.mjs";
 
@@ -19,6 +20,8 @@ const MAX_SEGMENT_BYTES = 8 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SERVER_READY_TIMEOUT_MS = 90_000;
 const LIBRARY_READY_TIMEOUT_MS = 60_000;
+const LIBRARY_CATALOG_READY_TIMEOUT_MS = 30_000;
+const LIBRARY_CATALOG_RETRY_INTERVAL_MS = 500;
 const RESTART_NEGOTIATION_READY_TIMEOUT_MS = 10_000;
 const RESTART_NEGOTIATION_RETRY_INTERVAL_MS = 250;
 const CONTAINER_START_RETRY_INTERVAL_MS = 250;
@@ -72,6 +75,13 @@ const REPORTABLE_FAILURE_CODES = new Set([
   "jellyfin_fixture_failed",
   "jellyfin_target_invalid",
   "library_item_invalid",
+  "library_catalog_invalid",
+  "library_catalog_empty",
+  "library_catalog_identity_invalid",
+  "library_catalog_kind_invalid",
+  "library_catalog_pagination_invalid",
+  "library_catalog_runtime_invalid",
+  "library_catalog_title_invalid",
   "library_scan_timeout",
   "library_streams_invalid",
   "manifest_invalid",
@@ -109,6 +119,7 @@ const CONNECTOR_DIAGNOSTIC_PATTERN = new RegExp(
     "hls_segment_open",
     "hls_segment_read",
     "identity_public_info",
+    "library_catalog",
     "password_authentication",
     "playback_report_progress",
     "playback_report_started",
@@ -329,6 +340,18 @@ export function jellyfinCompatibilityReport(input) {
   if (Object.values(identity).some((passed) => !passed)) {
     throw new JellyfinFixtureFailure("compatibility_report_invalid");
   }
+  const libraryCatalog = {
+    itemCount: input.libraryCatalog?.itemCount,
+    kind: input.libraryCatalog?.kind,
+    userScoped: input.libraryCatalog?.userScoped,
+  };
+  if (
+    libraryCatalog.itemCount !== 1 ||
+    libraryCatalog.kind !== "movie" ||
+    libraryCatalog.userScoped !== true
+  ) {
+    throw new JellyfinFixtureFailure("compatibility_report_invalid");
+  }
   return {
     checks: {
       directRange: {
@@ -341,6 +364,7 @@ export function jellyfinCompatibilityReport(input) {
         status: input.playback.hls.status,
       },
       identity,
+      libraryCatalog,
       progress: {
         persistedSeconds: input.persistedSeconds,
         reportedSeconds: 6,
@@ -703,6 +727,51 @@ export function validateImportedItem(item) {
   };
 }
 
+export function validateLibraryCatalog(result, expectedItemId) {
+  const item = result?.items?.[0];
+  if (result?.items?.length !== 1) throw new JellyfinFixtureFailure("library_catalog_empty");
+  if (result.nextStartIndex !== null || result.truncated !== false) {
+    throw new JellyfinFixtureFailure("library_catalog_pagination_invalid");
+  }
+  if (item?.externalId !== expectedItemId) {
+    throw new JellyfinFixtureFailure("library_catalog_identity_invalid");
+  }
+  if (item.kind !== "movie") throw new JellyfinFixtureFailure("library_catalog_kind_invalid");
+  if (item.title !== "Omnifin Fixture") {
+    throw new JellyfinFixtureFailure("library_catalog_title_invalid");
+  }
+  if (!Number.isSafeInteger(item.runtimeSeconds) || item.runtimeSeconds < 1) {
+    throw new JellyfinFixtureFailure("library_catalog_runtime_invalid");
+  }
+  return { itemCount: 1, kind: "movie", userScoped: true };
+}
+
+export function isLibraryCatalogPending(error) {
+  return error instanceof JellyfinFixtureFailure && error.code === "library_catalog_empty";
+}
+
+export async function waitForLibraryCatalog(operation, expectedItemId, options = {}) {
+  const now = options.now ?? Date.now;
+  const pause = options.pause ?? sleep;
+  const timeoutMs = options.timeoutMs ?? LIBRARY_CATALOG_READY_TIMEOUT_MS;
+  const retryIntervalMs = options.retryIntervalMs ?? LIBRARY_CATALOG_RETRY_INTERVAL_MS;
+  const deadline = now() + timeoutMs;
+  let lastPendingFailure = new JellyfinFixtureFailure("library_catalog_empty");
+
+  while (now() < deadline) {
+    const result = await operation();
+    try {
+      return validateLibraryCatalog(result, expectedItemId);
+    } catch (error) {
+      if (!isLibraryCatalogPending(error)) throw error;
+      lastPendingFailure = error;
+    }
+    await pause(Math.min(retryIntervalMs, Math.max(0, deadline - now())));
+  }
+
+  throw lastPendingFailure;
+}
+
 export function isLibraryProbePending(error) {
   return error instanceof JellyfinFixtureFailure && error.code === "library_streams_invalid";
 }
@@ -763,6 +832,40 @@ function playbackClient(context, server, accessToken, deviceId) {
       timeoutMs: REQUEST_TIMEOUT_MS,
     },
   });
+}
+
+function userMediaClient(server, accessToken, deviceId) {
+  return new JellyfinUserMediaClient({
+    accessToken,
+    deviceId,
+    metadata: { appVersion: "0.1.0" },
+    target: {
+      baseUrl: server.connectorUrl.href,
+      connectorId: "jellyfin-fixture",
+      displayName: "Jellyfin fixture",
+      insecureHttpApproved: true,
+      maxResponseBytes: MAX_JSON_BYTES,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    },
+  });
+}
+
+async function verifyLibraryCatalog(server, authentication, deviceId, expectedItemId) {
+  const client = userMediaClient(server, authentication.accessToken, deviceId);
+  return waitForLibraryCatalog(
+    () =>
+      connectorOperation("library_catalog", () =>
+        client.readLibrary({
+          kind: "movies",
+          limit: 1,
+          query: "Omnifin Fixture",
+          sort: "title",
+          startIndex: 0,
+          userId: authentication.userId,
+        }),
+      ),
+    expectedItemId,
+  );
 }
 
 function authenticationClient(context, server) {
@@ -1188,6 +1291,12 @@ async function main(options) {
     const authentication = identity.authentication;
     await configureFixtureServer(firstServer.loopbackUrl, authentication);
     const item = await importFixture(firstServer.loopbackUrl, authentication);
+    const libraryCatalog = await verifyLibraryCatalog(
+      firstServer,
+      authentication,
+      context.deviceId,
+      item.id,
+    );
     const playback = await verifyPlayback(context, firstServer, authentication, item);
     const persistedSeconds = await playbackPosition(
       firstServer.loopbackUrl,
@@ -1245,6 +1354,7 @@ async function main(options) {
     successfulReport = jellyfinCompatibilityReport({
       identityChecks: identity.checks,
       image: context.target.image,
+      libraryCatalog,
       persistedSeconds,
       playback,
       reconnectDelivery: reconnected.delivery,
