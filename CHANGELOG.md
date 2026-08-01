@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/rezanmz/omnifin/compare/v0.5.1...v0.5.2) (2026-08-01)
+
+
+### Fixes
+
+* **release:** make Compose secrets readable ([#148](https://github.com/rezanmz/omnifin/issues/148)) ([2719aa2](https://github.com/rezanmz/omnifin/commit/2719aa2a254e3fac335d2bf468384e0baaa6f4a0)), closes [#147](https://github.com/rezanmz/omnifin/issues/147)
+
 ## [0.5.1](https://github.com/rezanmz/omnifin/compare/v0.5.0...v0.5.1) (2026-08-01)
 
 
