@@ -745,7 +745,10 @@ jobs:
           umask 077
           openssl rand -base64 32 | tr -d '\n' > "$encryption_key_file"
           openssl rand -base64 48 | tr -d '\n' > "$recovery_secret_file"
-          chmod 0600 "$encryption_key_file" "$recovery_secret_file"
+          # Compose bind-mounts local secret files without remapping ownership. The
+          # files must therefore be readable by the image's unprivileged UID; the
+          # private 0700 parent directory keeps them inaccessible to other host users.
+          chmod 0444 "$encryption_key_file" "$recovery_secret_file"
           {
             echo "OMNIFIN_BACKUP_DIRECTORY=$backup_directory"
             echo "OMNIFIN_ENCRYPTION_KEY_FILE=$encryption_key_file"

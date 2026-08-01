@@ -163,7 +163,9 @@ test("gates stable promotion on the generated Compose bundle", () => {
   assert.match(credentials.run, /omnifin-install-secrets/u);
   assert.match(credentials.run, /OMNIFIN_ENCRYPTION_KEY_FILE/u);
   assert.match(credentials.run, /OMNIFIN_RECOVERY_SECRET_FILE/u);
-  assert.match(credentials.run, /chmod 0600/u);
+  assert.match(credentials.run, /install --directory --mode 0700/u);
+  assert.match(credentials.run, /chmod 0444/u);
+  assert.doesNotMatch(credentials.run, /chmod 0600/u);
   assert.doesNotMatch(credentials.run, /OMNIFIN_ENCRYPTION_KEY=\$encryption_key/u);
   assert.doesNotMatch(credentials.run, /OMNIFIN_RECOVERY_SECRET=\$recovery_secret/u);
   const exercise = verification.steps.find(
@@ -180,6 +182,18 @@ test("gates stable promotion on the generated Compose bundle", () => {
     workflow.jobs["promote-stable"].if,
     /needs\.verify-install-bundle\.result == 'success'/u,
   );
+});
+
+test("documents the private-directory permission contract for rootless Compose secrets", () => {
+  for (const relativePath of ["README.md", "docs/first-run.md"]) {
+    const source = readFileSync(path.join(repositoryRoot, relativePath), "utf8");
+    assert.match(source, /install -d -m 0700 secrets/u);
+    assert.match(
+      source,
+      /chmod 0444 secrets\/omnifin_encryption_key secrets\/omnifin_recovery_secret/u,
+    );
+    assert.match(source, /cannot traverse the `0700` directory/u);
+  }
 });
 
 test("uploads an unmodified bundle before publishing the GitHub Release", () => {

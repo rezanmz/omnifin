@@ -21,8 +21,13 @@ install -d -m 0700 secrets
 umask 077
 openssl rand -base64 32 | tr -d '\n' > secrets/omnifin_encryption_key
 openssl rand -base64 48 | tr -d '\n' > secrets/omnifin_recovery_secret
-chmod 0600 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
+chmod 0444 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
 ```
+
+Compose bind-mounts local secret files without changing their host ownership, while the Omnifin
+image runs as an unprivileged numeric user. The files are therefore read-only for every identity,
+but other host users cannot traverse the `0700` directory to read them. Keep that directory owned
+by the deployment account and do not loosen its permissions.
 
 For a reviewed source checkout, use `.env.example` instead. Never copy a release environment file
 between versions: its `OMNIFIN_IMAGE` value intentionally binds it to one verified image digest.
