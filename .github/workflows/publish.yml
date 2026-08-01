@@ -708,6 +708,93 @@ jobs:
             "$image_ref" >/dev/null
           node scripts/container-smoke.mjs --image "$image_ref"
 
+  verify-install-bundle:
+    name: Verify digest-pinned Compose installation
+    if: ${{ always() && needs.publish-candidate.result == 'success' && needs.verify-candidate.result == 'success' }}
+    needs:
+      - publish-candidate
+      - verify-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      OMNIFIN_BASE_URL: http://localhost:33012
+      OMNIFIN_INSECURE_LOOPBACK_PREVIEW: "true"
+      OMNIFIN_JELLYFIN_URL: https://jellyfin.invalid
+      OMNIFIN_SECURE_COOKIES: "false"
+      OMNIFIN_WEB_PORT: "33012"
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Generate isolated deployment credentials
+        run: |
+          set -euo pipefail
+          encryption_key=$(openssl rand -base64 32 | tr -d '\n')
+          recovery_secret=$(openssl rand -base64 48 | tr -d '\n')
+          echo "::add-mask::$encryption_key"
+          echo "::add-mask::$recovery_secret"
+          backup_directory="${RUNNER_TEMP}/omnifin-install-backups"
+          {
+            echo "OMNIFIN_BACKUP_DIRECTORY=$backup_directory"
+            echo "OMNIFIN_ENCRYPTION_KEY=$encryption_key"
+            echo "OMNIFIN_RECOVERY_SECRET=$recovery_secret"
+          } >> "$GITHUB_ENV"
+          sudo install --directory --mode 0700 --owner 65532 --group 65532 \
+            "$backup_directory"
+      - name: Generate the release installation bundle
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+        run: >-
+          node scripts/release/install-bundle.mjs
+          --version "${{ inputs.version }}"
+          --digest "$IMAGE_DIGEST"
+          --output "${{ runner.temp }}/omnifin-install"
+      - name: Start, inspect, back up, and verify the release
+        run: |
+          set -euo pipefail
+          bundle="${{ runner.temp }}/omnifin-install"
+          compose=(
+            docker compose
+            --project-name "omnifin-install-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --env-file "$bundle/omnifin.env.example"
+            --file "$bundle/compose.yaml"
+          )
+
+          (cd "$bundle" && sha256sum --check SHA256SUMS)
+          "${compose[@]}" config --quiet
+          images=$("${compose[@]}" config --images | sort --unique)
+          test "$images" = "$(grep '^OMNIFIN_IMAGE=' "$bundle/omnifin.env.example" | cut -d= -f2-)"
+          "${compose[@]}" up --detach --wait
+          curl --fail --silent --show-error "http://127.0.0.1:${OMNIFIN_WEB_PORT}/healthz" \
+            >/dev/null
+          curl --fail --silent --show-error "http://127.0.0.1:${OMNIFIN_WEB_PORT}/recovery" \
+            >/dev/null
+          "${compose[@]}" exec -T gateway \
+            /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs http://127.0.0.1:4000/readyz
+          "${compose[@]}" run --rm --no-deps maintenance backup \
+            --output /backups/release-install.sqlite
+          "${compose[@]}" run --rm --no-deps maintenance verify \
+            --input /backups/release-install.sqlite
+      - name: Tear down the release installation
+        if: always()
+        run: |
+          bundle="${{ runner.temp }}/omnifin-install"
+          if [ -f "$bundle/compose.yaml" ] && [ -f "$bundle/omnifin.env.example" ]; then
+            docker compose \
+              --project-name "omnifin-install-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --env-file "$bundle/omnifin.env.example" \
+              --file "$bundle/compose.yaml" \
+              down --volumes --remove-orphans
+          fi
+
   rehearse-upgrade:
     name: Rehearse upgrade and exact-digest rollback
     if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.verify-candidate.result == 'success' }}
@@ -847,12 +934,13 @@ jobs:
 
   promote-stable:
     name: Promote verified digest to stable tags
-    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.rehearse-upgrade.result == 'success' }}
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.verify-install-bundle.result == 'success' && needs.rehearse-upgrade.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
       - scan-candidate
       - verify-candidate
+      - verify-install-bundle
       - rehearse-upgrade
     environment: release
     runs-on: ubuntu-latest
@@ -1030,6 +1118,69 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Generate release install assets
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+        run: >-
+          node scripts/release/install-bundle.mjs
+          --version "${{ inputs.version }}"
+          --digest "$IMAGE_DIGEST"
+          --output "${{ runner.temp }}/release-install-assets"
+      - name: Attach install assets to the draft
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ASSET_DIRECTORY: ${{ runner.temp }}/release-install-assets
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find(
+              (candidate) => candidate.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!release?.draft) {
+              throw new Error(`Expected an unpublished release draft for ${process.env.RELEASE_TAG}.`);
+            }
+            const names = ["compose.yaml", "omnifin.env.example", "SHA256SUMS"];
+            const existing = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            for (const name of names) {
+              if (existing.some((asset) => asset.name === name)) {
+                throw new Error(`Refusing to overwrite release asset ${name}.`);
+              }
+            }
+            for (const name of names) {
+              const data = fs.readFileSync(path.join(process.env.ASSET_DIRECTORY, name));
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                name,
+                data,
+                headers: {
+                  "content-length": data.length,
+                  "content-type": "application/octet-stream",
+                },
+              });
+            }
       - name: Publish draft after stable digest verification
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -1052,7 +1203,9 @@ jobs:
 
             const digestLine = `Container digest: \`${process.env.IMAGE_DIGEST}\``;
             const profileLine = `Release coverage profile: \`${process.env.RELEASE_PROFILE}\``;
-            const evidenceLines = [digestLine, profileLine].filter(
+            const installLine =
+              "Install bundle: verify `SHA256SUMS`, copy `omnifin.env.example` to `.env`, then start `compose.yaml`.";
+            const evidenceLines = [digestLine, profileLine, installLine].filter(
               (line) => !release.body?.includes(line),
             );
             const body = `${release.body || ""}\n\n${evidenceLines.join("\n")}`.trim();

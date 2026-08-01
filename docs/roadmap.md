@@ -21,7 +21,7 @@ or planned.
 - Public repository, AGPL-3.0-only licensing, governance, architecture, support, and
   security documentation
 - pnpm TypeScript workspace, strict checks, test harnesses, migrations, structured
-  redacted logging, health endpoints, Docker image, and Compose deployment
+  redacted logging, health endpoints, Docker image, and digest-pinned Compose release bundle
 - Protected branch and release-tag policy, pinned CI actions, dependency automation,
   and a reviewed automatic-release path
 

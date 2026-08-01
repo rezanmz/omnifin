@@ -4,6 +4,7 @@
 Dockerfile
 CHANGELOG.md
 coverage
+deploy/*.env.example
 dist
 node_modules
 playwright-report

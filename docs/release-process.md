@@ -127,18 +127,22 @@ The release sequence is:
 6. From a fresh job with an empty Docker credential directory, resolve the candidate
    tag, pull the digest anonymously, verify its signature and platforms, and run the
    container smoke harness.
-7. On a GitHub-hosted runner, resolve the current `latest` image to its immutable
+7. Generate the release-only Compose and environment assets, verify their checksums and exact
+   image reference, then start the bundle on a clean hosted runner. Require web and gateway health,
+   recovery-route reachability, a real online backup and verification, and complete teardown.
+8. On a GitHub-hosted runner, resolve the current `latest` image to its immutable
    digest, seed bounded encrypted identity state through the previous image's recovery
    API, verify a private backup, migrate that state with the candidate, restore the
    previous backup, and boot the exact previous digest again. Retain only the closed
    sanitized rehearsal report. Only when neither stable image tags nor published
    GitHub Releases exist may the workflow record the explicit first-release exception. Before
    executing either digest, the rehearsal verifies its keyless workflow signature.
-8. Recheck release ordering and full-version-tag absence, then point the full, minor,
+9. Recheck release ordering and full-version-tag absence, then point the full, minor,
    major, and `latest` tags at that exact verified digest.
-9. From another anonymous job, resolve every stable tag and pull the full version.
-10. Publish the GitHub Release and record the coverage profile and container digest in
-    its notes.
+10. From another anonymous job, resolve every stable tag and pull the full version.
+11. Attach `compose.yaml`, `omnifin.env.example`, and `SHA256SUMS` to the still-draft release,
+    refusing asset replacement, then publish the GitHub Release and record the coverage profile
+    and container digest in its notes.
 
 For version `1.4.2`, successful promotion creates:
 
@@ -176,7 +180,9 @@ The retained release evidence includes the portable SPDX document and checksum,
 two-platform candidate scan reports, sanitized fixture and applicable live integration
 reports, the closed upgrade/rollback report, BuildKit provenance, the keyless signature,
 GitHub attestations, the coverage profile in the image metadata, and both the profile and
-digest in the GitHub Release notes.
+digest in the GitHub Release notes. Its checksummed installation assets contain only public
+configuration placeholders and the exact verified image digest; they contain no generated
+deployment credential.
 
 ## Failure and recovery
 
