@@ -17,6 +17,7 @@ const ENVELOPE_KEY_PURPOSE = "omnifin:v1:envelope:aes-256-gcm";
 const PRIVACY_HASH_KEY_PURPOSE = "omnifin:v1:privacy-hash:hmac-sha256";
 
 export type PrivacyHashDomain =
+  | "acquisition_event"
   | "acquisition_calendar_cursor"
   | "acquisition_calendar_event"
   | "acquisition_calendar_source"

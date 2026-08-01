@@ -7,6 +7,7 @@ import {
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type {
   AcquisitionMonitoringState,
+  AcquisitionEvent,
   AcquisitionProvenanceResponse,
   AcquisitionSearchResponse,
 } from "@omnifin/contracts/acquisition";
@@ -100,6 +101,23 @@ const normalizedResponse: AcquisitionProvenanceResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const stalledResponse: AcquisitionProvenanceResponse = {
+  ...normalizedResponse,
+  events: [
+    {
+      ...normalizedResponse.events[0]!,
+      id: "radarr:queue:91",
+      kind: "stalled",
+      release: {
+        ...normalizedResponse.events[0]!.release,
+        title: "Private.Release.Name.2026",
+      },
+      state: "warning",
+      summary: "Download needs operator attention before import can continue.",
+    },
+  ],
+};
+
 const normalizedSearch: AcquisitionSearchResponse = {
   acceptedAt: now.toISOString(),
   operationId: "radarr:command:812",
@@ -126,6 +144,7 @@ function capabilitySnapshot(id: string, service: "radarr" | "sonarr") {
         "connector.version",
         "acquisition.history",
         "acquisition.monitoring",
+        "acquisition.queue.mutate",
         "acquisition.search",
       ],
       checkedAt: now.toISOString(),
@@ -170,7 +189,7 @@ function insertConnector(
     .run();
 }
 
-function harness(options: { withConnector?: boolean } = {}) {
+function harness(options: { clock?: () => Date; withConnector?: boolean } = {}) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
@@ -190,18 +209,28 @@ function harness(options: { withConnector?: boolean } = {}) {
   const readAcquisitionProvenance = vi.fn(async () => normalizedResponse);
   const readAcquisitionMonitoring = vi.fn(async () => monitoredState);
   const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
+  const readAcquisitionQueue = vi.fn(
+    async (): Promise<{ event: AcquisitionEvent; externalId: number }[]> => [],
+  );
+  const removeAndBlocklistAcquisitionQueueItem = vi.fn(async () => undefined);
   const updateAcquisitionMonitoring = vi.fn(async () => unmonitoredState);
   let identifier = 0;
+  let recoveryIdentifier = 0;
   const createAdapter = vi.fn(() => ({
     queueAcquisitionSearch,
     readAcquisitionMonitoring,
+    readAcquisitionQueue,
     readAcquisitionProvenance,
+    removeAndBlocklistAcquisitionQueueItem,
     updateAcquisitionMonitoring,
   }));
   const service = new AcquisitionProvenanceService(database, config, {
-    clock: () => now,
+    clock: options.clock ?? (() => now),
     createAdapter,
     createId: () => `acquisition-operation-${++identifier}`,
+    createOperationId: () =>
+      `acquisition_recovery_ABCDEFGHIJKLMNOPQRSTU${String.fromCharCode(86 + recoveryIdentifier++)}`,
+    wait: async () => undefined,
   });
   return {
     config,
@@ -209,7 +238,9 @@ function harness(options: { withConnector?: boolean } = {}) {
     database,
     queueAcquisitionSearch,
     readAcquisitionMonitoring,
+    readAcquisitionQueue,
     readAcquisitionProvenance,
+    removeAndBlocklistAcquisitionQueueItem,
     service,
     updateAcquisitionMonitoring,
   };
@@ -224,7 +255,15 @@ describe("acquisition provenance service", () => {
         { principal: principal() },
       );
 
-      expect(response).toEqual(normalizedResponse);
+      expect(response).toEqual({
+        ...normalizedResponse,
+        events: [
+          {
+            ...normalizedResponse.events[0],
+            id: expect.stringMatching(/^acquisition_[A-Za-z0-9_-]{22}$/u),
+          },
+        ],
+      });
       expect(createAdapter).toHaveBeenCalledWith(
         "radarr",
         expect.objectContaining({
@@ -241,6 +280,448 @@ describe("acquisition provenance service", () => {
       expect(JSON.stringify(response)).not.toContain(privateApiKey);
     } finally {
       database.close();
+    }
+  });
+
+  it("offers and idempotently completes exact stalled-queue recovery without persisting raw IDs", async () => {
+    const {
+      database,
+      readAcquisitionProvenance,
+      readAcquisitionQueue,
+      removeAndBlocklistAcquisitionQueueItem,
+      service,
+    } = harness();
+    try {
+      readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const provenance = await service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const event = provenance.events[0]!;
+      expect(event.id).toMatch(/^acquisition_[A-Za-z0-9_-]{22}$/u);
+      expect(event.recovery).toMatchObject({
+        expiresAt: "2026-07-27T18:35:00.000Z",
+        reference: expect.stringMatching(/^aqr_v2\./u),
+      });
+      expect(event.recovery?.reference).not.toBe("91");
+
+      readAcquisitionQueue
+        .mockResolvedValueOnce([{ event: stalledResponse.events[0]!, externalId: 91 }])
+        .mockResolvedValueOnce([]);
+      const context = {
+        ipAddress: "192.0.2.21",
+        principal: principal(),
+        requestId: "queue-recovery-request",
+      };
+      const first = await service.recoverQueueItem(
+        { reference: event.recovery!.reference },
+        "queue-recovery-key-00000001",
+        context,
+      );
+      const replay = await service.recoverQueueItem(
+        { reference: event.recovery!.reference },
+        "queue-recovery-key-00000001",
+        context,
+      );
+      const alternateKeyReplay = await service.recoverQueueItem(
+        { reference: event.recovery!.reference },
+        "queue-recovery-alternate-key-0001",
+        context,
+      );
+
+      expect(first).toEqual({
+        recovery: {
+          completedAt: now.toISOString(),
+          eventId: event.id,
+          operationId: "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+          service: "radarr",
+          state: "removed_and_blocklisted",
+        },
+        replayed: false,
+      });
+      expect(replay).toEqual({ ...first, replayed: true });
+      expect(alternateKeyReplay).toEqual({ ...first, replayed: true });
+
+      readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const freshReference = (await service.read({ mediaId: 42, service: "radarr" }, context))
+        .events[0]!.recovery!.reference;
+      await expect(
+        service.recoverQueueItem(
+          { reference: freshReference },
+          "queue-recovery-key-00000001",
+          context,
+        ),
+      ).rejects.toMatchObject({ reason: "idempotency_conflict" });
+      expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+      expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledWith(91, undefined);
+      expect(readAcquisitionQueue).toHaveBeenCalledTimes(2);
+
+      const stored = database.sqlite
+        .prepare(
+          `select event_id as eventId, event_snapshot_json as snapshot,
+                  response_json as response, failure_code as failureCode
+           from acquisition_queue_recovery_operations`,
+        )
+        .get() as {
+        eventId: string;
+        failureCode: string | null;
+        response: string;
+        snapshot: string;
+      };
+      expect(stored).toMatchObject({ eventId: event.id, failureCode: null });
+      expect(JSON.stringify(stored)).not.toContain("Private.Release.Name");
+      expect(JSON.stringify(stored)).not.toContain("radarr:queue:91");
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count from audit_events
+             where event_type in (
+               'acquisition.queue.recovery.requested',
+               'acquisition.queue.recovery.completed'
+             )`,
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when a recovery reference is tampered with or the exact queue state changed", async () => {
+    const {
+      database,
+      readAcquisitionProvenance,
+      readAcquisitionQueue,
+      removeAndBlocklistAcquisitionQueueItem,
+      service,
+    } = harness();
+    try {
+      readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const provenance = await service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const reference = provenance.events[0]!.recovery!.reference;
+      const tamperedReference = `${reference.slice(0, -1)}${reference.endsWith("A") ? "B" : "A"}`;
+      await expect(
+        service.recoverQueueItem({ reference: tamperedReference }, "queue-recovery-key-00000002", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "reference_invalid" });
+
+      readAcquisitionQueue.mockResolvedValueOnce([
+        {
+          event: { ...stalledResponse.events[0]!, state: "failure" },
+          externalId: 91,
+        },
+      ]);
+      await expect(
+        service.recoverQueueItem({ reference }, "queue-recovery-key-00000003", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "stale_state" });
+      expect(removeAndBlocklistAcquisitionQueueItem).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("omits recovery offers without active identity and current mutation capability", async () => {
+    const inactive = harness();
+    try {
+      inactive.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await inactive.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: { ...principal(), accountState: "pending_link" } },
+      );
+      expect(response.events[0]).not.toHaveProperty("recovery");
+    } finally {
+      inactive.database.close();
+    }
+
+    const incapable = harness();
+    try {
+      incapable.database.sqlite
+        .prepare("update connector_configs set capability_snapshot_json = ? where id = ?")
+        .run(
+          capabilitySnapshot("radarr-main", "radarr").replace(',"acquisition.queue.mutate"', ""),
+          "radarr-main",
+        );
+      incapable.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await incapable.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      expect(response.events[0]).not.toHaveProperty("recovery");
+    } finally {
+      incapable.database.close();
+    }
+  });
+
+  it("rejects an expired recovery reference before reserving or reading the queue", async () => {
+    let current = now;
+    const snapshot = harness({ clock: () => current });
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      current = new Date(now.getTime() + 5 * 60 * 1_000 + 1);
+      await expect(
+        snapshot.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-expired-00000001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "reference_expired" });
+      expect(snapshot.readAcquisitionQueue).not.toHaveBeenCalled();
+      expect(
+        snapshot.database.sqlite
+          .prepare("select count(*) as count from acquisition_queue_recovery_operations")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("keeps one recovery reservation in flight across matching and alternate keys", async () => {
+    const snapshot = harness();
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      let resolveQueue!: (items: { event: AcquisitionEvent; externalId: number }[]) => void;
+      snapshot.readAcquisitionQueue.mockImplementationOnce(
+        async () =>
+          new Promise((resolve) => {
+            resolveQueue = resolve;
+          }),
+      );
+      const reference = response.events[0]!.recovery!.reference;
+      const first = snapshot.service.recoverQueueItem(
+        { reference },
+        "queue-recovery-concurrent-0001",
+        { principal: principal() },
+      );
+      expect(snapshot.readAcquisitionQueue).toHaveBeenCalledOnce();
+
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-concurrent-0001", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-concurrent-0002", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).not.toHaveBeenCalled();
+
+      resolveQueue([{ event: stalledResponse.events[0]!, externalId: 91 }]);
+      await expect(first).resolves.toMatchObject({ replayed: false });
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("records interruption safety before and after the upstream mutation boundary", async () => {
+    const beforeMutation = harness();
+    try {
+      beforeMutation.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await beforeMutation.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      beforeMutation.readAcquisitionQueue.mockRejectedValueOnce(
+        new DOMException("Aborted", "AbortError"),
+      );
+      await expect(
+        beforeMutation.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-abort-before-0001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(
+        beforeMutation.database.sqlite
+          .prepare("select failure_code as failureCode from acquisition_queue_recovery_operations")
+          .get(),
+      ).toEqual({ failureCode: "temporarily_unavailable" });
+    } finally {
+      beforeMutation.database.close();
+    }
+
+    const afterMutation = harness();
+    try {
+      afterMutation.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await afterMutation.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      afterMutation.readAcquisitionQueue.mockResolvedValueOnce([
+        { event: stalledResponse.events[0]!, externalId: 91 },
+      ]);
+      afterMutation.removeAndBlocklistAcquisitionQueueItem.mockRejectedValueOnce(
+        new DOMException("Aborted", "AbortError"),
+      );
+      await expect(
+        afterMutation.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-abort-after-00001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(
+        afterMutation.database.sqlite
+          .prepare("select failure_code as failureCode from acquisition_queue_recovery_operations")
+          .get(),
+      ).toEqual({ failureCode: "outcome_unconfirmed" });
+    } finally {
+      afterMutation.database.close();
+    }
+  });
+
+  it("does not retry an unconfirmed post-mutation outcome under any idempotency key", async () => {
+    const snapshot = harness();
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const item = { event: stalledResponse.events[0]!, externalId: 91 };
+      snapshot.readAcquisitionQueue.mockResolvedValue([item]);
+      const reference = response.events[0]!.recovery!.reference;
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-unconfirmed-0001", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "outcome_unconfirmed" });
+      expect(snapshot.readAcquisitionQueue).toHaveBeenCalledTimes(4);
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+      expect(
+        snapshot.database.sqlite
+          .prepare(
+            "select state, failure_code as failureCode from acquisition_queue_recovery_operations",
+          )
+          .get(),
+      ).toEqual({ failureCode: "outcome_unconfirmed", state: "failed" });
+
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-new-key-0000001", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "operation_failed" });
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("rejects duplicate exact queue evidence before mutation", async () => {
+    const snapshot = harness();
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const item = { event: stalledResponse.events[0]!, externalId: 91 };
+      snapshot.readAcquisitionQueue.mockResolvedValueOnce([item, item]);
+      await expect(
+        snapshot.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-duplicate-00001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "response_invalid" });
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).not.toHaveBeenCalled();
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("rechecks active identity and reference ownership before queue access", async () => {
+    const snapshot = harness();
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const reference = response.events[0]!.recovery!.reference;
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-pending-identity", {
+          principal: { ...principal(), accountState: "pending_link" },
+        }),
+      ).rejects.toMatchObject({ reason: "identity_required" });
+      await expect(
+        snapshot.service.recoverQueueItem({ reference }, "queue-recovery-other-identity", {
+          principal: { ...principal(), userId: "other-operator-user" },
+        }),
+      ).rejects.toMatchObject({ reason: "reference_invalid" });
+      expect(snapshot.readAcquisitionQueue).not.toHaveBeenCalled();
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("records safe pre-mutation failures when an exact item disappears or the connector throttles", async () => {
+    const missing = harness();
+    try {
+      missing.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await missing.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      missing.readAcquisitionQueue.mockResolvedValueOnce([]);
+      await expect(
+        missing.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-missing-0000001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "stale_state" });
+      expect(missing.removeAndBlocklistAcquisitionQueueItem).not.toHaveBeenCalled();
+    } finally {
+      missing.database.close();
+    }
+
+    const throttled = harness();
+    try {
+      throttled.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await throttled.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      throttled.readAcquisitionQueue.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "rate_limited",
+          message: "Private upstream message.",
+          operation: "acquisition.queue.read",
+          retryable: true,
+          service: "radarr",
+        }),
+      );
+      await expect(
+        throttled.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-throttled-0001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "rate_limited" });
+      expect(
+        throttled.database.sqlite
+          .prepare("select failure_code as failureCode from acquisition_queue_recovery_operations")
+          .get(),
+      ).toEqual({ failureCode: "rate_limited" });
+    } finally {
+      throttled.database.close();
     }
   });
 

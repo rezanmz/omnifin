@@ -9,6 +9,11 @@ import {
   acquisitionProvenanceEventCursorSchema,
   acquisitionProvenanceResponseJsonSchema,
   acquisitionProvenanceResponseSchema,
+  acquisitionQueueRecoveryIdempotencyKeySchema,
+  acquisitionQueueRecoveryInputJsonSchema,
+  acquisitionQueueRecoveryInputSchema,
+  acquisitionQueueRecoveryResponseJsonSchema,
+  acquisitionQueueRecoveryResponseSchema,
   acquisitionSearchIdempotencyKeySchema,
   acquisitionSearchInputJsonSchema,
   acquisitionSearchInputSchema,
@@ -59,8 +64,14 @@ function configurationError(error: AcquisitionProvenanceError) {
     case "idempotency_conflict":
     case "idempotency_in_progress":
     case "identity_required":
+    case "operation_failed":
+    case "operation_limit_reached":
+    case "outcome_unconfirmed":
     case "rate_limited":
+    case "reference_expired":
+    case "reference_invalid":
     case "response_invalid":
+    case "stale_state":
     case "temporarily_unavailable":
       return new SafeHttpError({
         cause: error,
@@ -115,6 +126,12 @@ function searchError(error: AcquisitionProvenanceError, reply: FastifyReply) {
     case "connector_integrity_failure":
     case "configuration_unavailable":
     case "storage_failure":
+    case "operation_failed":
+    case "operation_limit_reached":
+    case "outcome_unconfirmed":
+    case "reference_expired":
+    case "reference_invalid":
+    case "stale_state":
       return new SafeHttpError({
         cause: error,
         code: "acquisition_search_configuration_unavailable",
@@ -159,6 +176,12 @@ function monitoringError(error: AcquisitionProvenanceError) {
     case "connector_integrity_failure":
     case "configuration_unavailable":
     case "storage_failure":
+    case "operation_failed":
+    case "operation_limit_reached":
+    case "outcome_unconfirmed":
+    case "reference_expired":
+    case "reference_invalid":
+    case "stale_state":
       return new SafeHttpError({
         cause: error,
         code: "acquisition_monitoring_configuration_unavailable",
@@ -172,6 +195,96 @@ function monitoringError(error: AcquisitionProvenanceError) {
         cause: error,
         code: "acquisition_monitoring_temporarily_unavailable",
         message: "Monitoring controls are temporarily unavailable.",
+        statusCode: 503,
+      });
+  }
+}
+
+function recoveryError(error: AcquisitionProvenanceError, reply: FastifyReply) {
+  switch (error.reason) {
+    case "reference_invalid":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_reference_invalid",
+        message: "That recovery reference is invalid. Refresh the timeline before continuing.",
+        statusCode: 400,
+      });
+    case "reference_expired":
+    case "stale_state":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_stale",
+        message: "That queue item changed or expired. Refresh the timeline before continuing.",
+        statusCode: 409,
+      });
+    case "idempotency_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "idempotency_key_conflict",
+        message: "The idempotency key was already used for a different queue recovery.",
+        statusCode: 409,
+      });
+    case "idempotency_in_progress":
+      reply.header("retry-after", "2");
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_pending",
+        message: "That exact queue recovery is already in progress.",
+        statusCode: 409,
+      });
+    case "operation_failed":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_failed",
+        message: "The previous recovery attempt failed. Refresh before trying again.",
+        statusCode: 409,
+      });
+    case "identity_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_identity_required",
+        message: "An active operator account is required to recover a queue item.",
+        statusCode: 403,
+      });
+    case "operation_limit_reached":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_limit_reached",
+        message: "Too many recovery records are retained for this account.",
+        statusCode: 429,
+      });
+    case "rate_limited":
+      reply.header("retry-after", "30");
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_rate_limited",
+        message: "Queue recovery is temporarily rate limited.",
+        statusCode: 429,
+      });
+    case "response_invalid":
+    case "outcome_unconfirmed":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_unconfirmed",
+        message: "The exact queue recovery outcome could not be confirmed. Refresh before acting.",
+        statusCode: 502,
+      });
+    case "connector_unconfigured":
+    case "connector_ambiguous":
+    case "connector_integrity_failure":
+    case "configuration_unavailable":
+    case "storage_failure":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_configuration_unavailable",
+        message: "Queue recovery is temporarily unavailable due to configuration.",
+        statusCode: 503,
+      });
+    case "temporarily_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_queue_recovery_temporarily_unavailable",
+        message: "The queue item could not be recovered safely.",
         statusCode: 503,
       });
   }
@@ -608,6 +721,54 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         return acquisitionSearchResponseSchema.parse(result.search);
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw searchError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/acquisitions/queue-recoveries",
+    {
+      bodyLimit: 4 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 6, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: acquisitionQueueRecoveryInputJsonSchema,
+        response: {
+          200: acquisitionQueueRecoveryResponseJsonSchema,
+          201: acquisitionQueueRecoveryResponseJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "acquisition.manage",
+      );
+      const input = acquisitionQueueRecoveryInputSchema.parse(request.body);
+      const idempotencyKey = acquisitionQueueRecoveryIdempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const result = await provenance.recoverQueueItem(
+          input,
+          idempotencyKey,
+          { ipAddress: request.ip, principal, requestId: request.id },
+          controller.signal,
+        );
+        reply.header("idempotency-replayed", String(result.replayed));
+        reply.status(result.replayed ? 200 : 201);
+        return acquisitionQueueRecoveryResponseSchema.parse(result.recovery);
+      } catch (error) {
+        if (error instanceof AcquisitionProvenanceError) throw recoveryError(error, reply);
         throw error;
       } finally {
         request.raw.off("aborted", abort);

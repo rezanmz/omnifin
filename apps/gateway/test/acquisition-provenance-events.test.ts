@@ -31,7 +31,10 @@ function provenance(target: AcquisitionTargetInput): AcquisitionProvenanceRespon
   };
 }
 
-function principal(sessionId = "provenance-events-session"): SessionPrincipal {
+function principal(
+  sessionId = "provenance-events-session",
+  userId = "operator-user",
+): SessionPrincipal {
   return sessionPrincipalSchema.parse({
     absoluteExpiresAt: "2026-08-28T13:30:00.000Z",
     accountState: "active",
@@ -55,7 +58,7 @@ function principal(sessionId = "provenance-events-session"): SessionPrincipal {
     permissions: ROLE_PERMISSIONS.operator,
     role: "operator",
     sessionId,
-    userId: "operator-user",
+    userId,
   });
 }
 
@@ -141,6 +144,44 @@ describe("acquisition provenance event broker", () => {
       subscription.unsubscribe();
       subscription.unsubscribe();
     }
+    broker.close();
+  });
+
+  it("isolates the same target's live snapshot and replay buffer between users", async () => {
+    const readUsers: string[] = [];
+    const read = vi.fn(
+      async (target: AcquisitionTargetInput, context: { principal: SessionPrincipal }) => {
+        readUsers.push(context.principal.userId ?? context.principal.sessionId);
+        return provenance(target);
+      },
+    );
+    const firstEvents: unknown[] = [];
+    const secondEvents: unknown[] = [];
+    const broker = new AcquisitionProvenanceEventBroker(
+      { read },
+      { createCursor: () => "provenance_event_ABCDEFGHIJKLMNOPQRSTUV", wait: waitUntilAbort },
+    );
+
+    const first = broker.subscribe({
+      onClose: vi.fn(),
+      onEvent: (event) => firstEvents.push(event),
+      principal: principal("first-user-session", "first-user"),
+      target: movieTarget,
+    });
+    const second = broker.subscribe({
+      onClose: vi.fn(),
+      onEvent: (event) => secondEvents.push(event),
+      principal: principal("second-user-session", "second-user"),
+      target: movieTarget,
+    });
+
+    await vi.waitFor(() => expect(firstEvents).toHaveLength(1));
+    await vi.waitFor(() => expect(secondEvents).toHaveLength(1));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(readUsers.sort()).toEqual(["first-user", "second-user"]);
+
+    if (first.accepted) first.unsubscribe();
+    if (second.accepted) second.unsubscribe();
     broker.close();
   });
 

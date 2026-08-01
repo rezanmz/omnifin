@@ -141,6 +141,13 @@
       "when": 1785533270544,
       "tag": "0019_jellyfin_admin_bootstrap",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1785609524962,
+      "tag": "0020_acquisition_queue_recovery",
+      "breakpoints": true
     }
   ]
 }

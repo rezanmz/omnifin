@@ -1,6 +1,7 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type {
   AcquisitionMonitoringState,
+  AcquisitionEvent,
   AcquisitionProvenanceResponse,
   AcquisitionSearchResponse,
 } from "@omnifin/contracts/acquisition";
@@ -8,6 +9,7 @@ import {
   acquisitionMonitoringStateSchema,
   acquisitionProvenanceSnapshotEventSchema,
   acquisitionProvenanceResponseSchema,
+  acquisitionQueueRecoveryResponseSchema,
   acquisitionSearchResponseSchema,
 } from "@omnifin/contracts/acquisition";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
@@ -80,6 +82,19 @@ const normalizedResponse: AcquisitionProvenanceResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const stalledResponse: AcquisitionProvenanceResponse = {
+  ...normalizedResponse,
+  events: [
+    {
+      ...normalizedResponse.events[0]!,
+      id: "radarr:queue:91",
+      kind: "stalled",
+      state: "warning",
+      summary: "Download needs operator attention before import can continue.",
+    },
+  ],
+};
+
 const normalizedSearch: AcquisitionSearchResponse = {
   acceptedAt: now.toISOString(),
   operationId: "radarr:command:814",
@@ -106,6 +121,7 @@ function capabilitySnapshot() {
         "connector.version",
         "acquisition.history",
         "acquisition.monitoring",
+        "acquisition.queue.mutate",
         "acquisition.search",
       ],
       checkedAt: now.toISOString(),
@@ -138,6 +154,10 @@ async function harness(
   const config = testConfig();
   const queueAcquisitionSearch = vi.fn(async () => normalizedSearch);
   const readAcquisitionMonitoring = vi.fn(async () => monitoredState);
+  const readAcquisitionQueue = vi.fn(
+    async (): Promise<{ event: AcquisitionEvent; externalId: number }[]> => [],
+  );
+  const removeAndBlocklistAcquisitionQueueItem = vi.fn(async () => undefined);
   const updateAcquisitionMonitoring = vi.fn(async () => unmonitoredState);
   let operationIdentifier = 0;
   const app = await createApp({
@@ -149,10 +169,14 @@ async function harness(
       createAdapter: () => ({
         queueAcquisitionSearch,
         readAcquisitionMonitoring,
+        readAcquisitionQueue,
         readAcquisitionProvenance: implementation,
+        removeAndBlocklistAcquisitionQueueItem,
         updateAcquisitionMonitoring,
       }),
       createId: () => `acquisition-operation-${++operationIdentifier}`,
+      createOperationId: () => "acquisition_recovery_ABCDEFGHIJKLMNOPQRSTUV",
+      wait: async () => undefined,
     },
     config,
     sessionDependencies: sessionDependencies(),
@@ -277,12 +301,79 @@ async function harness(
     operator,
     queueAcquisitionSearch,
     readAcquisitionMonitoring,
+    readAcquisitionQueue,
+    removeAndBlocklistAcquisitionQueueItem,
     updateAcquisitionMonitoring,
     viewer,
   };
 }
 
 describe("acquisition provenance routes", () => {
+  it("protects, confirms, and safely replays an exact queue recovery", async () => {
+    const implementation = vi.fn(async () => stalledResponse);
+    const { app, operator, readAcquisitionQueue, removeAndBlocklistAcquisitionQueueItem, viewer } =
+      await harness(implementation);
+    try {
+      const provenanceResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      const provenance = acquisitionProvenanceResponseSchema.parse(provenanceResponse.json());
+      const event = provenance.events[0]!;
+      expect(event.recovery).toBeDefined();
+      const body = { reference: event.recovery!.reference };
+      const headers = {
+        cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+        "idempotency-key": "queue-recovery-route-key-0001",
+        origin: baseUrl,
+        "x-omnifin-csrf": operator.csrfToken,
+      };
+
+      const denied = await app.inject({
+        headers: {
+          ...headers,
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "x-omnifin-csrf": viewer.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/queue-recoveries",
+      });
+      expect(denied.statusCode).toBe(403);
+
+      readAcquisitionQueue
+        .mockResolvedValueOnce([{ event: stalledResponse.events[0]!, externalId: 91 }])
+        .mockResolvedValueOnce([]);
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/queue-recoveries",
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      expect(created.headers["idempotency-replayed"]).toBe("false");
+      expect(acquisitionQueueRecoveryResponseSchema.parse(created.json())).toMatchObject({
+        eventId: event.id,
+        service: "radarr",
+        state: "removed_and_blocklisted",
+      });
+
+      const replay = await app.inject({
+        headers,
+        method: "POST",
+        payload: body,
+        url: "/v1/acquisitions/queue-recoveries",
+      });
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.headers["idempotency-replayed"]).toBe("true");
+      expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+      expect(created.body).not.toContain("radarr:queue:91");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("protects and idempotently queues an operator acquisition search", async () => {
     const { app, operator, queueAcquisitionSearch, viewer } = await harness();
     const body = { mediaId: 42, service: "radarr" };
@@ -375,9 +466,15 @@ describe("acquisition provenance routes", () => {
         url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
       });
       expect(response.statusCode, response.body).toBe(200);
-      expect(acquisitionProvenanceResponseSchema.parse(response.json())).toEqual(
-        normalizedResponse,
-      );
+      expect(acquisitionProvenanceResponseSchema.parse(response.json())).toEqual({
+        ...normalizedResponse,
+        events: [
+          {
+            ...normalizedResponse.events[0],
+            id: expect.stringMatching(/^acquisition_[A-Za-z0-9_-]{22}$/u),
+          },
+        ],
+      });
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.pragma).toBe("no-cache");
       expect(response.headers.vary).toBe("Cookie");
