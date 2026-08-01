@@ -128,7 +128,7 @@ to the exact multi-architecture image digest that passed the release gates. Sele
 assets:
 
 ```sh
-OMNIFIN_RELEASE=v0.5.1
+OMNIFIN_RELEASE=v0.5.2
 mkdir omnifin && cd omnifin
 curl --fail --location --remote-name \
   "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/compose.yaml"
@@ -163,8 +163,9 @@ by the deployment account and do not loosen its permissions.
 
 The web socket remains loopback-bound and the gateway is never published. Put a maintained TLS
 reverse proxy in front of the web service before using secure cookies or OIDC. Continue with the
-[first-run guide](docs/first-run.md) to create the first administrator, then rehearse a verified
-backup before adding irreplaceable configuration.
+[reverse proxy runbook](docs/operations/reverse-proxy.md) for one-hop Caddy and Nginx examples and
+an end-to-end verification checklist, then use the [first-run guide](docs/first-run.md) to create the
+first administrator and rehearse a verified backup before adding irreplaceable configuration.
 
 ## Development preview
 
@@ -232,6 +233,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy
 - [Deployment](docs/deployment.md) — secrets, TLS, backups, upgrades, and rollback
+- [Reverse proxy](docs/operations/reverse-proxy.md) — loopback-only Caddy and Nginx TLS patterns,
+  trusted hops, live events, and public verification
 - [First run](docs/first-run.md) — source/Compose startup and first-administrator bootstrap
 - [Development](docs/development.md) — local setup, checks, and contribution workflow
 - [Roadmap](docs/roadmap.md) — phased delivery and release gates

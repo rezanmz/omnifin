@@ -123,6 +123,8 @@ subjects, recovery access, and raw upstream responses stay outside the guide.
 Terminate TLS at a maintained reverse proxy and forward only to the web service. Do
 not publish the gateway port to an untrusted network. Preserve the canonical host and
 scheme so origin checks, secure cookies, and OIDC redirects remain correct. The
+copyable one-host Caddy and Nginx configurations, forwarded-header rules, SSE settings, and public
+verification steps are in the [reverse proxy runbook](operations/reverse-proxy.md). The
 fronting proxy must remove any client-supplied forwarding chain before setting or
 appending its observed address. The published web socket is loopback-only, and the
 bundled Compose topology sets `OMNIFIN_WEB_TRUST_PROXY_HOPS=1` for that single

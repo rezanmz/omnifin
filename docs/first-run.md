@@ -8,7 +8,9 @@ supports only the capabilities and upstream versions stated in its notes and com
 
 Choose a canonical public origin and a Jellyfin server that Omnifin can reach. Production cookies
 and OIDC require HTTPS. The bundled Compose file publishes only the web process on loopback; place a
-maintained TLS reverse proxy in front of it and do not publish the gateway.
+maintained TLS reverse proxy in front of it and do not publish the gateway. Use the
+[reverse proxy runbook](operations/reverse-proxy.md) for one-host Caddy and Nginx examples, exact
+trusted-hop behavior, live-event settings, and public verification.
 
 For a tagged release, first verify the downloaded `SHA256SUMS`, create the local environment file
 from the digest-pinned template, and generate two independent file-backed secrets:
