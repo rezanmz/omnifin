@@ -7,6 +7,7 @@ import {
   prepareAdditions,
   pullRequestBaseReadAttempts,
   pullRequestHeadReadAttempts,
+  releaseReferenceReadAttempts,
   releaseConfiguration,
   validateComparison,
   validateGitHubEndpoints,
@@ -16,6 +17,7 @@ import {
   validateSignedCommit,
   waitForExpectedPullRequest,
   waitForSignedPullRequest,
+  waitForSignedReference,
 } from "./normalize-release-commit.mjs";
 
 const repository = "rezanmz/omnifin";
@@ -182,12 +184,19 @@ function dependencies(options = {}) {
     },
     fetchReference: async () => {
       referenceReads += 1;
+      calls.push(["fetchReference", releaseBranch]);
+      const staleReference =
+        currentHead === signedSha && referenceReads <= (options.staleReferenceReads ?? 0);
       return {
+        ref: `refs/heads/${releaseBranch}`,
         object: {
+          type: "commit",
           sha:
             options.moveReferenceAfterFinalHead && referenceReads === 2
               ? "8".repeat(40)
-              : currentHead,
+              : staleReference
+                ? headSha
+                : currentHead,
         },
       };
     },
@@ -438,6 +447,93 @@ test("fails closed when signed-head propagation never converges", async () => {
   assert.equal(pauses.length, pullRequestHeadReadAttempts - 1);
 });
 
+test("waits through bounded release-reference propagation without accepting a third SHA", async () => {
+  let reads = 0;
+  const pauses = [];
+  const result = await waitForSignedReference(
+    { branch: releaseBranch, previousHeadSha: headSha, signedSha },
+    {
+      fetchReference: async () => {
+        reads += 1;
+        return {
+          object: { sha: reads <= 2 ? headSha : signedSha, type: "commit" },
+          ref: `refs/heads/${releaseBranch}`,
+        };
+      },
+      pause: async (milliseconds) => pauses.push(milliseconds),
+    },
+  );
+
+  assert.equal(result.object.sha, signedSha);
+  assert.equal(reads, 3);
+  assert.deepEqual(pauses, [2_000, 2_000]);
+
+  await assert.rejects(
+    waitForSignedReference(
+      { branch: releaseBranch, previousHeadSha: headSha, signedSha },
+      {
+        fetchReference: async () => ({
+          object: { sha: "8".repeat(40), type: "commit" },
+          ref: `refs/heads/${releaseBranch}`,
+        }),
+        pause: async () => assert.fail("unexpected reference must not be retried"),
+      },
+    ),
+    /unexpected commit after replacement/u,
+  );
+});
+
+test("fails closed when release-reference propagation never converges", async () => {
+  let reads = 0;
+  const pauses = [];
+  await assert.rejects(
+    waitForSignedReference(
+      { branch: releaseBranch, previousHeadSha: headSha, signedSha },
+      {
+        fetchReference: async () => {
+          reads += 1;
+          return {
+            object: { sha: headSha, type: "commit" },
+            ref: `refs/heads/${releaseBranch}`,
+          };
+        },
+        pause: async (milliseconds) => pauses.push(milliseconds),
+      },
+    ),
+    /bounded propagation window/u,
+  );
+  assert.equal(reads, releaseReferenceReadAttempts);
+  assert.equal(pauses.length, releaseReferenceReadAttempts - 1);
+});
+
+test("rejects unexpected release-reference identity or object type without retrying", async () => {
+  for (const reference of [
+    {
+      object: { sha: signedSha, type: "commit" },
+      ref: "refs/heads/release-please--branches--main--components--other",
+    },
+    {
+      object: { sha: signedSha, type: "tag" },
+      ref: `refs/heads/${releaseBranch}`,
+    },
+  ]) {
+    let paused = false;
+    await assert.rejects(
+      waitForSignedReference(
+        { branch: releaseBranch, previousHeadSha: headSha, signedSha },
+        {
+          fetchReference: async () => reference,
+          pause: async () => {
+            paused = true;
+          },
+        },
+      ),
+      /unexpected release branch metadata/u,
+    );
+    assert.equal(paused, false);
+  }
+});
+
 test("requires one release commit on the exact base with the reviewed title", () => {
   assert.equal(
     validateOriginalCommit(commit(), { expectedBaseSha: baseSha, headSha, title: releaseTitle })
@@ -621,6 +717,18 @@ test("waits for the pull request head after the exact release ref is replaced", 
   );
 });
 
+test("waits for the exact release ref after the lease-protected replacement", async () => {
+  const { calls, dependencySet } = dependencies({ staleReferenceReads: 2 });
+  const result = await normalizeReleaseCommit(configuration(), dependencySet);
+
+  assert.deepEqual(result, { normalized: true, sha: signedSha });
+  assert.equal(calls.filter(([name]) => name === "fetchReference").length, 4);
+  assert.equal(
+    calls.filter(([name, milliseconds]) => name === "pause" && milliseconds === 2_000).length,
+    2,
+  );
+});
+
 test("rejects an unexpected pull request head after the exact release ref is replaced", async () => {
   const { calls, dependencySet } = dependencies({ unexpectedFinalHead: true });
   await assert.rejects(
@@ -635,7 +743,7 @@ test("rejects a release ref that moves after pull request propagation", async ()
   const { calls, dependencySet } = dependencies({ moveReferenceAfterFinalHead: true });
   await assert.rejects(
     normalizeReleaseCommit(configuration(), dependencySet),
-    /did not remain on the verified commit/u,
+    /unexpected commit after replacement/u,
   );
   assert.equal(calls.filter(([name]) => name === "replaceWithLease").length, 1);
   assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
