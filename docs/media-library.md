@@ -35,6 +35,23 @@ invalid Jellyfin pairing returns a safe `503` boundary error. Signed-out callers
 without `media.view` are rejected before connector I/O. Responses are private and use
 `Cache-Control: no-store`.
 
+## Viewer experience
+
+`/library` is the user-facing catalogue. It provides bounded search, movie and episode filters,
+recent/title/year sorting, opaque continuation paging, watch progress, played state, and lazy-loaded
+theater playback. The page never receives the Jellyfin user ID, connector address, API token, raw
+item ID, or filesystem path. Artwork and streams remain on Omnifin's authenticated origin.
+
+The interface has deliberate loading, empty, unavailable, signed-out, and permission-denied
+boundaries. Desktop cards leave headroom for their raised hover and focus treatment; the catalogue
+grid remains directly on the adaptive page backdrop so it does not become a separate opaque panel.
+Keyboard and directional navigation share the same playable-card order, touch layouts keep a
+visible 44-pixel play target, and reduced-motion mode removes nonessential transforms and shimmer.
+Light, dark, and system appearance preferences use the same liquid-material hierarchy.
+
+Administrative scan, match, metadata, and artwork work remains separate at
+`/operations/library`, so viewer navigation does not expose operator controls by accident.
+
 The disposable Jellyfin compatibility runner imports the generated copyright-free media fixture
 and exercises this production catalogue client with the exact paired user on both targeted
 Jellyfin versions. It validates normalized output and emits only a closed, identifier-free result.

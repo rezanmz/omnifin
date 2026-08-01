@@ -31,6 +31,13 @@ describe("directional navigation", () => {
     );
   });
 
+  it("marks the viewer library as the current destination", () => {
+    render(<NavigationRail current="library" />);
+
+    expect(screen.getByRole("link", { name: "Library" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Discover" })).not.toHaveAttribute("aria-current");
+  });
+
   it("moves between hero actions horizontally", async () => {
     const user = userEvent.setup();
     render(<HeroSpotlight hero={demoDashboard.hero} />);

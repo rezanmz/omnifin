@@ -103,8 +103,10 @@ identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-t
 and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
 queue and acquisition calendar are available as pre-release development surfaces. Phase 4 also
 provides Jellyfin playback negotiation and protected media proxying, progress reporting and
-Continue Watching, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
-maintenance. Operator request review and the unified player/Seerr issue lifecycle are also
+Continue Watching, a paired-user `/library` catalogue with protected artwork and lazy theater
+playback, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
+maintenance at `/operations/library`. Operator request review and the unified player/Seerr issue
+lifecycle are also
 available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
 available to operators; broader acquisition mutations remain later pre-release work.
 Reusable upstream credentials, token responses, identity assertions, and raw upstream
