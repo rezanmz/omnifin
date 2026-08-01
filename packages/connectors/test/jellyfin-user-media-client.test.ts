@@ -305,7 +305,18 @@ describe("JellyfinUserMediaClient", () => {
   });
 
   it("uses exact library type and sorting allowlists and fails closed on version drift", async () => {
-    const movieClient = clientWithResponses([jsonResponse({ Items: [] })]);
+    const movieClient = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            ProductionYear: 0,
+            UserData: { Played: null, PlaybackPositionTicks: null },
+          },
+          { ...movie, Id: "runtime-missing", RunTimeTicks: null },
+        ],
+      }),
+    ]);
     await expect(
       movieClient.client.readLibrary({
         kind: "movies",
@@ -314,7 +325,17 @@ describe("JellyfinUserMediaClient", () => {
         startIndex: 0,
         userId: "paired-user-id",
       }),
-    ).resolves.toEqual({ items: [], nextStartIndex: null, truncated: false });
+    ).resolves.toEqual({
+      items: [
+        expect.objectContaining({
+          played: false,
+          positionSeconds: 0,
+          year: null,
+        }),
+      ],
+      nextStartIndex: null,
+      truncated: false,
+    });
     expect(movieClient.requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Movie");
     expect(movieClient.requests[0]?.url.searchParams.get("SortBy")).toBe("SortName");
     expect(movieClient.requests[0]?.url.searchParams.get("SortOrder")).toBe("Ascending");

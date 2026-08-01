@@ -56,22 +56,22 @@ const jellyfinLibraryItemSchema = z.object({
   ImageBlurHashes: z.unknown().optional(),
   ImageTags: imageTagsSchema.nullish(),
   IndexNumber: z.int().nonnegative().max(100_000).nullish(),
-  Name: z.string().trim().min(1).max(300),
+  Name: z.string().trim().min(1).max(300).nullish(),
   OfficialRating: z.string().trim().max(32).nullish(),
   Overview: z.string().max(8_000).nullish(),
   ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   ParentBackdropItemId: z.string().trim().min(1).max(256).nullish(),
   ParentIndexNumber: z.int().nonnegative().max(100_000).nullish(),
-  ProductionYear: z.int().min(1870).max(2200).nullish(),
-  RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
+  ProductionYear: z.int().min(0).max(9_999).nullish(),
+  RunTimeTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
   SeriesId: z.string().trim().min(1).max(256).nullish(),
   SeriesName: z.string().trim().min(1).max(300).nullish(),
   SeriesPrimaryImageTag: z.string().min(1).max(256).nullish(),
   Type: z.enum(["Episode", "Movie"]),
   UserData: z
     .object({
-      Played: z.boolean().optional(),
-      PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).optional(),
+      Played: z.boolean().nullish(),
+      PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
     })
     .nullish(),
 });
@@ -270,7 +270,7 @@ function artworkPalette(
 
 function episodeLabel(item: {
   IndexNumber?: number | null | undefined;
-  Name: string;
+  Name?: string | null | undefined;
   ParentIndexNumber?: number | null | undefined;
 }) {
   const season = item.ParentIndexNumber;
@@ -336,8 +336,10 @@ function normalizeResumeItem(
 
 function normalizeLibraryItem(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
-): JellyfinLibraryItem {
+): JellyfinLibraryItem | null {
+  if (!item.Name || item.RunTimeTicks === null || item.RunTimeTicks === undefined) return null;
   const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
+  if (runtimeSeconds < 1) return null;
   const isEpisode = item.Type === "Episode";
   const posterTag =
     isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
@@ -377,7 +379,13 @@ function normalizeLibraryItem(
     seasonNumber: isEpisode ? (item.ParentIndexNumber ?? null) : null,
     subtitle: isEpisode ? episodeLabel(item) : null,
     title: isEpisode ? (item.SeriesName ?? item.Name) : item.Name,
-    year: item.ProductionYear ?? null,
+    year:
+      item.ProductionYear !== null &&
+      item.ProductionYear !== undefined &&
+      item.ProductionYear >= 1870 &&
+      item.ProductionYear <= 2200
+        ? item.ProductionYear
+        : null,
   };
 }
 
@@ -487,7 +495,9 @@ export class JellyfinUserMediaClient {
     );
     const truncated = response.Items.length > input.limit;
     return {
-      items: response.Items.slice(0, input.limit).map(normalizeLibraryItem),
+      items: response.Items.slice(0, input.limit)
+        .map(normalizeLibraryItem)
+        .filter((item): item is JellyfinLibraryItem => item !== null),
       nextStartIndex: truncated ? input.startIndex + input.limit : null,
       truncated,
     };
