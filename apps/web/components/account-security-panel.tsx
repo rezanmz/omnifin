@@ -9,6 +9,7 @@ import {
   CircleAlert,
   KeyRound,
   Link2,
+  ListChecks,
   LoaderCircle,
   LogOut,
   RefreshCw,
@@ -462,6 +463,12 @@ export function AccountSecurityPanel({
                     </div>
                   ) : (
                     <div className="account-card__actions">
+                      {snapshot!.principal.permissions.includes("connectors.manage") &&
+                      snapshot!.principal.authenticationMethod.kind !== "recovery" ? (
+                        <Link className="account-action account-action--primary" href="/onboarding">
+                          <ListChecks aria-hidden="true" size={17} /> Setup guide
+                        </Link>
+                      ) : null}
                       {snapshot!.principal.permissions.includes("connectors.manage") ||
                       snapshot!.principal.permissions.includes("recovery.jellyfin.manage") ? (
                         <Link

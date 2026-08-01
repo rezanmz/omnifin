@@ -94,6 +94,10 @@ import { asStartupError } from "./startup-error.js";
 import { clientNetworkGroup } from "./security/client-network.js";
 import { installRequestPolicy } from "./security/request-policy.js";
 import {
+  setupReadinessRoutes,
+  type SetupReadinessRoutesOptions,
+} from "./setup/readiness-routes.js";
+import {
   subtitleOperationRoutes,
   type SubtitleOperationRoutesOptions,
 } from "./subtitles/operation-routes.js";
@@ -141,6 +145,7 @@ export interface CreateAppOptions {
   indexerIntelligenceDependencies?: IndexerIntelligenceRoutesOptions["dependencies"];
   systemStatusDependencies?: SystemStatusRoutesOptions["dependencies"];
   systemStatusEventDependencies?: SystemStatusRoutesOptions["eventDependencies"];
+  setupReadinessDependencies?: SetupReadinessRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -517,6 +522,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.systemStatusEventDependencies === undefined
         ? {}
         : { eventDependencies: options.systemStatusEventDependencies }),
+    });
+    await app.register(setupReadinessRoutes, {
+      ...(options.setupReadinessDependencies === undefined
+        ? {}
+        : { dependencies: options.setupReadinessDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

@@ -92,9 +92,17 @@ recovery session intact for another attempt. If an active Omnifin administrator 
 bootstrap is refused. Signing in through the normal Jellyfin button does not bootstrap authority;
 new direct accounts are local viewers regardless of their upstream Jellyfin role.
 
+After the administrator session is active, open **Account & access → Setup guide**. The guide reads
+only normalized, browser-safe administration contracts and separates the two essential readiness
+checks—your verified Jellyfin identity and a validated Jellyfin service—from optional stack
+extensions. It never displays connector addresses, credentials, external identifiers, raw upstream
+responses, or the recovery path. If one upstream service fails validation, independently verified
+steps remain visible alongside the affected service's normalized attention state and are not
+promoted into a false success.
+
 ## 4. Configure identity and services
 
-From the administrator session:
+From the administrator session, use the live setup guide as the index for these actions:
 
 1. Open **Account & access → Identity providers** to configure Authentik or another standards-based
    OIDC issuer. Register the exact callback and logout URLs shown before enabling the provider.
@@ -104,6 +112,11 @@ From the administrator session:
    the capability snapshot, and only then enable it.
 4. Sign out and verify both ordinary Jellyfin and OIDC login paths. OIDC users must prove control of
    their Jellyfin account before media access.
+
+OIDC is recommended for homes that already operate an identity provider, but it is not part of the
+core-ready boundary. Radarr, Sonarr, Prowlarr, Bazarr, Seerr, qBittorrent, and SABnzbd are similarly
+optional: connect only the services present in the deployment. A partially configured group remains
+visible as partial rather than making the whole application appear unavailable.
 
 ## 5. Rehearse recovery and backups
 

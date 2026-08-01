@@ -100,6 +100,13 @@ export { openDatabase, type DatabaseHandle } from "./db/client.js";
 export * as databaseSchema from "./db/schema.js";
 export { SafeHttpError } from "./http-error.js";
 export {
+  SetupReadinessError,
+  SetupReadinessService,
+  type SetupReadinessContext,
+  type SetupReadinessDependencies,
+  type SetupReadinessErrorReason,
+} from "./setup/readiness-service.js";
+export {
   MediaReferenceError,
   MediaReferenceService,
   type MediaReferenceDependencies,

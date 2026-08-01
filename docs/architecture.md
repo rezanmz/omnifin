@@ -209,6 +209,13 @@ Session-aware front-channel logout can revoke an exact provider-scoped session w
 restricting iframe access to the validated issuer origin. Raw `sid` and `jti` values
 are not persisted.
 
+The full-administrator `GET /v1/admin/setup/readiness` resource aggregates only the current
+principal's Jellyfin link health, minimal connector readiness columns, and minimal OIDC discovery
+state in one read transaction. Its strict response contains canonical step identifiers, bounded
+counts, normalized states, and a generation timestamp. It does not serialize connector or provider
+identifiers, addresses, credentials, claims, identity subjects, recovery state, or raw capability
+snapshots. The same authorization requirement is enforced by both the route and service boundary.
+
 Role-mapping mutations are serialized with sanitized audit writes and session revocation. A
 change invalidates active authority derived from the affected provider's default or mapped role;
 manual roles and recovery sessions are not changed. Mapping resolution remains deterministic by

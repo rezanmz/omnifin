@@ -97,6 +97,13 @@ Every reusable component and route must deliberately cover:
 
 A feature is incomplete when only its populated happy path is designed.
 
+The setup-readiness guide applies the same rule to configuration itself. It separates
+the essential Jellyfin identity and service boundary from recommended OIDC and optional
+media-stack extensions, preserves independently verified steps when a configured service
+needs attention, and never converts “not configured” into “broken.” Its geometry-matched loading,
+signed-out, permission, unavailable, partial, core-ready, light, dark, mobile, and
+10-foot states are maintained as isolated stories and browser evidence.
+
 ## Interaction model
 
 - Drawers preserve browsing context for deep comparison and technical work.
