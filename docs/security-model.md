@@ -399,6 +399,33 @@ active mapped session and that fresh sign-in reuses the immutable identity with 
 Protected live compatibility evidence remains separate from this development gate and is required
 before a public support claim.
 
+## Stack-verification controls
+
+- **Spoofing:** only a server-resolved session with both connector and OIDC recovery administration
+  permissions may run the report. The mutation-shaped request requires the exact canonical origin
+  and the current session CSRF proof; partial recovery and operator roles fail at route and service
+  boundaries.
+- **Tampering:** every connector result must bind the returned service and connector identifier to
+  the exact stored row before aggregation. The response uses a strict versioned schema, canonical
+  service and field order, internally derived counts and states, and closed capability and finding
+  enums.
+- **Repudiation:** the assembled report is not an audit log and is not persisted. The underlying
+  connector and OIDC validation paths refresh their existing minimal success or failure audit
+  events. The report has a bounded generation time and explicitly identifies itself as a local
+  diagnostic.
+- **Information disclosure:** connector and provider identifiers, names, destinations, users,
+  claims, media data, paths, credentials, assertions, raw errors, request metadata, and audit data
+  cannot enter the response schema. Upstream version strings are exported only through a narrow
+  64-character grammar; rejected values become `version_redacted`.
+- **Denial of service:** the endpoint permits two starts per minute and one in-flight run per
+  administrator session. It reads at most 100 connector and 50 OIDC records, runs no more than four
+  upstream checks concurrently, and inherits the fixed timeouts and response-size limits of the
+  hardened adapters and OIDC discovery client.
+- **Elevation of privilege:** verification performs no upstream write. It may refresh only local
+  health/discovery snapshots and the normal validation audits; it cannot enable a service, change a
+  role, mint a session, expose a credential, or convert diagnostic success into a compatibility or
+  authorization decision.
+
 ## Deployment-doctor controls
 
 - **Spoofing:** the maintenance command accepts no destination argument. It uses the configured

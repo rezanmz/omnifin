@@ -227,6 +227,14 @@ proxy topology, secrets, and storage contents never cross the browser boundary. 
 separate also gives the interface an explicit partial-failure state without discarding connector
 readiness that was independently verified.
 
+The adjacent `POST /v1/admin/setup/verification` action performs fresh OIDC discovery and connector
+health probes with four-way bounded concurrency and one active run per administrator session.
+Upstream work is read-only; the normal local health snapshots and minimal validation audit events
+are refreshed. The response is assembled in memory from a closed allowlist and aggregates only
+service kinds, counts, normalized capabilities, narrowly validated versions, and bounded findings.
+It contains no record identifiers, display names, destinations, identity data, media data, raw
+errors, or secrets, and it is never cached or persisted as a report.
+
 Role-mapping mutations are serialized with sanitized audit writes and session revocation. A
 change invalidates active authority derived from the affected provider's default or mapped role;
 manual roles and recovery sessions are not changed. Mapping resolution remains deterministic by
