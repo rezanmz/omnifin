@@ -366,18 +366,13 @@ export function DeploymentReadinessPanel({
         <strong>{readiness.readyCount}</strong>
         <span>of {readiness.total} host checks</span>
       </div>
-      <div aria-label="Deployment readiness checks" className="deployment-checks" role="list">
+      <ul aria-label="Deployment readiness checks" className="deployment-checks">
         {readiness.checks.map((item) => {
           const content = DEPLOYMENT_CHECK_CONTENT[item.id];
           const Icon = content.icon;
           const checkReady = item.state === "ready";
           return (
-            <article
-              className="deployment-check"
-              data-state={item.state}
-              key={item.id}
-              role="listitem"
-            >
+            <li className="deployment-check" data-state={item.state} key={item.id}>
               <span className="deployment-check__icon" aria-hidden="true">
                 <Icon size={19} strokeWidth={1.65} />
               </span>
@@ -392,10 +387,10 @@ export function DeploymentReadinessPanel({
                 </span>
                 <p>{checkReady ? content.ready : content.attention}</p>
               </div>
-            </article>
+            </li>
           );
         })}
-      </div>
+      </ul>
       <a
         className="deployment-posture__runbook"
         data-directional-item

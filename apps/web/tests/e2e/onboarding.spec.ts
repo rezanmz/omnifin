@@ -9,7 +9,9 @@ test("administrator readiness keeps core and optional progress distinct", async 
   );
   await expect(page.getByText("2 of 2 essentials ready")).toBeVisible();
   await expect(page.getByText("3 of 6 stack extensions ready")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Production posture is ready." })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Host prerequisites are configured." }),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "OpenID Connect" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Movie & series automation" })).toBeVisible();
   await expect(page.getByText("Partially ready", { exact: true })).toBeVisible();

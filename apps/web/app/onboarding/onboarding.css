@@ -526,6 +526,9 @@
   gap: 10px;
   grid-column: 1 / -1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
   position: relative;
   z-index: 1;
 }
