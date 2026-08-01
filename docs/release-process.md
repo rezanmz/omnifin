@@ -29,7 +29,23 @@ secret. The protected environment keeps it unavailable to branch-selected workfl
 Pull requests created with it emit ordinary `pull_request` events, so release pull
 requests receive the same CI and security checks as every other change. The workflow
 intentionally has no label-based or `workflow_dispatch` fallback that could substitute
-a weaker check run.
+a weaker check run. After Release Please creates or updates its same-repository branch,
+the workflow validates that the branch is exactly one commit ahead of the protected
+`main` SHA and changes only `CHANGELOG.md`, `package.json`, and the release manifest.
+It rejects forks, unexpected branches, renames, binary or oversized content, stale
+heads, and tree mismatches. A temporary branch rooted at the exact base is then used
+with GitHub's `createCommitOnBranch` mutation to produce a GitHub-verified commit with
+the identical tree. An atomic Git force-with-lease moves only the expected release
+branch head; a concurrent update leaves the branch untouched. The temporary branch is
+removed in all handled outcomes, and the normal CI, Security, and connector gates run
+again for the verified head.
+
+If normalization fails before the leased update, the Release Please branch remains
+unchanged and the workflow fails closed. A later successful protected-main run may
+retry it. If GitHub created a temporary signing branch but an infrastructure failure
+prevented cleanup, a maintainer may remove only the
+`automation/release-signing/<run>-<attempt>-<uuid>` branch after confirming it is not a
+pull-request head; the stable tag and image pipeline will not have advanced.
 
 Until `OMNIFIN_RELEASE_AUTOMATION_ENABLED` is exactly `true`, the Release Please
 workflow reports that automation is pending and does not enter the `release`

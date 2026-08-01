@@ -52,6 +52,24 @@ test("release automation remains in the reviewed pre-1.0 channel", () => {
   assert.match(packageDocument.version, /^0\.\d+\.\d+$/u);
 });
 
+test("release pull requests are normalized through a verified exact-tree commit", () => {
+  const document = workflowDocument("release-please.yml");
+  const release = document.jobs.release;
+  const checkout = namedStep(release.steps, "Check out the exact protected source");
+  const normalize = namedStep(release.steps, "Normalize release pull request to a verified commit");
+
+  assert.deepEqual(release.permissions, { contents: "read" });
+  assert.equal(checkout.with.ref, "${{ github.event.workflow_run.head_sha }}");
+  assert.equal(checkout.with["persist-credentials"], false);
+  assert.equal(normalize.if, "steps.release.outputs.prs_created == 'true'");
+  assert.equal(normalize.env.EXPECTED_BASE_SHA, "${{ github.event.workflow_run.head_sha }}");
+  assert.equal(normalize.env.GH_TOKEN, "${{ secrets.RELEASE_PLEASE_TOKEN }}");
+  assert.equal(normalize.env.RELEASE_PR_JSON, "${{ steps.release.outputs.pr }}");
+  assert.equal(normalize.run, "node scripts/ci/normalize-release-commit.mjs");
+  assert.equal(release.outputs["normalized-sha"], undefined);
+  assert.doesNotMatch(JSON.stringify(release), /contents:\s*write|pull-requests:\s*write/u);
+});
+
 test("CI installs actionlint from a checksum-pinned release", () => {
   const source = workflow("ci.yml");
   const validation = source.slice(
