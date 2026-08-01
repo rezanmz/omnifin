@@ -53,7 +53,8 @@ describe("first-run route selection", () => {
     );
 
     expect(target?.pathname).toBe("/onboarding");
-    expect(target?.search).toBe("?test-profile=ten-foot");
+    expect(target?.search).toBe("?test-view=needs-core&test-profile=ten-foot");
+    expect(target?.searchParams.has("secret")).toBe(false);
   });
 
   it("does not rewrite mutations or non-root routes", () => {

@@ -13,7 +13,8 @@ export function onboardingRewriteTarget(request: NextRequest) {
   const target = request.nextUrl.clone();
   const testProfile = request.nextUrl.searchParams.get("test-profile");
   target.pathname = "/onboarding";
-  target.search = testProfile === "ten-foot" ? "?test-profile=ten-foot" : "";
+  target.search = "?test-view=needs-core";
+  if (testProfile === "ten-foot") target.searchParams.set("test-profile", "ten-foot");
   return target;
 }
 
