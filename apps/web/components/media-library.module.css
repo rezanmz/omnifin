@@ -886,7 +886,7 @@
 
   .boundary {
     margin-bottom: max(112px, calc(92px + env(safe-area-inset-bottom)));
-    margin-top: clamp(22px, 6vw, 36px);
+    margin-top: 0;
   }
 
   .boundary > a,
