@@ -175,6 +175,7 @@ test("gates stable promotion on the generated Compose bundle", () => {
   assert.match(exercise.run, /config --quiet/u);
   assert.match(exercise.run, /up --detach --wait/u);
   assert.match(exercise.run, /\/recovery/u);
+  assert.match(exercise.run, /healthcheck\.mjs http:\/\/127\.0\.0\.1:4000\/readyz/u);
   assert.match(exercise.run, /maintenance backup/u);
   assert.match(exercise.run, /maintenance verify/u);
   assert.ok(workflow.jobs["promote-stable"].needs.includes("verify-install-bundle"));
