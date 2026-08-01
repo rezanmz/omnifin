@@ -129,7 +129,8 @@ The release sequence is:
    container smoke harness.
 7. Generate the release-only Compose and environment assets, verify their checksums and exact
    image reference, then start the bundle on a clean hosted runner. Require web and gateway health,
-   recovery-route reachability, a real online backup and verification, and complete teardown.
+   recovery-route reachability, portable file-backed secret mounting, a real online backup and
+   verification, and complete teardown.
 8. On a GitHub-hosted runner, resolve the current `latest` image to its immutable
    digest, seed bounded encrypted identity state through the previous image's recovery
    API, verify a private backup, migrate that state with the candidate, restore the

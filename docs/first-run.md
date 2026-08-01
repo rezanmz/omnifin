@@ -10,22 +10,26 @@ Choose a canonical public origin and a Jellyfin server that Omnifin can reach. P
 and OIDC require HTTPS. The bundled Compose file publishes only the web process on loopback; place a
 maintained TLS reverse proxy in front of it and do not publish the gateway.
 
-For a tagged release, first verify the downloaded `SHA256SUMS`, then create the local environment
-file from the digest-pinned template and generate two independent secrets:
+For a tagged release, first verify the downloaded `SHA256SUMS`, create the local environment file
+from the digest-pinned template, and generate two independent file-backed secrets:
 
 ```sh
 sha256sum --check SHA256SUMS
 cp omnifin.env.example .env
 chmod 0600 .env
-openssl rand -base64 32
-openssl rand -base64 48
+install -d -m 0700 secrets
+umask 077
+openssl rand -base64 32 | tr -d '\n' > secrets/omnifin_encryption_key
+openssl rand -base64 48 | tr -d '\n' > secrets/omnifin_recovery_secret
+chmod 0600 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
 ```
 
 For a reviewed source checkout, use `.env.example` instead. Never copy a release environment file
 between versions: its `OMNIFIN_IMAGE` value intentionally binds it to one verified image digest.
 
-Put the first output in `OMNIFIN_ENCRYPTION_KEY` and the second in
-`OMNIFIN_RECOVERY_SECRET`. Also set:
+The release environment template points Compose at those two paths through
+`OMNIFIN_ENCRYPTION_KEY_FILE` and `OMNIFIN_RECOVERY_SECRET_FILE`. The secret values stay out of
+`.env` and are mounted read-only into the gateway. Also set:
 
 ```dotenv
 OMNIFIN_BASE_URL=https://omnifin.example.net
@@ -36,9 +40,9 @@ OMNIFIN_INSECURE_LOOPBACK_PREVIEW=false
 
 For a deliberately trusted private-network Jellyfin URL using plain HTTP, set
 `OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. Prefer HTTPS and restrict network paths in either
-case. Keep `.env` mode `0600`, never commit it, and store the encryption key and recovery secret
-separately from the SQLite backup. Prepare the bind-mounted backup directory for the numeric
-runtime identity:
+case. Keep `.env`, `secrets/`, and their contents private; never commit them, and store the
+encryption key and recovery secret separately from the SQLite backup. Prepare the bind-mounted
+backup directory for the numeric runtime identity:
 
 ```sh
 sudo install -d -m 0700 -o 65532 -g 65532 backups

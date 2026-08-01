@@ -124,7 +124,7 @@ to the exact multi-architecture image digest that passed the release gates. Sele
 assets:
 
 ```sh
-OMNIFIN_RELEASE=v0.5.0
+OMNIFIN_RELEASE=v0.5.1
 mkdir omnifin && cd omnifin
 curl --fail --location --remote-name \
   "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/compose.yaml"
@@ -137,10 +137,15 @@ cp omnifin.env.example .env
 chmod 0600 .env
 ```
 
-Replace the example origins and empty secrets in `.env`, prepare the private backup directory, and
-start the exact digest:
+Replace the example origins in `.env`, generate the two file-backed secrets, prepare the private
+backup directory, and start the exact digest:
 
 ```sh
+install -d -m 0700 secrets
+umask 077
+openssl rand -base64 32 | tr -d '\n' > secrets/omnifin_encryption_key
+openssl rand -base64 48 | tr -d '\n' > secrets/omnifin_recovery_secret
+chmod 0600 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
 sudo install -d -m 0700 -o 65532 -g 65532 backups
 docker compose --env-file .env --file compose.yaml pull
 docker compose --env-file .env --file compose.yaml up --detach --wait

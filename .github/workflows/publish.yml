@@ -737,15 +737,19 @@ jobs:
       - name: Generate isolated deployment credentials
         run: |
           set -euo pipefail
-          encryption_key=$(openssl rand -base64 32 | tr -d '\n')
-          recovery_secret=$(openssl rand -base64 48 | tr -d '\n')
-          echo "::add-mask::$encryption_key"
-          echo "::add-mask::$recovery_secret"
           backup_directory="${RUNNER_TEMP}/omnifin-install-backups"
+          secret_directory="${RUNNER_TEMP}/omnifin-install-secrets"
+          encryption_key_file="${secret_directory}/omnifin_encryption_key"
+          recovery_secret_file="${secret_directory}/omnifin_recovery_secret"
+          install --directory --mode 0700 "$secret_directory"
+          umask 077
+          openssl rand -base64 32 | tr -d '\n' > "$encryption_key_file"
+          openssl rand -base64 48 | tr -d '\n' > "$recovery_secret_file"
+          chmod 0600 "$encryption_key_file" "$recovery_secret_file"
           {
             echo "OMNIFIN_BACKUP_DIRECTORY=$backup_directory"
-            echo "OMNIFIN_ENCRYPTION_KEY=$encryption_key"
-            echo "OMNIFIN_RECOVERY_SECRET=$recovery_secret"
+            echo "OMNIFIN_ENCRYPTION_KEY_FILE=$encryption_key_file"
+            echo "OMNIFIN_RECOVERY_SECRET_FILE=$recovery_secret_file"
           } >> "$GITHUB_ENV"
           sudo install --directory --mode 0700 --owner 65532 --group 65532 \
             "$backup_directory"

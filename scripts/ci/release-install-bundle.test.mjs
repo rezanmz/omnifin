@@ -79,8 +79,16 @@ test("creates a deterministic runtime-only installation bundle", () => {
     }
     assert.equal(compose.services.gateway.ports, undefined);
     assert.ok(compose.services.web.ports.every((entry) => String(entry).startsWith("127.0.0.1:")));
-    assert.equal(compose.secrets.omnifin_encryption_key.environment, "OMNIFIN_ENCRYPTION_KEY");
-    assert.equal(compose.secrets.omnifin_recovery_secret.environment, "OMNIFIN_RECOVERY_SECRET");
+    assert.equal(
+      compose.secrets.omnifin_encryption_key.file,
+      "${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",
+    );
+    assert.equal(
+      compose.secrets.omnifin_recovery_secret.file,
+      "${OMNIFIN_RECOVERY_SECRET_FILE:-./secrets/omnifin_recovery_secret}",
+    );
+    assert.equal(compose.secrets.omnifin_encryption_key.environment, undefined);
+    assert.equal(compose.secrets.omnifin_recovery_secret.environment, undefined);
     assert.doesNotMatch(composeSource, /^\s+build:/mu);
 
     assert.match(environmentSource, /^# Omnifin 0\.5\.0$/mu);
@@ -91,8 +99,16 @@ test("creates a deterministic runtime-only installation bundle", () => {
     assert.match(environmentSource, /^OMNIFIN_BASE_URL=https:\/\/omnifin\.example\.net$/mu);
     assert.match(environmentSource, /^OMNIFIN_SECURE_COOKIES=true$/mu);
     assert.match(environmentSource, /^OMNIFIN_INSECURE_LOOPBACK_PREVIEW=false$/mu);
-    assert.match(environmentSource, /^OMNIFIN_ENCRYPTION_KEY=$/mu);
-    assert.match(environmentSource, /^OMNIFIN_RECOVERY_SECRET=$/mu);
+    assert.match(
+      environmentSource,
+      /^OMNIFIN_ENCRYPTION_KEY_FILE=\.\/secrets\/omnifin_encryption_key$/mu,
+    );
+    assert.match(
+      environmentSource,
+      /^OMNIFIN_RECOVERY_SECRET_FILE=\.\/secrets\/omnifin_recovery_secret$/mu,
+    );
+    assert.doesNotMatch(environmentSource, /^OMNIFIN_ENCRYPTION_KEY=/mu);
+    assert.doesNotMatch(environmentSource, /^OMNIFIN_RECOVERY_SECRET=/mu);
     assert.doesNotMatch(environmentSource, /__OMNIFIN_|OMNIFIN_GATEWAY_URL|NEXT_TELEMETRY/u);
 
     const expectedChecksums = [
@@ -141,6 +157,15 @@ test("gates stable promotion on the generated Compose bundle", () => {
   assert.match(generate.run, /scripts\/release\/install-bundle\.mjs/u);
   assert.equal(generate.env.IMAGE_DIGEST, "${{ needs.publish-candidate.outputs.digest }}");
   assert.match(generate.run, /--digest "\$IMAGE_DIGEST"/u);
+  const credentials = verification.steps.find(
+    (step) => step.name === "Generate isolated deployment credentials",
+  );
+  assert.match(credentials.run, /omnifin-install-secrets/u);
+  assert.match(credentials.run, /OMNIFIN_ENCRYPTION_KEY_FILE/u);
+  assert.match(credentials.run, /OMNIFIN_RECOVERY_SECRET_FILE/u);
+  assert.match(credentials.run, /chmod 0600/u);
+  assert.doesNotMatch(credentials.run, /OMNIFIN_ENCRYPTION_KEY=\$encryption_key/u);
+  assert.doesNotMatch(credentials.run, /OMNIFIN_RECOVERY_SECRET=\$recovery_secret/u);
   const exercise = verification.steps.find(
     (step) => step.name === "Start, inspect, back up, and verify the release",
   );
