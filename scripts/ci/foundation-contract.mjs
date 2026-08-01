@@ -263,6 +263,22 @@ async function verifyDeployment(root, problems) {
       problems,
     );
   }
+  const maintenanceEnvironment = services.maintenance?.environment;
+  requireValue(
+    isRecord(maintenanceEnvironment) &&
+      maintenanceEnvironment.NODE_ENV === "production" &&
+      maintenanceEnvironment.OMNIFIN_BACKUP_DIRECTORY === "/backups" &&
+      maintenanceEnvironment.OMNIFIN_BASE_URL === "${OMNIFIN_BASE_URL:-http://localhost:3000}" &&
+      maintenanceEnvironment.OMNIFIN_GATEWAY_HEALTH_URL === "http://gateway:4000/healthz" &&
+      maintenanceEnvironment.OMNIFIN_GATEWAY_READY_URL === "http://gateway:4000/readyz",
+    "The maintenance service must receive only the fixed deployment-doctor runtime inputs.",
+    problems,
+  );
+  requireValue(
+    services.maintenance?.secrets === undefined,
+    "The maintenance service must not mount application secrets.",
+    problems,
+  );
   requireValue(
     compose?.secrets?.omnifin_encryption_key?.file ===
       "${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",

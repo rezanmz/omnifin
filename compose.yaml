@@ -104,8 +104,11 @@ services:
       - --help
     environment:
       NODE_ENV: production
+      OMNIFIN_BACKUP_DIRECTORY: /backups
+      OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
       OMNIFIN_DATABASE_URL: /data/omnifin.db
       OMNIFIN_GATEWAY_HEALTH_URL: http://gateway:4000/healthz
+      OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz
       OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}
     volumes:
       - omnifin_data:/data

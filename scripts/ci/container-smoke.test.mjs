@@ -5,8 +5,50 @@ import {
   boundDiagnosticTail,
   collectContainerDiagnostics,
   createFailureReport,
+  parseDoctorSmokeReport,
   redactDiagnosticText,
 } from "../container-smoke.mjs";
+
+test("deployment doctor smoke reports accept only the bounded preview posture", () => {
+  const report = {
+    operation: "doctor",
+    status: "attention",
+    schemaVersion: 1,
+    state: "attention",
+    readyCount: 4,
+    total: 6,
+    generatedAt: "2026-08-01T12:00:00.000Z",
+    checks: [
+      { id: "runtime", state: "ready" },
+      { code: "image_reference_not_immutable", id: "image", state: "attention" },
+      { id: "gateway", state: "ready" },
+      { code: "public_origin_invalid", id: "public_boundary", state: "attention" },
+      { id: "storage", state: "ready" },
+      { id: "backup", state: "ready" },
+    ],
+  };
+  assert.deepEqual(parseDoctorSmokeReport(JSON.stringify(report)), report);
+
+  assert.throws(
+    () =>
+      parseDoctorSmokeReport(
+        JSON.stringify({ ...report, publicUrl: "https://private.example.test" }),
+      ),
+    /maintenance_doctor_report_invalid/u,
+  );
+  assert.throws(
+    () =>
+      parseDoctorSmokeReport(
+        JSON.stringify({
+          ...report,
+          checks: report.checks.map((check, index) =>
+            index === 0 ? { ...check, detail: "/private/runtime/path" } : check,
+          ),
+        }),
+      ),
+    /maintenance_doctor_report_invalid/u,
+  );
+});
 
 test("diagnostic redaction removes exact smoke secrets, host paths, and common credentials", () => {
   const encryptionSecret = "generated-encryption-value";

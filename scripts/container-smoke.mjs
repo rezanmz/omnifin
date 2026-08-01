@@ -144,6 +144,84 @@ function docker(arguments_, operation, options = {}) {
   }
 }
 
+function dockerExpectExit(arguments_, operation, expectedExitCode) {
+  try {
+    execFileSync("docker", arguments_, {
+      cwd: REPOSITORY_ROOT,
+      encoding: "utf8",
+      maxBuffer: 4 * 1_024 * 1_024,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+  } catch (error) {
+    if (error?.status === expectedExitCode) {
+      return typeof error.stdout === "string" || Buffer.isBuffer(error.stdout)
+        ? String(error.stdout).trim()
+        : "";
+    }
+    throw new SmokeFailure(operation, captureCommandFailure(error));
+  }
+  throw new SmokeFailure(operation);
+}
+
+export function parseDoctorSmokeReport(rawReport) {
+  let report;
+  try {
+    report = JSON.parse(rawReport);
+  } catch {
+    throw new Error("maintenance_doctor_report_invalid");
+  }
+  const expected = [
+    ["runtime", "ready", null],
+    ["image", "attention", "image_reference_not_immutable"],
+    ["gateway", "ready", null],
+    ["public_boundary", "attention", "public_origin_invalid"],
+    ["storage", "ready", null],
+    ["backup", "ready", null],
+  ];
+  if (
+    !report ||
+    report.operation !== "doctor" ||
+    report.status !== "attention" ||
+    report.schemaVersion !== 1 ||
+    report.state !== "attention" ||
+    report.readyCount !== 4 ||
+    report.total !== expected.length ||
+    typeof report.generatedAt !== "string" ||
+    report.generatedAt.length > 32 ||
+    Number.isNaN(Date.parse(report.generatedAt)) ||
+    new Date(report.generatedAt).toISOString() !== report.generatedAt ||
+    !Array.isArray(report.checks) ||
+    report.checks.length !== expected.length ||
+    expected.some(([id, state, code], index) => {
+      const check = report.checks[index];
+      return (
+        !check ||
+        check.id !== id ||
+        check.state !== state ||
+        (code === null ? Object.hasOwn(check, "code") : check.code !== code) ||
+        Object.keys(check).some((key) => !["code", "id", "state"].includes(key))
+      );
+    }) ||
+    Object.keys(report).some(
+      (key) =>
+        ![
+          "checks",
+          "generatedAt",
+          "operation",
+          "readyCount",
+          "schemaVersion",
+          "state",
+          "status",
+          "total",
+        ].includes(key),
+    )
+  ) {
+    throw new Error("maintenance_doctor_report_invalid");
+  }
+  return report;
+}
+
 function diagnosticDocker(arguments_) {
   try {
     return {
@@ -389,9 +467,17 @@ async function main() {
       "--volume",
       `${backupVolume}:/backups`,
       "--env",
+      "NODE_ENV=production",
+      "--env",
+      "OMNIFIN_BACKUP_DIRECTORY=/backups",
+      "--env",
+      "OMNIFIN_BASE_URL=http://web:3000",
+      "--env",
       "OMNIFIN_DATABASE_URL=/data/omnifin.db",
       "--env",
       "OMNIFIN_GATEWAY_HEALTH_URL=http://gateway:4000/healthz",
+      "--env",
+      "OMNIFIN_GATEWAY_READY_URL=http://gateway:4000/readyz",
       "--env",
       `OMNIFIN_IMAGE_REF=${image}`,
       image,
@@ -450,6 +536,14 @@ async function main() {
       "http://127.0.0.1:3000/api/auth/providers",
       "web_gateway_proxy",
     );
+    parseDoctorSmokeReport(
+      dockerExpectExit([...maintenanceRuntime, "doctor"], "maintenance_doctor", 78),
+    );
+    dockerExpectExit(
+      [...maintenanceRuntime, "doctor", "--input", "/backups/container-smoke.sqlite"],
+      "maintenance_doctor_argument_rejection",
+      64,
+    );
 
     process.stdout.write(
       `${JSON.stringify({
@@ -462,6 +556,8 @@ async function main() {
           "gateway_api",
           "maintenance_backup",
           "maintenance_backup_verification",
+          "maintenance_doctor",
+          "maintenance_doctor_argument_rejection",
           "web_health",
           "web_gateway_proxy",
         ],
