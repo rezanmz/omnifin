@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/rezanmz/omnifin/compare/v0.5.0...v0.5.1) (2026-08-01)
+
+
+### Fixes
+
+* **release:** use portable Compose secrets ([#144](https://github.com/rezanmz/omnifin/issues/144)) ([0eb629a](https://github.com/rezanmz/omnifin/commit/0eb629a9d267db76c01dd64def270c45d96931de)), closes [#143](https://github.com/rezanmz/omnifin/issues/143)
+
 ## [0.5.0](https://github.com/rezanmz/omnifin/compare/v0.4.1...v0.5.0) (2026-08-01)
 
 
