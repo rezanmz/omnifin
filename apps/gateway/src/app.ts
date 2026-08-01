@@ -98,6 +98,10 @@ import {
   type SetupReadinessRoutesOptions,
 } from "./setup/readiness-routes.js";
 import {
+  deploymentReadinessRoutes,
+  type DeploymentReadinessRoutesOptions,
+} from "./setup/deployment-readiness-routes.js";
+import {
   subtitleOperationRoutes,
   type SubtitleOperationRoutesOptions,
 } from "./subtitles/operation-routes.js";
@@ -146,6 +150,7 @@ export interface CreateAppOptions {
   systemStatusDependencies?: SystemStatusRoutesOptions["dependencies"];
   systemStatusEventDependencies?: SystemStatusRoutesOptions["eventDependencies"];
   setupReadinessDependencies?: SetupReadinessRoutesOptions["dependencies"];
+  deploymentReadinessDependencies?: DeploymentReadinessRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -527,6 +532,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.setupReadinessDependencies === undefined
         ? {}
         : { dependencies: options.setupReadinessDependencies }),
+    });
+    await app.register(deploymentReadinessRoutes, {
+      ...(options.deploymentReadinessDependencies === undefined
+        ? {}
+        : { dependencies: options.deploymentReadinessDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

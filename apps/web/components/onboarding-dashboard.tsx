@@ -4,12 +4,16 @@ import type { CSSProperties } from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  Box,
   CheckCircle2,
   CircleAlert,
   CloudOff,
+  Database,
   Download,
+  ExternalLink,
   KeyRound,
   ListChecks,
+  LockKeyhole,
   Radar,
   RefreshCw,
   Server,
@@ -25,6 +29,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
+import type { DeploymentReadinessOutcome } from "../lib/deployment-readiness";
 import {
   loadSetupReadiness,
   type SetupReadinessModel,
@@ -50,6 +55,50 @@ interface StepContent {
   settingsHref: string;
   surfaceHref?: string;
 }
+
+type DeploymentCheckId = Extract<
+  DeploymentReadinessOutcome,
+  { status: "ready" }
+>["readiness"]["checks"][number]["id"];
+
+interface DeploymentCheckContent {
+  attention: string;
+  icon: LucideIcon;
+  label: string;
+  ready: string;
+}
+
+const DEPLOYMENT_GUIDE_URL =
+  "https://github.com/rezanmz/omnifin/blob/main/docs/deployment.md#requirements-for-a-supported-deployment";
+
+const DEPLOYMENT_CHECK_CONTENT: Readonly<Record<DeploymentCheckId, DeploymentCheckContent>> =
+  Object.freeze({
+    recovery: {
+      attention: "Add a dedicated break-glass secret before relying on this installation.",
+      icon: KeyRound,
+      label: "Recovery access",
+      ready: "A valid break-glass secret is configured; verify the recovery drill separately.",
+    },
+    runtime: {
+      attention: "Run a tagged image with its production runtime before exposing the service.",
+      icon: Box,
+      label: "Production runtime",
+      ready: "The gateway is running with production safeguards enabled.",
+    },
+    storage: {
+      attention: "Move SQLite out of memory and onto the private data volume before keeping state.",
+      icon: Database,
+      label: "Persistent storage",
+      ready:
+        "SQLite is file-backed and its migration ledger is readable; verify the host volume and backups.",
+    },
+    transport: {
+      attention: "Finish the canonical HTTPS origin and secure-session cookie boundary.",
+      icon: LockKeyhole,
+      label: "HTTPS sessions",
+      ready: "The canonical origin and secure session-cookie policy agree on HTTPS.",
+    },
+  });
 
 const STEP_CONTENT: Readonly<Record<SetupReadinessStepId, StepContent>> = Object.freeze({
   acquisition: {
@@ -207,6 +256,15 @@ function SetupLoading() {
         <span />
         <span />
       </div>
+      <div className="deployment-posture deployment-posture--loading" aria-hidden="true">
+        <span />
+        <span />
+        <div>
+          {Array.from({ length: 4 }, (_, index) => (
+            <span key={index} />
+          ))}
+        </div>
+      </div>
       <div className="setup-loading__grid" aria-hidden="true">
         {Array.from({ length: 8 }, (_, index) => (
           <article
@@ -221,6 +279,133 @@ function SetupLoading() {
         ))}
       </div>
       <span className="sr-only">Checking private identity and service readiness…</span>
+    </section>
+  );
+}
+
+export function DeploymentReadinessPanel({
+  onRetry,
+  outcome,
+}: {
+  onRetry: () => void;
+  outcome: Extract<DeploymentReadinessOutcome, { status: "ready" | "unavailable" }>;
+}) {
+  if (outcome.status === "unavailable") {
+    return (
+      <section
+        aria-labelledby="deployment-posture-title"
+        className="deployment-posture"
+        data-state="unavailable"
+      >
+        <div className="deployment-posture__heading">
+          <span className="deployment-posture__mark" aria-hidden="true">
+            <CircleAlert size={23} strokeWidth={1.6} />
+          </span>
+          <div>
+            <p className="section-kicker">Host flight check</p>
+            <h2 id="deployment-posture-title">Deployment posture could not be verified.</h2>
+            <p>
+              Identity and connector readiness remain visible. Retry this private check before
+              treating the host as production-ready.
+            </p>
+          </div>
+        </div>
+        <div className="deployment-posture__actions">
+          <button
+            className="button button--glass"
+            data-directional-item
+            onClick={onRetry}
+            type="button"
+          >
+            <RefreshCw aria-hidden="true" size={17} /> Check host again
+          </button>
+          <a
+            className="deployment-posture__runbook"
+            data-directional-item
+            href={DEPLOYMENT_GUIDE_URL}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Deployment runbook <span className="sr-only">(opens in a new tab)</span>
+            <ExternalLink aria-hidden="true" size={15} />
+          </a>
+        </div>
+      </section>
+    );
+  }
+
+  const { readiness } = outcome;
+  const ready = readiness.state === "ready";
+  return (
+    <section
+      aria-labelledby="deployment-posture-title"
+      className="deployment-posture"
+      data-state={readiness.state}
+    >
+      <div className="deployment-posture__heading">
+        <span className="deployment-posture__mark" aria-hidden="true">
+          {ready ? (
+            <ShieldCheck size={23} strokeWidth={1.6} />
+          ) : (
+            <ShieldAlert size={23} strokeWidth={1.6} />
+          )}
+        </span>
+        <div>
+          <p className="section-kicker">Host flight check</p>
+          <h2 id="deployment-posture-title">
+            {ready ? "Host prerequisites are configured." : "Finish the host hardening boundary."}
+          </h2>
+          <p>
+            {ready
+              ? "Runtime and transport checks pass; recovery and SQLite settings are configured. Complete the host verification in the runbook."
+              : "This stack can stay useful while you finish the host checks below, but it should remain private."}
+          </p>
+        </div>
+      </div>
+      <div className="deployment-posture__summary">
+        <strong>{readiness.readyCount}</strong>
+        <span>of {readiness.total} host checks</span>
+      </div>
+      <div aria-label="Deployment readiness checks" className="deployment-checks" role="list">
+        {readiness.checks.map((item) => {
+          const content = DEPLOYMENT_CHECK_CONTENT[item.id];
+          const Icon = content.icon;
+          const checkReady = item.state === "ready";
+          return (
+            <article
+              className="deployment-check"
+              data-state={item.state}
+              key={item.id}
+              role="listitem"
+            >
+              <span className="deployment-check__icon" aria-hidden="true">
+                <Icon size={19} strokeWidth={1.65} />
+              </span>
+              <div>
+                <span className="deployment-check__label">
+                  {content.label}
+                  {checkReady ? (
+                    <CheckCircle2 aria-hidden="true" size={15} />
+                  ) : (
+                    <CircleAlert aria-hidden="true" size={15} />
+                  )}
+                </span>
+                <p>{checkReady ? content.ready : content.attention}</p>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      <a
+        className="deployment-posture__runbook"
+        data-directional-item
+        href={DEPLOYMENT_GUIDE_URL}
+        rel="noreferrer"
+        target="_blank"
+      >
+        Review the deployment boundary <span className="sr-only">(opens in a new tab)</span>
+        <ExternalLink aria-hidden="true" size={15} />
+      </a>
     </section>
   );
 }
@@ -335,13 +520,20 @@ function SetupHero({ model }: { model: SetupReadinessModel }) {
   );
 }
 
-function SetupReady({ outcome }: { outcome: Extract<SetupReadinessOutcome, { status: "ready" }> }) {
+function SetupReady({
+  onRetry,
+  outcome,
+}: {
+  onRetry: () => void;
+  outcome: Extract<SetupReadinessOutcome, { status: "ready" }>;
+}) {
   const model = outcome.readiness;
   const essential = model.steps.slice(0, 2);
   const optional = model.steps.slice(2);
   return (
     <>
       <SetupHero model={model} />
+      <DeploymentReadinessPanel onRetry={onRetry} outcome={outcome.deployment} />
       <section aria-labelledby="setup-essential-title" className="setup-section">
         <div className="setup-section__heading">
           <div>
@@ -379,8 +571,8 @@ function SetupReady({ outcome }: { outcome: Extract<SetupReadinessOutcome, { sta
         <div>
           <strong>Readiness never exposes the machinery.</strong>
           <p>
-            This screen uses normalized local status only. Credentials, connector addresses,
-            external identifiers, recovery access, and raw upstream responses remain hidden.
+            This screen uses normalized local status only. Secret values, connector addresses,
+            external identifiers, database paths, and raw upstream responses remain hidden.
           </p>
         </div>
       </aside>
@@ -440,7 +632,7 @@ export function OnboardingDashboard({
         {outcome === null ? (
           <SetupLoading />
         ) : outcome.status === "ready" ? (
-          <SetupReady outcome={outcome} />
+          <SetupReady onRetry={refresh} outcome={outcome} />
         ) : (
           <SetupBoundary onRetry={refresh} status={outcome.status} />
         )}

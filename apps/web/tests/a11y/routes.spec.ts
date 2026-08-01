@@ -20,6 +20,11 @@ const routes = [
   { label: "setup readiness guide", path: "/onboarding?test-view=partial" },
   { label: "setup core action", path: "/onboarding?test-view=needs-core" },
   { label: "setup provider degradation", path: "/onboarding?test-view=provider-unavailable" },
+  { label: "setup deployment attention", path: "/onboarding?test-view=deployment-attention" },
+  {
+    label: "setup deployment unavailability",
+    path: "/onboarding?test-view=deployment-unavailable",
+  },
   { label: "setup signed-out boundary", path: "/onboarding?test-view=signed-out" },
   { label: "setup permission boundary", path: "/onboarding?test-view=forbidden" },
   { label: "configured login", path: "/login" },

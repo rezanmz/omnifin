@@ -383,6 +383,18 @@ test("first-run core action visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("dashboard-onboarding-needs-core.png", { fullPage: true });
 });
 
+test("first-run deployment attention visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Host-hardening guidance covers representative desktop and phone geometry",
+  );
+  await page.goto("/onboarding?test-view=deployment-attention");
+  await page.getByRole("heading", { name: /Finish the host hardening boundary/u }).waitFor();
+  await expect(page).toHaveScreenshot("dashboard-onboarding-deployment-attention.png", {
+    fullPage: true,
+  });
+});
+
 test("light first-run dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !lightVisualProjects.has(testInfo.project.name),

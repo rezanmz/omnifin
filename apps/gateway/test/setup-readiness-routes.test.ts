@@ -1,10 +1,12 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { deploymentReadinessResponseSchema } from "@omnifin/contracts/deployment";
 import { setupReadinessResponseSchema } from "@omnifin/contracts/setup";
 import { describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
+import { openDatabase } from "../src/db/client.js";
 import { connectorConfigs, oidcProviders, serviceIdentityLinks, users } from "../src/db/schema.js";
 
 const now = new Date("2026-08-01T12:00:00.000Z");
@@ -12,14 +14,15 @@ const now = new Date("2026-08-01T12:00:00.000Z");
 function testConfig(): AppConfig {
   return {
     baseUrl: new URL("https://omnifin.example"),
-    databaseUrl: ":memory:",
+    databaseUrl: "/data/omnifin.db",
     encryptionKey: Buffer.alloc(32, 117),
-    environment: "test",
+    environment: "production",
     host: "127.0.0.1",
     insecureLoopbackPreview: false,
     jellyfinInsecureHttpApproved: false,
     logLevel: "silent",
     port: 4000,
+    recoverySecretDigest: Buffer.alloc(32, 118),
     secureCookies: true,
     session: {
       absoluteTtlMs: 30 * 24 * 60 * 60 * 1_000,
@@ -58,9 +61,14 @@ function healthyJellyfinSnapshot() {
   });
 }
 
-async function harness(options: { invalidClock?: boolean } = {}) {
+async function harness(options: { invalidClock?: boolean; invalidDeploymentClock?: boolean } = {}) {
+  const database = openDatabase(":memory:");
   const app = await createApp({
     config: testConfig(),
+    database,
+    deploymentReadinessDependencies: {
+      clock: () => (options.invalidDeploymentClock ? new Date(Number.NaN) : now),
+    },
     sessionDependencies: sessionDependencies(),
     setupReadinessDependencies: {
       clock: () => (options.invalidClock ? new Date(Number.NaN) : now),
@@ -183,6 +191,76 @@ describe("setup readiness routes", () => {
       expect(response.body).not.toMatch(
         /private|example\.test|jellyfin-connector|provider-id|client-id|external-user/u,
       );
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("returns a strict deployment posture without host configuration details", async () => {
+    const fixture = await harness();
+    try {
+      const response = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.admin.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/setup/deployment",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+      expect(deploymentReadinessResponseSchema.parse(response.json())).toMatchObject({
+        readyCount: 4,
+        state: "ready",
+        total: 4,
+      });
+      expect(response.body).not.toMatch(
+        /omnifin\.example|\/data|private|secret|proxy|production|127\.0\.0\.1/u,
+      );
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("protects deployment posture with the full administrator boundary", async () => {
+    const fixture = await harness();
+    try {
+      const anonymous = await fixture.app.inject({
+        method: "GET",
+        url: "/v1/admin/setup/deployment",
+      });
+      const viewer = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/setup/deployment",
+      });
+
+      expect(anonymous.statusCode).toBe(401);
+      expect(apiErrorSchema.parse(anonymous.json()).error.code).toBe("authentication_required");
+      expect(viewer.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(viewer.json()).error.code).toBe("permission_denied");
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("returns a safe retryable error when deployment posture cannot be derived", async () => {
+    const fixture = await harness({ invalidDeploymentClock: true });
+    try {
+      const response = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.admin.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/setup/deployment",
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.headers["retry-after"]).toBe("5");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "deployment_readiness_unavailable",
+      );
+      expect(response.body).not.toMatch(/NaN|integrity_failure|stack|sqlite|environment/u);
     } finally {
       await fixture.app.close();
     }

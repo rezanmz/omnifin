@@ -162,6 +162,7 @@ gateway directly.
 | `DELETE /api/auth/identity-links/{linkId}`                                     | Revoke an owned link, erase its token, and reduce local authority.          |
 | `POST /api/auth/recovery/session`                                              | Hidden, rate-limited recovery endpoint; never linked from the login UI.     |
 | `GET /api/admin/setup/readiness`                                               | Read a no-store, detail-free setup summary; requires a full administrator.  |
+| `GET /api/admin/setup/deployment`                                              | Read four no-store deployment posture bits; requires a full administrator.  |
 | `GET /api/admin/auth/oidc/providers`                                           | List secret-free OIDC configuration for an authorized administrator.        |
 | `POST /api/admin/auth/oidc/providers`                                          | Create an encrypted, audited OIDC configuration; requires session CSRF.     |
 | `PUT /api/admin/auth/oidc/providers/{providerId}`                              | Replace configuration, invalidate stale runtime state, and revoke sessions. |

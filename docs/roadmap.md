@@ -113,12 +113,14 @@ browser behavior.
 
 ## Phase 5 — Hardening and public release
 
-**Status: Planned**
+**Status: In development**
 
 - Full compatibility matrix, threat-model-driven security review, load testing,
   container scans, backup and restore (implemented; protected release evidence pending),
   migration and rollback rehearsals (release automation implemented; protected release evidence
   pending)
+- Browser-safe deployment flight check for production runtime, HTTPS sessions, recovery access, and
+  persistent SQLite configuration (implemented; host-specific operational proof remains required)
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 

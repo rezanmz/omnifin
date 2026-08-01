@@ -104,6 +104,13 @@ needs attention, and never converts “not configured” into “broken.” Its 
 signed-out, permission, unavailable, partial, core-ready, light, dark, mobile, and
 10-foot states are maintained as isolated stories and browser evidence.
 
+A distinct Liquid Glass deployment flight check presents ready, attention, and unavailable states
+without blending host posture into media-stack health. Its four fixed cells maintain identical
+geometry across states, preserve readable contrast with and without backdrop-filter support, expose
+the status in text rather than colour alone, and collapse from four columns to two and then one. When
+the check fails, the verified connector snapshot remains visible and the retry action retains a
+44-pixel target.
+
 ## Interaction model
 
 - Drawers preserve browsing context for deep comparison and technical work.
