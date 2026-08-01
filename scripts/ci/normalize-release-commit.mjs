@@ -418,6 +418,7 @@ function makeProductionDependencies(config) {
               }
               ref {
                 name
+                prefix
               }
             }
           }
@@ -527,7 +528,8 @@ export async function normalizeReleaseCommit(
     });
     const signedSha = requireFullSha(mutation?.commit?.oid, "Normalized release commit");
     if (
-      mutation?.ref?.name !== `refs/heads/${temporaryBranch}` ||
+      mutation?.ref?.name !== temporaryBranch ||
+      mutation?.ref?.prefix !== "refs/heads/" ||
       mutation?.commit?.tree?.oid !== originalCommit.treeSha
     ) {
       throw new Error(
