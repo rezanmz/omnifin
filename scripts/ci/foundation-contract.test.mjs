@@ -75,8 +75,10 @@ function validFiles() {
     '    ports: ["127.0.0.1:3000:3000"]',
     "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:3000/healthz] }",
     "secrets:",
-    "  omnifin_encryption_key: { environment: OMNIFIN_ENCRYPTION_KEY }",
-    "  omnifin_recovery_secret: { environment: OMNIFIN_RECOVERY_SECRET }",
+    "  omnifin_encryption_key:",
+    "    file: ${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",
+    "  omnifin_recovery_secret:",
+    "    file: ${OMNIFIN_RECOVERY_SECRET_FILE:-./secrets/omnifin_recovery_secret}",
     "",
   ].join("\n");
   files["scripts/integration/readiness.json"] = JSON.stringify({
@@ -162,6 +164,20 @@ test("rejects any non-loopback web publication", async () => {
     },
     async (root) => {
       await assert.rejects(checkFoundationContract({ root }), /web socket must bind to loopback/u);
+    },
+  );
+});
+
+test("rejects non-portable environment-backed deployment secrets", async () => {
+  await withRepository(
+    (files) => {
+      files["compose.yaml"] = files["compose.yaml"].replace(
+        "    file: ${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",
+        "    environment: OMNIFIN_ENCRYPTION_KEY",
+      );
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /portable file-backed secret/u);
     },
   );
 });

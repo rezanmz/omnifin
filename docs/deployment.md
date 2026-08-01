@@ -47,9 +47,9 @@ Before operating a release that advertises the corresponding capabilities, prepa
 
 - a canonical HTTPS public URL;
 - a persistent volume with sufficient free space and reliable backups;
-- a randomly generated encryption master key supplied through a secret, not embedded
-  in Compose configuration;
-- a separately generated break-glass recovery secret;
+- a randomly generated encryption master key supplied through a private file-backed
+  Compose secret, not embedded in Compose configuration or `.env`;
+- a separately generated, file-backed break-glass recovery secret;
 - dedicated connector credentials where upstream services support them; and
 - exact OIDC callback, back-channel logout, front-channel logout, and post-logout URLs
   when using an identity provider.

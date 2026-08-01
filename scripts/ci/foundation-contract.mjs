@@ -264,13 +264,15 @@ async function verifyDeployment(root, problems) {
     );
   }
   requireValue(
-    compose?.secrets?.omnifin_encryption_key?.environment === "OMNIFIN_ENCRYPTION_KEY",
-    "Compose must source the encryption key from an explicit secret input.",
+    compose?.secrets?.omnifin_encryption_key?.file ===
+      "${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",
+    "Compose must source the encryption key from a portable file-backed secret input.",
     problems,
   );
   requireValue(
-    compose?.secrets?.omnifin_recovery_secret?.environment === "OMNIFIN_RECOVERY_SECRET",
-    "Compose must source the recovery credential from an explicit secret input.",
+    compose?.secrets?.omnifin_recovery_secret?.file ===
+      "${OMNIFIN_RECOVERY_SECRET_FILE:-./secrets/omnifin_recovery_secret}",
+    "Compose must source the recovery credential from a portable file-backed secret input.",
     problems,
   );
 

@@ -119,9 +119,9 @@ services:
 
 secrets:
   omnifin_encryption_key:
-    environment: OMNIFIN_ENCRYPTION_KEY
+    file: ${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}
   omnifin_recovery_secret:
-    environment: OMNIFIN_RECOVERY_SECRET
+    file: ${OMNIFIN_RECOVERY_SECRET_FILE:-./secrets/omnifin_recovery_secret}
 
 volumes:
   omnifin_data:
