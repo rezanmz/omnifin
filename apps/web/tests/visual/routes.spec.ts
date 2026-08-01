@@ -368,9 +368,31 @@ test("first-run dashboard visual baseline", async ({ page }, testInfo) => {
     !visualProjects.has(testInfo.project.name),
     "Visual baselines use representative Chromium viewports",
   );
-  await page.goto(routeForProject("/?test-view=onboarding", testInfo.project.name));
-  await page.locator("main").waitFor();
+  await page.goto(routeForProject("/onboarding?test-view=partial", testInfo.project.name));
+  await page.getByRole("heading", { name: /Core is ready/u }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-onboarding.png", { fullPage: true });
+});
+
+test("first-run core action visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Core setup actions cover representative desktop and phone geometry",
+  );
+  await page.goto("/onboarding?test-view=needs-core");
+  await page.getByRole("heading", { name: /Two essentials/u }).waitFor();
+  await expect(page).toHaveScreenshot("dashboard-onboarding-needs-core.png", { fullPage: true });
+});
+
+test("light first-run dashboard visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light setup guidance covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/onboarding?test-view=partial");
+  await page.getByRole("heading", { name: /Core is ready/u }).waitFor();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("dashboard-onboarding-light.png", { fullPage: true });
 });
 
 test("login visual baseline", async ({ page }, testInfo) => {

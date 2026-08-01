@@ -130,6 +130,10 @@ describe("AccountSecurityPanel", () => {
       "href",
       "/settings/connectors",
     );
+    expect(screen.getByRole("link", { name: "Setup guide" })).toHaveAttribute(
+      "href",
+      "/onboarding",
+    );
 
     rerender(
       <AccountSecurityPanel
@@ -153,6 +157,7 @@ describe("AccountSecurityPanel", () => {
       "href",
       "/settings/connectors",
     );
+    expect(screen.queryByRole("link", { name: "Setup guide" })).not.toBeInTheDocument();
   });
 
   it("requires deliberate confirmation before revoking an identity link", async () => {

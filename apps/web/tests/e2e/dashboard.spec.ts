@@ -509,12 +509,14 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
 
   await expect(page).toHaveURL(/\/\?test-view=onboarding$/u);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Your media control room is being prepared." }),
+    page.getByRole("heading", {
+      level: 1,
+      name: "Two essentials stand between first sign-in and movie night.",
+    }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Review account access" })).toHaveAttribute(
-    "href",
-    "/settings",
-  );
+  await expect(
+    page.getByRole("link", { name: "Validate Jellyfin service" }).first(),
+  ).toHaveAttribute("href", "/settings/connectors");
   await expect(page.getByRole("searchbox")).toHaveCount(0);
   await expect(page.getByRole("navigation")).toHaveCount(0);
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
@@ -813,7 +815,7 @@ test("mobile navigation leaves primary actions and focus rings unobscured", asyn
 
   await page.goto("/?test-view=onboarding");
   await expect(page.locator(".mobile-navigation")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Review account access" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Validate Jellyfin service" }).first()).toBeVisible();
 });
 
 test("lifted media cards stay inside a seamless rail", async ({ page }, testInfo) => {

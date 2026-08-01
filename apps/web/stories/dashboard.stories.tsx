@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { DashboardScreen } from "../components/dashboard-screen";
 import { OnboardingDashboard } from "../components/onboarding-dashboard";
 import { demoDashboard } from "../lib/dashboard-data";
+import { setupReadinessDemo } from "../lib/setup-readiness-demo";
 
 const meta = {
   component: DashboardScreen,
@@ -18,9 +19,27 @@ export const ConfiguredTenFoot: Story = {
 };
 export const FirstRun: Story = {
   args: { data: demoDashboard },
-  render: () => <OnboardingDashboard />,
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("partial")} />,
 };
 export const FirstRunTenFoot: Story = {
   args: { data: demoDashboard },
-  render: () => <OnboardingDashboard displayProfile="ten-foot" />,
+  render: () => (
+    <OnboardingDashboard displayProfile="ten-foot" initialOutcome={setupReadinessDemo("partial")} />
+  ),
+};
+export const FirstRunNeedsCore: Story = {
+  args: { data: demoDashboard },
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("needs-core")} />,
+};
+export const FirstRunReady: Story = {
+  args: { data: demoDashboard },
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("ready")} />,
+};
+export const FirstRunProviderUnavailable: Story = {
+  args: { data: demoDashboard },
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("provider-unavailable")} />,
+};
+export const FirstRunSignedOut: Story = {
+  args: { data: demoDashboard },
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("signed-out")} />,
 };

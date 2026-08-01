@@ -57,6 +57,10 @@
       "types": "./dist/requests.d.ts",
       "default": "./dist/requests.js"
     },
+    "./setup": {
+      "types": "./dist/setup.d.ts",
+      "default": "./dist/setup.js"
+    },
     "./subtitles": {
       "types": "./dist/subtitles.d.ts",
       "default": "./dist/subtitles.js"

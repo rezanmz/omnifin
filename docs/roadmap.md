@@ -55,8 +55,9 @@ CSRF/session tests, recovery rehearsal, and secret-leak inspection all pass.
 - Cinematic token system, editorial typography, artwork-derived palettes, and
   production interface primitives
 - Application shell, dashboard, exact skeletons, authentication and account-linking
-  screens, responsive navigation, adaptive light/dark/system themes, and a connected
-  Liquid Glass discovery surface with protected artwork
+  screens, a live permission-aware setup-readiness guide, responsive navigation,
+  adaptive light/dark/system themes, and a connected Liquid Glass discovery surface
+  with protected artwork
 - Storybook state coverage and interaction tests before route assembly
 
 **Gate:** visual regression, WCAG 2.2 AA checks, keyboard and directional navigation,

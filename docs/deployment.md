@@ -108,8 +108,15 @@ Authorized administrators and recovery sessions reach the guided control room th
 **Account & access → Identity providers**. It previews exact callback and logout endpoints before
 the first credential is submitted, saves new providers disabled, requires fresh discovery
 validation before offering enablement, and manages exact typed role mappings. Role-mapping
-administration and the role-derived session invalidation boundary are implemented; mapping
-updates are not yet available. Operators should not edit SQLite manually to bypass that boundary.
+administration, guarded mapping updates, and the role-derived session invalidation boundary are
+implemented. Operators should not edit SQLite manually to bypass that boundary.
+
+After bootstrap, **Account & access → Setup guide** provides a live, permission-aware route through
+the remaining configuration. Its core-ready boundary requires both a verified Jellyfin identity and
+a currently validated Jellyfin connector. OIDC and surrounding media services are reported as
+recommended or optional extensions, so a deliberately smaller home stack is never labelled broken.
+The browser receives only normalized readiness state; connector URLs, credentials, identity
+subjects, recovery access, and raw upstream responses stay outside the guide.
 
 ## Target production network layout
 
