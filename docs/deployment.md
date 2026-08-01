@@ -20,8 +20,8 @@ untagged image or default branch build as a production support promise.
 
 ## Deployment model
 
-The Compose file establishes the intended topology: web and gateway processes
-run from the same source-built image, only the web service is published, and the
+The Compose files establish the intended topology: web and gateway processes
+run from the same immutable image, only the web service is published, and the
 gateway owns the SQLite volume. The gateway owns all upstream communication, secret isolation,
 authorization, and audit records. The runtime includes permission-checked identity, connector, and
 media-operation surfaces; the compatibility matrix, not the presence of a route, determines which
@@ -35,10 +35,10 @@ Set `OMNIFIN_DISPLAY_PROFILE=ten-foot` when the interface is viewed primarily fr
 television distance. The default `standard` profile remains appropriate for desktop,
 tablet, and handheld use.
 
-The reserved public image location is `ghcr.io/rezanmz/omnifin`. Do not assume that an
-image or public package exists until a verified release or default-branch publication
-is visible in the repository. Versioned installation instructions will begin with the
-first verified release. Avoid `edge` for persistent installations; it follows the
+The public image location is `ghcr.io/rezanmz/omnifin`. Every verified GitHub Release attaches a
+runtime-only `compose.yaml`, a version-labelled `omnifin.env.example` containing its exact image
+digest, and `SHA256SUMS`. Verify the checksums before copying the template to `.env`; never replace
+its immutable digest with a moving tag for a persistent installation. Avoid `edge`: it follows the
 default branch and may include migrations that have not passed a release gate.
 
 ## Requirements for a supported deployment
@@ -145,6 +145,17 @@ Insecure HTTP weakens connector identity and requires an explicit, service-speci
 administrative acknowledgement. A self-signed HTTPS connector additionally requires
 its current PEM-encoded CA certificate; Omnifin keeps normal certificate and hostname
 verification enabled against that connector-specific trust anchor.
+
+## Tagged installation verification
+
+The release workflow generates the same three assets from the immutable tagged source, starts them
+against the anonymously pullable candidate digest on a clean hosted runner, verifies web and gateway
+health plus recovery-route reachability, creates and verifies an online SQLite backup, and tears down
+the complete Compose project. Stable tags cannot move unless that installation gate succeeds.
+
+Operators should still repeat the health and backup checks on their own host before adding service
+credentials. Host networking, proxy headers, filesystem ownership, certificates, and upstream ACLs
+remain deployment-specific.
 
 ## Source-checkpoint verification
 

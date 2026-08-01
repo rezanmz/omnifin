@@ -116,10 +116,46 @@ gateway services to be upgraded together without introducing an external databas
 Read the [architecture overview](docs/architecture.md) for trust boundaries and
 design decisions.
 
+## Install a tagged release
+
+Each verified tagged release publishes a small Compose bundle whose environment template is bound
+to the exact multi-architecture image digest that passed the release gates. Select a release from
+[GitHub Releases](https://github.com/rezanmz/omnifin/releases), then download and verify its three
+assets:
+
+```sh
+OMNIFIN_RELEASE=v0.5.0
+mkdir omnifin && cd omnifin
+curl --fail --location --remote-name \
+  "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/compose.yaml"
+curl --fail --location --remote-name \
+  "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/omnifin.env.example"
+curl --fail --location --remote-name \
+  "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/SHA256SUMS"
+sha256sum --check SHA256SUMS
+cp omnifin.env.example .env
+chmod 0600 .env
+```
+
+Replace the example origins and empty secrets in `.env`, prepare the private backup directory, and
+start the exact digest:
+
+```sh
+sudo install -d -m 0700 -o 65532 -g 65532 backups
+docker compose --env-file .env --file compose.yaml pull
+docker compose --env-file .env --file compose.yaml up --detach --wait
+curl --fail --silent --show-error http://127.0.0.1:3000/healthz
+```
+
+The web socket remains loopback-bound and the gateway is never published. Put a maintained TLS
+reverse proxy in front of the web service before using secure cookies or OIDC. Continue with the
+[first-run guide](docs/first-run.md) to create the first administrator, then rehearse a verified
+backup before adding irreplaceable configuration.
+
 ## Development preview
 
-Prerequisites are Node.js, pnpm, and Docker with Compose. Until the first supported
-container release is published, run Omnifin from source:
+Prerequisites are Node.js, pnpm, and Docker with Compose. Contributors and source-checkpoint
+reviewers can run Omnifin from source:
 
 ```sh
 pnpm install --frozen-lockfile

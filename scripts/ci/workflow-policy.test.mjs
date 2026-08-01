@@ -474,6 +474,7 @@ test("stable publication crosses optional live coverage only through explicit su
     "attest-candidate",
     "scan-candidate",
     "verify-candidate",
+    "verify-install-bundle",
     "promote-stable",
     "verify-stable",
     "finalize",

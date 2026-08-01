@@ -1,8 +1,8 @@
 # First-run runbook
 
-This runbook takes a fresh source checkout to its first local Omnifin administrator. Omnifin is
-pre-release software until a tagged release says otherwise; use an immutable release digest for a
-persistent installation once one is published.
+This runbook takes a verified release bundle or reviewed source checkout to its first local Omnifin
+administrator. Omnifin remains pre-release software until `v1.0.0`; each tagged phase release
+supports only the capabilities and upstream versions stated in its notes and compatibility matrix.
 
 ## 1. Prepare the deployment
 
@@ -10,13 +10,19 @@ Choose a canonical public origin and a Jellyfin server that Omnifin can reach. P
 and OIDC require HTTPS. The bundled Compose file publishes only the web process on loopback; place a
 maintained TLS reverse proxy in front of it and do not publish the gateway.
 
-Create the local environment file and two independent secrets:
+For a tagged release, first verify the downloaded `SHA256SUMS`, then create the local environment
+file from the digest-pinned template and generate two independent secrets:
 
 ```sh
-cp .env.example .env
+sha256sum --check SHA256SUMS
+cp omnifin.env.example .env
+chmod 0600 .env
 openssl rand -base64 32
 openssl rand -base64 48
 ```
+
+For a reviewed source checkout, use `.env.example` instead. Never copy a release environment file
+between versions: its `OMNIFIN_IMAGE` value intentionally binds it to one verified image digest.
 
 Put the first output in `OMNIFIN_ENCRYPTION_KEY` and the second in
 `OMNIFIN_RECOVERY_SECRET`. Also set:
@@ -31,17 +37,28 @@ OMNIFIN_INSECURE_LOOPBACK_PREVIEW=false
 For a deliberately trusted private-network Jellyfin URL using plain HTTP, set
 `OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. Prefer HTTPS and restrict network paths in either
 case. Keep `.env` mode `0600`, never commit it, and store the encryption key and recovery secret
-separately from the SQLite backup.
+separately from the SQLite backup. Prepare the bind-mounted backup directory for the numeric
+runtime identity:
+
+```sh
+sudo install -d -m 0700 -o 65532 -g 65532 backups
+```
 
 ## 2. Start and verify
 
-Until a supported image is published, build the exact reviewed checkout:
+For a tagged release bundle, pull and start the exact digest from its environment file:
 
 ```sh
-docker compose up -d --build --wait
+docker compose --env-file .env --file compose.yaml pull
+docker compose --env-file .env --file compose.yaml up --detach --wait
 curl --fail --silent --show-error http://127.0.0.1:3000/healthz
-docker compose exec -T gateway /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs
+docker compose --env-file .env --file compose.yaml exec -T gateway \
+  /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs http://127.0.0.1:4000/readyz
 ```
+
+Source-checkpoint reviewers use `docker compose up --detach --build --wait` from the repository root
+instead. Do not add `--build` to release-bundle commands: the bundle deliberately contains no build
+context and must run the already verified image.
 
 The web check proves liveness. The private gateway check additionally reaches the process that owns
 SQLite and upstream secrets. Inspect `docker compose ps` and sanitized logs if either check fails.
