@@ -1,4 +1,7 @@
-import type { JellyfinContinueWatchingResult } from "@omnifin/connectors/media/jellyfin-user-media-client";
+import type {
+  JellyfinContinueWatchingResult,
+  JellyfinLibraryResult,
+} from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
   ROLE_PERMISSIONS,
@@ -6,6 +9,7 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
+import { libraryBrowseResponseSchema } from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -161,12 +165,42 @@ function resumeResult(): JellyfinContinueWatchingResult {
   };
 }
 
+function libraryResult(): JellyfinLibraryResult {
+  return {
+    items: [
+      {
+        artwork: {
+          accentColor: "#336699",
+          backdrop: { itemId: privateSeriesId, type: "Backdrop" },
+          blurHash: "005?}k",
+          poster: { itemId: privateSeriesId, type: "Primary" },
+        },
+        contentRating: "TV-14",
+        episodeNumber: 3,
+        externalId: privateItemId,
+        kind: "episode",
+        overview: "A receiver resolves a signal beyond the ice.",
+        played: false,
+        positionSeconds: 900,
+        runtimeSeconds: 2_700,
+        seasonNumber: 2,
+        subtitle: "S02E03 · The Long Meridian",
+        title: "Northern Lights",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 30,
+    truncated: true,
+  };
+}
+
 function harness(options: { withIdentity?: boolean } = {}) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
   if (options.withIdentity !== false) insertIdentity(database, config);
   const readContinueWatching = vi.fn(async () => resumeResult());
+  const readLibrary = vi.fn(async () => libraryResult());
   const readImage = vi.fn(async () => ({
     body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
     contentType: "image/jpeg" as const,
@@ -174,6 +208,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
   const createClient = vi.fn((_input: ContinueWatchingClientFactoryInput) => ({
     readContinueWatching,
     readImage,
+    readLibrary,
   }));
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
@@ -183,7 +218,15 @@ function harness(options: { withIdentity?: boolean } = {}) {
       createToken: () => "m".repeat(22),
     },
   });
-  return { config, createClient, database, readContinueWatching, readImage, service };
+  return {
+    config,
+    createClient,
+    database,
+    readContinueWatching,
+    readImage,
+    readLibrary,
+    service,
+  };
 }
 
 describe("ContinueWatchingService", () => {
@@ -245,6 +288,161 @@ describe("ContinueWatchingService", () => {
         items: [],
         state: "empty",
         truncated: false,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("browses only the paired Jellyfin user through encrypted query-bound cursors", async () => {
+    const { createClient, database, readLibrary, service } = harness();
+    try {
+      const first = await service.browse(
+        { kind: "all", limit: 30, query: "Meridian", sort: "recent" },
+        { principal: principal() },
+      );
+
+      expect(libraryBrowseResponseSchema.parse(first)).toEqual(first);
+      expect(first).toMatchObject({
+        items: [
+          {
+            media: {
+              id: `media_${"m".repeat(22)}`,
+              kind: "episode",
+              title: "Northern Lights",
+            },
+            played: false,
+            positionSeconds: 900,
+          },
+        ],
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      });
+      expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+      expect(first.nextCursor).not.toContain("viewer-link");
+      expect(first.nextCursor).not.toContain("Meridian");
+      expect(JSON.stringify(first)).not.toMatch(
+        /private-jellyfin|private-upstream|viewer-external/u,
+      );
+      expect(readLibrary).toHaveBeenCalledWith(
+        {
+          kind: "all",
+          limit: 30,
+          query: "Meridian",
+          sort: "recent",
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+      expect(createClient).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: privateAccessToken, deviceId: "viewer-device" }),
+      );
+
+      const longestQuery = await service.browse(
+        { kind: "episodes", limit: 50, query: "m".repeat(100), sort: "year" },
+        { principal: principal() },
+      );
+      expect(longestQuery.nextCursor?.length).toBeLessThanOrEqual(512);
+      expect(libraryBrowseResponseSchema.parse(longestQuery)).toEqual(longestQuery);
+
+      await service.browse(
+        {
+          cursor: first.nextCursor!,
+          kind: "all",
+          limit: 30,
+          query: "Meridian",
+          sort: "recent",
+        },
+        { principal: principal() },
+      );
+      expect(readLibrary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ startIndex: 30, userId: "viewer-external" }),
+        undefined,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects tampered or cross-query library cursors before contacting Jellyfin", async () => {
+    const { database, readLibrary, service } = harness();
+    try {
+      const first = await service.browse(
+        { kind: "all", limit: 30, query: "Meridian", sort: "recent" },
+        { principal: principal() },
+      );
+      const calls = readLibrary.mock.calls.length;
+      const cursor = first.nextCursor!;
+
+      await expect(
+        service.browse(
+          {
+            cursor: `${cursor.slice(0, -1)}${cursor.endsWith("a") ? "b" : "a"}`,
+            kind: "all",
+            limit: 30,
+            query: "Meridian",
+            sort: "recent",
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+      await expect(
+        service.browse(
+          { cursor, kind: "movies", limit: 30, query: "Meridian", sort: "recent" },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+
+      database.sqlite
+        .prepare("update service_identity_links set revision = revision + 1 where id = ?")
+        .run("viewer-link");
+      await expect(
+        service.browse(
+          { cursor, kind: "all", limit: 30, query: "Meridian", sort: "recent" },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+      expect(readLibrary).toHaveBeenCalledTimes(calls);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns a safe degraded catalogue without leaking upstream failures", async () => {
+    const { database, readLibrary, service } = harness();
+    readLibrary.mockRejectedValueOnce(new Error(`private ${privateItemId} ${privateAccessToken}`));
+    try {
+      const response = await service.browse(
+        { kind: "all", limit: 30, sort: "recent" },
+        { principal: principal() },
+      );
+      expect(response).toMatchObject({
+        items: [],
+        nextCursor: null,
+        source: {
+          failure: { operation: "media.library", service: "jellyfin" },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
+      expect(JSON.stringify(response)).not.toMatch(/private-jellyfin|private-upstream/u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("distinguishes a healthy empty paired-user catalogue from an unavailable source", async () => {
+    const { database, readLibrary, service } = harness();
+    readLibrary.mockResolvedValueOnce({ items: [], nextStartIndex: null, truncated: false });
+    try {
+      await expect(
+        service.browse({ kind: "all", limit: 30, sort: "recent" }, { principal: principal() }),
+      ).resolves.toMatchObject({
+        items: [],
+        nextCursor: null,
+        source: { failure: null, status: "healthy" },
+        state: "empty",
       });
     } finally {
       database.close();

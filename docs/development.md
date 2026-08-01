@@ -58,8 +58,8 @@ and safe local logout when optional provider logout is absent. The browser conne
 and global discovery, request, acquisition-provenance, manual release, Indexer Intelligence,
 system-health, download-queue, and acquisition-calendar flows are pre-release development
 surfaces. The same is
-true of Jellyfin playback and progress, Continue Watching, issue reporting, Bazarr subtitle search
-and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
+true of Jellyfin playback and progress, Continue Watching, the paired-user library catalogue, issue
+reporting, Bazarr subtitle search and download, and guarded Jellyfin library maintenance. The protected live compatibility baseline,
 broader acquisition mutations, and release-grade live compatibility evidence remain unavailable.
 
 The web application and gateway are separate processes. Browser traffic must still

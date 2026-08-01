@@ -5,6 +5,10 @@ import {
   libraryAttentionQuerySchema,
   libraryAttentionResponseJsonSchema,
   libraryAttentionResponseSchema,
+  libraryBrowseQueryJsonSchema,
+  libraryBrowseQuerySchema,
+  libraryBrowseResponseJsonSchema,
+  libraryBrowseResponseSchema,
   libraryItemRefreshRequestSchema,
   libraryMetadataUpdateRequestSchema,
   libraryMutationResponseSchema,
@@ -31,6 +35,37 @@ const attention = {
   nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
   scanned: 30,
   truncated: true,
+};
+
+const catalogue = {
+  generatedAt: "2026-07-28T14:00:00.000Z",
+  items: [
+    {
+      durationSeconds: 2_700,
+      media: {
+        artwork: {
+          accentColor: "#336699",
+          backdropPath: `/v1/media/${referenceId}/images/backdrop`,
+          blurHash: "005?}k",
+          posterPath: `/v1/media/${referenceId}/images/poster`,
+        },
+        availability: "available" as const,
+        contentRating: "TV-14",
+        id: referenceId,
+        kind: "episode" as const,
+        overview: "A receiver resolves a signal beyond the ice.",
+        runtimeMinutes: 45,
+        subtitle: "S02E03 · The Long Meridian",
+        title: "Northern Lights",
+        year: 2026,
+      },
+      played: false,
+      positionSeconds: 900,
+    },
+  ],
+  nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
+  source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+  state: "complete" as const,
 };
 
 describe("library operation contracts", () => {
@@ -78,6 +113,94 @@ describe("library operation contracts", () => {
       imageMode: "missing",
       metadataMode: "missing",
     });
+  });
+
+  it("normalizes a playable paired-user catalogue with opaque references", () => {
+    expect(libraryBrowseResponseSchema.parse(catalogue)).toEqual(catalogue);
+    expect(JSON.stringify(catalogue)).not.toMatch(/external|jellyfin\.example|upstream/iu);
+    expect(libraryBrowseQuerySchema.parse({ limit: "25" })).toEqual({
+      kind: "all",
+      limit: 25,
+      sort: "recent",
+    });
+    expect(
+      libraryBrowseQuerySchema.parse({ kind: "episodes", query: "  Meridian  ", sort: "title" }),
+    ).toEqual({ kind: "episodes", limit: 30, query: "Meridian", sort: "title" });
+    expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+  });
+
+  it("rejects non-playable, cross-reference, or inconsistent catalogue state", () => {
+    const item = catalogue.items[0]!;
+
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [
+          {
+            ...item,
+            media: { ...item.media, kind: "series" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [
+          {
+            ...item,
+            media: {
+              ...item.media,
+              artwork: {
+                ...item.media.artwork,
+                posterPath: `/v1/media/media_${"z".repeat(22)}/images/poster`,
+              },
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [],
+        nextCursor: null,
+        state: "complete",
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "unavailable",
+        },
+        state: "unavailable",
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: "Home Jellyfin",
+          failure: {
+            code: "upstream_error",
+            message: "The source is unavailable.",
+            occurredAt: catalogue.generatedAt,
+            operation: "media.continue_watching",
+            retryable: true,
+            service: "jellyfin",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      }).success,
+    ).toBe(false);
   });
 
   it("requires a bounded editable metadata field", () => {
@@ -133,5 +256,9 @@ describe("library operation contracts", () => {
   it("exports Fastify-compatible response schema", () => {
     expect(libraryAttentionResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryAttentionResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryBrowseQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryBrowseQueryJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryBrowseResponseJsonSchema).toMatchObject({ type: "object" });
   });
 });

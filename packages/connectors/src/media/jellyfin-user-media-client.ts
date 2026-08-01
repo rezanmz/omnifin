@@ -9,6 +9,7 @@ import { SafeHttpClient } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 
 export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
+export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
@@ -46,6 +47,54 @@ const jellyfinResumeResponseSchema = z.object({
   TotalRecordCount: z.int().nonnegative().optional(),
 });
 
+const jellyfinLibraryItemSchema = z.object({
+  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
+  Id: z.string().trim().min(1).max(256),
+  ImageBlurHashes: z.unknown().optional(),
+  ImageTags: imageTagsSchema.optional(),
+  IndexNumber: z.int().nonnegative().max(100_000).optional(),
+  Name: z.string().trim().min(1).max(300),
+  OfficialRating: z.string().trim().max(32).nullish(),
+  Overview: z.string().max(8_000).nullish(),
+  ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
+  ParentBackdropItemId: z.string().trim().min(1).max(256).optional(),
+  ParentIndexNumber: z.int().nonnegative().max(100_000).optional(),
+  ProductionYear: z.int().min(1870).max(2200).nullish(),
+  RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
+  SeriesId: z.string().trim().min(1).max(256).optional(),
+  SeriesName: z.string().trim().min(1).max(300).optional(),
+  SeriesPrimaryImageTag: z.string().min(1).max(256).optional(),
+  Type: z.enum(["Episode", "Movie"]),
+  UserData: z
+    .object({
+      Played: z.boolean().optional(),
+      PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).optional(),
+    })
+    .optional(),
+});
+
+const jellyfinLibraryResponseSchema = z.object({
+  Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
+});
+
+const jellyfinLibraryQuerySchema = z.strictObject({
+  kind: z.enum(["all", "episodes", "movies"]),
+  limit: z.int().positive().max(JELLYFIN_LIBRARY_BROWSE_LIMIT),
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
+    .optional(),
+  sort: z.enum(["recent", "title", "year"]),
+  startIndex: z.int().nonnegative().max(1_000_000),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
 export interface JellyfinArtworkSource {
   itemId: string;
   type: "Backdrop" | "Primary";
@@ -74,6 +123,25 @@ export interface JellyfinContinueWatchingItem {
 
 export interface JellyfinContinueWatchingResult {
   items: JellyfinContinueWatchingItem[];
+  truncated: boolean;
+}
+
+export interface JellyfinLibraryBrowseInput {
+  kind: "all" | "episodes" | "movies";
+  limit: number;
+  query?: string;
+  sort: "recent" | "title" | "year";
+  startIndex: number;
+  userId: string;
+}
+
+export interface JellyfinLibraryItem extends Omit<JellyfinContinueWatchingItem, "lastPlayedAt"> {
+  played: boolean;
+}
+
+export interface JellyfinLibraryResult {
+  items: JellyfinLibraryItem[];
+  nextStartIndex: number | null;
   truncated: boolean;
 }
 
@@ -180,7 +248,7 @@ function selectedBlurHash(imageBlurHashes: unknown, type: "Backdrop" | "Primary"
 }
 
 function artworkPalette(
-  item: z.infer<typeof jellyfinResumeItemSchema>,
+  item: { ImageBlurHashes?: unknown },
   posterTag: string | undefined,
   backdropTag: string | undefined,
 ) {
@@ -197,7 +265,11 @@ function artworkPalette(
   return { accentColor: null, blurHash: null };
 }
 
-function episodeLabel(item: z.infer<typeof jellyfinResumeItemSchema>) {
+function episodeLabel(item: {
+  IndexNumber?: number | undefined;
+  Name: string;
+  ParentIndexNumber?: number | undefined;
+}) {
   const season = item.ParentIndexNumber;
   const episode = item.IndexNumber;
   const index =
@@ -259,6 +331,67 @@ function normalizeResumeItem(
   };
 }
 
+function normalizeLibraryItem(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+): JellyfinLibraryItem {
+  const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
+  const isEpisode = item.Type === "Episode";
+  const posterTag =
+    isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
+      ? item.SeriesPrimaryImageTag
+      : item.ImageTags?.Primary;
+  const poster =
+    isEpisode && item.SeriesId && posterTag
+      ? { itemId: item.SeriesId, type: "Primary" as const }
+      : posterTag
+        ? { itemId: item.Id, type: "Primary" as const }
+        : null;
+  const backdropTag = item.ParentBackdropImageTags?.[0] ?? item.BackdropImageTags?.[0];
+  const backdropItemId = item.ParentBackdropImageTags?.length
+    ? (item.ParentBackdropItemId ?? item.SeriesId)
+    : item.BackdropImageTags?.length
+      ? item.Id
+      : undefined;
+  const positionSeconds = Math.min(
+    runtimeSeconds,
+    secondsFromTicks(item.UserData?.PlaybackPositionTicks ?? 0),
+  );
+
+  return {
+    artwork: {
+      ...artworkPalette(item, posterTag, backdropTag),
+      backdrop: backdropItemId ? { itemId: backdropItemId, type: "Backdrop" } : null,
+      poster,
+    },
+    contentRating: compactText(item.OfficialRating, 32),
+    episodeNumber: isEpisode ? (item.IndexNumber ?? null) : null,
+    externalId: item.Id,
+    kind: isEpisode ? "episode" : "movie",
+    overview: compactText(item.Overview, 2_000),
+    played: item.UserData?.Played ?? false,
+    positionSeconds,
+    runtimeSeconds,
+    seasonNumber: isEpisode ? (item.ParentIndexNumber ?? null) : null,
+    subtitle: isEpisode ? episodeLabel(item) : null,
+    title: isEpisode ? (item.SeriesName ?? item.Name) : item.Name,
+    year: item.ProductionYear ?? null,
+  };
+}
+
+function libraryItemTypes(kind: JellyfinLibraryBrowseInput["kind"]) {
+  if (kind === "episodes") return "Episode";
+  if (kind === "movies") return "Movie";
+  return "Movie,Episode";
+}
+
+function librarySort(sort: JellyfinLibraryBrowseInput["sort"]) {
+  if (sort === "title") return { SortBy: "SortName", SortOrder: "Ascending" };
+  if (sort === "year") {
+    return { SortBy: "ProductionYear,SortName", SortOrder: "Descending,Ascending" };
+  }
+  return { SortBy: "DateCreated", SortOrder: "Descending" };
+}
+
 export class JellyfinUserMediaClient {
   readonly #authorization: string;
   readonly #client: SafeHttpClient;
@@ -316,6 +449,44 @@ export class JellyfinUserMediaClient {
       truncated:
         response.Items.length > JELLYFIN_CONTINUE_WATCHING_LIMIT ||
         (response.TotalRecordCount ?? 0) > JELLYFIN_CONTINUE_WATCHING_LIMIT,
+    };
+  }
+
+  public async readLibrary(
+    rawInput: JellyfinLibraryBrowseInput,
+    signal?: AbortSignal,
+  ): Promise<JellyfinLibraryResult> {
+    const input = jellyfinLibraryQuerySchema.parse(rawInput);
+    const response = await this.#client.requestJson(
+      `Users/${input.userId}/Items`,
+      jellyfinLibraryResponseSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.library",
+        query: {
+          EnableImageTypes: "Primary,Backdrop",
+          EnableTotalRecordCount: "false",
+          EnableUserData: "true",
+          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+          ImageTypeLimit: "1",
+          IncludeItemTypes: libraryItemTypes(input.kind),
+          IsMissing: "false",
+          IsVirtualItem: "false",
+          Limit: String(input.limit + 1),
+          MediaTypes: "Video",
+          Recursive: "true",
+          ...(input.query === undefined ? {} : { SearchTerm: input.query }),
+          ...librarySort(input.sort),
+          StartIndex: String(input.startIndex),
+        },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    const truncated = response.Items.length > input.limit;
+    return {
+      items: response.Items.slice(0, input.limit).map(normalizeLibraryItem),
+      nextStartIndex: truncated ? input.startIndex + input.limit : null,
+      truncated,
     };
   }
 

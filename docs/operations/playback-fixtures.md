@@ -50,10 +50,11 @@ Raw daemon diagnostics, runner paths, generated container names, ports, and netw
 remain private.
 
 Each version completes the first-run flow with ephemeral credentials and then calls
-Omnifin's production identity and playback connectors. The gate requires public version
+Omnifin's production identity, user-media, and playback connectors. The gate requires public version
 discovery, password authentication, invalid-password rejection, Quick Connect
 initiation, mismatched-secret rejection, administrator approval, polling, and final
-Quick Connect authentication. It then imports the fixture and requires successful
+Quick Connect authentication. It then imports the fixture, searches the exact authenticated user's
+catalogue through the production adapter, validates one normalized playable movie, and requires successful
 direct-play negotiation, an authenticated 4 KiB range response, French audio and English
 subtitle selection, a seeked HLS transcode and real media segment, exact progress
 persistence, and playback renegotiation after restarting Jellyfin. The uploaded reports

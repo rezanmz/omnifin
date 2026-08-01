@@ -1,10 +1,12 @@
 import { z } from "zod";
 
-import { mediaReferenceIdSchema } from "./dashboard.js";
+import { partialFailureSchema } from "./connectors.js";
+import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
 export const LIBRARY_ARTWORK_MAX_RESULTS = 40;
+export const LIBRARY_BROWSE_MAX_ITEMS = 50;
 
 const safeTextSchema = z
   .string()
@@ -20,6 +22,157 @@ export const libraryCursorSchema = z
   .max(512)
   .regex(/^[A-Za-z0-9_.-]+$/u);
 export type LibraryCursor = z.infer<typeof libraryCursorSchema>;
+
+export const libraryBrowseKindSchema = z.enum(["all", "episodes", "movies"]);
+export type LibraryBrowseKind = z.infer<typeof libraryBrowseKindSchema>;
+
+export const libraryBrowseSortSchema = z.enum(["recent", "title", "year"]);
+export type LibraryBrowseSort = z.infer<typeof libraryBrowseSortSchema>;
+
+export const libraryBrowseQuerySchema = z.strictObject({
+  cursor: libraryCursorSchema.optional(),
+  kind: libraryBrowseKindSchema.default("all"),
+  limit: z.coerce.number().int().positive().max(LIBRARY_BROWSE_MAX_ITEMS).default(30),
+  query: safeTextSchema.max(100).optional(),
+  sort: libraryBrowseSortSchema.default("recent"),
+});
+export type LibraryBrowseQuery = z.infer<typeof libraryBrowseQuerySchema>;
+
+export const libraryBrowseItemSchema = z
+  .strictObject({
+    durationSeconds: z.int().positive().max(10_000_000),
+    media: mediaSummarySchema,
+    played: z.boolean(),
+    positionSeconds: z.int().nonnegative().max(10_000_000),
+  })
+  .superRefine((item, context) => {
+    if (!mediaReferenceIdSchema.safeParse(item.media.id).success) {
+      context.addIssue({
+        code: "custom",
+        message: "Library catalogue items must use opaque media references.",
+        path: ["media", "id"],
+      });
+    }
+    if (item.media.kind !== "movie" && item.media.kind !== "episode") {
+      context.addIssue({
+        code: "custom",
+        message: "Library catalogue items must be directly playable videos.",
+        path: ["media", "kind"],
+      });
+    }
+    if (item.media.availability !== "available") {
+      context.addIssue({
+        code: "custom",
+        message: "Library catalogue items must be available to the paired Jellyfin user.",
+        path: ["media", "availability"],
+      });
+    }
+    if (item.positionSeconds > item.durationSeconds) {
+      context.addIssue({
+        code: "custom",
+        message: "Library playback position cannot exceed duration.",
+        path: ["positionSeconds"],
+      });
+    }
+    for (const [artworkType, path] of Object.entries({
+      backdropPath: item.media.artwork.backdropPath,
+      posterPath: item.media.artwork.posterPath,
+    })) {
+      if (path !== null && !path.startsWith(`/v1/media/${item.media.id}/images/`)) {
+        context.addIssue({
+          code: "custom",
+          message: "Library artwork must belong to the same opaque media reference.",
+          path: ["media", "artwork", artworkType],
+        });
+      }
+    }
+  });
+export type LibraryBrowseItem = z.infer<typeof libraryBrowseItemSchema>;
+
+export const libraryBrowseSourceSchema = z
+  .strictObject({
+    displayName: safeTextSchema.max(160),
+    failure: partialFailureSchema.nullable(),
+    status: z.enum(["healthy", "unavailable"]),
+  })
+  .superRefine((source, context) => {
+    if ((source.status === "healthy") !== (source.failure === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "An unavailable library source must include one safe failure.",
+        path: ["failure"],
+      });
+    }
+    if (source.failure && source.failure.service !== "jellyfin") {
+      context.addIssue({
+        code: "custom",
+        message: "Library source failures must identify Jellyfin.",
+        path: ["failure", "service"],
+      });
+    }
+    if (
+      source.failure &&
+      source.failure.operation !== "media.library" &&
+      source.failure.operation !== "media.reference"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library source failures must identify a catalogue operation.",
+        path: ["failure", "operation"],
+      });
+    }
+  });
+export type LibraryBrowseSource = z.infer<typeof libraryBrowseSourceSchema>;
+
+export const libraryBrowseResponseSchema = z
+  .strictObject({
+    generatedAt: timestampSchema,
+    items: z.array(libraryBrowseItemSchema).max(LIBRARY_BROWSE_MAX_ITEMS),
+    nextCursor: libraryCursorSchema.nullable(),
+    source: libraryBrowseSourceSchema,
+    state: z.enum(["complete", "empty", "unavailable"]),
+  })
+  .superRefine((response, context) => {
+    const references = new Set<string>();
+    for (const [index, item] of response.items.entries()) {
+      if (references.has(item.media.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Library media references must be unique within a page.",
+          path: ["items", index, "media", "id"],
+        });
+      }
+      references.add(item.media.id);
+    }
+    const healthy = response.source.status === "healthy";
+    const expectedState = !healthy
+      ? "unavailable"
+      : response.items.length === 0
+        ? "empty"
+        : "complete";
+    if (response.state !== expectedState) {
+      context.addIssue({
+        code: "custom",
+        message: "Library catalogue state must match source health and returned items.",
+        path: ["state"],
+      });
+    }
+    if (!healthy && (response.items.length > 0 || response.nextCursor !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Unavailable library sources cannot return media or pagination.",
+        path: ["items"],
+      });
+    }
+    if (response.items.length === 0 && response.nextCursor !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "An empty library page cannot include a continuation cursor.",
+        path: ["nextCursor"],
+      });
+    }
+  });
+export type LibraryBrowseResponse = z.infer<typeof libraryBrowseResponseSchema>;
 
 export const libraryAttentionQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
@@ -265,6 +418,8 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 export const libraryAttentionResponseJsonSchema = withoutSchemaDialect(
   libraryAttentionResponseSchema,
 );
+export const libraryBrowseQueryJsonSchema = withoutSchemaDialect(libraryBrowseQuerySchema);
+export const libraryBrowseResponseJsonSchema = withoutSchemaDialect(libraryBrowseResponseSchema);
 export const libraryScanRequestJsonSchema = withoutSchemaDialect(libraryScanRequestSchema);
 export const libraryItemRefreshRequestJsonSchema = withoutSchemaDialect(
   libraryItemRefreshRequestSchema,

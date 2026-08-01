@@ -24,6 +24,7 @@ import {
   selectConnectorAddress,
   startContainerWithRetry,
   validateImportedItem,
+  validateLibraryCatalog,
   verifiedQuickConnectSession,
 } from "../integration/jellyfin/playback.mjs";
 
@@ -70,7 +71,7 @@ test("keeps the disposable Jellyfin server on a private network with determinist
 });
 
 test("builds a closed compatibility report without retaining supplied secrets", () => {
-  const report = jellyfinCompatibilityReport({
+  const input = {
     accessToken: "private-access-token",
     identityChecks: {
       invalidPasswordRejected: true,
@@ -81,6 +82,12 @@ test("builds a closed compatibility report without retaining supplied secrets", 
       secret: "private-quick-connect-secret",
     },
     image: LATEST_IMAGE,
+    libraryCatalog: {
+      itemCount: 1,
+      kind: "movie",
+      secret: "private-library-identifier",
+      userScoped: true,
+    },
     persistedSeconds: 6,
     playback: {
       direct: { bytes: 4_096, status: 206, token: "private-direct-token" },
@@ -92,7 +99,8 @@ test("builds a closed compatibility report without retaining supplied secrets", 
     reconnectDelivery: "direct",
     restartPosition: 6,
     version: "10.11.11",
-  });
+  };
+  const report = jellyfinCompatibilityReport(input);
 
   assert.deepEqual(Object.keys(report).sort(), [
     "checks",
@@ -110,9 +118,22 @@ test("builds a closed compatibility report without retaining supplied secrets", 
   });
   assert.deepEqual(report.checks.directRange, { bytes: 4_096, status: 206 });
   assert.deepEqual(report.checks.hlsTranscode, { bytes: 8_192, format: "fmp4", status: 200 });
+  assert.deepEqual(report.checks.libraryCatalog, {
+    itemCount: 1,
+    kind: "movie",
+    userScoped: true,
+  });
   assert.doesNotMatch(
     JSON.stringify(report),
-    /private-access-token|private-quick-connect-secret|private-direct-token|private\/media/u,
+    /private-access-token|private-quick-connect-secret|private-direct-token|private-library-identifier|private\/media/u,
+  );
+  assert.throws(
+    () =>
+      jellyfinCompatibilityReport({
+        ...input,
+        libraryCatalog: { ...input.libraryCatalog, userScoped: false },
+      }),
+    /compatibility_report_invalid/u,
   );
 });
 
@@ -489,6 +510,47 @@ test("waits for Jellyfin to finish probing imported media streams", () => {
   }
   assert.equal(isLibraryProbePending(probeError), true);
   assert.equal(isLibraryProbePending(new Error("unrelated")), false);
+});
+
+test("accepts only a normalized user-scoped production catalogue result", () => {
+  const expectedItemId = "a".repeat(32);
+  assert.deepEqual(
+    validateLibraryCatalog(
+      {
+        items: [
+          {
+            externalId: expectedItemId,
+            kind: "movie",
+            runtimeSeconds: 16,
+            title: "Omnifin Fixture",
+          },
+        ],
+        nextStartIndex: null,
+        truncated: false,
+      },
+      expectedItemId,
+    ),
+    { itemCount: 1, kind: "movie", userScoped: true },
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          items: [
+            {
+              externalId: "b".repeat(32),
+              kind: "movie",
+              runtimeSeconds: 16,
+              title: "Omnifin Fixture",
+            },
+          ],
+          nextStartIndex: null,
+          truncated: false,
+        },
+        expectedItemId,
+      ),
+    /library_catalog_invalid/u,
+  );
 });
 
 test("retries only transient post-restart negotiation failures", async () => {

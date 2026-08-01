@@ -219,6 +219,121 @@ describe("JellyfinUserMediaClient", () => {
     expect(result.items.map((item) => item.externalId)).not.toContain("movie-50");
   });
 
+  it("reads a bounded paired-user library without widening the user's Jellyfin scope", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            UserData: { Played: false, PlaybackPositionTicks: 1_800_000_000 },
+          },
+          {
+            Id: "episode-upstream-1",
+            ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
+            IndexNumber: 3,
+            Name: "The Long Meridian",
+            ParentIndexNumber: 2,
+            RunTimeTicks: 2_700_000_000,
+            SeriesId: "series-upstream-1",
+            SeriesName: "Northern Lights",
+            SeriesPrimaryImageTag: "series-poster",
+            Type: "Episode",
+            UserData: { Played: true, PlaybackPositionTicks: 0 },
+          },
+          { ...movie, Id: "hidden-overflow-item" },
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readLibrary({
+        kind: "all",
+        limit: 2,
+        query: "  Meridian  ",
+        sort: "recent",
+        startIndex: 30,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({
+      items: [
+        expect.objectContaining({
+          externalId: "movie-upstream-1",
+          kind: "movie",
+          played: false,
+          positionSeconds: 180,
+          title: "The Far Meridian",
+        }),
+        expect.objectContaining({
+          externalId: "episode-upstream-1",
+          kind: "episode",
+          played: true,
+          positionSeconds: 0,
+          subtitle: "S02E03 · The Long Meridian",
+          title: "Northern Lights",
+        }),
+      ],
+      nextStartIndex: 32,
+      truncated: true,
+    });
+    expect(requests[0]?.url.pathname).toBe("/base/Users/paired-user-id/Items");
+    expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
+      EnableTotalRecordCount: "false",
+      EnableUserData: "true",
+      IncludeItemTypes: "Movie,Episode",
+      IsMissing: "false",
+      IsVirtualItem: "false",
+      Limit: "3",
+      MediaTypes: "Video",
+      Recursive: "true",
+      SearchTerm: "Meridian",
+      SortBy: "DateCreated",
+      SortOrder: "Descending",
+      StartIndex: "30",
+    });
+    expect(requests[0]?.url.searchParams.has("api_key")).toBe(false);
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("uses exact library type and sorting allowlists and fails closed on version drift", async () => {
+    const movieClient = clientWithResponses([jsonResponse({ Items: [] })]);
+    await expect(
+      movieClient.client.readLibrary({
+        kind: "movies",
+        limit: 30,
+        sort: "title",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ items: [], nextStartIndex: null, truncated: false });
+    expect(movieClient.requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Movie");
+    expect(movieClient.requests[0]?.url.searchParams.get("SortBy")).toBe("SortName");
+    expect(movieClient.requests[0]?.url.searchParams.get("SortOrder")).toBe("Ascending");
+
+    const malformed = clientWithResponses([
+      jsonResponse({ Items: [{ ...movie, Type: "Series" }] }),
+    ]);
+    await expect(
+      malformed.client.readLibrary({
+        kind: "all",
+        limit: 30,
+        sort: "year",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.library" });
+    await expect(
+      movieClient.client.readLibrary({
+        kind: "all",
+        limit: 51,
+        sort: "recent",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).rejects.toBeDefined();
+  });
+
   it("fails closed on malformed resume data and unsafe tokens", async () => {
     const malformed = clientWithResponses([
       jsonResponse({ Items: [{ ...movie, RunTimeTicks: "7200000000" }] }),

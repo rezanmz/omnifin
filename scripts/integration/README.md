@@ -68,8 +68,9 @@ that starts the pinned upstream provider in the same pull-request workflow.
 
 The same protected aggregate also generates the copyright-free
 [playback fixture](../../docs/operations/playback-fixtures.md) with the FFmpeg build
-from an immutable official Jellyfin image. It verifies seeking, alternate audio,
-embedded captions, and HLS transcoding without claiming live Jellyfin API coverage.
+from an immutable official Jellyfin image. It verifies the paired-user catalogue, seeking,
+alternate audio, embedded captions, and HLS transcoding without claiming live Jellyfin API
+coverage.
 
 The aggregate also runs the
 [isolated download-client fixtures](../../docs/operations/download-client-fixtures.md) against

@@ -1,6 +1,10 @@
-import type { JellyfinContinueWatchingResult } from "@omnifin/connectors/media/jellyfin-user-media-client";
+import type {
+  JellyfinContinueWatchingResult,
+  JellyfinLibraryResult,
+} from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { libraryBrowseResponseSchema } from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -73,6 +77,32 @@ async function harness() {
     truncated: false,
   };
   const readContinueWatching = vi.fn(async () => result);
+  const readLibrary = vi.fn(async (): Promise<JellyfinLibraryResult> => ({
+    items: [
+      {
+        artwork: {
+          accentColor: "#336699",
+          backdrop: null,
+          blurHash: "005?}k",
+          poster: { itemId: privateItemId, type: "Primary" },
+        },
+        contentRating: "PG-13",
+        episodeNumber: null,
+        externalId: privateItemId,
+        kind: "movie",
+        overview: "A signal crosses the horizon.",
+        played: false,
+        positionSeconds: 1_200,
+        runtimeSeconds: 7_200,
+        seasonNumber: null,
+        subtitle: null,
+        title: "The Far Meridian",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 1,
+    truncated: true,
+  }));
   const readImage = vi.fn(async () => ({
     body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
     contentType: "image/png" as const,
@@ -81,7 +111,7 @@ async function harness() {
     config,
     continueWatchingDependencies: {
       clock: () => now,
-      createClient: () => ({ readContinueWatching, readImage }),
+      createClient: () => ({ readContinueWatching, readImage, readLibrary }),
       mediaReferences: {
         clock: () => now,
         createToken: () => "r".repeat(22),
@@ -150,7 +180,7 @@ async function harness() {
       userId: "viewer-user",
     },
   });
-  return { app, readContinueWatching, readImage, viewer };
+  return { app, readContinueWatching, readImage, readLibrary, viewer };
 }
 
 describe("Continue Watching routes", () => {
@@ -194,6 +224,101 @@ describe("Continue Watching routes", () => {
       expect(response.statusCode).toBe(401);
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readContinueWatching).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves a private paired-user library page with an opaque continuation cursor", async () => {
+    const { app, readLibrary, viewer } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&limit=1&query=Meridian&sort=title",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      const body = libraryBrowseResponseSchema.parse(response.json());
+      expect(body).toMatchObject({
+        items: [
+          {
+            media: { id: `media_${"r".repeat(22)}`, kind: "movie", title: "The Far Meridian" },
+            played: false,
+            positionSeconds: 1_200,
+          },
+        ],
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      });
+      expect(body.nextCursor).toMatch(/^v2\./u);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+      expect(readLibrary).toHaveBeenCalledWith(
+        {
+          kind: "movies",
+          limit: 1,
+          query: "Meridian",
+          sort: "title",
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        expect.any(AbortSignal),
+      );
+
+      const next = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library?cursor=${encodeURIComponent(body.nextCursor!)}&kind=movies&limit=1&query=Meridian&sort=title`,
+      });
+      expect(next.statusCode, next.body).toBe(200);
+      expect(readLibrary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ startIndex: 1, userId: "viewer-external" }),
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires authentication and rejects tampered library cursors before upstream access", async () => {
+    const { app, readLibrary, viewer } = await harness();
+    try {
+      const signedOut = await app.inject({ method: "GET", url: "/v1/media/library" });
+      expect(signedOut.statusCode).toBe(401);
+      expect(readLibrary).not.toHaveBeenCalled();
+
+      const recovery = app.sessionService.createSession({
+        attribution: { authMethod: "recovery" },
+      });
+      const denied = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library",
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("permission_denied");
+      expect(readLibrary).not.toHaveBeenCalled();
+
+      const first = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?limit=1",
+      });
+      const cursor = libraryBrowseResponseSchema.parse(first.json()).nextCursor!;
+      const calls = readLibrary.mock.calls.length;
+      const tampered = `${cursor.slice(0, -1)}${cursor.endsWith("a") ? "b" : "a"}`;
+      const rejected = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library?cursor=${encodeURIComponent(tampered)}&limit=1`,
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(rejected.json()).error.code).toBe("media_library_cursor_invalid");
+      expect(rejected.body).not.toContain(cursor);
+      expect(readLibrary).toHaveBeenCalledTimes(calls);
     } finally {
       await app.close();
     }

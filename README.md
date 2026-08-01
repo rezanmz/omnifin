@@ -216,6 +216,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   normalized mutations, and audits
 - [Media issues](docs/media-issues.md) — normalized player and Seerr issue lifecycle,
   opaque references, partial failure, and idempotent decisions
+- [Media library](docs/media-library.md) — user-scoped Jellyfin catalogue, opaque pagination,
+  playback references, and privacy boundaries
 - [Acquisition provenance](docs/acquisition-provenance.md) — live normalized Radarr
   and Sonarr title history, bounded fallback, partial failure, and operator access
 - [Acquisition monitoring](docs/acquisition-monitoring.md) — exact-title Radarr and

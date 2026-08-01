@@ -118,10 +118,12 @@ export {
   ContinueWatchingError,
   ContinueWatchingService,
   MediaArtworkError,
+  MediaLibraryError,
   type ContinueWatchingClientFactoryInput,
   type ContinueWatchingContext,
   type ContinueWatchingDependencies,
   type MediaArtworkErrorReason,
+  type MediaLibraryErrorReason,
 } from "./media/continue-watching-service.js";
 export {
   PlaybackIssueError,
