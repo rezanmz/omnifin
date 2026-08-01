@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/rezanmz/omnifin/compare/v0.4.1...v0.5.0) (2026-08-01)
+
+
+### Features
+
+* **auth:** add first administrator bootstrap ([#134](https://github.com/rezanmz/omnifin/issues/134)) ([e81994b](https://github.com/rezanmz/omnifin/commit/e81994bd9569538c83598d5accdc7d113227616e))
+* **release:** publish digest-pinned install bundle ([#142](https://github.com/rezanmz/omnifin/issues/142)) ([bc81308](https://github.com/rezanmz/omnifin/commit/bc813084033f7253f7e2f6ad900f3ab0b8a8a1f1)), closes [#141](https://github.com/rezanmz/omnifin/issues/141)
+
+
+### Fixes
+
+* **ci:** isolate Playwright dependency installation ([#138](https://github.com/rezanmz/omnifin/issues/138)) ([e82b416](https://github.com/rezanmz/omnifin/commit/e82b41625f0116710bbda5800749ea4a1b868796)), closes [#136](https://github.com/rezanmz/omnifin/issues/136)
+* **ci:** preserve Jellyfin failure evidence ([#130](https://github.com/rezanmz/omnifin/issues/130)) ([fe16a15](https://github.com/rezanmz/omnifin/commit/fe16a1581936b9be3fec55e7f26cafdf1d7c25a2)), closes [#129](https://github.com/rezanmz/omnifin/issues/129) [#131](https://github.com/rezanmz/omnifin/issues/131)
+* **ci:** retry stalled Playwright installs ([#126](https://github.com/rezanmz/omnifin/issues/126)) ([f2f45e5](https://github.com/rezanmz/omnifin/commit/f2f45e5085aed846496fa9f39b45ba4e549fc889))
+* **ci:** retry transient Jellyfin container startup ([6a868c0](https://github.com/rezanmz/omnifin/commit/6a868c0dea7e30f5d2d091cb7716bf9a989b12e4)), closes [#135](https://github.com/rezanmz/omnifin/issues/135)
+* **web:** stabilize modal pointer submissions ([#140](https://github.com/rezanmz/omnifin/issues/140)) ([74b3f8e](https://github.com/rezanmz/omnifin/commit/74b3f8e241a2df71e4483749694f2451234b0d09)), closes [#139](https://github.com/rezanmz/omnifin/issues/139)
+
 ## [0.4.1](https://github.com/rezanmz/omnifin/compare/v0.4.0...v0.4.1) (2026-07-31)
 
 
