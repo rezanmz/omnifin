@@ -32,6 +32,10 @@ to create the host path implicitly so a typo cannot silently place recovery data
 
 ## Create and verify an online backup
 
+Before creating the first backup or beginning an upgrade, run the read-only
+[deployment doctor](deployment-doctor.md). Its backup check verifies only the mount's privacy and
+access posture; the backup and restore commands below remain the source of recovery evidence.
+
 Choose a new filename for every backup. Existing database or manifest files are never
 overwritten.
 

@@ -374,6 +374,26 @@ active mapped session and that fresh sign-in reuses the immutable identity with 
 Protected live compatibility evidence remains separate from this development gate and is required
 before a public support claim.
 
+## Deployment-doctor controls
+
+- **Spoofing:** the maintenance command accepts no destination argument. It uses the configured
+  canonical HTTPS origin and fixed private gateway endpoints, keeps ordinary certificate and hostname
+  validation enabled, follows no redirects, and requires exact bounded health/readiness shapes.
+- **Tampering:** the storage check opens an existing regular SQLite file read-only, runs a bounded
+  quick check plus foreign-key validation, and requires a readable non-empty migration ledger. The
+  image check accepts only a full `sha256` digest reference.
+- **Repudiation:** each versioned report includes a bounded generation time and deterministic ordered
+  results. The command does not claim to be an authenticated audit event; operators retain it with
+  the host's own invocation and change records.
+- **Information disclosure:** successful and failed checks return only enumerated IDs, states, and
+  reason codes. Origins, hostnames, addresses, paths, image values, headers, bodies, database values,
+  environment values, and exception text cannot enter the report schema.
+- **Denial of service:** network checks have fixed timeouts, private bodies have strict byte limits,
+  public bodies are discarded, and SQLite uses `quick_check(1)` instead of a full integrity scan.
+- **Elevation of privilege:** the rootless read-only maintenance container mounts no encryption or
+  recovery secrets for the doctor. The command performs no database, backup, session, or upstream
+  mutation and provides no insecure TLS override.
+
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and
 cache rules that do not expose one user's protected content to another.

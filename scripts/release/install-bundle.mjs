@@ -7,6 +7,9 @@ const publicImage = "ghcr.io/rezanmz/omnifin";
 const outputNames = ["compose.yaml", "omnifin.env.example", "SHA256SUMS"];
 const sourceImage = "image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
 const releaseImage = "image: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
+const sourceImageReference = "OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
+const releaseImageReference =
+  "OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
 
 export function stableReleaseVersion(value) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(value ?? "")) {
@@ -41,8 +44,16 @@ function runtimeCompose(source) {
     releaseImage,
     "compose_image_boundary_invalid",
   );
-  if (/^\s+build:/mu.test(withRequiredImage)) throw new Error("compose_build_boundary_invalid");
-  return withRequiredImage;
+  const withRequiredDoctorReference = replaceExactlyOnce(
+    withRequiredImage,
+    sourceImageReference,
+    releaseImageReference,
+    "compose_doctor_image_boundary_invalid",
+  );
+  if (/^\s+build:/mu.test(withRequiredDoctorReference)) {
+    throw new Error("compose_build_boundary_invalid");
+  }
+  return withRequiredDoctorReference;
 }
 
 function environmentTemplate(source, version, image) {

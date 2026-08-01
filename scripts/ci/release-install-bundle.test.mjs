@@ -79,6 +79,16 @@ test("creates a deterministic runtime-only installation bundle", () => {
     }
     assert.equal(compose.services.gateway.ports, undefined);
     assert.ok(compose.services.web.ports.every((entry) => String(entry).startsWith("127.0.0.1:")));
+    assert.equal(compose.services.maintenance.secrets, undefined);
+    assert.deepEqual(compose.services.maintenance.environment, {
+      NODE_ENV: "production",
+      OMNIFIN_BACKUP_DIRECTORY: "/backups",
+      OMNIFIN_BASE_URL: "${OMNIFIN_BASE_URL:-http://localhost:3000}",
+      OMNIFIN_DATABASE_URL: "/data/omnifin.db",
+      OMNIFIN_GATEWAY_HEALTH_URL: "http://gateway:4000/healthz",
+      OMNIFIN_GATEWAY_READY_URL: "http://gateway:4000/readyz",
+      OMNIFIN_IMAGE_REF: "${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
+    });
     assert.equal(
       compose.secrets.omnifin_encryption_key.file,
       "${OMNIFIN_ENCRYPTION_KEY_FILE:-./secrets/omnifin_encryption_key}",

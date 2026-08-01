@@ -132,6 +132,13 @@ durable on the host, backups are restorable, or recovery secrets are available t
 publishing Omnifin beyond loopback, resolve every attention result and complete the proxy, backup,
 restore, and recovery exercises in this guide.
 
+The maintenance image adds a complementary [deployment doctor](operations/deployment-doctor.md).
+It verifies the private health/readiness path, configured public HTTPS response and security headers,
+immutable image reference, SQLite integrity posture, and private backup-directory access without
+mounting application secrets or returning deployment values. Run it after the services start and
+before exposure or upgrade; then complete the manual recovery and representative-operation checks it
+cannot prove.
+
 ## Target production network layout
 
 Terminate TLS at a maintained reverse proxy and forward only to the web service. Do

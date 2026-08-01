@@ -74,6 +74,17 @@ context and must run the already verified image.
 The web check proves liveness. The private gateway check additionally reaches the process that owns
 SQLite and upstream secrets. Inspect `docker compose ps` and sanitized logs if either check fails.
 
+After the public HTTPS origin and immutable image digest are configured, run the read-only
+[deployment doctor](operations/deployment-doctor.md):
+
+```sh
+docker compose run --rm --no-deps maintenance doctor
+```
+
+Resolve every attention result or document an externally verified hairpin-network exception before
+exposing the installation. A ready doctor report does not replace the backup and recovery exercise
+below.
+
 ## 3. Establish the first administrator
 
 Open `<OMNIFIN_BASE_URL>/recovery` directly. It is intentionally absent from the ordinary login
