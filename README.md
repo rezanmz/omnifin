@@ -145,12 +145,17 @@ install -d -m 0700 secrets
 umask 077
 openssl rand -base64 32 | tr -d '\n' > secrets/omnifin_encryption_key
 openssl rand -base64 48 | tr -d '\n' > secrets/omnifin_recovery_secret
-chmod 0600 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
+chmod 0444 secrets/omnifin_encryption_key secrets/omnifin_recovery_secret
 sudo install -d -m 0700 -o 65532 -g 65532 backups
 docker compose --env-file .env --file compose.yaml pull
 docker compose --env-file .env --file compose.yaml up --detach --wait
 curl --fail --silent --show-error http://127.0.0.1:3000/healthz
 ```
+
+Compose bind-mounts local secret files without changing their host ownership, while the Omnifin
+image runs as an unprivileged numeric user. The files are therefore read-only for every identity,
+but other host users cannot traverse the `0700` directory to read them. Keep that directory owned
+by the deployment account and do not loosen its permissions.
 
 The web socket remains loopback-bound and the gateway is never published. Put a maintained TLS
 reverse proxy in front of the web service before using secure cookies or OIDC. Continue with the
