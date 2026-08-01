@@ -134,7 +134,7 @@ function dependencies(options = {}) {
           signature: { isValid: true, wasSignedByGitHub: true },
           tree: { oid: treeSha },
         },
-        ref: { name: `refs/heads/${input.branch}` },
+        ref: { name: input.branch, prefix: "refs/heads/" },
       };
     },
     deleteReference: async (branch) => calls.push(["deleteReference", branch]),
@@ -577,6 +577,44 @@ test("rejects a GraphQL tree mismatch before touching the release branch", async
   dependencySet.createSignedCommit = async (input) => {
     const result = await originalCreate(input);
     result.commit.tree.oid = "9".repeat(40);
+    return result;
+  };
+  await assert.rejects(
+    normalizeReleaseCommit(configuration(), dependencySet),
+    /unexpected reference or tree/u,
+  );
+  assert.equal(
+    calls.some(([name]) => name === "replaceWithLease"),
+    false,
+  );
+  assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
+});
+
+test("rejects a GraphQL branch-name mismatch before touching the release branch", async () => {
+  const { calls, dependencySet } = dependencies();
+  const originalCreate = dependencySet.createSignedCommit;
+  dependencySet.createSignedCommit = async (input) => {
+    const result = await originalCreate(input);
+    result.ref.name = "automation/release-signing/unexpected";
+    return result;
+  };
+  await assert.rejects(
+    normalizeReleaseCommit(configuration(), dependencySet),
+    /unexpected reference or tree/u,
+  );
+  assert.equal(
+    calls.some(([name]) => name === "replaceWithLease"),
+    false,
+  );
+  assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
+});
+
+test("rejects a GraphQL reference-prefix mismatch before touching the release branch", async () => {
+  const { calls, dependencySet } = dependencies();
+  const originalCreate = dependencySet.createSignedCommit;
+  dependencySet.createSignedCommit = async (input) => {
+    const result = await originalCreate(input);
+    result.ref.prefix = "refs/tags/";
     return result;
   };
   await assert.rejects(
