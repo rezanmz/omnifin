@@ -24,6 +24,8 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
       ? "ten-foot"
       : "standard";
   const demoViews = new Set([
+    "deployment-attention",
+    "deployment-unavailable",
     "forbidden",
     "needs-core",
     "partial",

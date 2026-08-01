@@ -29,6 +29,10 @@
       "types": "./dist/discovery.d.ts",
       "default": "./dist/discovery.js"
     },
+    "./deployment": {
+      "types": "./dist/deployment.d.ts",
+      "default": "./dist/deployment.js"
+    },
     "./downloads": {
       "types": "./dist/downloads.d.ts",
       "default": "./dist/downloads.js"

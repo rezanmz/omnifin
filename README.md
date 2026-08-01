@@ -73,9 +73,10 @@ The user access directory adds normalized role provenance and session visibility
 OIDC authority, review-before-apply role and suspension controls, final-admin protection, and
 atomic session revocation without exposing immutable external identities or Jellyfin credentials.
 A live administrator setup guide separates the verified Jellyfin core from recommended OIDC and
-optional media-stack extensions, preserves partial readiness during control-plane degradation, and
-links each incomplete capability to the exact safe configuration surface without exposing recovery,
-connector addresses, credentials, external identifiers, or raw upstream payloads.
+optional media-stack extensions, adds a private four-point deployment flight check, preserves partial
+readiness during control-plane degradation, and links each incomplete capability to the exact safe
+configuration surface without exposing recovery, connector addresses, credentials, external
+identifiers, or raw upstream payloads.
 Phase 3 adds a permission-checked live Seerr dashboard with partial-failure rails and
 user-bound protected artwork, discovery search and details, requests, acquisition recovery,
 Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,

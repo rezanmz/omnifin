@@ -39,6 +39,16 @@ export const FirstRunProviderUnavailable: Story = {
   args: { data: demoDashboard },
   render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("provider-unavailable")} />,
 };
+export const FirstRunDeploymentAttention: Story = {
+  args: { data: demoDashboard },
+  render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("deployment-attention")} />,
+};
+export const FirstRunDeploymentUnavailable: Story = {
+  args: { data: demoDashboard },
+  render: () => (
+    <OnboardingDashboard initialOutcome={setupReadinessDemo("deployment-unavailable")} />
+  ),
+};
 export const FirstRunSignedOut: Story = {
   args: { data: demoDashboard },
   render: () => <OnboardingDashboard initialOutcome={setupReadinessDemo("signed-out")} />,

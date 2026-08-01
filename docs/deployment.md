@@ -118,6 +118,20 @@ recommended or optional extensions, so a deliberately smaller home stack is neve
 The browser receives only normalized readiness state; connector URLs, credentials, identity
 subjects, recovery access, and raw upstream responses stay outside the guide.
 
+The same guide includes a separate **Deployment flight check** for the host boundary. It reports only
+four ordered ready-or-attention results: production runtime, canonical HTTPS with secure sessions,
+configured recovery access, and persistent SQLite storage. Only a full administrator can request the
+snapshot. The response is non-cacheable and never includes environment values, public origins,
+filesystem paths, proxy details, secret material, or database contents. A flight-check outage remains
+visibly separate from connector readiness, so a failed diagnostic cannot make a healthy media core
+look unconfigured.
+
+Treat the flight check as a preflight, not certification. It cannot prove that a reverse proxy is
+correctly stripping untrusted forwarding headers, a certificate is publicly trusted, the volume is
+durable on the host, backups are restorable, or recovery secrets are available to the operator. Before
+publishing Omnifin beyond loopback, resolve every attention result and complete the proxy, backup,
+restore, and recovery exercises in this guide.
+
 ## Target production network layout
 
 Terminate TLS at a maintained reverse proxy and forward only to the web service. Do

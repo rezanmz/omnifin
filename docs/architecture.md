@@ -216,6 +216,15 @@ counts, normalized states, and a generation timestamp. It does not serialize con
 identifiers, addresses, credentials, claims, identity subjects, recovery state, or raw capability
 snapshots. The same authorization requirement is enforced by both the route and service boundary.
 
+Deployment posture is deliberately a separate full-administrator resource at
+`GET /v1/admin/setup/deployment`. It returns four static identifiers with ready-or-attention state for
+the production runtime, HTTPS and secure-cookie boundary, recovery-secret configuration, and
+persistent SQLite configuration. Route and service layers independently enforce authority; the
+response is rate-limited and non-cacheable. Exact origins, environment values, filesystem paths,
+proxy topology, secrets, and storage contents never cross the browser boundary. Keeping this check
+separate also gives the interface an explicit partial-failure state without discarding connector
+readiness that was independently verified.
+
 Role-mapping mutations are serialized with sanitized audit writes and session revocation. A
 change invalidates active authority derived from the affected provider's default or mapped role;
 manual roles and recovery sessions are not changed. Mapping resolution remains deterministic by
