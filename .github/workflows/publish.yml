@@ -785,7 +785,16 @@ jobs:
           curl --fail --silent --show-error "http://127.0.0.1:${OMNIFIN_WEB_PORT}/recovery" \
             >/dev/null
           "${compose[@]}" exec -T gateway \
-            /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs http://127.0.0.1:4000/readyz
+            /nodejs/bin/node --input-type=module --eval '
+              const response = await fetch("http://127.0.0.1:4000/readyz", {
+                headers: { accept: "application/json" },
+                redirect: "error",
+                signal: AbortSignal.timeout(4_000),
+              });
+              if (!response.ok) process.exit(1);
+              const body = await response.json();
+              if (body?.status !== "ready" || body?.checks?.database !== "ok") process.exit(1);
+            '
           "${compose[@]}" run --rm --no-deps maintenance backup \
             --output /backups/release-install.sqlite
           "${compose[@]}" run --rm --no-deps maintenance verify \
