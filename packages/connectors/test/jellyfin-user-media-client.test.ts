@@ -299,6 +299,7 @@ describe("JellyfinUserMediaClient", () => {
       StartIndex: "30",
     });
     expect(requests[0]?.url.searchParams.has("api_key")).toBe(false);
+    expect(requests[0]?.url.searchParams.get("Fields")?.split(",")).toContain("MediaSources");
     expect(requests[0]?.init.headers.get("authorization")).toContain(
       'Token="private-access-token"',
     );
@@ -310,7 +311,9 @@ describe("JellyfinUserMediaClient", () => {
         Items: [
           {
             ...movie,
+            MediaSources: [{ RunTimeTicks: movie.RunTimeTicks }],
             ProductionYear: 0,
+            RunTimeTicks: null,
             UserData: { Played: null, PlaybackPositionTicks: null },
           },
           { ...movie, Id: "runtime-missing", RunTimeTicks: null },

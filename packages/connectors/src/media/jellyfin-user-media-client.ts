@@ -56,6 +56,14 @@ const jellyfinLibraryItemSchema = z.object({
   ImageBlurHashes: z.unknown().optional(),
   ImageTags: imageTagsSchema.nullish(),
   IndexNumber: z.int().nonnegative().max(100_000).nullish(),
+  MediaSources: z
+    .array(
+      z.object({
+        RunTimeTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
+      }),
+    )
+    .max(128)
+    .nullish(),
   Name: z.string().trim().min(1).max(300).nullish(),
   OfficialRating: z.string().trim().max(32).nullish(),
   Overview: z.string().max(8_000).nullish(),
@@ -337,8 +345,14 @@ function normalizeResumeItem(
 function normalizeLibraryItem(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
 ): JellyfinLibraryItem | null {
-  if (!item.Name || item.RunTimeTicks === null || item.RunTimeTicks === undefined) return null;
-  const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
+  if (!item.Name) return null;
+  const runtimeTicks =
+    item.RunTimeTicks ??
+    item.MediaSources?.find(
+      (source) => source.RunTimeTicks !== null && source.RunTimeTicks !== undefined,
+    )?.RunTimeTicks;
+  if (runtimeTicks === null || runtimeTicks === undefined) return null;
+  const runtimeSeconds = secondsFromTicks(runtimeTicks);
   if (runtimeSeconds < 1) return null;
   const isEpisode = item.Type === "Episode";
   const posterTag =
@@ -478,7 +492,7 @@ export class JellyfinUserMediaClient {
           EnableImageTypes: "Primary,Backdrop",
           EnableTotalRecordCount: "false",
           EnableUserData: "true",
-          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes,MediaSources",
           ImageTypeLimit: "1",
           IncludeItemTypes: libraryItemTypes(input.kind),
           IsMissing: "false",
