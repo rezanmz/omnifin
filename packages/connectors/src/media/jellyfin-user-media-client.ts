@@ -15,25 +15,28 @@ const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
 
-const imageTagsSchema = z.record(z.string().trim().min(1).max(80), z.string().min(1).max(256));
+const imageTagsSchema = z.record(
+  z.string().trim().min(1).max(80),
+  z.string().min(1).max(256).nullable(),
+);
 
 const jellyfinResumeItemSchema = z.object({
-  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
+  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   Id: z.string().trim().min(1).max(256),
   ImageBlurHashes: z.unknown().optional(),
-  ImageTags: imageTagsSchema.optional(),
-  IndexNumber: z.int().nonnegative().max(100_000).optional(),
+  ImageTags: imageTagsSchema.nullish(),
+  IndexNumber: z.int().nonnegative().max(100_000).nullish(),
   Name: z.string().trim().min(1).max(300),
   OfficialRating: z.string().trim().max(32).nullish(),
   Overview: z.string().max(8_000).nullish(),
-  ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
-  ParentBackdropItemId: z.string().trim().min(1).max(256).optional(),
-  ParentIndexNumber: z.int().nonnegative().max(100_000).optional(),
+  ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  ParentBackdropItemId: z.string().trim().min(1).max(256).nullish(),
+  ParentIndexNumber: z.int().nonnegative().max(100_000).nullish(),
   ProductionYear: z.int().min(1870).max(2200).nullish(),
   RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
-  SeriesId: z.string().trim().min(1).max(256).optional(),
-  SeriesName: z.string().trim().min(1).max(300).optional(),
-  SeriesPrimaryImageTag: z.string().min(1).max(256).optional(),
+  SeriesId: z.string().trim().min(1).max(256).nullish(),
+  SeriesName: z.string().trim().min(1).max(300).nullish(),
+  SeriesPrimaryImageTag: z.string().min(1).max(256).nullish(),
   Type: z.string().trim().min(1).max(80),
   UserData: z.object({
     LastPlayedDate: z.iso.datetime({ offset: true }),
@@ -48,29 +51,29 @@ const jellyfinResumeResponseSchema = z.object({
 });
 
 const jellyfinLibraryItemSchema = z.object({
-  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
+  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   Id: z.string().trim().min(1).max(256),
   ImageBlurHashes: z.unknown().optional(),
-  ImageTags: imageTagsSchema.optional(),
-  IndexNumber: z.int().nonnegative().max(100_000).optional(),
+  ImageTags: imageTagsSchema.nullish(),
+  IndexNumber: z.int().nonnegative().max(100_000).nullish(),
   Name: z.string().trim().min(1).max(300),
   OfficialRating: z.string().trim().max(32).nullish(),
   Overview: z.string().max(8_000).nullish(),
-  ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).optional(),
-  ParentBackdropItemId: z.string().trim().min(1).max(256).optional(),
-  ParentIndexNumber: z.int().nonnegative().max(100_000).optional(),
+  ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  ParentBackdropItemId: z.string().trim().min(1).max(256).nullish(),
+  ParentIndexNumber: z.int().nonnegative().max(100_000).nullish(),
   ProductionYear: z.int().min(1870).max(2200).nullish(),
   RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
-  SeriesId: z.string().trim().min(1).max(256).optional(),
-  SeriesName: z.string().trim().min(1).max(300).optional(),
-  SeriesPrimaryImageTag: z.string().min(1).max(256).optional(),
+  SeriesId: z.string().trim().min(1).max(256).nullish(),
+  SeriesName: z.string().trim().min(1).max(300).nullish(),
+  SeriesPrimaryImageTag: z.string().min(1).max(256).nullish(),
   Type: z.enum(["Episode", "Movie"]),
   UserData: z
     .object({
       Played: z.boolean().optional(),
       PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).optional(),
     })
-    .optional(),
+    .nullish(),
 });
 
 const jellyfinLibraryResponseSchema = z.object({
@@ -266,9 +269,9 @@ function artworkPalette(
 }
 
 function episodeLabel(item: {
-  IndexNumber?: number | undefined;
+  IndexNumber?: number | null | undefined;
   Name: string;
-  ParentIndexNumber?: number | undefined;
+  ParentIndexNumber?: number | null | undefined;
 }) {
   const season = item.ParentIndexNumber;
   const episode = item.IndexNumber;
@@ -295,7 +298,7 @@ function normalizeResumeItem(
   const posterTag =
     isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
       ? item.SeriesPrimaryImageTag
-      : item.ImageTags?.Primary;
+      : (item.ImageTags?.Primary ?? undefined);
   const poster =
     isEpisode && item.SeriesId && posterTag
       ? { itemId: item.SeriesId, type: "Primary" as const }
@@ -339,7 +342,7 @@ function normalizeLibraryItem(
   const posterTag =
     isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
       ? item.SeriesPrimaryImageTag
-      : item.ImageTags?.Primary;
+      : (item.ImageTags?.Primary ?? undefined);
   const poster =
     isEpisode && item.SeriesId && posterTag
       ? { itemId: item.SeriesId, type: "Primary" as const }

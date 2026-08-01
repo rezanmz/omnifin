@@ -225,6 +225,14 @@ describe("JellyfinUserMediaClient", () => {
         Items: [
           {
             ...movie,
+            ImageTags: { Primary: "poster-tag", Thumb: null },
+            IndexNumber: null,
+            ParentBackdropImageTags: null,
+            ParentBackdropItemId: null,
+            ParentIndexNumber: null,
+            SeriesId: null,
+            SeriesName: null,
+            SeriesPrimaryImageTag: null,
             UserData: { Played: false, PlaybackPositionTicks: 1_800_000_000 },
           },
           {
