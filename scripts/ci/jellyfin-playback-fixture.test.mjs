@@ -514,23 +514,30 @@ test("waits for Jellyfin to finish probing imported media streams", () => {
 
 test("accepts only a normalized user-scoped production catalogue result", () => {
   const expectedItemId = "a".repeat(32);
-  assert.deepEqual(
-    validateLibraryCatalog(
+  const validResult = {
+    items: [
       {
-        items: [
-          {
-            externalId: expectedItemId,
-            kind: "movie",
-            runtimeSeconds: 16,
-            title: "Omnifin Fixture",
-          },
-        ],
-        nextStartIndex: null,
-        truncated: false,
+        externalId: expectedItemId,
+        kind: "movie",
+        runtimeSeconds: 16,
+        title: "Omnifin Fixture",
       },
-      expectedItemId,
-    ),
-    { itemCount: 1, kind: "movie", userScoped: true },
+    ],
+    nextStartIndex: null,
+    truncated: false,
+  };
+  assert.deepEqual(validateLibraryCatalog(validResult, expectedItemId), {
+    itemCount: 1,
+    kind: "movie",
+    userScoped: true,
+  });
+  assert.throws(
+    () => validateLibraryCatalog({ ...validResult, items: [] }, expectedItemId),
+    /library_catalog_empty/u,
+  );
+  assert.throws(
+    () => validateLibraryCatalog({ ...validResult, truncated: true }, expectedItemId),
+    /library_catalog_pagination_invalid/u,
   );
   assert.throws(
     () =>
@@ -549,7 +556,40 @@ test("accepts only a normalized user-scoped production catalogue result", () => 
         },
         expectedItemId,
       ),
-    /library_catalog_invalid/u,
+    /library_catalog_identity_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], kind: "episode" }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_kind_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], title: "Unexpected" }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_title_invalid/u,
+  );
+  assert.throws(
+    () =>
+      validateLibraryCatalog(
+        {
+          ...validResult,
+          items: [{ ...validResult.items[0], runtimeSeconds: 0 }],
+        },
+        expectedItemId,
+      ),
+    /library_catalog_runtime_invalid/u,
   );
 });
 

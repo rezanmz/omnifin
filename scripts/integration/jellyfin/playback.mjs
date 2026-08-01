@@ -74,6 +74,12 @@ const REPORTABLE_FAILURE_CODES = new Set([
   "jellyfin_target_invalid",
   "library_item_invalid",
   "library_catalog_invalid",
+  "library_catalog_empty",
+  "library_catalog_identity_invalid",
+  "library_catalog_kind_invalid",
+  "library_catalog_pagination_invalid",
+  "library_catalog_runtime_invalid",
+  "library_catalog_title_invalid",
   "library_scan_timeout",
   "library_streams_invalid",
   "manifest_invalid",
@@ -721,17 +727,19 @@ export function validateImportedItem(item) {
 
 export function validateLibraryCatalog(result, expectedItemId) {
   const item = result?.items?.[0];
-  if (
-    result?.items?.length !== 1 ||
-    result.nextStartIndex !== null ||
-    result.truncated !== false ||
-    item?.externalId !== expectedItemId ||
-    item.kind !== "movie" ||
-    item.title !== "Omnifin Fixture" ||
-    !Number.isSafeInteger(item.runtimeSeconds) ||
-    item.runtimeSeconds < 1
-  ) {
-    throw new JellyfinFixtureFailure("library_catalog_invalid");
+  if (result?.items?.length !== 1) throw new JellyfinFixtureFailure("library_catalog_empty");
+  if (result.nextStartIndex !== null || result.truncated !== false) {
+    throw new JellyfinFixtureFailure("library_catalog_pagination_invalid");
+  }
+  if (item?.externalId !== expectedItemId) {
+    throw new JellyfinFixtureFailure("library_catalog_identity_invalid");
+  }
+  if (item.kind !== "movie") throw new JellyfinFixtureFailure("library_catalog_kind_invalid");
+  if (item.title !== "Omnifin Fixture") {
+    throw new JellyfinFixtureFailure("library_catalog_title_invalid");
+  }
+  if (!Number.isSafeInteger(item.runtimeSeconds) || item.runtimeSeconds < 1) {
+    throw new JellyfinFixtureFailure("library_catalog_runtime_invalid");
   }
   return { itemCount: 1, kind: "movie", userScoped: true };
 }
