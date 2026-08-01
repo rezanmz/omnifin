@@ -18,6 +18,7 @@ const maximumFileBytes = 512 * 1_024;
 const maximumTotalBytes = 1_024 * 1_024;
 export const pullRequestBaseReadAttempts = 15;
 export const pullRequestHeadReadAttempts = 15;
+export const releaseReferenceReadAttempts = 15;
 const pullRequestPropagationReadDelayMs = 2_000;
 export const gitSafetyArguments = Object.freeze([
   "-c",
@@ -240,6 +241,32 @@ export async function waitForSignedPullRequest(
     await dependencies.pause(pullRequestPropagationReadDelayMs);
   }
   throw new Error("The normalized release pull request propagation check ended unexpectedly.");
+}
+
+export async function waitForSignedReference({ branch, previousHeadSha, signedSha }, dependencies) {
+  const expectedReference = `refs/heads/${branch}`;
+  for (let attempt = 1; attempt <= releaseReferenceReadAttempts; attempt += 1) {
+    const reference = requireObject(
+      await dependencies.fetchReference(branch),
+      "Release branch reference",
+    );
+    const object = requireObject(reference.object, "Release branch reference object");
+    if (reference.ref !== expectedReference || object.type !== "commit") {
+      throw new Error("GitHub returned unexpected release branch metadata.");
+    }
+    const currentSha = requireFullSha(object.sha, "Release branch reference");
+    if (currentSha === signedSha) return reference;
+    if (currentSha !== previousHeadSha) {
+      throw new Error("The release branch moved to an unexpected commit after replacement.");
+    }
+    if (attempt === releaseReferenceReadAttempts) {
+      throw new Error(
+        "The release branch did not report the normalized commit within the bounded propagation window.",
+      );
+    }
+    await dependencies.pause(pullRequestPropagationReadDelayMs);
+  }
+  throw new Error("The normalized release branch propagation check ended unexpectedly.");
 }
 
 export function validateOriginalCommit(commitValue, { expectedBaseSha, headSha, title }) {
@@ -581,19 +608,19 @@ export async function normalizeReleaseCommit(
       temporaryBranch,
     });
 
-    const finalReference = await dependencies.fetchReference(release.branch);
-    if (finalReference?.object?.sha !== signedSha) {
-      throw new Error("The release branch did not resolve to the normalized commit.");
-    }
+    await waitForSignedReference(
+      { branch: release.branch, previousHeadSha: release.headSha, signedSha },
+      dependencies,
+    );
     await waitForSignedPullRequest(
       config,
       { previousHeadSha: release.headSha, signedSha },
       dependencies,
     );
-    const confirmedReference = await dependencies.fetchReference(release.branch);
-    if (confirmedReference?.object?.sha !== signedSha) {
-      throw new Error("The normalized release branch did not remain on the verified commit.");
-    }
+    await waitForSignedReference(
+      { branch: release.branch, previousHeadSha: release.headSha, signedSha },
+      dependencies,
+    );
     return { normalized: true, sha: signedSha };
   } finally {
     if (temporaryCreated) await dependencies.deleteReference(temporaryBranch);
