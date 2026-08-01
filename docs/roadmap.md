@@ -121,6 +121,8 @@ browser behavior.
   pending)
 - Browser-safe deployment flight check for production runtime, HTTPS sessions, recovery access, and
   persistent SQLite configuration (implemented; host-specific operational proof remains required)
+- Immutable-image deployment doctor for private readiness, public HTTPS headers, SQLite integrity,
+  and backup-directory posture (implemented; restore and authenticated-operation proof remain manual)
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 
