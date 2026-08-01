@@ -4,14 +4,16 @@ import { BrandMark } from "./brand-mark";
 import { DirectionalNavigationRegion } from "./directional-navigation-group";
 
 const destinations = [
-  { current: true, href: "/", icon: Compass, label: "Discover" },
-  { current: false, href: "/library", icon: Library, label: "Library" },
-  { current: false, href: "/calendar", icon: CalendarDays, label: "Calendar" },
-  { current: false, href: "/operations/health", icon: Gauge, label: "Operations" },
-  { current: false, href: "/operations/requests", icon: ClipboardCheck, label: "Requests" },
+  { href: "/", icon: Compass, id: "discover", label: "Discover" },
+  { href: "/library", icon: Library, id: "library", label: "Library" },
+  { href: "/calendar", icon: CalendarDays, id: "calendar", label: "Calendar" },
+  { href: "/operations/health", icon: Gauge, id: "operations", label: "Operations" },
+  { href: "/operations/requests", icon: ClipboardCheck, id: "requests", label: "Requests" },
 ] as const;
 
-export function NavigationRail() {
+type PrimaryDestination = (typeof destinations)[number]["id"];
+
+export function NavigationRail({ current = "discover" }: { current?: PrimaryDestination }) {
   return (
     <DirectionalNavigationRegion
       ariaLabel="Primary navigation"
@@ -24,11 +26,11 @@ export function NavigationRail() {
         <BrandMark compact />
       </Link>
       <nav className="navigation-rail__nav">
-        {destinations.map(({ current, href, icon: Icon, label }) => (
+        {destinations.map(({ href, icon: Icon, id, label }) => (
           <Link
-            aria-current={current ? "page" : undefined}
+            aria-current={current === id ? "page" : undefined}
             className="navigation-rail__item"
-            data-current={current || undefined}
+            data-current={current === id || undefined}
             data-directional-item
             href={href}
             key={href}
@@ -53,7 +55,7 @@ export function NavigationRail() {
   );
 }
 
-export function MobileNavigation() {
+export function MobileNavigation({ current = "discover" }: { current?: PrimaryDestination }) {
   return (
     <DirectionalNavigationRegion
       ariaLabel="Primary navigation"
@@ -62,11 +64,11 @@ export function MobileNavigation() {
       className="mobile-navigation"
       liquidGlass
     >
-      {destinations.map(({ current, href, icon: Icon, label }) => (
+      {destinations.map(({ href, icon: Icon, id, label }) => (
         <Link
-          aria-current={current ? "page" : undefined}
+          aria-current={current === id ? "page" : undefined}
           className="mobile-navigation__item"
-          data-current={current || undefined}
+          data-current={current === id || undefined}
           data-directional-item
           href={href}
           key={href}

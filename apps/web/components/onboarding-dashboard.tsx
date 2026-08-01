@@ -193,7 +193,7 @@ const STEP_CONTENT: Readonly<Record<SetupReadinessStepId, StepContent>> = Object
     readyAction: "Open library care",
     requirement: "Optional",
     settingsHref: "/settings/connectors",
-    surfaceHref: "/library",
+    surfaceHref: "/operations/library",
   },
 });
 

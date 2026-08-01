@@ -181,20 +181,44 @@ const routes = [
     path: "/calendar?test-view=unconfigured",
   },
   {
-    label: "library care",
+    label: "viewer library",
     path: "/library?test-view=ready",
   },
   {
-    label: "empty library care",
+    label: "empty viewer library",
     path: "/library?test-view=empty",
   },
   {
-    label: "unavailable library care",
+    label: "unavailable viewer library",
     path: "/library?test-view=unavailable",
   },
   {
-    label: "restricted library care",
+    label: "restricted viewer library",
     path: "/library?test-view=forbidden",
+  },
+  {
+    label: "signed-out viewer library",
+    path: "/library?test-view=signed_out",
+  },
+  {
+    label: "loading viewer library",
+    path: "/library?test-view=loading",
+  },
+  {
+    label: "library care",
+    path: "/operations/library?test-view=ready",
+  },
+  {
+    label: "empty library care",
+    path: "/operations/library?test-view=empty",
+  },
+  {
+    label: "unavailable library care",
+    path: "/operations/library?test-view=unavailable",
+  },
+  {
+    label: "restricted library care",
+    path: "/operations/library?test-view=forbidden",
   },
   {
     label: "Jellyfin credential denial",
@@ -439,7 +463,7 @@ test("library item inspector has no automatically detectable accessibility viola
     "Covered by representative Chromium viewports",
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/library?test-view=ready");
+  await page.goto("/operations/library?test-view=ready");
   await page.getByRole("button", { name: "Inspect Northern Lights" }).click();
   await expect(page.getByRole("button", { name: "Close library inspector" })).toBeFocused();
   const results = await new AxeBuilder({ page }).analyze();

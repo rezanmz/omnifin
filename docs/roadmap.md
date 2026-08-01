@@ -101,7 +101,8 @@ matrix.
   subtitles, bitrate control, progress, and Continue Watching (implemented;
   protected live evidence pending)
 - Paired-user Jellyfin movie and episode catalogue with bounded search, filters, sorting,
-  encrypted pagination, and protected artwork (gateway implemented; viewer presentation pending)
+  encrypted pagination, protected artwork, responsive viewer states, and lazy theater playback
+  (implemented; protected browser and live compatibility evidence pending)
 - Player issue reporting plus a unified local/Seerr resolve and reopen workbench
   (implemented; protected live evidence pending)
 - Bazarr subtitle search and download (implemented with an isolated real-service embedded-subtitle

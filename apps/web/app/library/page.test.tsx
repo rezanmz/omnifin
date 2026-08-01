@@ -13,7 +13,7 @@ describe("LibraryPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders geometry-preserving loading while the operator boundary resolves", async () => {
+  it("renders geometry-preserving loading while the paired catalogue resolves", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => new Promise<Response>(() => undefined)),
@@ -21,21 +21,26 @@ describe("LibraryPage", () => {
 
     render(await LibraryPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByLabelText("Loading library care")).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByRole("link", { name: "Discover" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("radiogroup", { name: "Color theme" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Gathering your library…" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.getAllByRole("link", { name: "Library" })).toHaveLength(2);
+    for (const link of screen.getAllByRole("link", { name: "Library" })) {
+      expect(link).toHaveAttribute("aria-current", "page");
+    }
   });
 
-  it("exposes the deterministic attention workspace only in explicit test mode", async () => {
+  it("exposes the deterministic paired catalogue only in explicit test mode", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
 
     render(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "ready" }) }));
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "Make every title feel finished." }),
+      screen.getByRole("heading", { level: 1, name: "Every story, in its place." }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Inspect Ember Coast" })).toBeVisible();
-    expect(screen.getByText("4 titles need a finishing touch")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Play Ember Coast/u })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "8 titles in view" })).toBeVisible();
   });
 
   it("renders a deliberate empty state", async () => {
@@ -43,7 +48,7 @@ describe("LibraryPage", () => {
 
     render(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "empty" }) }));
 
-    expect(screen.getByText("Library looks polished")).toBeVisible();
-    expect(screen.getByText("Nothing needs attention.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Your paired library is empty." })).toBeVisible();
+    expect(screen.getByText(/Add a playable movie or episode in Jellyfin/u)).toBeVisible();
   });
 });
