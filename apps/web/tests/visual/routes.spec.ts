@@ -938,6 +938,15 @@ for (const state of ["empty", "unavailable", "loading"] as const) {
     await page.goto(`/library?test-view=${state}`);
     await page.locator("main").waitFor();
     await removeDevelopmentIndicator(page);
+    if (state === "unavailable" && testInfo.project.name === "mobile") {
+      const retry = await page.getByRole("button", { name: "Try again" }).boundingBox();
+      const navigation = await page
+        .getByRole("navigation", { name: "Primary navigation" })
+        .boundingBox();
+      expect(retry, "retry action should be rendered").not.toBeNull();
+      expect(navigation, "mobile navigation should be rendered").not.toBeNull();
+      expect(retry!.y + retry!.height).toBeLessThanOrEqual(navigation!.y - 8);
+    }
     await expect(page).toHaveScreenshot(`media-library-${state}.png`, { fullPage: true });
   });
 }
