@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { createServer } from "node:http";
-import { chmod, lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -62,6 +62,23 @@ function readMarker(databasePath: string) {
 }
 
 describe("database backup maintenance", () => {
+  it.each([1, 366, 2.5, Number.NaN])(
+    "rejects invalid retained-backup count %s before writing",
+    async (retentionCount) => {
+      const directory = await fixtureDirectory();
+      const databasePath = path.join(directory, "omnifin.db");
+      writeMarker(databasePath, "source");
+
+      await expect(
+        createRetainedDatabaseBackup({
+          backupDirectory: directory,
+          databasePath,
+          retentionCount,
+        }),
+      ).rejects.toMatchObject({ code: "backup_retention_invalid" });
+    },
+  );
+
   it("creates and verifies a generated recovery point before applying retention", async () => {
     const directory = await fixtureDirectory();
     const databasePath = path.join(directory, "omnifin.db");
@@ -105,6 +122,7 @@ describe("database backup maintenance", () => {
 
     const oldest = await createScheduledBackup(1);
     const middle = await createScheduledBackup(2);
+    await writeFile(path.join(directory, "operator-notes.txt"), "keep", { mode: 0o600 });
     const newest = await createScheduledBackup(3);
 
     await expect(lstat(path.join(directory, oldest.backup.fileName))).rejects.toMatchObject({
@@ -119,6 +137,7 @@ describe("database backup maintenance", () => {
     await expect(
       verifyDatabaseBackup({ backupPath: path.join(directory, newest.backup.fileName) }),
     ).resolves.toEqual(newest.backup);
+    await expect(lstat(path.join(directory, "operator-notes.txt"))).resolves.toBeDefined();
     expect(newest.retention).toEqual({
       candidates: 3,
       removed: 1,
@@ -166,6 +185,80 @@ describe("database backup maintenance", () => {
     ]) {
       await expect(lstat(path.join(directory, fileName))).resolves.toBeDefined();
     }
+  });
+
+  it("never adopts a manually created backup into the managed retention set", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const manualFileName =
+      "omnifin-auto-20260730T120000000Z-11000000-0000-4000-8000-000000000099.sqlite";
+    const manual = await createDatabaseBackup({
+      databasePath,
+      now: new Date("2026-07-30T12:00:00.000Z"),
+      outputPath: path.join(directory, manualFileName),
+    });
+    const createScheduledBackup = (day: number, retentionCount: number) =>
+      createRetainedDatabaseBackup({
+        backupDirectory: directory,
+        createId: () => `11000000-0000-4000-8000-${day.toString().padStart(12, "0")}`,
+        databasePath,
+        now: new Date(`2026-08-0${day}T12:00:00.000Z`),
+        retentionCount,
+      });
+    await createScheduledBackup(1, 3);
+
+    const newest = await createScheduledBackup(2, 2);
+
+    expect(newest.retention).toEqual({
+      candidates: 3,
+      reason: "retention_set_invalid",
+      removed: 0,
+      retained: 3,
+      state: "attention",
+    });
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, manual.fileName) }),
+    ).resolves.toEqual(manual);
+  });
+
+  it("rejects a managed pair whose generated timestamp no longer matches its manifest", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const first = await createRetainedDatabaseBackup({
+      backupDirectory: directory,
+      createId: () => "12000000-0000-4000-8000-000000000001",
+      databasePath,
+      now: new Date("2026-08-01T12:00:00.000Z"),
+      retentionCount: 3,
+    });
+    const renamedFileName = first.backup.fileName.replace("20260801", "20260701");
+    await rename(
+      path.join(directory, first.backup.fileName),
+      path.join(directory, renamedFileName),
+    );
+    await rename(
+      path.join(directory, first.backup.manifestFileName),
+      path.join(directory, `${renamedFileName}.manifest.json`),
+    );
+
+    const second = await createRetainedDatabaseBackup({
+      backupDirectory: directory,
+      createId: () => "12000000-0000-4000-8000-000000000002",
+      databasePath,
+      now: new Date("2026-08-02T12:00:00.000Z"),
+      retentionCount: 2,
+    });
+
+    expect(second.retention).toMatchObject({
+      candidates: 2,
+      reason: "retention_set_invalid",
+      removed: 0,
+      retained: 2,
+      state: "attention",
+    });
+    await expect(lstat(path.join(directory, renamedFileName))).resolves.toBeDefined();
   });
 
   it("treats an orphan generated manifest as an invalid retention set", async () => {
@@ -233,6 +326,69 @@ describe("database backup maintenance", () => {
     ).resolves.toEqual(newest.backup);
     await expect(lstat(path.join(directory, "foreign-one.txt"))).resolves.toBeDefined();
     await expect(lstat(path.join(directory, "foreign-two.txt"))).resolves.toBeDefined();
+  });
+
+  it("reports a post-verification directory scan failure without losing the new recovery point", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+
+    const current = await createRetainedDatabaseBackup(
+      {
+        backupDirectory: directory,
+        createId: () => "32000000-0000-4000-8000-000000000001",
+        databasePath,
+        now: new Date("2026-08-01T12:00:00.000Z"),
+        retentionCount: 2,
+      },
+      {
+        readDirectoryEntries: async () => {
+          throw Object.assign(new Error("unavailable"), { code: "EIO" });
+        },
+      },
+    );
+
+    expect(current.retention).toEqual({
+      candidates: 0,
+      reason: "retention_scan_failed",
+      removed: 0,
+      retained: 0,
+      state: "attention",
+    });
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, current.backup.fileName) }),
+    ).resolves.toEqual(current.backup);
+  });
+
+  it("bounds generated candidate evaluation before opening a large retention set", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    for (let index = 0; index < 731; index += 1) {
+      const fileName = `omnifin-auto-20260701T120000000Z-30000000-0000-4000-8000-${index
+        .toString()
+        .padStart(12, "0")}.sqlite`;
+      await writeFile(path.join(directory, fileName), "bounded", { mode: 0o600 });
+    }
+
+    const current = await createRetainedDatabaseBackup({
+      backupDirectory: directory,
+      createId: () => "31000000-0000-4000-8000-000000000001",
+      databasePath,
+      now: new Date("2026-08-01T12:00:00.000Z"),
+      retentionCount: 2,
+    });
+
+    expect(current.retention).toEqual({
+      candidates: 732,
+      reason: "retention_candidate_limit_exceeded",
+      removed: 0,
+      retained: 732,
+      state: "attention",
+    });
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, current.backup.fileName) }),
+    ).resolves.toEqual(current.backup);
   });
 
   it("never prunes the current recovery point when the wall clock moves backward", async () => {
@@ -344,6 +500,208 @@ describe("database backup maintenance", () => {
         verifyDatabaseBackup({ backupPath: path.join(directory, backup.fileName) }),
       ).resolves.toEqual(backup);
     }
+  });
+
+  it("reports cleanup failure after safely retiring an expired pair", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const createScheduledBackup = (day: number, retentionCount: number) =>
+      createRetainedDatabaseBackup({
+        backupDirectory: directory,
+        createId: () => `71000000-0000-4000-8000-${day.toString().padStart(12, "0")}`,
+        databasePath,
+        now: new Date(`2026-08-0${day}T12:00:00.000Z`),
+        retentionCount,
+      });
+    const oldest = await createScheduledBackup(1, 3);
+    const middle = await createScheduledBackup(2, 3);
+
+    const newest = await createRetainedDatabaseBackup(
+      {
+        backupDirectory: directory,
+        createId: () => "71000000-0000-4000-8000-000000000003",
+        databasePath,
+        now: new Date("2026-08-03T12:00:00.000Z"),
+        retentionCount: 2,
+      },
+      {
+        removeFile: async () => {
+          throw Object.assign(new Error("denied"), { code: "EACCES" });
+        },
+      },
+    );
+
+    expect(newest.retention).toEqual({
+      candidates: 3,
+      reason: "retention_cleanup_failed",
+      removed: 1,
+      retained: 2,
+      state: "attention",
+    });
+    await expect(lstat(path.join(directory, oldest.backup.fileName))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const backup of [middle.backup, newest.backup]) {
+      await expect(
+        verifyDatabaseBackup({ backupPath: path.join(directory, backup.fileName) }),
+      ).resolves.toEqual(backup);
+    }
+  });
+
+  it("reports an unavailable pair when a failed retirement cannot roll back", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const createScheduledBackup = (day: number, retentionCount: number) =>
+      createRetainedDatabaseBackup({
+        backupDirectory: directory,
+        createId: () => `72000000-0000-4000-8000-${day.toString().padStart(12, "0")}`,
+        databasePath,
+        now: new Date(`2026-08-0${day}T12:00:00.000Z`),
+        retentionCount,
+      });
+    const oldest = await createScheduledBackup(1, 3);
+    const middle = await createScheduledBackup(2, 3);
+    let renameCall = 0;
+
+    const newest = await createRetainedDatabaseBackup(
+      {
+        backupDirectory: directory,
+        createId: () => "72000000-0000-4000-8000-000000000003",
+        databasePath,
+        now: new Date("2026-08-03T12:00:00.000Z"),
+        retentionCount: 2,
+      },
+      {
+        renameFile: async (source, destination) => {
+          renameCall += 1;
+          if (renameCall === 2 || renameCall === 3) {
+            throw Object.assign(new Error("denied"), { code: "EACCES" });
+          }
+          await rename(source, destination);
+        },
+      },
+    );
+
+    expect(newest.retention).toEqual({
+      candidates: 3,
+      reason: "retention_rollback_failed",
+      removed: 0,
+      retained: 2,
+      state: "attention",
+      unavailable: 1,
+    });
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, oldest.backup.fileName) }),
+    ).rejects.toMatchObject({ code: "backup_manifest_invalid" });
+    for (const backup of [middle.backup, newest.backup]) {
+      await expect(
+        verifyDatabaseBackup({ backupPath: path.join(directory, backup.fileName) }),
+      ).resolves.toEqual(backup);
+    }
+  });
+
+  it("never follows generated-looking symlink pairs during retention", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const first = await createRetainedDatabaseBackup({
+      backupDirectory: directory,
+      createId: () => "80000000-0000-4000-8000-000000000001",
+      databasePath,
+      now: new Date("2026-08-01T12:00:00.000Z"),
+      retentionCount: 3,
+    });
+    const linkedFileName =
+      "omnifin-auto-20260731T120000000Z-80000000-0000-4000-8000-000000000099.sqlite";
+    await symlink(first.backup.fileName, path.join(directory, linkedFileName));
+    await symlink(
+      first.backup.manifestFileName,
+      path.join(directory, `${linkedFileName}.manifest.json`),
+    );
+
+    const second = await createRetainedDatabaseBackup({
+      backupDirectory: directory,
+      createId: () => "80000000-0000-4000-8000-000000000002",
+      databasePath,
+      now: new Date("2026-08-02T12:00:00.000Z"),
+      retentionCount: 2,
+    });
+
+    expect(second.retention).toMatchObject({
+      candidates: 3,
+      reason: "retention_set_invalid",
+      removed: 0,
+      state: "attention",
+    });
+    await expect(lstat(path.join(directory, linkedFileName))).resolves.toMatchObject({
+      isSymbolicLink: expect.any(Function),
+    });
+    expect((await lstat(path.join(directory, linkedFileName))).isSymbolicLink()).toBe(true);
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, first.backup.fileName) }),
+    ).resolves.toEqual(first.backup);
+  });
+
+  it("preserves all generated pairs when an existing recovery point is tampered", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const createScheduledBackup = (day: number, retentionCount: number) =>
+      createRetainedDatabaseBackup({
+        backupDirectory: directory,
+        createId: () => `90000000-0000-4000-8000-${day.toString().padStart(12, "0")}`,
+        databasePath,
+        now: new Date(`2026-08-0${day}T12:00:00.000Z`),
+        retentionCount,
+      });
+    const first = await createScheduledBackup(1, 3);
+    const second = await createScheduledBackup(2, 3);
+    await writeFile(path.join(directory, first.backup.fileName), "tampered", { flag: "a" });
+
+    const third = await createScheduledBackup(3, 2);
+
+    expect(third.retention).toMatchObject({
+      candidates: 3,
+      reason: "retention_set_invalid",
+      removed: 0,
+      retained: 3,
+      state: "attention",
+    });
+    await expect(lstat(path.join(directory, first.backup.fileName))).resolves.toBeDefined();
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, second.backup.fileName) }),
+    ).resolves.toEqual(second.backup);
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, third.backup.fileName) }),
+    ).resolves.toEqual(third.backup);
+  });
+
+  it("uses generated names as a deterministic tie-breaker for equal creation times", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    writeMarker(databasePath, "source");
+    const createScheduledBackup = (id: number, now: Date, retentionCount: number) =>
+      createRetainedDatabaseBackup({
+        backupDirectory: directory,
+        createId: () => `a0000000-0000-4000-8000-${id.toString().padStart(12, "0")}`,
+        databasePath,
+        now,
+        retentionCount,
+      });
+    const tiedFirst = await createScheduledBackup(1, new Date("2026-07-01T12:00:00.000Z"), 3);
+    const tiedSecond = await createScheduledBackup(2, new Date("2026-07-01T12:00:00.000Z"), 3);
+
+    const current = await createScheduledBackup(3, new Date("2026-08-01T12:00:00.000Z"), 2);
+
+    await expect(lstat(path.join(directory, tiedFirst.backup.fileName))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      verifyDatabaseBackup({ backupPath: path.join(directory, tiedSecond.backup.fileName) }),
+    ).resolves.toEqual(tiedSecond.backup);
+    expect(current.retention).toMatchObject({ candidates: 3, removed: 1, retained: 2 });
   });
 
   it("creates and independently verifies a private, consistent backup", async () => {

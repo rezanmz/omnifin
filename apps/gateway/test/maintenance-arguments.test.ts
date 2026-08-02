@@ -27,6 +27,16 @@ describe("maintenance argument grammar", () => {
     expect(requireMaintenanceInteger(parsed, "--retain", { maximum: 365, minimum: 2 })).toBe(14);
   });
 
+  it.each(["0", "1", "2.5", "02", "366", "9007199254740992"])(
+    "rejects invalid retention value %s",
+    (value) => {
+      const parsed = parseMaintenanceArguments(["--retain", value]);
+      expect(() =>
+        requireMaintenanceInteger(parsed, "--retain", { maximum: 365, minimum: 2 }),
+      ).toThrow("usage");
+    },
+  );
+
   it.each([
     ["unknown argument", ["--public-url", "https://elsewhere.test"]],
     ["missing value", ["--input"]],

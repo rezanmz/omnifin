@@ -63,6 +63,23 @@ describe("maintenance CLI", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("returns a usage error for an out-of-policy retention count", async () => {
+    const fixture = await cliFixture();
+    let failure: (ExecFileException & { stderr: string; stdout: string }) | undefined;
+
+    try {
+      await runMaintenance(["backup-retained", "--retain", "1"], fixture);
+    } catch (error) {
+      failure = error as ExecFileException & { stderr: string; stdout: string };
+    }
+
+    expect(failure?.code).toBe(64);
+    expect(failure?.stdout).toBe("");
+    expect(failure?.stderr).toContain("backup-retained --retain 14");
+    expect(failure?.stderr).not.toContain(fixture.directory);
+    expect(failure?.stderr).not.toContain(fixture.databasePath);
+  });
+
   it("returns a temporary failure with safe partial-success evidence when pruning is blocked", async () => {
     const fixture = await cliFixture();
     await writeFile(

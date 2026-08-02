@@ -28,6 +28,7 @@ const RETAINED_BACKUP_FILE_PATTERN =
 const MAX_RETAINED_BACKUPS = 365;
 const MIN_RETAINED_BACKUPS = 2;
 const MAX_RETENTION_DIRECTORY_ENTRIES = 10_000;
+const MAX_RETENTION_CANDIDATES = MAX_RETAINED_BACKUPS * 2;
 const RETENTION_OVERLAP_GRACE_MS = 15 * 60 * 1_000;
 
 const backupManifestSchema = z
@@ -39,6 +40,7 @@ const backupManifestSchema = z
     formatVersion: z.literal(BACKUP_FORMAT_VERSION),
     imageReference: z.string().min(1).max(512),
     migrationCount: z.number().int().nonnegative(),
+    retentionManaged: z.literal(true).optional(),
     schemaSha256: z.string().regex(/^[0-9a-f]{64}$/),
     sqliteVersion: z.string().min(1).max(64),
   })
@@ -88,9 +90,11 @@ export interface RetainedBackupResult {
     candidates: number;
     deferred?: number;
     reason?:
+      | "retention_candidate_limit_exceeded"
       | "retention_cleanup_failed"
       | "retention_delete_failed"
       | "retention_rollback_failed"
+      | "retention_scan_failed"
       | "retention_scan_limit_exceeded"
       | "retention_set_invalid";
     removed: number;
@@ -121,6 +125,7 @@ interface BackupOptions {
   imageReference?: string;
   now?: Date;
   outputPath: string;
+  retentionManaged?: boolean;
 }
 
 interface RetainedBackupOptions {
@@ -134,6 +139,7 @@ interface RetainedBackupOptions {
 }
 
 interface RetainedBackupDependencies {
+  readDirectoryEntries?: typeof readBoundedDirectoryEntries;
   removeFile?: typeof unlink;
   renameFile?: typeof rename;
 }
@@ -359,8 +365,12 @@ function retainedBackupFileName(now: Date, id: string) {
   if (Number.isNaN(now.getTime()) || !RETAINED_BACKUP_ID_PATTERN.test(id)) {
     throw new MaintenanceError("backup_retention_invalid");
   }
-  const timestamp = now.toISOString().replaceAll(/[-:.]/g, "");
+  const timestamp = retainedBackupTimestamp(now);
   return `omnifin-auto-${timestamp}-${id}.sqlite`;
+}
+
+function retainedBackupTimestamp(now: Date) {
+  return now.toISOString().replaceAll(/[-:.]/g, "");
 }
 
 async function readBoundedDirectoryEntries(directory: string, limit: number) {
@@ -386,7 +396,18 @@ async function applyRetainedBackupLimit(
   scanLimit: number,
   dependencies: Required<RetainedBackupDependencies>,
 ) {
-  const scan = await readBoundedDirectoryEntries(backupDirectory, scanLimit);
+  let scan: Awaited<ReturnType<typeof readBoundedDirectoryEntries>>;
+  try {
+    scan = await dependencies.readDirectoryEntries(backupDirectory, scanLimit);
+  } catch {
+    return {
+      candidates: 0,
+      reason: "retention_scan_failed" as const,
+      removed: 0,
+      retained: 0,
+      state: "attention" as const,
+    };
+  }
   if (scan.exceeded) {
     return {
       candidates: 0,
@@ -403,6 +424,15 @@ async function applyRetainedBackupLimit(
     .map((fileName) => fileName.slice(0, -".manifest.json".length))
     .filter((fileName) => RETAINED_BACKUP_FILE_PATTERN.test(fileName));
   const fileNames = [...new Set([...backupFileNames, ...manifestBackupFileNames])];
+  if (fileNames.length > MAX_RETENTION_CANDIDATES) {
+    return {
+      candidates: fileNames.length,
+      reason: "retention_candidate_limit_exceeded" as const,
+      removed: 0,
+      retained: fileNames.length,
+      state: "attention" as const,
+    };
+  }
   const backupFileNameSet = new Set(backupFileNames);
   const manifestBackupFileNameSet = new Set(manifestBackupFileNames);
   if (
@@ -418,23 +448,30 @@ async function applyRetainedBackupLimit(
       state: "attention" as const,
     };
   }
-  let candidates: { backupPath: string; createdAt: string }[];
-  try {
-    candidates = await Promise.all(
-      fileNames.map(async (fileName) => {
-        const backupPath = path.join(backupDirectory, fileName);
-        const verified = await readAndValidateManifest(backupPath);
-        return { backupPath, createdAt: verified.manifest.createdAt };
-      }),
-    );
-  } catch {
-    return {
-      candidates: fileNames.length,
-      reason: "retention_set_invalid" as const,
-      removed: 0,
-      retained: fileNames.length,
-      state: "attention" as const,
-    };
+  const candidates: { backupPath: string; createdAt: string }[] = [];
+  for (const fileName of fileNames) {
+    try {
+      const backupPath = path.join(backupDirectory, fileName);
+      const verified = await readAndValidateManifest(backupPath);
+      if (verified.manifest.retentionManaged !== true) {
+        throw new MaintenanceError("backup_manifest_invalid");
+      }
+      const expectedPrefix = `omnifin-auto-${retainedBackupTimestamp(
+        new Date(verified.manifest.createdAt),
+      )}-`;
+      if (!fileName.startsWith(expectedPrefix)) {
+        throw new MaintenanceError("backup_manifest_invalid");
+      }
+      candidates.push({ backupPath, createdAt: verified.manifest.createdAt });
+    } catch {
+      return {
+        candidates: fileNames.length,
+        reason: "retention_set_invalid" as const,
+        removed: 0,
+        retained: fileNames.length,
+        state: "attention" as const,
+      };
+    }
   }
   candidates.sort(
     (left, right) =>
@@ -592,6 +629,7 @@ export async function createDatabaseBackup(options: BackupOptions): Promise<Back
       formatVersion: BACKUP_FORMAT_VERSION,
       imageReference: options.imageReference?.trim() || "unknown",
       migrationCount: inspection.migrationCount,
+      ...(options.retentionManaged ? { retentionManaged: true as const } : {}),
       schemaSha256: inspection.schemaSha256,
       sqliteVersion: inspection.sqliteVersion,
     });
@@ -654,6 +692,7 @@ export async function createRetainedDatabaseBackup(
     outputPath: backupPath,
     ...(options.imageReference ? { imageReference: options.imageReference } : {}),
     now,
+    retentionManaged: true,
   });
   await verifyDatabaseBackup({ backupPath });
 
@@ -666,6 +705,7 @@ export async function createRetainedDatabaseBackup(
       options.retentionCount,
       options.scanLimit ?? MAX_RETENTION_DIRECTORY_ENTRIES,
       {
+        readDirectoryEntries: dependencies.readDirectoryEntries ?? readBoundedDirectoryEntries,
         removeFile: dependencies.removeFile ?? unlink,
         renameFile: dependencies.renameFile ?? rename,
       },
