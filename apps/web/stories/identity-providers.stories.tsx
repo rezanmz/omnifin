@@ -1,4 +1,5 @@
 import {
+  RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   type OidcProviderAdmin,
   type RoleMapping,
@@ -111,6 +112,32 @@ export const EditingRoleMappingLight: Story = {
 };
 export const GuidedAuthentikConnection: Story = {
   args: { initialMappings: {}, initialOutcome: empty },
+};
+export const RecoveryAdministratorClaim: Story = {
+  args: {
+    initialMappings: { [provider.id]: [] },
+    initialOutcome: {
+      snapshot: {
+        ...ready.snapshot,
+        principal: {
+          ...principal,
+          accountState: "recovery",
+          authenticationMethod: { kind: "recovery" },
+          displayName: "Recovery access",
+          linkedServices: [],
+          permissions: [...RECOVERY_PERMISSIONS],
+          userId: null,
+        },
+        providers: [{ ...provider, enabled: true }],
+      },
+      status: "ready",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Continue with OIDC" })).toBeEnabled();
+    await expect(canvas.getByText(/Media and playback stay locked/u)).toBeVisible();
+  },
 };
 export const DiscoveryAttention: Story = {
   args: {

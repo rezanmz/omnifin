@@ -3277,6 +3277,45 @@
   color: var(--paper-0);
 }
 
+.jellyfin-bootstrap-alternative {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.jellyfin-bootstrap-alternative > span {
+  background: var(--line-soft);
+  height: 1px;
+  margin-bottom: 4px;
+  width: 100%;
+}
+
+.jellyfin-bootstrap-alternative a {
+  align-items: center;
+  align-self: start;
+  color: var(--acid);
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 680;
+  gap: 8px;
+  min-height: 44px;
+  transition:
+    color 150ms ease-out,
+    gap 150ms ease-out;
+}
+
+.jellyfin-bootstrap-alternative a:hover {
+  color: var(--paper-0);
+  gap: 11px;
+}
+
+.jellyfin-bootstrap-alternative p {
+  color: var(--paper-2);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin: -2px 0 0;
+}
+
 .jellyfin-login-form {
   display: grid;
   gap: 18px;

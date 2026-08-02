@@ -166,6 +166,7 @@ interface SessionJoinedRow {
   joinedUserDisplayName: string | null;
   joinedUserId: string | null;
   joinedUserRole: string | null;
+  joinedUserRoleSource: string | null;
   joinedUserStatus: string | null;
   lastRotatedAt: number;
   lastSeenAt: number;
@@ -307,11 +308,16 @@ function mapPrincipalRecord(row: SessionJoinedRow): SessionPrincipalRecord | nul
       ? null
       : row.joinedUserDisplayName !== null &&
           ["viewer", "requester", "operator", "admin"].includes(row.joinedUserRole ?? "") &&
+          ["default", "manual", "oidc_mapping", "recovery_bootstrap"].includes(
+            row.joinedUserRoleSource ?? "",
+          ) &&
           ["active", "disabled", "pending_link"].includes(row.joinedUserStatus ?? "")
         ? {
             displayName: row.joinedUserDisplayName,
             id: row.joinedUserId,
             role: row.joinedUserRole as "admin" | "operator" | "requester" | "viewer",
+            roleSource: row.joinedUserRoleSource as
+              "default" | "manual" | "oidc_mapping" | "recovery_bootstrap",
             status: row.joinedUserStatus as "active" | "disabled" | "pending_link",
           }
         : undefined;
@@ -1058,6 +1064,42 @@ export class SessionService {
     });
   }
 
+  /** @internal Resumes the exact recovery proof bound into an OIDC transaction. */
+  public resumeRecoveryBootstrapSession(
+    sessionToken: unknown,
+    expectedSessionId: unknown,
+  ): ValidatedRecoveryBootstrapSession | null {
+    if (typeof expectedSessionId !== "string" || !SESSION_ID_PATTERN.test(expectedSessionId)) {
+      return null;
+    }
+    const operationTime = this.currentTime();
+    const candidate = this.loadSessionReplacementCandidate(sessionToken, operationTime);
+    const row = candidate?.row;
+    const principalRecord = row && mapPrincipalRecord(row);
+    const principal = principalRecord && buildSessionPrincipal(principalRecord, operationTime);
+    if (
+      !candidate ||
+      !row ||
+      row.sessionId !== expectedSessionId ||
+      !principal ||
+      !this.sessionLifecycleIsActive(row, operationTime) ||
+      row.authMethod !== "recovery" ||
+      row.sessionUserId !== null ||
+      row.externalIdentityId !== null ||
+      row.oidcProviderId !== null ||
+      row.serviceIdentityLinkId !== null ||
+      principal.accountState !== "recovery" ||
+      principal.authenticationMethod.kind !== "recovery"
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      [VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND]: true as const,
+      operationTime: operationTime.getTime(),
+      sessionId: row.sessionId,
+    });
+  }
+
   /** @internal Atomically replaces a proven pending OIDC session after its link is established. */
   public completeValidatedOidcPairingSession(
     pairingSession: unknown,
@@ -1233,6 +1275,90 @@ export class SessionService {
         recoverySessionId: proof.sessionId,
         replacementSessionId: issued.principal.sessionId,
         userId,
+      }) as RevokedSessionRow[];
+    const replaced = revoked.find((candidate) => candidate.sessionId === row.sessionId);
+    if (!replaced) throw new Error("The recovery bootstrap session could not be replaced.");
+    this.auditSessionReplacement(replaced, issued, sessionInput, now, "recovery_bootstrap");
+    return issued;
+  }
+
+  /** @internal Replaces exact recovery access with an OIDC-attributed first-admin session. */
+  public completeValidatedRecoveryOidcBootstrapSession(
+    bootstrapSession: unknown,
+    attribution: Extract<SessionAttribution, { authMethod: "oidc" }>,
+    input: Omit<CreateSessionInput, "attribution"> = {},
+  ): IssuedSession {
+    if (!this.database.sqlite.inTransaction) {
+      throw new Error("A surrounding administrator bootstrap transaction is required.");
+    }
+    if (
+      !bootstrapSession ||
+      typeof bootstrapSession !== "object" ||
+      (bootstrapSession as Partial<ValidatedRecoveryBootstrapSession>)[
+        VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND
+      ] !== true
+    ) {
+      throw new Error("The recovery bootstrap session is invalid.");
+    }
+    const proof = bootstrapSession as ValidatedRecoveryBootstrapSession;
+    const validatedAttribution = this.validateAttribution(attribution);
+    if (validatedAttribution.authMethod !== "oidc") {
+      throw new Error("The recovery bootstrap identity is invalid.");
+    }
+    const now = new Date(proof.operationTime);
+    const row = this.loadJoinedSessionById(proof.sessionId);
+    if (
+      !row ||
+      !this.sessionLifecycleIsActive(row, now) ||
+      row.authMethod !== "recovery" ||
+      row.sessionUserId !== null ||
+      row.externalIdentityId !== null ||
+      row.oidcProviderId !== null ||
+      row.serviceIdentityLinkId !== null
+    ) {
+      throw new Error("The recovery bootstrap session could not be upgraded.");
+    }
+
+    const sessionInput: CreateSessionInput = {
+      attribution: validatedAttribution,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+    };
+    const issued = this.issueSessionInCurrentTransaction(
+      sessionInput,
+      new Set([row.tokenHash]),
+      now,
+      row.sessionId,
+    );
+    if (
+      issued.principal.userId !== validatedAttribution.userId ||
+      issued.principal.role !== "admin" ||
+      issued.principal.authenticationMethod.kind !== "oidc" ||
+      issued.principal.authenticationMethod.providerId !== validatedAttribution.oidcProviderId ||
+      (issued.principal.accountState !== "pending_link" &&
+        issued.principal.accountState !== "active")
+    ) {
+      throw new Error("The recovery bootstrap identity could not be established.");
+    }
+    const revoked = this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where id <> @replacementSessionId
+           and revoked_at is null
+           and (id = @recoverySessionId or user_id = @userId)
+         returning
+           id as sessionId,
+           user_id as userId,
+           auth_method as authMethod,
+           created_at as createdAt`,
+      )
+      .all({
+        now: now.getTime(),
+        recoverySessionId: proof.sessionId,
+        replacementSessionId: issued.principal.sessionId,
+        userId: validatedAttribution.userId,
       }) as RevokedSessionRow[];
     const replaced = revoked.find((candidate) => candidate.sessionId === row.sessionId);
     if (!replaced) throw new Error("The recovery bootstrap session could not be replaced.");
@@ -1725,6 +1851,7 @@ export class SessionService {
       u.id as joinedUserId,
       u.display_name as joinedUserDisplayName,
       u.role as joinedUserRole,
+      u.role_source as joinedUserRoleSource,
       u.status as joinedUserStatus,
       e.id as joinedExternalId,
       e.user_id as joinedExternalUserId,

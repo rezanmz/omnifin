@@ -25,6 +25,7 @@ const MAX_RETURN_PATH_LENGTH = 2_048;
 const MAX_REDIRECT_URI_LENGTH = 2_048;
 const OPAQUE_256_BIT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const PKCE_CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 const MALFORMED_PERCENT_ENCODING_PATTERN = /%(?![A-Fa-f0-9]{2})/;
@@ -67,6 +68,8 @@ export interface CreateOidcAuthorizationTransactionInput {
   browserBindingToken?: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
+  purpose?: "administrator_bootstrap" | "sign_in";
+  recoverySessionId?: string;
   returnPath?: string;
 }
 
@@ -78,6 +81,8 @@ export interface CreatedOidcAuthorizationTransaction {
   nonce: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
+  purpose?: "administrator_bootstrap" | "sign_in";
+  recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
   state: string;
@@ -99,6 +104,8 @@ export interface ConsumedOidcAuthorizationTransaction {
   nonce: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
+  purpose: "administrator_bootstrap" | "sign_in";
+  recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
   transactionId: string;
@@ -141,12 +148,24 @@ interface StoredOidcAuthorizationTransaction {
   returnPath: string;
 }
 
-interface EncryptedOidcAuthorizationTransactionPayload {
+interface EncryptedOidcAuthorizationTransactionPayloadV1 {
   readonly nonce: string;
   readonly providerId: string;
   readonly providerRuntimeBinding: OidcProviderRuntimeBinding;
   readonly schemaVersion: 1;
 }
+
+interface EncryptedOidcAuthorizationTransactionPayloadV2 {
+  readonly nonce: string;
+  readonly providerId: string;
+  readonly providerRuntimeBinding: OidcProviderRuntimeBinding;
+  readonly purpose: "administrator_bootstrap" | "sign_in";
+  readonly recoverySessionId: string | null;
+  readonly schemaVersion: 2;
+}
+
+type EncryptedOidcAuthorizationTransactionPayload =
+  EncryptedOidcAuthorizationTransactionPayloadV1 | EncryptedOidcAuthorizationTransactionPayloadV2;
 
 function invalidTransaction(): never {
   throw new OidcAuthorizationTransactionError("oidc_transaction_invalid");
@@ -164,6 +183,10 @@ function isCanonical256BitToken(value: unknown): value is string {
 
 function validProviderId(value: unknown): value is string {
   return typeof value === "string" && PROVIDER_ID_PATTERN.test(value);
+}
+
+function validSessionId(value: unknown): value is string {
+  return typeof value === "string" && SESSION_ID_PATTERN.test(value);
 }
 
 function validCodeVerifier(value: unknown): value is string {
@@ -376,8 +399,20 @@ function serializeEncryptedTransactionPayload(
   nonce: string,
   providerId: string,
   providerRuntimeBinding: OidcProviderRuntimeBinding,
+  purpose: "administrator_bootstrap" | "sign_in",
+  recoverySessionId: string | null,
 ) {
-  return JSON.stringify({ nonce, providerId, providerRuntimeBinding, schemaVersion: 1 });
+  if (purpose === "sign_in") {
+    return JSON.stringify({ nonce, providerId, providerRuntimeBinding, schemaVersion: 1 });
+  }
+  return JSON.stringify({
+    nonce,
+    providerId,
+    providerRuntimeBinding,
+    purpose,
+    recoverySessionId,
+    schemaVersion: 2,
+  });
 }
 
 function parseEncryptedTransactionPayload(
@@ -393,22 +428,38 @@ function parseEncryptedTransactionPayload(
     payload === null ||
     typeof payload !== "object" ||
     Array.isArray(payload) ||
-    Object.getPrototypeOf(payload) !== Object.prototype ||
-    Object.keys(payload).sort().join(",") !==
-      "nonce,providerId,providerRuntimeBinding,schemaVersion"
+    Object.getPrototypeOf(payload) !== Object.prototype
+  ) {
+    invalidTransaction();
+  }
+  const keys = Object.keys(payload).sort().join(",");
+  if (
+    keys !== "nonce,providerId,providerRuntimeBinding,schemaVersion" &&
+    keys !== "nonce,providerId,providerRuntimeBinding,purpose,recoverySessionId,schemaVersion"
   ) {
     invalidTransaction();
   }
   const candidate = payload as Record<string, unknown>;
+  const commonValid =
+    isCanonical256BitToken(candidate.nonce) &&
+    validProviderId(candidate.providerId) &&
+    validRuntimeBinding(candidate.providerRuntimeBinding);
+  if (!commonValid) invalidTransaction();
   if (
-    candidate.schemaVersion !== 1 ||
-    !isCanonical256BitToken(candidate.nonce) ||
-    !validProviderId(candidate.providerId) ||
-    !validRuntimeBinding(candidate.providerRuntimeBinding)
+    candidate.schemaVersion === 1 &&
+    keys === "nonce,providerId,providerRuntimeBinding,schemaVersion"
+  ) {
+    return candidate as unknown as EncryptedOidcAuthorizationTransactionPayloadV1;
+  }
+  if (
+    candidate.schemaVersion !== 2 ||
+    (candidate.purpose !== "sign_in" && candidate.purpose !== "administrator_bootstrap") ||
+    !(candidate.recoverySessionId === null || validSessionId(candidate.recoverySessionId)) ||
+    (candidate.purpose === "sign_in") !== (candidate.recoverySessionId === null)
   ) {
     invalidTransaction();
   }
-  return candidate as unknown as EncryptedOidcAuthorizationTransactionPayload;
+  return candidate as unknown as EncryptedOidcAuthorizationTransactionPayloadV2;
 }
 
 export class OidcAuthorizationTransactionService {
@@ -448,7 +499,18 @@ export class OidcAuthorizationTransactionService {
       !input ||
       typeof input !== "object" ||
       !validProviderId(input.providerId) ||
-      !validRuntimeBinding(input.providerRuntimeBinding)
+      !validRuntimeBinding(input.providerRuntimeBinding) ||
+      (input.purpose !== undefined &&
+        input.purpose !== "sign_in" &&
+        input.purpose !== "administrator_bootstrap")
+    ) {
+      invalidTransaction();
+    }
+    const purpose = input.purpose ?? "sign_in";
+    const recoverySessionId = input.recoverySessionId ?? null;
+    if (
+      (purpose === "administrator_bootstrap" && !validSessionId(recoverySessionId)) ||
+      (purpose === "sign_in" && recoverySessionId !== null)
     ) {
       invalidTransaction();
     }
@@ -498,6 +560,8 @@ export class OidcAuthorizationTransactionService {
             nonce,
             input.providerId,
             input.providerRuntimeBinding,
+            purpose,
+            recoverySessionId,
           ),
           nonceContext(transactionId),
         ),
@@ -519,6 +583,8 @@ export class OidcAuthorizationTransactionService {
         nonce,
         providerId: input.providerId,
         providerRuntimeBinding: input.providerRuntimeBinding,
+        purpose,
+        ...(recoverySessionId === null ? {} : { recoverySessionId }),
         redirectUri,
         returnPath,
         state,
@@ -631,6 +697,10 @@ export class OidcAuthorizationTransactionService {
       nonce: encryptedPayload.nonce,
       providerId: row.providerId,
       providerRuntimeBinding: encryptedPayload.providerRuntimeBinding,
+      purpose: encryptedPayload.schemaVersion === 1 ? "sign_in" : encryptedPayload.purpose,
+      ...(encryptedPayload.schemaVersion === 2 && encryptedPayload.recoverySessionId !== null
+        ? { recoverySessionId: encryptedPayload.recoverySessionId }
+        : {}),
       redirectUri: row.redirectUri,
       returnPath,
       transactionId: row.id,

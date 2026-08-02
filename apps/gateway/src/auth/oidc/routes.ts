@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { oidcAdministratorBootstrapStartResponseSchema } from "@omnifin/contracts/auth";
 import { requirePermission } from "../authorization.js";
 import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SessionIssuanceLimitError } from "../session-service.js";
@@ -572,6 +573,125 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     },
   );
 
+  app.post<{
+    Params: { providerId: string };
+  }>(
+    "/v1/auth/bootstrap/oidc/:providerId/start",
+    {
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+      schema: {
+        response: {
+          200: {
+            additionalProperties: false,
+            properties: {
+              authorizationUrl: { maxLength: 16_384, minLength: 1, type: "string" },
+              expiresAt: { format: "date-time", type: "string" },
+            },
+            required: ["authorizationUrl", "expiresAt"],
+            type: "object",
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const principal = app.sessionService.resolveValidatedSessionPrincipal(
+        request.validatedSession,
+      );
+      requirePermission(principal, "recovery.oidc.manage");
+      const bootstrapSession = app.sessionService.beginValidatedRecoveryBootstrapSession(
+        request.validatedSession,
+      );
+      if (!bootstrapSession || principal?.authenticationMethod.kind !== "recovery") {
+        throw new SafeHttpError({
+          code: "bootstrap_not_available",
+          message: "Administrator bootstrap is not available for this session.",
+          statusCode: 403,
+        });
+      }
+      const providerId = request.params.providerId;
+      if (!PROVIDER_ID_PATTERN.test(providerId)) throw new OidcBrowserRouteError();
+      await enforceRateLimit(
+        startClientRateLimit,
+        request,
+        reply,
+        "Too many authentication attempts were started.",
+      );
+      await enforceRateLimit(
+        globalStartRateLimit,
+        request,
+        reply,
+        "Too many authentication attempts were started.",
+      );
+      try {
+        const runtime = await providerRegistry.discover(providerId);
+        const providerRuntimeBinding = oidcProviderRuntimeBinding(runtime);
+        protocol.assertAuthorizationRequestViable(runtime, {
+          providerId,
+          redirectUri: canonicalOidcCallbackUri(app.appConfig.baseUrl, providerId),
+        });
+        const transaction = await transactions.create({
+          browserBindingToken:
+            request.cookies[oidcBrowserBindingCookieName(app.appConfig)] ?? createBrowserBinding(),
+          providerId,
+          providerRuntimeBinding,
+          purpose: "administrator_bootstrap",
+          recoverySessionId: bootstrapSession.sessionId,
+          returnPath: "/settings",
+        });
+        try {
+          const redirect = protocol.buildAuthorizationRequest(runtime, transaction);
+          writeOidcBrowserBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          writeOidcTransactionBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.state,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          return oidcAdministratorBootstrapStartResponseSchema.parse({
+            authorizationUrl: redirect.authorizationUrl,
+            expiresAt: transaction.expiresAt.toISOString(),
+          });
+        } catch (error) {
+          transactions.cancel({
+            browserBindingToken: transaction.browserBindingToken,
+            providerId: transaction.providerId,
+            state: transaction.state,
+          });
+          throw error;
+        }
+      } catch (error) {
+        if (error instanceof SafeHttpError) throw error;
+        const failure = startFailure(error);
+        await recordStartFailure(request, failure.auditReason);
+        throw new SafeHttpError({
+          code:
+            failure.browserError === "invalid_request"
+              ? "invalid_request"
+              : "oidc_provider_unavailable",
+          message:
+            failure.browserError === "invalid_request"
+              ? "The administrator bootstrap request is invalid."
+              : "The identity provider is temporarily unavailable.",
+          statusCode: failure.browserError === "invalid_request" ? 400 : 503,
+        });
+      }
+    },
+  );
+
   app.get<{
     Params: { providerId: string };
     Querystring: { returnPath?: string };
@@ -735,7 +855,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           runtime,
           transaction,
         });
-        const result = signIn.signIn({
+        const signInInput = {
           currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
           grant,
           ipAddress: request.ip,
@@ -743,7 +863,14 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           ...(request.headers["user-agent"] === undefined
             ? {}
             : { userAgent: request.headers["user-agent"] }),
-        });
+        };
+        const result =
+          transaction.purpose === "administrator_bootstrap" && transaction.recoverySessionId
+            ? signIn.bootstrapAdministrator({
+                ...signInInput,
+                recoverySessionId: transaction.recoverySessionId,
+              })
+            : signIn.signIn(signInInput);
         if (result.status === "denied") {
           recordFailure(request, "identity_rejected", "denied", result.reason);
           return reply.redirect(failureLocation("account_not_authorized"), 303);
@@ -755,7 +882,11 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           result.session.absoluteExpiresAt,
         );
         return reply.redirect(
-          result.session.principal.accountState === "pending_link" ? "/link/jellyfin" : returnPath,
+          transaction.purpose === "administrator_bootstrap"
+            ? "/settings?administrator=ready&jellyfin=pending"
+            : result.session.principal.accountState === "pending_link"
+              ? "/link/jellyfin"
+              : returnPath,
           303,
         );
       } catch (error) {

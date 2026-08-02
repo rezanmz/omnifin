@@ -1,4 +1,5 @@
 import {
+  RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   type OidcProviderAdmin,
   type SessionPrincipal,
@@ -69,12 +70,24 @@ function testOutcome(
   if (view === "forbidden" || view === "signed_out" || view === "unavailable") {
     return { status: view };
   }
-  if (view !== "ready" && view !== "empty") return undefined;
+  if (view !== "ready" && view !== "empty" && view !== "recovery") return undefined;
+  const recoveryPrincipal: SessionPrincipal = {
+    ...testPrincipal,
+    accountState: "recovery",
+    authenticationMethod: { kind: "recovery" },
+    displayName: "Recovery access",
+    linkedServices: [],
+    permissions: [...RECOVERY_PERMISSIONS],
+    userId: null,
+  };
   return {
     snapshot: {
       csrfToken: "test_csrf_token_0123456789abcdefghijklmnopqrstuvwxyz",
-      principal: testPrincipal,
-      providers: view === "empty" ? [] : [testProvider],
+      principal: view === "recovery" ? recoveryPrincipal : testPrincipal,
+      providers:
+        view === "empty"
+          ? []
+          : [{ ...testProvider, enabled: view === "recovery" ? true : testProvider.enabled }],
     },
     status: "ready",
   };

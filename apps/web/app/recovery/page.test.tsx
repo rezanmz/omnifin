@@ -13,6 +13,8 @@ describe("RecoveryPage", () => {
     render(await RecoveryPage({ searchParams: Promise.resolve({ "test-view": "bootstrap" }) }));
 
     expect(screen.getByRole("heading", { name: "Establish trusted control." })).toBeVisible();
+    expect(screen.getByText(/Use a configured OIDC provider/u)).toBeVisible();
+    expect(screen.getByText("Passwords are never stored")).toBeVisible();
     expect(screen.queryByLabelText("Recovery secret")).not.toBeInTheDocument();
   });
 

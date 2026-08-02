@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AUTH_USERS_PAGE_MAX_COUNT,
   OIDC_ISSUER_MAX_LENGTH,
+  PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   authenticatedSessionResponseSchema,
@@ -826,6 +827,23 @@ describe("authentication contracts", () => {
         linkedServices: [jellyfinLink],
       }).success,
     ).toBe(false);
+
+    expect(
+      sessionPrincipalSchema.safeParse({
+        ...pendingPrincipal,
+        permissions: [...PENDING_BOOTSTRAP_ADMIN_PERMISSIONS],
+        role: "admin",
+      }).success,
+    ).toBe(true);
+    expect(
+      sessionPrincipalSchema.safeParse({
+        ...pendingPrincipal,
+        permissions: [...PENDING_BOOTSTRAP_ADMIN_PERMISSIONS],
+        role: "operator",
+      }).success,
+    ).toBe(false);
+    expect(PENDING_BOOTSTRAP_ADMIN_PERMISSIONS).not.toContain("media.view");
+    expect(PENDING_BOOTSTRAP_ADMIN_PERMISSIONS).not.toContain("playback.use");
   });
 
   it("isolates recovery sessions from user identities and media capabilities", () => {

@@ -1,4 +1,5 @@
 import type {
+  OidcAdministratorBootstrapStartResponse,
   OidcProviderAdmin,
   OidcProviderCreateRequest,
   OidcProviderDeleteResponse,
@@ -197,6 +198,10 @@ export interface IdentityProviderAdminClient {
   ): Promise<OidcRoleMappingDeleteResponse>;
   listRoleMappings(providerId: string): Promise<readonly RoleMapping[]>;
   load(): Promise<IdentityProviderAdminLoadOutcome>;
+  startAdministratorBootstrap(
+    providerId: string,
+    csrfToken: string,
+  ): Promise<OidcAdministratorBootstrapStartResponse>;
   updateRoleMapping(
     providerId: string,
     mappingId: string,
@@ -275,6 +280,16 @@ export const identityProviderAdminClient: IdentityProviderAdminClient = {
   },
 
   load: loadIdentityProviderAdministration,
+
+  async startAdministratorBootstrap(providerId, csrfToken) {
+    const schemas = (await contractSchemas()).auth;
+    return mutationRequest(
+      `/api/auth/bootstrap/oidc/${encodeURIComponent(providerId)}/start`,
+      csrfToken,
+      "POST",
+      schemas.oidcAdministratorBootstrapStartResponseSchema,
+    );
+  },
 
   async updateProvider(providerId, input, csrfToken) {
     const schemas = (await contractSchemas()).auth;

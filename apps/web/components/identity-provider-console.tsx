@@ -1027,6 +1027,16 @@ function IdentityProviderConsoleContent({
     });
   };
 
+  const startAdministratorBootstrap = async () => {
+    if (!snapshot || !selected || snapshot.principal.authenticationMethod.kind !== "recovery") {
+      return;
+    }
+    await run("administrator-bootstrap", async () => {
+      const result = await client.startAdministratorBootstrap(selected.id, snapshot.csrfToken);
+      window.location.assign(result.authorizationUrl);
+    });
+  };
+
   const deleteProvider = async () => {
     if (!snapshot || !selected) return;
     await run("delete", async () => {
@@ -1316,6 +1326,47 @@ function IdentityProviderConsoleContent({
                       </small>
                     </div>
                   </div>
+
+                  {snapshot?.principal.authenticationMethod.kind === "recovery" ? (
+                    <section
+                      aria-labelledby="administrator-bootstrap-title"
+                      className={styles.bootstrapCallout}
+                    >
+                      <div className={styles.bootstrapIcon}>
+                        <Fingerprint aria-hidden="true" size={22} />
+                      </div>
+                      <div>
+                        <p className="section-kicker">First administrator</p>
+                        <h3 id="administrator-bootstrap-title">
+                          Claim with this identity provider
+                        </h3>
+                        <p>
+                          Sign in once to replace this recovery session with an OIDC administrator.
+                          Media and playback stay locked until you pair Jellyfin separately.
+                        </p>
+                      </div>
+                      <button
+                        className={styles.primaryButton}
+                        disabled={
+                          busyAction !== null ||
+                          !selected.enabled ||
+                          selected.discoveryState !== "ready"
+                        }
+                        onClick={() => void startAdministratorBootstrap()}
+                        type="button"
+                      >
+                        {busyAction === "administrator-bootstrap" ? (
+                          <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                        ) : (
+                          <ShieldCheck aria-hidden="true" size={16} />
+                        )}
+                        Continue with OIDC
+                      </button>
+                      {!selected.enabled || selected.discoveryState !== "ready" ? (
+                        <small>Validate and enable this provider before claiming authority.</small>
+                      ) : null}
+                    </section>
+                  ) : null}
 
                   <section
                     className={styles.detailSection}

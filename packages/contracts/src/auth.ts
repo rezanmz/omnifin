@@ -121,6 +121,24 @@ export const PENDING_LINK_PERMISSIONS = [
   "sessions.self.revoke",
 ] as const satisfies readonly Permission[];
 
+/**
+ * A recovery-proven first administrator may finish configuring identity and
+ * service connections before pairing Jellyfin. Media and upstream mutation
+ * permissions remain unavailable until that explicit pairing succeeds.
+ */
+export const PENDING_BOOTSTRAP_ADMIN_PERMISSIONS = [
+  "connectors.manage",
+  "identities.manage",
+  "identities.self.manage",
+  "roles.manage",
+  "audit.view",
+  "sessions.revoke",
+  "sessions.self.revoke",
+  "recovery.oidc.manage",
+  "recovery.jellyfin.manage",
+  "recovery.sessions.revoke",
+] as const satisfies readonly Permission[];
+
 export const RECOVERY_PERMISSIONS = [
   "recovery.oidc.manage",
   "recovery.jellyfin.manage",
@@ -433,14 +451,21 @@ export const sessionPrincipalSchema = z
 
     if (principal.accountState === "pending_link") {
       const pendingPermissions = new Set<Permission>(PENDING_LINK_PERMISSIONS);
-      if (
-        principal.permissions.length !== PENDING_LINK_PERMISSIONS.length ||
-        principal.permissions.some((permission) => !pendingPermissions.has(permission))
-      ) {
+      const bootstrapAdminPermissions = new Set<Permission>(PENDING_BOOTSTRAP_ADMIN_PERMISSIONS);
+      const hasSelfServicePermissions =
+        principal.permissions.length === PENDING_LINK_PERMISSIONS.length &&
+        principal.permissions.every((permission) => pendingPermissions.has(permission));
+      const hasBootstrapAdminPermissions =
+        principal.role === "admin" &&
+        principal.authenticationMethod.kind === "oidc" &&
+        principal.permissions.length === PENDING_BOOTSTRAP_ADMIN_PERMISSIONS.length &&
+        principal.permissions.every((permission) => bootstrapAdminPermissions.has(permission));
+      if (!hasSelfServicePermissions && !hasBootstrapAdminPermissions) {
         context.addIssue({
           code: "custom",
           path: ["permissions"],
-          message: "Pending-link accounts are limited to self-service permissions.",
+          message:
+            "Pending-link accounts are limited to self-service or recovery-proven administration permissions.",
         });
       }
       if (principal.authenticationMethod.kind === "recovery") {
@@ -847,6 +872,14 @@ export const jellyfinQuickConnectBootstrapPollResponseSchema = z.discriminatedUn
 ]);
 export type JellyfinQuickConnectBootstrapPollResponse = z.infer<
   typeof jellyfinQuickConnectBootstrapPollResponseSchema
+>;
+
+export const oidcAdministratorBootstrapStartResponseSchema = z.strictObject({
+  authorizationUrl: z.url().max(16_384),
+  expiresAt: z.iso.datetime({ offset: true }),
+});
+export type OidcAdministratorBootstrapStartResponse = z.infer<
+  typeof oidcAdministratorBootstrapStartResponseSchema
 >;
 
 export const sessionResponseSchema = z.union([

@@ -35,6 +35,7 @@ type RoleSource = "default" | "manual" | "oidc_mapping" | "recovery_bootstrap";
 
 export const OIDC_IDENTITY_DENIAL_REASONS = [
   "active_service_link_required",
+  "administrator_already_exists",
   "disabled_user",
   "identity_integrity_failure",
   "identity_provider_mismatch",
@@ -218,6 +219,15 @@ function resolvedMappingRole(resolution: Extract<OidcRoleResolution, { status: "
   return { role: "viewer" as const, roleSource: "default" as const };
 }
 
+function resolvedAccountRole(
+  resolution: Extract<OidcRoleResolution, { status: "resolved" }>,
+  administratorBootstrap: boolean,
+) {
+  return administratorBootstrap
+    ? { role: "admin" as const, roleSource: "recovery_bootstrap" as const }
+    : resolvedMappingRole(resolution);
+}
+
 function validIdentifier(value: unknown): value is string {
   return typeof value === "string" && IDENTIFIER_PATTERN.test(value);
 }
@@ -348,7 +358,7 @@ export class OidcIdentityService {
 
     try {
       const replacement = this.verifySessionReplacement(options);
-      const resolution = this.resolveInCurrentTransaction(input, replacement);
+      const resolution = this.resolveInCurrentTransaction(input, replacement, false);
       if (replacement) {
         replacement.sessionService.completeReplacementIdentityResolution(
           replacement.capability,
@@ -362,11 +372,33 @@ export class OidcIdentityService {
     }
   }
 
+  /** @internal Resolves one recovery-bound OIDC identity as the first administrator. */
+  public resolveAdministratorBootstrapInExistingTransaction(
+    input: ResolveOidcIdentityInput,
+    operationTime: number,
+  ): OidcIdentityResolution {
+    if (
+      !this.database.sqlite.inTransaction ||
+      !Number.isSafeInteger(operationTime) ||
+      operationTime < 0
+    ) {
+      throw new OidcIdentityServiceError();
+    }
+    try {
+      return this.resolveInCurrentTransaction(input, undefined, true, operationTime);
+    } catch (error) {
+      if (error instanceof OidcIdentityServiceError) throw error;
+      throw new OidcIdentityServiceError({ cause: error });
+    }
+  }
+
   private resolveInCurrentTransaction(
     input: ResolveOidcIdentityInput,
     replacement: VerifiedSessionReplacement | undefined,
+    administratorBootstrap: boolean,
+    bootstrapOperationTime?: number,
   ): OidcIdentityResolution {
-    const occurredAt = replacement?.operationTime ?? this.currentTime();
+    const occurredAt = bootstrapOperationTime ?? replacement?.operationTime ?? this.currentTime();
     let grant: unknown;
     let grantWasExtracted = false;
     try {
@@ -433,28 +465,62 @@ export class OidcIdentityService {
       return this.deny("invalid_verified_context");
     }
 
-    const mappingRows = this.database.sqlite
-      .prepare(
-        `select
-              id,
-              provider_id as providerId,
-              claim_path_json as claimPathJson,
-              operator,
-              values_json as valuesJson,
-              role,
-              priority,
-              enabled
-             from role_mappings
-             where provider_id = ?
-             order by priority desc, id asc`,
-      )
-      .all(provider.id) as RoleMappingRow[];
-    const mappings = parseRoleMappings(mappingRows);
-    const expectedResolution = mappings
-      ? resolveOidcRole({ claims: identity.claims, mappings, providerId: provider.id })
-      : undefined;
+    const expectedResolution: OidcRoleResolution | undefined = administratorBootstrap
+      ? {
+          mappingIds: [],
+          priority: null,
+          role: "viewer",
+          source: "default",
+          status: "resolved",
+        }
+      : (() => {
+          const mappingRows = this.database.sqlite
+            .prepare(
+              `select
+                    id,
+                    provider_id as providerId,
+                    claim_path_json as claimPathJson,
+                    operator,
+                    values_json as valuesJson,
+                    role,
+                    priority,
+                    enabled
+                   from role_mappings
+                   where provider_id = ?
+                   order by priority desc, id asc`,
+            )
+            .all(provider.id) as RoleMappingRow[];
+          const mappings = parseRoleMappings(mappingRows);
+          return mappings
+            ? resolveOidcRole({ claims: identity.claims, mappings, providerId: provider.id })
+            : undefined;
+        })();
     if (!expectedResolution || expectedResolution.status !== "resolved") {
       return this.deny("role_mapping_denied");
+    }
+
+    if (administratorBootstrap) {
+      const existingAdministrator = this.database.sqlite
+        .prepare(
+          `select id
+           from users
+           where (role = 'admin' and status = 'active')
+              or (role = 'admin' and role_source = 'recovery_bootstrap' and status = 'pending_link')
+           limit 1`,
+        )
+        .get() as { id: string } | undefined;
+      if (existingAdministrator) {
+        this.insertAudit({
+          eventType: "auth.admin.bootstrap",
+          metadata: { proof: "oidc", reason: "administrator_already_exists" },
+          occurredAt,
+          outcome: "denied",
+          ...(requestId ? { requestId } : {}),
+          targetId: provider.id,
+          targetType: "oidc_provider",
+        });
+        return this.deny("administrator_already_exists");
+      }
     }
 
     const displayClaims = normalizedDisplayClaims(identity.claims);
@@ -480,7 +546,7 @@ export class OidcIdentityService {
       .get(provider.issuer, identity.claims.subject) as ExistingIdentityRow | undefined;
 
     if (!existing) {
-      if (provider.allowJitProvisioning !== 1) {
+      if (!administratorBootstrap && provider.allowJitProvisioning !== 1) {
         return this.deny("jit_provisioning_disabled");
       }
       return this.provision({
@@ -489,6 +555,7 @@ export class OidcIdentityService {
         displayName: displayNameFallback(displayClaims),
         occurredAt,
         provider,
+        administratorBootstrap,
         ...(requestId ? { requestId } : {}),
         resolution: expectedResolution,
         sessionProof: {
@@ -541,6 +608,7 @@ export class OidcIdentityService {
         userId: existing.userId,
       },
       occurredAt,
+      administratorBootstrap,
       ...(replacement ? { replacementSessionId: replacement.sessionId } : {}),
       provider,
       ...(requestId ? { requestId } : {}),
@@ -708,6 +776,7 @@ export class OidcIdentityService {
   }
 
   private provision(input: {
+    administratorBootstrap: boolean;
     claims: ValidatedOidcClaims;
     displayClaimsJson: string;
     displayName: string;
@@ -722,7 +791,7 @@ export class OidcIdentityService {
   }): ResolvedOidcIdentity {
     const userId = this.nextId();
     const externalIdentityId = this.nextId();
-    const mapped = resolvedMappingRole(input.resolution);
+    const mapped = resolvedAccountRole(input.resolution, input.administratorBootstrap);
     this.database.sqlite
       .prepare(
         `insert into users (
@@ -772,6 +841,18 @@ export class OidcIdentityService {
       targetId: externalIdentityId,
       targetType: "external_identity",
     });
+    if (input.administratorBootstrap) {
+      this.insertAudit({
+        actorUserId: userId,
+        eventType: "auth.admin.bootstrap",
+        metadata: { proof: "oidc", provisioned: true },
+        occurredAt: input.occurredAt,
+        outcome: "success",
+        ...(input.requestId ? { requestId: input.requestId } : {}),
+        targetId: userId,
+        targetType: "user",
+      });
+    }
     this.insertAudit({
       actorUserId: userId,
       eventType: "auth.oidc.identity.login",
@@ -796,6 +877,7 @@ export class OidcIdentityService {
   }
 
   private loginExisting(input: {
+    administratorBootstrap: boolean;
     claims: ValidatedOidcClaims;
     displayClaimsJson: string;
     existing: ExistingIdentityRow & {
@@ -817,9 +899,11 @@ export class OidcIdentityService {
   }): ResolvedOidcIdentity {
     const currentRole = input.existing.role;
     const currentRoleSource = input.existing.roleSource;
-    const mapped = resolvedMappingRole(input.resolution);
+    const mapped = resolvedAccountRole(input.resolution, input.administratorBootstrap);
     const mayRecomputeRole =
-      currentRoleSource === "default" || currentRoleSource === "oidc_mapping";
+      input.administratorBootstrap ||
+      currentRoleSource === "default" ||
+      currentRoleSource === "oidc_mapping";
     const roleChanged =
       mayRecomputeRole && (currentRole !== mapped.role || currentRoleSource !== mapped.roleSource);
 
@@ -905,6 +989,18 @@ export class OidcIdentityService {
       targetId: input.existing.externalIdentityId,
       targetType: "external_identity",
     });
+    if (input.administratorBootstrap) {
+      this.insertAudit({
+        actorUserId: input.existing.userId,
+        eventType: "auth.admin.bootstrap",
+        metadata: { proof: "oidc", provisioned: false },
+        occurredAt: input.occurredAt,
+        outcome: "success",
+        ...(input.requestId ? { requestId: input.requestId } : {}),
+        targetId: input.existing.userId,
+        targetType: "user",
+      });
+    }
     return this.resolvedResult({
       accountStatus: input.existing.status,
       externalIdentityId: input.existing.externalIdentityId,

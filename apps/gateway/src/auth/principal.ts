@@ -1,4 +1,5 @@
 import {
+  PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
   PENDING_LINK_PERMISSIONS,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -27,6 +28,7 @@ export interface SessionPrincipalRecord {
     displayName: string;
     id: string;
     role: Role;
+    roleSource: "default" | "manual" | "oidc_mapping" | "recovery_bootstrap";
     status: "active" | "disabled" | "pending_link";
   } | null;
   externalIdentity: {
@@ -152,7 +154,11 @@ function normalPrincipal(record: SessionPrincipalRecord): SessionPrincipal | nul
           },
         ]
       : [],
-    permissions: active ? [...ROLE_PERMISSIONS[user.role]] : [...PENDING_LINK_PERMISSIONS],
+    permissions: active
+      ? [...ROLE_PERMISSIONS[user.role]]
+      : user.role === "admin" && user.roleSource === "recovery_bootstrap" && method.kind === "oidc"
+        ? [...PENDING_BOOTSTRAP_ADMIN_PERMISSIONS]
+        : [...PENDING_LINK_PERMISSIONS],
     role: user.role,
     sessionId: record.session.id,
     userId: user.id,
