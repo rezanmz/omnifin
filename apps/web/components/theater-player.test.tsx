@@ -7,11 +7,20 @@ import type { PlaybackClient } from "../lib/playback";
 import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
+interface HlsErrorFixture {
+  details?: string;
+  fatal: boolean;
+  reason?: string;
+  response?: { code?: number; text?: string };
+  type: string;
+  url?: string;
+}
+
 const hlsHarness = vi.hoisted(() => ({
   instances: [] as Array<{
     attachMedia: ReturnType<typeof vi.fn>;
     destroy: ReturnType<typeof vi.fn>;
-    handlers: Map<string, (event: string, data: { fatal: boolean; type: string }) => void>;
+    handlers: Map<string, (event: string, data: HlsErrorFixture) => void>;
     loadSource: ReturnType<typeof vi.fn>;
     recoverMediaError: ReturnType<typeof vi.fn>;
     startLoad: ReturnType<typeof vi.fn>;
@@ -30,10 +39,7 @@ vi.mock("hls.js", () => {
 
     readonly attachMedia = vi.fn();
     readonly destroy = vi.fn();
-    readonly handlers = new Map<
-      string,
-      (event: string, data: { fatal: boolean; type: string }) => void
-    >();
+    readonly handlers = new Map<string, (event: string, data: HlsErrorFixture) => void>();
     readonly loadSource = vi.fn();
     readonly recoverMediaError = vi.fn();
     readonly startLoad = vi.fn();
@@ -42,7 +48,7 @@ vi.mock("hls.js", () => {
       hlsHarness.instances.push(this);
     }
 
-    on(event: string, handler: (event: string, data: { fatal: boolean; type: string }) => void) {
+    on(event: string, handler: (event: string, data: HlsErrorFixture) => void) {
       this.handlers.set(event, handler);
     }
   }
@@ -237,6 +243,7 @@ describe("TheaterPlayer", () => {
   });
 
   it("recovers bounded HLS failures before presenting a safe retry", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
@@ -258,13 +265,36 @@ describe("TheaterPlayer", () => {
 
     onError?.("error", { fatal: false, type: "networkError" });
     expect(instance?.startLoad).not.toHaveBeenCalled();
-    onError?.("error", { fatal: true, type: "networkError" });
-    onError?.("error", { fatal: true, type: "networkError" });
+    const privateFailure = {
+      details: "levelLoadError",
+      fatal: true,
+      reason: "private upstream response",
+      response: { code: 404, text: "private response body" },
+      type: "networkError",
+      url: `/v1/playback/${sessionId}/hls/asset_v2.private`,
+    };
+    onError?.("error", privateFailure);
+    onError?.("error", privateFailure);
     expect(instance?.startLoad).toHaveBeenCalledTimes(2);
     expect(await screen.findByLabelText("Buffering")).toBeVisible();
 
-    onError?.("error", { fatal: true, type: "networkError" });
+    onError?.("error", privateFailure);
     expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+    expect(warning).toHaveBeenLastCalledWith(
+      JSON.stringify({
+        details: "levelLoadError",
+        event: "hls_playback_failure",
+        fatal: true,
+        httpStatus: 404,
+        recovery: "stopped",
+        stage: "playlist",
+        type: "networkError",
+      }),
+    );
+    const diagnostics = warning.mock.calls.flat().join("\n");
+    expect(diagnostics).not.toMatch(
+      new RegExp(`${sessionId}|asset_v2|private response|private upstream|/v1/playback`, "u"),
+    );
   });
 
   it("re-negotiates track and quality changes at the current position", async () => {
@@ -474,6 +504,7 @@ describe("TheaterPlayer", () => {
   });
 
   it("recovers one fatal HLS media error and destroys the engine on close", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
@@ -488,6 +519,17 @@ describe("TheaterPlayer", () => {
     const instance = hlsHarness.instances[0];
     instance?.handlers.get("error")?.("error", { fatal: true, type: "mediaError" });
     expect(instance?.recoverMediaError).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenLastCalledWith(
+      JSON.stringify({
+        details: "unknown",
+        event: "hls_playback_failure",
+        fatal: true,
+        httpStatus: null,
+        recovery: "media_recovery",
+        stage: "engine",
+        type: "mediaError",
+      }),
+    );
     unmount();
     expect(instance?.destroy).toHaveBeenCalledOnce();
   });

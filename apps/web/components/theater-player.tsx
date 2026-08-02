@@ -66,6 +66,15 @@ type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
 type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "video_quality";
 type IssueStatus = "error" | "idle" | "submitting" | "success";
+type HlsFailureRecovery = "media_recovery" | "network_retry" | "stopped";
+type HlsFailureStage = "engine" | "fragment" | "manifest" | "media" | "playlist";
+
+interface HlsFailureData {
+  details?: unknown;
+  fatal?: unknown;
+  response?: { code?: unknown } | null;
+  type?: unknown;
+}
 
 interface PlaybackPreferences {
   audioStreamIndex: number | null;
@@ -92,6 +101,46 @@ const ISSUE_CATEGORIES = [
   { label: "Video quality", value: "video_quality" },
   { label: "Other", value: "other" },
 ] as const satisfies readonly { label: string; value: IssueCategory }[];
+
+const SAFE_HLS_DIAGNOSTIC_VALUE = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
+
+function safeHlsDiagnosticValue(value: unknown) {
+  return typeof value === "string" && SAFE_HLS_DIAGNOSTIC_VALUE.test(value) ? value : "unknown";
+}
+
+function hlsFailureStage(details: string): HlsFailureStage {
+  const normalized = details.toLowerCase();
+  if (normalized.includes("manifest")) return "manifest";
+  if (normalized.includes("level") || normalized.includes("track")) return "playlist";
+  if (normalized.includes("frag") || normalized.includes("key")) return "fragment";
+  if (normalized.includes("buffer") || normalized.includes("media") || normalized.includes("mux")) {
+    return "media";
+  }
+  return "engine";
+}
+
+function recordHlsFailure(data: HlsFailureData, recovery: HlsFailureRecovery) {
+  const details = safeHlsDiagnosticValue(data.details);
+  const responseCode = data.response?.code;
+  const httpStatus =
+    typeof responseCode === "number" &&
+    Number.isInteger(responseCode) &&
+    responseCode >= 100 &&
+    responseCode <= 599
+      ? responseCode
+      : null;
+  console.warn(
+    JSON.stringify({
+      details,
+      event: "hls_playback_failure",
+      fatal: data.fatal === true,
+      httpStatus,
+      recovery,
+      stage: hlsFailureStage(details),
+      type: safeHlsDiagnosticValue(data.type),
+    }),
+  );
+}
 
 function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
@@ -314,15 +363,18 @@ export function TheaterPlayer({
           if (!data.fatal) return;
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
             networkRecoveries += 1;
+            recordHlsFailure(data, "network_retry");
             setBuffering(true);
             hls.startLoad();
             return;
           }
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
             mediaRecoveries += 1;
+            recordHlsFailure(data, "media_recovery");
             hls.recoverMediaError();
             return;
           }
+          recordHlsFailure(data, "stopped");
           setStatus("error");
           setMessage("The stream stopped responding. Your saved progress is safe.");
         });
