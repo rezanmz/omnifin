@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeUsesApplicationShell } from "../lib/application-shell-route";
-import { ApplicationShellBoundary } from "./application-shell";
+import { ApplicationShellBoundary, ApplicationShellContent } from "./application-shell";
 import { ApplicationShellNavigation } from "./application-shell-navigation";
+import { ApplicationShellStatus } from "./application-shell-status";
 
 let pathname = "/";
 
@@ -15,7 +16,7 @@ vi.mock("next/navigation", () => ({
 function shell(children: ReactNode) {
   return (
     <ApplicationShellBoundary
-      backdrop={<div data-testid="backdrop" />}
+      backdrop={<div className="cinematic-backdrop" data-testid="backdrop" />}
       environment={null}
       mobileNavigation={<ApplicationShellNavigation mobile />}
       navigation={<ApplicationShellNavigation />}
@@ -60,6 +61,33 @@ describe("ApplicationShellBoundary", () => {
     for (const settingsLink of screen.getAllByRole("link", { name: "Settings" })) {
       expect(settingsLink).toHaveAttribute("aria-current", "page");
     }
+  });
+
+  it("updates shell chrome without restyling the page content ancestor", async () => {
+    render(
+      <ApplicationShellBoundary
+        backdrop={<div className="cinematic-backdrop" data-testid="backdrop" />}
+        environment={null}
+        mobileNavigation={<ApplicationShellNavigation mobile />}
+        navigation={<ApplicationShellNavigation />}
+        topCommandBar={<ApplicationShellStatus />}
+      >
+        <ApplicationShellContent
+          accent="#d8ff70"
+          current="discover"
+          displayProfile="ten-foot"
+          status="healthy"
+        >
+          <main>Discover</main>
+        </ApplicationShellContent>
+      </ApplicationShellBoundary>,
+    );
+
+    const frame = screen.getByRole("main").closest(".application-frame");
+    await waitFor(() => expect(frame).toHaveAttribute("data-connection-status", "healthy"));
+    expect(frame).toHaveAttribute("data-display-profile", "ten-foot");
+    expect(screen.getByTestId("backdrop")).toHaveStyle({ "--ambient-accent": "#d8ff70" });
+    expect(screen.getByRole("link", { name: "All connected services are healthy" })).toBeVisible();
   });
 
   it("removes the persistent shell when navigation crosses into authentication", () => {
