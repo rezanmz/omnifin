@@ -6,6 +6,7 @@ import { ConnectorControlRoomLoader } from "../../../components/connector-contro
 import { ConnectorPageShell } from "../../../components/connector-page-shell";
 import type { ConnectorAdminLoadOutcome } from "../../../lib/connector-admin";
 import "../../control-room.css";
+import "../../dashboard.css";
 
 export const metadata: Metadata = { title: "Service connections" };
 export const dynamic = "force-dynamic";

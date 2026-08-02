@@ -1,8 +1,9 @@
 "use client";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
+import { routeUsesApplicationShell } from "../lib/application-shell-route";
 import type { ThemePreference } from "../lib/theme";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   createContext,
   type CSSProperties,
@@ -24,7 +25,6 @@ const DEFAULT_SIGNAL: ApplicationShellSignal = {
   displayProfile: "standard",
   status: "healthy",
 };
-const PUBLIC_ROUTE_PREFIXES = ["/link", "/login", "/onboarding", "/recovery"] as const;
 
 type ShellStyle = CSSProperties & { "--ambient-accent": string };
 
@@ -50,13 +50,6 @@ function destinationForPath(pathname: string): PrimaryDestination | null {
   if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   if (pathname === "/operations" || pathname.startsWith("/operations/")) return "operations";
   return null;
-}
-
-export function routeUsesApplicationShell(pathname: string, testView: string | null = null) {
-  if (pathname === "/" && testView === "onboarding") return false;
-  return !PUBLIC_ROUTE_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
 }
 
 function ShellFrame({
@@ -100,7 +93,6 @@ export function ApplicationShellBoundary({
   themePreference: ThemePreference;
 }) {
   const pathname = usePathname();
-  const searchParameters = useSearchParams();
   const [registeredSignal, setRegisteredSignal] = useState<{
     pathname: string;
     signal: ApplicationShellSignal;
@@ -111,11 +103,9 @@ export function ApplicationShellBoundary({
     }),
     [pathname],
   );
-  const testView = searchParameters.get("test-view");
-  const usesShell = routeUsesApplicationShell(pathname, testView);
   const signal = registeredSignal.pathname === pathname ? registeredSignal.signal : DEFAULT_SIGNAL;
 
-  if (!usesShell) return children;
+  if (!routeUsesApplicationShell(pathname)) return children;
 
   return (
     <ApplicationShellContext.Provider value={context}>

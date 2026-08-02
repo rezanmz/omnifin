@@ -1,9 +1,13 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 
 import { ApplicationShellBoundary } from "../components/application-shell";
+import {
+  APPLICATION_PATHNAME_HEADER,
+  routeUsesApplicationShell,
+} from "../lib/application-shell-route";
 import { readThemePreference } from "../lib/theme-server";
-import "./dashboard.css";
 import "./foundation.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
@@ -27,6 +31,12 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   const preference = await readThemePreference();
   const explicitTheme = preference === "system" ? undefined : preference;
+  const pathname = (await headers()).get(APPLICATION_PATHNAME_HEADER) ?? "/";
+  const content = routeUsesApplicationShell(pathname) ? (
+    <ApplicationShellBoundary themePreference={preference}>{children}</ApplicationShellBoundary>
+  ) : (
+    children
+  );
 
   return (
     <html
@@ -51,7 +61,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <a className="skip-link" href="#main-content">
           Skip to main content
         </a>
-        <ApplicationShellBoundary themePreference={preference}>{children}</ApplicationShellBoundary>
+        {content}
       </body>
     </html>
   );
