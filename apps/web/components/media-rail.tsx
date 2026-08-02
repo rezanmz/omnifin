@@ -1,7 +1,5 @@
 "use client";
 
-import "./media-rail.css";
-
 import { ArrowRight, Clapperboard, PanelRightOpen, Play, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
