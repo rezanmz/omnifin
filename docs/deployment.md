@@ -259,7 +259,8 @@ database backup and protect backup access as carefully as live access.
 After a manual restore rehearsal, use the runbook's bounded `backup-retained` operation from a host
 systemd timer or overlap-locked cron job. The application image contains no scheduler. Alert on its
 non-zero attention exit, pin the Compose image by digest, and replicate successful recovery sets to
-independently protected off-host storage.
+independently protected off-host storage. Run the exact scheduled command interactively once and
+confirm a structured `status: "ok"` result before enabling unattended execution.
 
 ## Upgrade
 
