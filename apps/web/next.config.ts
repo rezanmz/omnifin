@@ -12,7 +12,6 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   serverExternalPackages: [],
   experimental: {
-    inlineCss: true,
     optimizePackageImports: ["lucide-react"],
   },
 };
