@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1](https://github.com/rezanmz/omnifin/compare/v0.7.0...v0.7.1) (2026-08-02)
+
+
+### Fixes
+
+* **gateway:** keep HLS assets on the public playback path ([#217](https://github.com/rezanmz/omnifin/issues/217)) ([513c42c](https://github.com/rezanmz/omnifin/commit/513c42cf63ac006563909f23ddb93d13ee9e8fd8))
+* **web:** keep Continue Watching cards at a stable useful size ([#212](https://github.com/rezanmz/omnifin/issues/212)) ([dfd2ece](https://github.com/rezanmz/omnifin/commit/dfd2ece717a99a08b0c347ec24794fc5eb20fa63))
+* **web:** keep global search anchored while typing ([#213](https://github.com/rezanmz/omnifin/issues/213)) ([12bd1f8](https://github.com/rezanmz/omnifin/commit/12bd1f8e32b903f14da4778d3d180519a0345421)), closes [#203](https://github.com/rezanmz/omnifin/issues/203)
+
 ## [0.7.0](https://github.com/rezanmz/omnifin/compare/v0.6.0...v0.7.0) (2026-08-02)
 
 
