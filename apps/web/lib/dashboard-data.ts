@@ -10,6 +10,7 @@ export interface MediaCardModel {
   id: string;
   positionSeconds?: number;
   progress?: number;
+  requestable?: boolean;
   title: string;
 }
 

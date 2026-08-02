@@ -327,6 +327,24 @@ function DetailContent({
         </div>
       </section>
 
+      {requestable && onRequest ? (
+        <aside aria-label="Request this title" className="media-detail__request-bar">
+          <div>
+            <span>Available to request</span>
+            <strong>Start the request without losing your place.</strong>
+          </div>
+          <button
+            aria-label={`Request ${detail.title}`}
+            className="media-detail__primary"
+            data-directional-item
+            onClick={() => onRequest(media)}
+            type="button"
+          >
+            Request title <Sparkles aria-hidden="true" />
+          </button>
+        </aside>
+      ) : null}
+
       <section className="media-detail__overview">
         <span>Story signal</span>
         <h3>Overview</h3>
@@ -542,21 +560,9 @@ function DetailContent({
 
       <div className="media-detail__footer">
         <span>Normalized Seerr metadata · private by design</span>
-        {requestable && onRequest ? (
-          <button
-            aria-label={`Request ${detail.title}`}
-            className="media-detail__primary"
-            data-directional-item
-            onClick={() => onRequest(media)}
-            type="button"
-          >
-            Request title <Sparkles aria-hidden="true" />
-          </button>
-        ) : (
-          <span className="media-detail__ready-state">
-            <BadgeCheck aria-hidden="true" /> {availabilityLabel(detail.availability)}
-          </span>
-        )}
+        <span className="media-detail__ready-state">
+          <BadgeCheck aria-hidden="true" /> {availabilityLabel(detail.availability)}
+        </span>
       </div>
     </div>
   );

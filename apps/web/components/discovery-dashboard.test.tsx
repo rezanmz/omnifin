@@ -63,6 +63,7 @@ describe("DiscoveryDashboard", () => {
     expect(screen.getByRole("heading", { name: "Series people are watching" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Coming soon" })).toBeVisible();
     expect(screen.queryByText("View all")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Request The Far Meridian" })).not.toHaveLength(0);
     expect(screen.getByRole("region", { name: "The Far Meridian" })).toHaveAttribute(
       "data-artwork-source",
       "remote",
@@ -80,6 +81,27 @@ describe("DiscoveryDashboard", () => {
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("opens the guarded request composer directly from a discovery card", async () => {
+    const user = userEvent.setup();
+    render(
+      <DiscoveryDashboard
+        initialFeed={demoDiscoveryFeed}
+        live={false}
+        showContinueWatching={false}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Request The Far Meridian" })[0]!);
+
+    expect(await screen.findByRole("dialog", { name: "Compose request" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Selected title" })).toHaveTextContent(
+      "The Far Meridian",
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "The Far Meridian details" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps healthy rails available beside an explicit degraded-state boundary", () => {
