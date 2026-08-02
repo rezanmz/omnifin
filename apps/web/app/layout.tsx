@@ -9,6 +9,7 @@ import {
 } from "../lib/application-shell-route";
 import { readThemePreference } from "../lib/theme-server";
 import "./foundation.css";
+import "./application-shell.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
 // framework and application script, including not-found and error surfaces.
