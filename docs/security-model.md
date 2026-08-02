@@ -412,9 +412,11 @@ diagnostic.
   require an explicit validated claim mapping, and identity plus session changes commit
   atomically. Direct Jellyfin sign-in also remains viewer-default even when Jellyfin marks
   the upstream account as an administrator. The first local administrator requires a
-  CSRF-proven recovery session, fresh Jellyfin proof, an explicit upstream administrator
-  policy, and an immediate SQLite transaction that aborts when another active local admin
-  already exists. The recovery session is replaced rather than upgraded in place.
+  CSRF-proven recovery session and either an exact PKCE-bound OIDC callback or fresh Jellyfin
+  proof with an explicit upstream administrator policy. The immediate SQLite transaction aborts
+  when another active local admin already exists, and the recovery session is replaced rather
+  than upgraded in place. An OIDC bootstrap administrator remains denied from media operations
+  until separately proving control of a Jellyfin account.
 
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token

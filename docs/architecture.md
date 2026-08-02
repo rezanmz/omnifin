@@ -186,10 +186,10 @@ identity keys, explicit claim-to-role mapping, viewer-default JIT provisioning, 
 sessions, and recovery access. Direct Jellyfin authentication and the user-controlled
 password and Quick Connect pairing paths and the self-service link lifecycle are
 implemented. A fresh database establishes its first local administrator only through a
-CSRF-proven recovery session plus current Jellyfin administrator proof; the immediate
-transaction enforces a single winner and records its role provenance. Media access requires a
-separately proven Jellyfin account link; matching email addresses is never sufficient
-proof. The full flow and recovery model are documented in
+CSRF-proven recovery session plus either an exact PKCE-bound OIDC callback or current Jellyfin
+administrator proof. The immediate transaction enforces a single winner and records its role
+provenance. Media access requires a separately proven Jellyfin account link; matching email
+addresses is never sufficient proof. The full flow and recovery model are documented in
 [Authentication](authentication.md).
 
 The shared contract defines `viewer`, `requester`, `operator`, and `admin` roles. Phase
