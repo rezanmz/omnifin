@@ -178,7 +178,7 @@ export function MediaRail({
                 {item.requestable && onRequest ? (
                   <button
                     aria-label={`Request ${item.title}`}
-                    className="media-card__request"
+                    className="button button--glass media-card__request"
                     data-directional-item
                     onClick={() => onRequest(item)}
                     type="button"
