@@ -9,7 +9,6 @@ import type { Metadata } from "next";
 import { IdentityProviderConsoleLoader } from "../../../components/identity-provider-console-loader";
 import { IdentityProviderPageShell } from "../../../components/identity-provider-page-shell";
 import type { IdentityProviderAdminLoadOutcome } from "../../../lib/identity-provider-admin";
-import "../../application-shell.css";
 import "../../control-room.css";
 
 export const metadata: Metadata = { title: "Identity providers" };

@@ -14,7 +14,6 @@ import {
 } from "../../lib/acquisition-calendar-demo";
 import type { AcquisitionCalendarLoadOutcome } from "../../lib/acquisition-calendar";
 import { readThemePreference } from "../../lib/theme-server";
-import "../application-shell.css";
 import "../control-room.css";
 
 export const metadata: Metadata = { title: "Acquisition calendar" };

@@ -5,7 +5,6 @@ import type { Metadata } from "next";
 import { ConnectorControlRoomLoader } from "../../../components/connector-control-room-loader";
 import { ConnectorPageShell } from "../../../components/connector-page-shell";
 import type { ConnectorAdminLoadOutcome } from "../../../lib/connector-admin";
-import "../../application-shell.css";
 import "../../control-room.css";
 
 export const metadata: Metadata = { title: "Service connections" };
