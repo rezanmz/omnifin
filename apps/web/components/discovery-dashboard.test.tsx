@@ -66,10 +66,9 @@ describe("DiscoveryDashboard", () => {
       "data-artwork-source",
       "remote",
     );
-    expect(container.querySelector(".hero-spotlight__art-image")).toHaveAttribute(
-      "fetchpriority",
-      "high",
-    );
+    const spotlightArtwork = container.querySelector(".hero-spotlight__art-image");
+    expect(spotlightArtwork).toHaveAttribute("decoding", "sync");
+    expect(spotlightArtwork).toHaveAttribute("fetchpriority", "high");
 
     await user.click(
       screen.getAllByRole("button", { name: "View details for The Far Meridian" })[0]!,

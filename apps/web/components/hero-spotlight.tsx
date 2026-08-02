@@ -48,7 +48,7 @@ export function HeroSpotlight({
           <img
             alt=""
             className="hero-spotlight__art-image"
-            decoding="async"
+            decoding="sync"
             fetchPriority="high"
             loading="eager"
             src={safeArtworkPath}
