@@ -129,13 +129,20 @@ design decisions.
 ## Install a tagged release
 
 Each verified tagged release publishes a small Compose bundle whose environment template is bound
-to the exact multi-architecture image digest that passed the release gates. Select a release from
-[GitHub Releases](https://github.com/rezanmz/omnifin/releases), then download and verify its three
-assets:
+to the exact multi-architecture image digest that passed the release gates. Open the
+[latest verified release](https://github.com/rezanmz/omnifin/releases/latest), copy its exact tag
+into `OMNIFIN_RELEASE` in place of `vX.Y.Z`, then download and verify its three assets. Keeping the
+tag explicit makes installs and later rollbacks reproducible instead of silently following a moving
+image tag.
 
 ```sh
-OMNIFIN_RELEASE=v0.5.2
-mkdir omnifin && cd omnifin
+OMNIFIN_RELEASE=vX.Y.Z
+test "$OMNIFIN_RELEASE" != "vX.Y.Z" || {
+  echo "Set OMNIFIN_RELEASE to the exact tag shown on the latest verified release page." >&2
+  exit 1
+}
+install -d -m 0700 omnifin
+cd omnifin
 curl --fail --location --remote-name \
   "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/compose.yaml"
 curl --fail --location --remote-name \
