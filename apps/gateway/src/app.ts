@@ -102,6 +102,10 @@ import {
   type DeploymentReadinessRoutesOptions,
 } from "./setup/deployment-readiness-routes.js";
 import {
+  stackVerificationRoutes,
+  type StackVerificationRoutesOptions,
+} from "./setup/stack-verification-routes.js";
+import {
   subtitleOperationRoutes,
   type SubtitleOperationRoutesOptions,
 } from "./subtitles/operation-routes.js";
@@ -151,6 +155,7 @@ export interface CreateAppOptions {
   systemStatusEventDependencies?: SystemStatusRoutesOptions["eventDependencies"];
   setupReadinessDependencies?: SetupReadinessRoutesOptions["dependencies"];
   deploymentReadinessDependencies?: DeploymentReadinessRoutesOptions["dependencies"];
+  stackVerificationDependencies?: StackVerificationRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   sessionDependencies?: SessionServiceDependencies;
 }
@@ -537,6 +542,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.deploymentReadinessDependencies === undefined
         ? {}
         : { dependencies: options.deploymentReadinessDependencies }),
+    });
+    await app.register(stackVerificationRoutes, {
+      ...(options.stackVerificationDependencies === undefined
+        ? {}
+        : { dependencies: options.stackVerificationDependencies }),
     });
     await app.register(oidcProviderAdminRoutes, {
       ...(options.oidcProviderAdminDependencies === undefined

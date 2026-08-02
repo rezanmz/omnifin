@@ -2,6 +2,7 @@ import { OnboardingDashboard } from "../../components/onboarding-dashboard";
 import type { Metadata } from "next";
 import { ThemeProvider } from "../../components/theme-provider";
 import type { SetupReadinessDemoView } from "../../lib/setup-readiness-demo";
+import type { StackVerificationDemoView } from "../../lib/stack-verification-demo";
 import { readThemePreference } from "../../lib/theme-server";
 import "./onboarding.css";
 
@@ -12,6 +13,7 @@ interface OnboardingPageProperties {
   searchParams: Promise<{
     "test-profile"?: string | string[];
     "test-view"?: string | string[];
+    "test-verification"?: string | string[];
   }>;
 }
 
@@ -23,6 +25,10 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" || parameters["test-profile"] === "ten-foot"
       ? "ten-foot"
       : "standard";
+  const verificationView =
+    typeof parameters["test-verification"] === "string"
+      ? parameters["test-verification"]
+      : undefined;
   const demoViews = new Set([
     "deployment-attention",
     "deployment-unavailable",
@@ -40,6 +46,16 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
           testView as SetupReadinessDemoView,
         )
       : undefined;
+  const verificationViews = new Set(["attention", "ready", "unconfigured"]);
+  const initialVerificationOutcome =
+    verificationView && verificationViews.has(verificationView)
+      ? {
+          report: (await import("../../lib/stack-verification-demo")).stackVerificationDemo(
+            verificationView as StackVerificationDemoView,
+          ),
+          status: "ready" as const,
+        }
+      : undefined;
   const preference = await readThemePreference();
 
   return (
@@ -47,6 +63,7 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
       <OnboardingDashboard
         displayProfile={displayProfile}
         {...(initialOutcome ? { initialOutcome } : {})}
+        {...(initialVerificationOutcome ? { initialVerificationOutcome } : {})}
       />
     </ThemeProvider>
   );

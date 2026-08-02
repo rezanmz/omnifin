@@ -399,6 +399,16 @@ test("first-run deployment attention visual baseline", async ({ page }, testInfo
   });
 });
 
+test("stack verification report visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Stack verification covers representative desktop and phone geometry",
+  );
+  await page.goto("/onboarding?test-view=partial&test-verification=attention");
+  await page.getByRole("heading", { name: /Most of the stack answered/u }).waitFor();
+  await expect(page).toHaveScreenshot("dashboard-stack-verification.png", { fullPage: true });
+});
+
 test("light first-run dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !lightVisualProjects.has(testInfo.project.name),

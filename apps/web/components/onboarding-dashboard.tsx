@@ -42,6 +42,8 @@ import { AppearanceSelector } from "./appearance-selector";
 import { BrandMark } from "./brand-mark";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
+import { StackVerificationPanel } from "./stack-verification-panel";
+import type { StackVerificationOutcome } from "../lib/stack-verification";
 
 interface StepContent {
   action: string;
@@ -516,11 +518,15 @@ function SetupHero({ model }: { model: SetupReadinessModel }) {
 }
 
 function SetupReady({
+  initialVerificationOutcome,
   onRetry,
   outcome,
+  runVerification,
 }: {
+  initialVerificationOutcome?: StackVerificationOutcome;
   onRetry: () => void;
   outcome: Extract<SetupReadinessOutcome, { status: "ready" }>;
+  runVerification?: (signal?: AbortSignal) => Promise<StackVerificationOutcome>;
 }) {
   const model = outcome.readiness;
   const essential = model.steps.slice(0, 2);
@@ -561,6 +567,10 @@ function SetupReady({
           ))}
         </div>
       </section>
+      <StackVerificationPanel
+        {...(initialVerificationOutcome ? { initialOutcome: initialVerificationOutcome } : {})}
+        {...(runVerification ? { runVerification } : {})}
+      />
       <aside className="setup-safety-note">
         <ShieldCheck aria-hidden="true" size={22} />
         <div>
@@ -579,13 +589,17 @@ function SetupReady({
 export interface OnboardingDashboardProperties {
   displayProfile?: DisplayProfile;
   initialOutcome?: SetupReadinessOutcome;
+  initialVerificationOutcome?: StackVerificationOutcome;
   loadReadiness?: () => Promise<SetupReadinessOutcome>;
+  runVerification?: (signal?: AbortSignal) => Promise<StackVerificationOutcome>;
 }
 
 export function OnboardingDashboard({
   displayProfile = "standard",
   initialOutcome,
+  initialVerificationOutcome,
   loadReadiness = loadSetupReadiness,
+  runVerification,
 }: OnboardingDashboardProperties) {
   const [outcome, setOutcome] = useState<SetupReadinessOutcome | null>(initialOutcome ?? null);
   const refresh = useCallback(() => setOutcome(null), []);
@@ -627,7 +641,12 @@ export function OnboardingDashboard({
         {outcome === null ? (
           <SetupLoading />
         ) : outcome.status === "ready" ? (
-          <SetupReady onRetry={refresh} outcome={outcome} />
+          <SetupReady
+            {...(initialVerificationOutcome ? { initialVerificationOutcome } : {})}
+            onRetry={refresh}
+            outcome={outcome}
+            {...(runVerification ? { runVerification } : {})}
+          />
         ) : (
           <SetupBoundary onRetry={refresh} status={outcome.status} />
         )}

@@ -107,6 +107,14 @@ export {
   type SetupReadinessErrorReason,
 } from "./setup/readiness-service.js";
 export {
+  StackVerificationError,
+  StackVerificationService,
+  type StackVerificationContext,
+  type StackVerificationDependencies,
+  type StackVerificationErrorReason,
+  type StackVerificationProbeResult,
+} from "./setup/stack-verification-service.js";
+export {
   MediaReferenceError,
   MediaReferenceService,
   type MediaReferenceDependencies,

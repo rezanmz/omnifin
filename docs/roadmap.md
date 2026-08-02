@@ -124,6 +124,9 @@ browser behavior.
   pending)
 - Browser-safe deployment flight check for production runtime, HTTPS sessions, recovery access, and
   persistent SQLite configuration (implemented; host-specific operational proof remains required)
+- Administrator-run stack verification with bounded fresh OIDC and connector probes, isolated
+  failures, and a privacy-safe downloadable report (implemented; protected live compatibility
+  evidence remains separate)
 - Immutable-image deployment doctor for private readiness, public HTTPS headers, SQLite integrity,
   and backup-directory posture (implemented; restore and authenticated-operation proof remain manual)
 - Verified installation, operation, troubleshooting, and contribution documentation

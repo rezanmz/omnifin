@@ -113,6 +113,13 @@ responses, or the recovery path. If one upstream service fails validation, indep
 steps remain visible alongside the affected service's normalized attention state and are not
 promoted into a false success.
 
+After the services you use are enabled, run the guide's **Post-install flight check**. It performs
+fresh, upstream-read-only checks for every configured OIDC provider and media connector, keeps
+partial failures isolated, and offers a privacy-safe JSON download. Resolve every attention result
+before an upgrade observation period ends. The [stack verification runbook](operations/stack-verification.md)
+describes the report's privacy boundary and explains why it is local diagnostic evidence rather
+than a public compatibility claim.
+
 ## 4. Configure identity and services
 
 From the administrator session, use the live setup guide as the index for these actions:

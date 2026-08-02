@@ -62,3 +62,30 @@ test("setup appearance follows an explicit light preference", async ({ page }) =
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme-preference", "light");
 });
+
+test("stack verification isolates an unavailable service and exposes only safe evidence", async ({
+  page,
+}) => {
+  await page.goto("/onboarding?test-view=partial&test-verification=attention");
+
+  await expect(
+    page.getByRole("heading", {
+      name: "Most of the stack answered. One edge needs attention.",
+    }),
+  ).toBeVisible();
+  const checks = page.getByRole("list", { name: "Stack verification checks" });
+  await expect(checks.locator(":scope > li")).toHaveCount(9);
+  await expect(page.getByText("Could not connect")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download safe JSON" })).toBeVisible();
+  await expect(
+    page.getByText(/example\.test|token=|external-user|connector-id|provider-id/iu),
+  ).toHaveCount(0);
+});
+
+test("stack verification action remains keyboard reachable", async ({ page }) => {
+  await page.goto("/onboarding?test-view=partial");
+
+  const run = page.getByRole("button", { name: "Run stack verification" });
+  await run.focus();
+  await expect(run).toBeFocused();
+});

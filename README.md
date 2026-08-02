@@ -244,6 +244,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   trusted hops, live events, and public verification
 - [Deployment doctor](docs/operations/deployment-doctor.md) — a privacy-safe runtime, HTTPS, storage,
   and backup-directory preflight from the immutable image
+- [Stack verification](docs/operations/stack-verification.md) — fresh administrator-run OIDC and
+  connector checks with a privacy-safe JSON report
 - [First run](docs/first-run.md) — source/Compose startup and first-administrator bootstrap
 - [Development](docs/development.md) — local setup, checks, and contribution workflow
 - [Roadmap](docs/roadmap.md) — phased delivery and release gates
