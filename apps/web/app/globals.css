@@ -66,8 +66,8 @@
 
 .navigation-rail {
   align-items: center;
-  -webkit-backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
-  backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background:
     radial-gradient(
       circle 88px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -331,8 +331,8 @@
 
 .global-search {
   align-items: center;
-  -webkit-backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
-  backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background:
     radial-gradient(
       circle 106px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -448,8 +448,8 @@
 
 .top-command-bar__actions {
   align-items: center;
-  -webkit-backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
-  backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background:
     radial-gradient(
       circle 92px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -471,6 +471,23 @@
   isolation: isolate;
   padding: 3px;
   position: relative;
+}
+
+:root[data-liquid-glass-ready] .navigation-rail,
+:root[data-liquid-glass-ready] .mobile-navigation,
+:root[data-liquid-glass-ready] .navigation-preview--mobile .mobile-navigation {
+  -webkit-backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+  backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+}
+
+:root[data-liquid-glass-ready] .global-search {
+  -webkit-backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
+  backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
+}
+
+:root[data-liquid-glass-ready] .top-command-bar__actions {
+  -webkit-backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
+  backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
 }
 
 .connection-pulse {
@@ -2020,8 +2037,8 @@
 
 .navigation-preview--mobile .mobile-navigation {
   align-items: center;
-  -webkit-backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
-  backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background:
     radial-gradient(
       circle 116px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -4301,8 +4318,8 @@
 
   .mobile-navigation {
     align-items: center;
-    -webkit-backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
-    backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
     background:
       radial-gradient(
         circle 116px at var(--glass-pointer-x) var(--glass-pointer-y),
