@@ -11,7 +11,10 @@ const nextConfig: NextConfig = {
   productionBrowserSourceMaps: false,
   reactStrictMode: true,
   serverExternalPackages: [],
-  experimental: { optimizePackageImports: ["lucide-react"] },
+  experimental: {
+    inlineCss: true,
+    optimizePackageImports: ["lucide-react"],
+  },
 };
 
 export default nextConfig;

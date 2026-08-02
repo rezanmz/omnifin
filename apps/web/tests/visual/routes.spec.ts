@@ -180,7 +180,7 @@ for (const state of ["development", "unavailable"] as const) {
       "Build identity states cover desktop and phone geometry",
     );
     await page.goto(`/about?test-view=${state}`);
-    await page.locator("main").waitFor();
+    await page.locator('main:not([aria-busy="true"])').waitFor();
     await removeDevelopmentIndicator(page);
     await expect(page).toHaveScreenshot(`about-build-identity-${state}.png`, { fullPage: true });
   });
