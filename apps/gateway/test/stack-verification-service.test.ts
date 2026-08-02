@@ -228,6 +228,63 @@ describe("StackVerificationService", () => {
     }
   });
 
+  it("reports partial readiness while preserving a normalized upstream failure", async () => {
+    const fixture = harness({
+      probeConnector: async (connectorId) =>
+        connectorId === "radarr-ready"
+          ? { kind: "completed", value: health(connectorId, "radarr") }
+          : {
+              kind: "completed",
+              value: health(connectorId, "radarr", {
+                failure: {
+                  code: "timeout",
+                  message: "Private upstream detail",
+                  occurredAt: now.toISOString(),
+                  operation: "connector.health",
+                  retryable: true,
+                  service: "radarr",
+                },
+                status: "unavailable",
+                version: null,
+              }),
+            },
+      validateOidcProvider: async () => ({
+        kind: "completed",
+        value: {
+          ...oidcCapabilities(),
+          logout: {
+            backChannel: false,
+            backChannelSession: false,
+            frontChannel: false,
+            frontChannelSession: false,
+            rpInitiated: false,
+          },
+          userInfo: false,
+        },
+      }),
+    });
+    try {
+      insertOidc(fixture.database);
+      insertConnector(fixture.database, "radarr", "radarr-ready");
+      insertConnector(fixture.database, "radarr", "radarr-timeout");
+
+      const report = await fixture.service.run({ principal: principal() });
+
+      expect(report.state).toBe("partial");
+      expect(report.checks[0]?.capabilities).toEqual(["oidc.authorization_code", "oidc.pkce_s256"]);
+      expect(report.checks.find(({ id }) => id === "radarr")).toMatchObject({
+        configuredCount: 2,
+        findings: [{ code: "timeout", count: 1 }],
+        readyCount: 1,
+        state: "partial",
+        versions: ["1.2.3"],
+      });
+      expect(JSON.stringify(report)).not.toContain("Private upstream detail");
+    } finally {
+      fixture.database.close();
+    }
+  });
+
   it("bounds concurrent upstream work to four checks", async () => {
     let active = 0;
     let maximum = 0;
