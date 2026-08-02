@@ -9,6 +9,7 @@ import type {
 import {
   degradedAcquisitionCalendar,
   demoAcquisitionCalendar,
+  demoMonthAcquisitionCalendar,
   emptyAcquisitionCalendar,
   unconfiguredAcquisitionCalendar,
 } from "../lib/acquisition-calendar-demo";
@@ -39,6 +40,17 @@ type Story = StoryObj<typeof meta>;
 
 export const Ready: Story = {};
 export const ReadyLight: Story = { globals: { theme: "light" } };
+export const Month: Story = {
+  args: {
+    initialOutcome: { calendar: demoMonthAcquisitionCalendar, status: "ready" },
+    initialView: "month",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("heading", { name: "Month at a glance" })).toBeVisible();
+    await expect(canvas.getAllByRole("gridcell")).toHaveLength(42);
+  },
+};
 
 export const AttentionFilter: Story = {
   play: async ({ canvasElement, userEvent }) => {

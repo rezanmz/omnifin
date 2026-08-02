@@ -8,6 +8,7 @@ import {
 import {
   degradedAcquisitionCalendar,
   demoAcquisitionCalendar,
+  demoMonthAcquisitionCalendar,
   emptyAcquisitionCalendar,
   unconfiguredAcquisitionCalendar,
 } from "../../lib/acquisition-calendar-demo";
@@ -36,9 +37,11 @@ function testOutcome(
         ? degradedAcquisitionCalendar
         : view === "unconfigured"
           ? unconfiguredAcquisitionCalendar
-          : view === "ready"
-            ? demoAcquisitionCalendar
-            : undefined;
+          : view === "month"
+            ? demoMonthAcquisitionCalendar
+            : view === "ready"
+              ? demoAcquisitionCalendar
+              : undefined;
   return calendar ? { calendar, status: "ready" } : undefined;
 }
 
@@ -53,13 +56,17 @@ export default async function AcquisitionCalendarPage({
       ? ({ calendar: demoAcquisitionCalendar, status: "ready" } as const)
       : undefined;
   const outcome = test ?? demo;
+  const initialView = parameters["test-view"] === "month" ? "month" : "week";
 
   return (
     <AcquisitionCalendarFrame initialPreference={preference}>
-      {outcome?.status === "ready" ? <AcquisitionCalendarHero calendar={outcome.calendar} /> : null}
+      {outcome?.status === "ready" ? (
+        <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
+      ) : null}
       <AcquisitionCalendarLoader
         embedded
         hideHero={outcome?.status === "ready"}
+        initialView={initialView}
         {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}
       />
     </AcquisitionCalendarFrame>

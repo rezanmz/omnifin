@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AcquisitionCalendarPage from "./page";
@@ -39,6 +39,22 @@ describe("AcquisitionCalendarPage", () => {
     expect(screen.getByRole("heading", { level: 1, name: "See what arrives next." })).toBeVisible();
     expect(await screen.findByRole("button", { name: /Inspect The Far Meridian/i })).toBeVisible();
     expect(screen.getByText("Opaque by design")).toBeVisible();
+  });
+
+  it("renders a deterministic month horizon for visual and accessibility checks", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+
+    render(
+      await AcquisitionCalendarPage({ searchParams: Promise.resolve({ "test-view": "month" }) }),
+    );
+
+    expect(await screen.findByRole("heading", { name: "Month at a glance" })).toBeVisible();
+    await waitFor(() => expect(screen.getAllByText("July 2026")).toHaveLength(2));
+    expect(screen.getAllByRole("gridcell")).toHaveLength(42);
+    expect(screen.getByRole("button", { name: "Month view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("renders the unconfigured service path without contacting a source", async () => {

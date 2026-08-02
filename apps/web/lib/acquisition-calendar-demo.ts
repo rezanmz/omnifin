@@ -1,5 +1,7 @@
 import type { AcquisitionCalendarResponse } from "@omnifin/contracts/calendar";
 
+import { monthContaining } from "./calendar-period";
+
 export const demoCalendarGeneratedAt = "2026-07-27T18:00:00.000Z";
 export const demoCalendarStartAt = "2026-07-27T04:00:00.000Z";
 export const demoCalendarEndAt = "2026-08-03T04:00:00.000Z";
@@ -187,6 +189,14 @@ export const demoAcquisitionCalendar: AcquisitionCalendarResponse = {
   startAt: demoCalendarStartAt,
   state: "complete",
   summary: { available: 1, episodes: 4, missing: 1, movies: 4, queued: 1, total: 8 },
+};
+
+const demoMonthRange = monthContaining(new Date("2026-07-15T12:00:00.000Z"));
+
+export const demoMonthAcquisitionCalendar: AcquisitionCalendarResponse = {
+  ...demoAcquisitionCalendar,
+  endAt: demoMonthRange.endAt,
+  startAt: demoMonthRange.startAt,
 };
 
 export const emptyAcquisitionCalendar: AcquisitionCalendarResponse = {

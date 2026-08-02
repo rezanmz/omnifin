@@ -37,6 +37,14 @@ import {
   type AcquisitionCalendarLoadOutcome,
   type AcquisitionCalendarRange,
 } from "../lib/acquisition-calendar";
+import {
+  calendarDays,
+  currentWeek,
+  formatCalendarPeriod,
+  rangeForCalendarView,
+  type CalendarView,
+  UTC_DAY,
+} from "../lib/calendar-period";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 import { AcquisitionCalendarTopbar } from "./acquisition-calendar-topbar";
 import { CinematicBackdrop } from "./cinematic-backdrop";
@@ -68,7 +76,6 @@ const EmbeddedLiveCalendar = dynamic(
   { loading: () => <LoadingState embedded /> },
 );
 
-const UTC_DAY = 24 * 60 * 60 * 1_000;
 const subscribeToHydration = () => () => undefined;
 const clientHydrated = () => true;
 const serverHydrated = () => false;
@@ -77,59 +84,13 @@ export interface AcquisitionCalendarProperties {
   client?: AcquisitionCalendarClient;
   embedded?: boolean;
   hideHero?: boolean;
+  initialView?: CalendarView;
   initialOutcome?: AcquisitionCalendarLoadOutcome;
   live?: boolean;
 }
 
-export function currentWeek(): AcquisitionCalendarRange {
-  const current = new Date();
-  const mondayOffset = (current.getUTCDay() + 6) % 7;
-  const start = new Date(
-    Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate() - mondayOffset),
-  );
-  return {
-    endAt: new Date(start.getTime() + 7 * UTC_DAY).toISOString(),
-    limit: 100,
-    startAt: start.toISOString(),
-  };
-}
-
-export function shiftedWeek(
-  range: AcquisitionCalendarRange,
-  offset: number,
-): AcquisitionCalendarRange {
-  const start = new Date(Date.parse(range.startAt) + offset * 7 * UTC_DAY);
-  return {
-    endAt: new Date(start.getTime() + 7 * UTC_DAY).toISOString(),
-    limit: 100,
-    startAt: start.toISOString(),
-  };
-}
-
-function dayDates(range: AcquisitionCalendarRange) {
-  const start = Date.parse(range.startAt);
-  return Array.from({ length: 7 }, (_, index) => new Date(start + index * UTC_DAY));
-}
-
 function dayKey(value: Date | string) {
   return (typeof value === "string" ? value : value.toISOString()).slice(0, 10);
-}
-
-function formatWeek(range: AcquisitionCalendarRange) {
-  const start = new Date(range.startAt);
-  const end = new Date(Date.parse(range.endAt) - 1);
-  const startLabel = new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(start);
-  const endLabel = new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: start.getUTCMonth() === end.getUTCMonth() ? undefined : "short",
-    timeZone: "UTC",
-    year: start.getUTCFullYear() === end.getUTCFullYear() ? undefined : "numeric",
-  }).format(end);
-  return `${startLabel} — ${endLabel}, ${end.getUTCFullYear()}`;
 }
 
 function formatEventTime(value: string) {
@@ -296,10 +257,12 @@ function Metric({
 }
 
 function EventCard({
+  density = "regular",
   event,
   interactive,
   onSelect,
 }: {
+  density?: "compact" | "regular";
   event: AcquisitionCalendarEvent;
   interactive: boolean;
   onSelect: (trigger: HTMLButtonElement) => void;
@@ -309,6 +272,7 @@ function EventCard({
       aria-label={`Inspect ${event.title}, ${event.subtitle ?? (event.kind === "movie" ? "movie" : "episode")}`}
       className={styles.eventCard}
       data-availability={event.availability}
+      data-density={density}
       data-directional-item
       disabled={!interactive}
       onFocus={() => void import("./acquisition-calendar-event-detail")}
@@ -343,7 +307,7 @@ function WeekGrid({
   range: AcquisitionCalendarRange;
 }) {
   const today = dayKey(new Date());
-  const days = dayDates(range);
+  const days = calendarDays(range);
   const grouped = new Map<string, AcquisitionCalendarEvent[]>();
   for (const event of events) {
     const list = grouped.get(dayKey(event.eventAt)) ?? [];
@@ -414,6 +378,136 @@ function WeekGrid({
   );
 }
 
+const MONTH_EVENT_PREVIEW_LIMIT = 2;
+const MONTH_WEEKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+
+function MonthGrid({
+  events,
+  interactive,
+  onSelect,
+  range,
+}: {
+  events: AcquisitionCalendarEvent[];
+  interactive: boolean;
+  onSelect: (event: AcquisitionCalendarEvent, trigger: HTMLButtonElement) => void;
+  range: AcquisitionCalendarRange;
+}) {
+  const [expandedDays, setExpandedDays] = useState<ReadonlySet<string>>(() => new Set());
+  const today = dayKey(new Date());
+  const days = calendarDays(range);
+  const activeMonth = new Date(Date.parse(range.startAt) + 7 * UTC_DAY).getUTCMonth();
+  const grouped = new Map<string, AcquisitionCalendarEvent[]>();
+  for (const event of events) {
+    const list = grouped.get(dayKey(event.eventAt)) ?? [];
+    list.push(event);
+    grouped.set(dayKey(event.eventAt), list);
+  }
+
+  const toggleDay = (key: string) => {
+    setExpandedDays((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  return (
+    <section className={styles.weekPanel} aria-labelledby="month-grid-title">
+      <header className={styles.sectionHeading}>
+        <div>
+          <p className="section-kicker">Six-week release horizon</p>
+          <h2 id="month-grid-title">Month at a glance</h2>
+          <small className={styles.periodLabel}>{formatCalendarPeriod(range, "month")}</small>
+        </div>
+        <span aria-label={`${events.length} visible events`}>
+          {String(events.length).padStart(2, "0")}
+        </span>
+      </header>
+      <div
+        aria-label={`Month acquisition calendar, ${formatCalendarPeriod(range, "month")}`}
+        className={styles.monthGrid}
+        onKeyDown={(event) => handleDirectionalFocus(event, { axis: "grid" })}
+        role="grid"
+      >
+        <div className={styles.monthWeek} role="row">
+          {MONTH_WEEKDAYS.map((weekday) => (
+            <span className={styles.monthWeekday} key={weekday} role="columnheader">
+              <span aria-hidden="true">{weekday.slice(0, 3)}</span>
+              <span className="sr-only">{weekday}</span>
+            </span>
+          ))}
+        </div>
+        {Array.from({ length: 6 }, (_, week) => (
+          <div className={styles.monthWeek} key={week} role="row">
+            {days.slice(week * 7, week * 7 + 7).map((day) => {
+              const key = dayKey(day);
+              const items = grouped.get(key) ?? [];
+              const expanded = expandedDays.has(key);
+              const visibleItems = expanded ? items : items.slice(0, MONTH_EVENT_PREVIEW_LIMIT);
+              const overflow = Math.max(0, items.length - MONTH_EVENT_PREVIEW_LIMIT);
+              const dateLabel = new Intl.DateTimeFormat("en-US", {
+                day: "numeric",
+                month: "long",
+                timeZone: "UTC",
+                weekday: "long",
+                year: "numeric",
+              }).format(day);
+              return (
+                <div
+                  aria-label={`${dateLabel}, ${items.length} ${items.length === 1 ? "arrival" : "arrivals"}`}
+                  className={styles.monthDay}
+                  data-outside={day.getUTCMonth() !== activeMonth || undefined}
+                  data-today={key === today || undefined}
+                  key={key}
+                  role="gridcell"
+                >
+                  <header>
+                    <time dateTime={key}>{day.getUTCDate()}</time>
+                    {items.length > 0 ? <small>{items.length}</small> : null}
+                  </header>
+                  <div className={styles.monthEvents}>
+                    {visibleItems.map((event) => (
+                      <EventCard
+                        density="compact"
+                        event={event}
+                        interactive={interactive}
+                        key={event.id}
+                        onSelect={(trigger) => onSelect(event, trigger)}
+                      />
+                    ))}
+                    {overflow > 0 ? (
+                      <button
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Show fewer" : `Show ${overflow} more`} arrivals on ${dateLabel}`}
+                        className={styles.monthOverflow}
+                        data-directional-item
+                        disabled={!interactive}
+                        onClick={() => toggleDay(key)}
+                        type="button"
+                      >
+                        {expanded ? "Show fewer" : `+${overflow} more`}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SourcePanel({ calendar }: { calendar: AcquisitionCalendarResponse }) {
   return (
     <aside className={styles.sourcePanel} aria-labelledby="calendar-sources-title">
@@ -466,7 +560,7 @@ function UnconfiguredCalendar() {
       <h2>Connect your release horizon.</h2>
       <p>
         Validate and enable Radarr or Sonarr to map monitored movie releases and episode premieres
-        into one private week view.
+        into one private calendar.
       </p>
       <Link className={styles.primaryAction} href="/settings/connectors">
         Configure services
@@ -489,10 +583,12 @@ export function ReadyCalendar({
   onNavigate,
   onRefresh,
   onSearch,
+  onView,
   query,
   range,
   refreshAvailable,
   stale,
+  view,
 }: {
   calendar: AcquisitionCalendarResponse;
   canLoadMore: boolean;
@@ -507,10 +603,12 @@ export function ReadyCalendar({
   onNavigate: (action: "next" | "previous" | "today") => void;
   onRefresh: () => void;
   onSearch: (value: string) => void;
+  onView: (view: CalendarView) => void;
   query: string;
   range: AcquisitionCalendarRange;
   refreshAvailable: boolean;
   stale: boolean;
+  view: CalendarView;
 }) {
   const [selected, setSelected] = useState<AcquisitionCalendarEvent | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -576,7 +674,7 @@ export function ReadyCalendar({
                   ? `${attention} ${attention === 1 ? "arrival needs" : "arrivals need"} attention`
                   : `${calendar.summary.total} arrivals mapped`}
               </strong>
-              <small>{formatWeek(range)}</small>
+              <small>{formatCalendarPeriod(range, view)}</small>
             </div>
           </div>
         </section>
@@ -587,9 +685,24 @@ export function ReadyCalendar({
       ) : (
         <>
           <div className={styles.commandGlass} data-liquid-glass>
+            <div aria-label="Calendar view" className={styles.viewControl} role="group">
+              {(["week", "month"] as const).map((option) => (
+                <button
+                  aria-label={`${option === "week" ? "Week" : "Month"} view`}
+                  aria-pressed={view === option}
+                  data-selected={view === option || undefined}
+                  disabled={!interactive || !refreshAvailable}
+                  key={option}
+                  onClick={() => onView(option)}
+                  type="button"
+                >
+                  {option === "week" ? "Week" : "Month"}
+                </button>
+              ))}
+            </div>
             <div className={styles.weekNavigation}>
               <button
-                aria-label="Previous week"
+                aria-label={`Previous ${view}`}
                 disabled={!refreshAvailable}
                 onClick={() => onNavigate("previous")}
                 type="button"
@@ -604,7 +717,7 @@ export function ReadyCalendar({
                 Today
               </button>
               <button
-                aria-label="Next week"
+                aria-label={`Next ${view}`}
                 disabled={!refreshAvailable}
                 onClick={() => onNavigate("next")}
                 type="button"
@@ -687,7 +800,7 @@ export function ReadyCalendar({
               value={String(calendar.summary.movies).padStart(2, "0")}
             />
             <Metric
-              detail="premieres this week"
+              detail={`premieres this ${view}`}
               icon={Tv}
               label="Episodes"
               value={String(calendar.summary.episodes).padStart(2, "0")}
@@ -716,23 +829,32 @@ export function ReadyCalendar({
                 <CalendarClock />
               </span>
               <h2>The horizon is clear.</h2>
-              <p>No monitored movies or episodes are scheduled in this week.</p>
+              <p>No monitored movies or episodes are scheduled in this {view}.</p>
             </section>
           ) : (
             <div className={styles.workspace}>
               <div>
-                <WeekGrid
-                  events={visibleEvents}
-                  interactive={interactive}
-                  onSelect={selectEvent}
-                  range={range}
-                />
+                {view === "month" ? (
+                  <MonthGrid
+                    events={visibleEvents}
+                    interactive={interactive}
+                    onSelect={selectEvent}
+                    range={range}
+                  />
+                ) : (
+                  <WeekGrid
+                    events={visibleEvents}
+                    interactive={interactive}
+                    onSelect={selectEvent}
+                    range={range}
+                  />
+                )}
                 {visibleEvents.length === 0 && filtered ? (
                   <div className={styles.filteredEmpty} role="status">
                     <ListFilter aria-hidden="true" size={19} />
                     <span>
                       <strong>No arrivals match this view</strong>Adjust the filter or search to
-                      restore the week.
+                      restore the {view}.
                     </span>
                   </div>
                 ) : null}
@@ -773,22 +895,35 @@ export function ReadyCalendar({
 function StaticCalendarContent({
   embedded = false,
   hideHero = false,
+  initialView = "week",
   outcome,
 }: {
   embedded?: boolean;
   hideHero?: boolean;
+  initialView?: CalendarView;
   outcome: AcquisitionCalendarLoadOutcome;
 }) {
-  const [range] = useState<AcquisitionCalendarRange>(() =>
+  const initialRange =
     outcome.status === "ready"
       ? { endAt: outcome.calendar.endAt, limit: 100, startAt: outcome.calendar.startAt }
-      : currentWeek(),
-  );
+      : currentWeek();
+  const [range, setRange] = useState<AcquisitionCalendarRange>(initialRange);
+  const [view, setView] = useState<CalendarView>(initialView);
   const [filter, setFilter] = useState<CalendarFilter>("all");
   const [search, setSearch] = useState("");
   const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
   if (outcome.status !== "ready")
     return <BoundaryState embedded={embedded} status={outcome.status} />;
+
+  const changeView = (next: CalendarView) => {
+    const midpoint = new Date(
+      (Date.parse(initialRange.startAt) + Date.parse(initialRange.endAt)) / 2,
+    );
+    setView(next);
+    setRange(rangeForCalendarView(midpoint, next));
+    setFilter("all");
+    setSearch("");
+  };
 
   return (
     <ReadyCalendar
@@ -805,10 +940,12 @@ function StaticCalendarContent({
       onNavigate={() => undefined}
       onRefresh={() => undefined}
       onSearch={setSearch}
+      onView={changeView}
       query={search}
       range={range}
       refreshAvailable={false}
       stale={false}
+      view={view}
     />
   );
 }
@@ -817,6 +954,7 @@ export function AcquisitionCalendar({
   client = acquisitionCalendarClient,
   embedded = false,
   hideHero = false,
+  initialView = "week",
   initialOutcome,
   live,
 }: AcquisitionCalendarProperties) {
@@ -827,13 +965,19 @@ export function AcquisitionCalendar({
         client={client}
         embedded={embedded}
         hideHero={hideHero}
+        initialView={initialView}
         {...(initialOutcome === undefined ? {} : { initialOutcome })}
         {...(live === undefined ? {} : { live })}
       />
     );
   }
   return initialOutcome ? (
-    <StaticCalendarContent embedded={embedded} hideHero={hideHero} outcome={initialOutcome} />
+    <StaticCalendarContent
+      embedded={embedded}
+      hideHero={hideHero}
+      initialView={initialView}
+      outcome={initialOutcome}
+    />
   ) : (
     <LoadingState embedded={embedded} />
   );

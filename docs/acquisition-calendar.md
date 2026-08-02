@@ -58,16 +58,22 @@ limit. `nextCursor` provides stable range-bound pagination when more combined ev
 
 ## Browser behavior
 
-The route is non-cacheable and rate-limited. The calendar keeps one week in view, supports explicit
-week navigation, refresh, title/source search, and movie, episode, and attention filters. Live reads
-preserve the last verified horizon when a later refresh fails and label that evidence as stale.
-Selecting an event opens a native modal detail drawer; Escape, backdrop activation, and the close
-control dismiss it and return focus to the exact event that opened it.
+The route is non-cacheable and rate-limited. The calendar offers a focused seven-day week and a
+Monday-aligned six-week month grid. Navigation advances by the selected period, while Today returns
+to the current UTC week or month. Both views preserve refresh, signed cursor pagination,
+title/source search, and movie, episode, and attention filters. Live reads preserve the last
+verified horizon when a later refresh fails and label that evidence as stale.
 
-Ready, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable states have
-component coverage. Dark and light desktop/mobile baselines are committed for macOS and Linux, and
-representative routes are checked for automatic accessibility violations, keyboard and directional
-navigation, responsive behavior, reduced motion, Content Security Policy, and production rendering.
+Month cells show a bounded event preview. A day with additional arrivals exposes an explicit
+expanded-state control, so density never makes an event unreachable. Selecting an event in either
+view opens the same native modal detail drawer; Escape, backdrop activation, and the close control
+dismiss it and return focus to the exact event that opened it.
+
+Ready week/month, empty, unconfigured, degraded, loading, signed-out, forbidden, and unavailable
+states have component coverage. Dark and light desktop/mobile baselines are committed for macOS and
+Linux, and representative routes are checked for automatic accessibility violations, keyboard and
+directional navigation, responsive behavior, reduced motion, Content Security Policy, and production
+rendering.
 
 ## Intentionally absent mutations
 

@@ -122,6 +122,7 @@
 .operationsLink,
 .heroLens,
 .commandGlass,
+.viewControl,
 .weekNavigation,
 .searchControl,
 .filters,
@@ -167,6 +168,7 @@
 .back:active,
 .operationsLink:active,
 .themeControl button:active,
+.viewControl button:active,
 .weekNavigation button:active,
 .filters button:active,
 .refresh:active,
@@ -177,6 +179,7 @@
 }
 
 .themeControl,
+.viewControl,
 .weekNavigation,
 .filters {
   background: var(--surface-recessed);
@@ -188,6 +191,7 @@
 
 .themeControl button,
 .refresh,
+.viewControl button,
 .weekNavigation button {
   align-items: center;
   border-radius: 11px;
@@ -206,11 +210,26 @@
 
 .themeControl button:hover,
 .themeControl button[data-selected],
+.viewControl button:hover,
+.viewControl button[data-selected],
 .weekNavigation button:hover:not(:disabled) {
   color: var(--paper-0);
 }
 
 .themeControl button[data-selected] {
+  background: var(--glass-highlight);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    0 4px 13px var(--glass-cast-shadow);
+}
+
+.viewControl button {
+  font-size: 0.69rem;
+  font-weight: 720;
+  padding: 0 13px;
+}
+
+.viewControl button[data-selected] {
   background: var(--glass-highlight);
   box-shadow:
     inset 0 1px 0 var(--glass-edge),
@@ -330,10 +349,16 @@
   width: auto;
 }
 
+.viewControl button:disabled,
 .weekNavigation button:disabled,
 .refresh:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.viewControl button[data-selected]:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
 .searchControl {
@@ -568,6 +593,14 @@
   color: var(--paper-3);
 }
 
+.periodLabel {
+  color: var(--paper-2);
+  display: block;
+  font-size: 0.67rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 8px;
+}
+
 .weekGrid {
   border: 1px solid var(--line-soft);
   border-radius: 25px;
@@ -768,6 +801,167 @@
   border-radius: 50%;
   height: 4px;
   width: 4px;
+}
+
+.monthGrid {
+  border: 1px solid var(--line-soft);
+  border-radius: 25px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.monthWeek {
+  display: contents;
+}
+
+.monthWeekday {
+  background: color-mix(in srgb, var(--surface-card-solid) 34%, transparent);
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+  color: var(--paper-3);
+  font-size: 0.58rem;
+  font-weight: 730;
+  letter-spacing: 0.09em;
+  padding: 11px 8px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.monthWeekday:first-child {
+  border-left: 0;
+}
+
+.monthDay {
+  background: color-mix(in srgb, var(--surface-card-solid) 17%, transparent);
+  border-bottom: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+  min-height: 156px;
+  min-width: 0;
+  padding: 8px;
+  position: relative;
+}
+
+.monthDay:nth-child(7n + 1) {
+  border-left: 0;
+}
+
+.monthWeek:last-child .monthDay {
+  border-bottom: 0;
+}
+
+.monthDay[data-outside] {
+  background: color-mix(in srgb, var(--surface-recessed) 60%, transparent);
+}
+
+.monthDay[data-outside] > header {
+  opacity: 0.72;
+}
+
+.monthDay[data-today] {
+  background:
+    linear-gradient(155deg, var(--accent-soft), transparent 55%),
+    color-mix(in srgb, var(--surface-card-solid) 17%, transparent);
+}
+
+.monthDay[data-today]::before {
+  background: var(--acid);
+  border-radius: 999px;
+  box-shadow: 0 0 13px var(--accent-ring);
+  content: "";
+  height: 3px;
+  left: 22%;
+  position: absolute;
+  right: 22%;
+  top: 0;
+}
+
+.monthDay > header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 3px 5px;
+}
+
+.monthDay > header time {
+  color: var(--paper-1);
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+}
+
+.monthDay[data-today] > header time {
+  color: var(--acid);
+}
+
+.monthDay > header small {
+  color: var(--paper-3);
+  font-size: 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.monthEvents {
+  display: grid;
+  gap: 5px;
+}
+
+.eventCard[data-density="compact"] {
+  border-radius: 12px;
+  gap: 5px;
+  grid-template-columns: 5px minmax(0, 1fr);
+  min-height: 44px;
+  padding: 6px 7px;
+}
+
+.eventCard[data-density="compact"] .eventStatus {
+  padding-top: 3px;
+}
+
+.eventCard[data-density="compact"] .eventCopy time {
+  font-size: 0.5rem;
+}
+
+.eventCard[data-density="compact"] .eventCopy strong {
+  font-size: 0.62rem;
+  line-height: 1.2;
+  margin: 2px 0 0;
+  -webkit-line-clamp: 1;
+}
+
+.eventCard[data-density="compact"] .eventCopy small,
+.eventCard[data-density="compact"] .eventKind {
+  display: none;
+}
+
+.monthOverflow {
+  border-radius: 11px;
+  color: var(--paper-2);
+  cursor: pointer;
+  font-size: 0.59rem;
+  font-weight: 690;
+  min-height: 44px;
+  padding: 0 7px;
+  text-align: left;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out,
+    transform 130ms ease-out;
+}
+
+.monthOverflow:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--paper-0);
+}
+
+.monthOverflow:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.monthOverflow:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .sourceList {
@@ -1117,6 +1311,18 @@
   .dayColumn {
     scroll-snap-align: start;
   }
+
+  .monthGrid {
+    grid-template-columns: repeat(7, minmax(108px, 1fr));
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline proximity;
+  }
+
+  .monthDay,
+  .monthWeekday {
+    scroll-snap-align: start;
+  }
 }
 
 @media (max-width: 840px) {
@@ -1179,9 +1385,14 @@
     top: 78px;
   }
 
-  .weekNavigation {
+  .viewControl {
     flex: 1 1 auto;
+  }
+
+  .weekNavigation {
+    flex: 1 1 100%;
     justify-content: space-between;
+    order: 1;
   }
 
   .searchControl {
@@ -1190,11 +1401,13 @@
   }
 
   .filters {
-    margin-left: auto;
+    flex: 1 1 auto;
+    justify-content: space-around;
+    order: 2;
   }
 
   .refresh {
-    order: 2;
+    order: 0;
   }
 
   .weekPanel,
@@ -1210,6 +1423,20 @@
     grid-template-columns: 1fr;
     min-height: 0;
     overflow: visible;
+  }
+
+  .monthGrid {
+    border-radius: 20px;
+    grid-template-columns: repeat(7, minmax(96px, 1fr));
+  }
+
+  .monthDay {
+    min-height: 142px;
+    padding: 7px;
+  }
+
+  .monthWeekday {
+    padding: 10px 5px;
   }
 
   .dayColumn,
@@ -1354,6 +1581,7 @@
   .metric,
   .weekPanel,
   .sourcePanel,
+  .monthDay,
   .eventCard {
     border: 1px solid CanvasText;
     box-shadow: none;

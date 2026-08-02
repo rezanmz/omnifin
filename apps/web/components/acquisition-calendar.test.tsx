@@ -11,6 +11,7 @@ import type {
 import {
   degradedAcquisitionCalendar,
   demoAcquisitionCalendar,
+  demoMonthAcquisitionCalendar,
   emptyAcquisitionCalendar,
   unconfiguredAcquisitionCalendar,
 } from "../lib/acquisition-calendar-demo";
@@ -24,7 +25,11 @@ const ready: AcquisitionCalendarLoadOutcome = {
 
 function renderCalendar(
   outcome: AcquisitionCalendarLoadOutcome = ready,
-  options: { client?: AcquisitionCalendarClient; live?: boolean } = {},
+  options: {
+    client?: AcquisitionCalendarClient;
+    initialView?: "month" | "week";
+    live?: boolean;
+  } = {},
 ) {
   return render(
     <ThemeProvider initialPreference="system">
@@ -32,6 +37,7 @@ function renderCalendar(
         initialOutcome={outcome}
         live={options.live ?? false}
         {...(options.client === undefined ? {} : { client: options.client })}
+        {...(options.initialView === undefined ? {} : { initialView: options.initialView })}
       />
     </ThemeProvider>,
   );
@@ -64,6 +70,39 @@ describe("AcquisitionCalendar", () => {
     expect(screen.getAllByRole("region", { name: /Mon|Tue|Wed|Thu|Fri|Sat|Sun/u })).toHaveLength(7);
     expect(document.body.textContent).not.toContain("calendar_ABCDEFGHIJKLMNOPQRSTUV");
     expect(document.body.textContent).not.toContain("calendar_source_ABCDEFGHIJKLMNOPQRSTUV");
+  });
+
+  it("switches to an accessible six-week month view", async () => {
+    const user = userEvent.setup();
+    const load = vi.fn(async () => demoMonthAcquisitionCalendar);
+    renderCalendar(ready, { client: { load }, live: true });
+
+    const month = await screen.findByRole("button", { name: "Month view" });
+    expect(screen.getByRole("button", { name: "Week view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.click(month);
+
+    expect(await screen.findByRole("heading", { name: "Month at a glance" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Month view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("grid", { name: /Month acquisition calendar/u })).toBeVisible();
+    const cells = screen.getAllByRole("gridcell");
+    expect(cells).toHaveLength(42);
+    expect(cells.every((cell) => cell.tagName === "DIV")).toBe(true);
+    expect(screen.getByRole("button", { name: "Previous month" })).toBeEnabled();
+    expect(screen.getByText("premieres this month")).toBeVisible();
+    expect(load).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endAt: "2026-08-10T00:00:00.000Z",
+        startAt: "2026-06-29T00:00:00.000Z",
+      }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("filters attention signals and title search without changing source coverage", async () => {
@@ -99,6 +138,43 @@ describe("AcquisitionCalendar", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(eventCard).toHaveFocus());
+  });
+
+  it("reveals a crowded month day without making arrivals unreachable", async () => {
+    const user = userEvent.setup();
+    const events = demoAcquisitionCalendar.events.slice(0, 3).map((event) => ({
+      ...event,
+      eventAt: "2026-07-27T18:30:00.000Z",
+    }));
+    renderCalendar(
+      {
+        calendar: {
+          ...demoMonthAcquisitionCalendar,
+          events,
+          summary: {
+            available: 1,
+            episodes: 1,
+            missing: 1,
+            movies: 2,
+            queued: 0,
+            total: 3,
+          },
+        },
+        status: "ready",
+      },
+      { initialView: "month" },
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Inspect Glass Horizon/i }),
+    ).not.toBeInTheDocument();
+    const reveal = screen.getByRole("button", {
+      name: "Show 1 more arrivals on Monday, July 27, 2026",
+    });
+    await user.click(reveal);
+
+    expect(screen.getByRole("button", { name: /Inspect Glass Horizon/i })).toBeVisible();
+    expect(reveal).toHaveAttribute("aria-expanded", "true");
   });
 
   it("provides accessible light, dark, and system appearance controls", async () => {
