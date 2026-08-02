@@ -20,7 +20,7 @@ media paths, viewing history, or an unpatched vulnerability.
 Search existing issues, read the [compatibility matrix](docs/compatibility.md), and
 reproduce on a supported release if one exists. Include:
 
-- Omnifin version and image digest or exact source commit;
+- the bounded support identity copied from `/about`, plus the image digest when available;
 - deployment method and browser;
 - affected upstream service and exact version;
 - minimal reproduction steps, expected result, and actual result;

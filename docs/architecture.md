@@ -32,7 +32,14 @@ The browser renders the application and sign-in shells, reaches the web process'
 liveness endpoint, and loads versioned provider metadata through the same-origin web
 process. Ready OIDC providers can complete the authorization-code flow and create a
 local session; failed or inconsistent providers remain non-interactive. Gateway
-liveness and storage readiness stay private to the Compose network. The gateway owns
+liveness and storage readiness stay private to the Compose network.
+The public About surface reads a strict, session-free runtime identity from the local gateway. Edge
+and stable images bind the displayed version and full revision to an immutable corresponding-source
+URL in a read-only baked file; malformed or contradictory identity prevents startup. The surface
+contains no installation-specific data and makes no request to the source host until a user follows
+the source link.
+
+The gateway owns
 OIDC discovery and backoff, one-time authorization transactions, identities, individually
 and account-wide revocable sessions,
 direct Jellyfin password and Quick Connect exchanges, recovery access, and authentication audits. It
