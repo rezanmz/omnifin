@@ -87,6 +87,7 @@ export const COMPATIBILITY_CHECKS = Object.freeze({
   ]),
   qbittorrent: Object.freeze([
     "authentication",
+    "coordinatedPauseResume",
     "credentialRejection",
     "exactPause",
     "exactPromotion",
@@ -108,6 +109,7 @@ export const COMPATIBILITY_CHECKS = Object.freeze({
   ]),
   sabnzbd: Object.freeze([
     "authentication",
+    "coordinatedPauseResume",
     "credentialRejection",
     "exactPause",
     "exactPromotion",

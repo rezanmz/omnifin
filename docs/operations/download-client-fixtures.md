@@ -44,14 +44,16 @@ Each runner calls Omnifin's production adapter over the host's private interface
 - exact-item promotion followed by the target observed at queue position zero;
 - exact-item resume followed by an observed non-paused state;
 - exact-item pause followed by an observed paused state;
+- coordinated pause/resume of two explicit items with both outcomes observed;
 - exact-item removal followed by observed absence; and
 - preservation of a byte-for-byte fixture file after removal.
 
 Promotion sends qBittorrent one validated info hash through `topPrio`; SABnzbd receives one
 validated `nzo_id` through `mode=switch` and position zero. Removal sends qBittorrent one validated
 info hash and `deleteFiles=false`; SABnzbd receives one validated `nzo_id` and no `del_files`
-parameter, matching SABnzbd's documented preserve-files default. The test never performs a bulk
-operation.
+parameter, matching SABnzbd's documented preserve-files default. Coordinated checks issue two
+bounded exact-item calls and never use a client-native wildcard or bulk command, matching the
+gateway coordinator's safety boundary.
 
 The uploaded report is validated against a closed allowlist. It contains only the service name,
 normalized server version, immutable image reference, fixed check names, and pass status. Native

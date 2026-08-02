@@ -80,8 +80,9 @@ identifiers, or raw upstream payloads.
 Phase 3 adds a permission-checked live Seerr dashboard with partial-failure rails and
 user-bound protected artwork, discovery search and details, requests, acquisition recovery,
 Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
-and qBittorrent/SABnzbd queue reads with exact-item pause/resume and downloaded-file-preserving
-removal through normalized, browser-safe contracts and responsive operational workspaces. An
+and qBittorrent/SABnzbd queue reads with exact-item and current-view bulk pause/resume,
+downloaded-file-preserving removal, durable partial results, and crash-safe replay through
+normalized, browser-safe contracts and responsive operational workspaces. An
 operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
 with path-free Radarr/Sonarr capacity telemetry, preserves verified partial results, and receives
 shared bounded live snapshots with an explicit foreground-polling fallback.

@@ -76,6 +76,7 @@ const SAFE_CONNECTOR_FAILURE_CODES = new Set([
 ]);
 const CHECK_NAMES = [
   "authentication",
+  "coordinatedPauseResume",
   "credentialRejection",
   "exactPause",
   "exactPromotion",
@@ -588,6 +589,45 @@ async function waitForQueueItem(adapter, externalId, predicate) {
   );
 }
 
+async function verifyCoordinatedPauseResume(adapter, externalIds) {
+  if (
+    !Array.isArray(externalIds) ||
+    externalIds.length !== 2 ||
+    externalIds.some((externalId) => typeof externalId !== "string" || externalId.length === 0) ||
+    new Set(externalIds).size !== externalIds.length
+  ) {
+    throw new DownloadFixtureFailure("coordinated_targets_invalid");
+  }
+  await connectorOperation("coordinated_resume", () =>
+    Promise.all(
+      externalIds.map((externalId) =>
+        adapter.updateDownloadQueueItem({ action: "resume", externalId }),
+      ),
+    ),
+  );
+  await Promise.all(
+    externalIds.map((externalId) =>
+      waitForQueueItem(
+        adapter,
+        externalId,
+        (item) => item !== undefined && item.state !== "paused",
+      ),
+    ),
+  );
+  await connectorOperation("coordinated_pause", () =>
+    Promise.all(
+      externalIds.map((externalId) =>
+        adapter.updateDownloadQueueItem({ action: "pause", externalId }),
+      ),
+    ),
+  );
+  await Promise.all(
+    externalIds.map((externalId) =>
+      waitForQueueItem(adapter, externalId, (item) => item?.state === "paused"),
+    ),
+  );
+}
+
 async function qbittorrentLogin(baseUrl, credentials) {
   const form = new URLSearchParams(credentials);
   const response = await directRequest(baseUrl, "api/v2/auth/login", {
@@ -705,6 +745,7 @@ async function runQBittorrent(context, server) {
     adapter.updateDownloadQueueItem({ action: "pause", externalId: fixture.infoHash }),
   );
   await waitForQueueItem(adapter, fixture.infoHash, (item) => item?.state === "paused");
+  await verifyCoordinatedPauseResume(adapter, [fixture.infoHash, queueAnchor.infoHash]);
 
   const rejected = await qbittorrentAdapter(server, {
     ...credentials,
@@ -794,7 +835,7 @@ async function runSabnzbd(context, server) {
     SERVER_READY_TIMEOUT_MS,
     "credential_config_timeout",
   );
-  await seedSabnzbd(server.directUrl, apiKey, "anchor");
+  const anchorExternalId = await seedSabnzbd(server.directUrl, apiKey, "anchor");
   const externalId = await seedSabnzbd(server.directUrl, apiKey, "primary");
   const adapter = sabnzbdAdapter(server, apiKey);
   const health = await connectorOperation("authentication", () => adapter.probe());
@@ -817,6 +858,7 @@ async function runSabnzbd(context, server) {
     adapter.updateDownloadQueueItem({ action: "pause", externalId }),
   );
   await waitForQueueItem(adapter, externalId, (item) => item?.state === "paused");
+  await verifyCoordinatedPauseResume(adapter, [externalId, anchorExternalId]);
   await connectorOperation("exact_resume", () =>
     adapter.updateDownloadQueueItem({ action: "resume", externalId }),
   );
