@@ -592,21 +592,21 @@ export function JellyfinCredentialScreen({
               {isPairing
                 ? "Prove control of your Jellyfin account once. Omnifin will preserve your own library visibility, playback permissions, and watch state."
                 : isBootstrap
-                  ? "Verify a Jellyfin administrator account. This one-time claim closes as soon as the first Omnifin administrator is established."
+                  ? "Use a configured OIDC provider or verify a Jellyfin administrator. This one-time claim closes as soon as the first Omnifin administrator is established."
                   : "Sign in directly or approve this device from Jellyfin. Your media permissions stay anchored to your own account."}
             </p>
           </div>
           <ul className="jellyfin-login-card__assurances" aria-label="Authentication safeguards">
             <li>
               <LockKeyhole aria-hidden="true" size={17} />
-              Password discarded after verification
+              {isBootstrap ? "Passwords are never stored" : "Password discarded after verification"}
             </li>
             <li>
               <ShieldCheck aria-hidden="true" size={17} />
               {isPairing
                 ? "Identity ownership is proven, never guessed"
                 : isBootstrap
-                  ? "Jellyfin administrator policy is verified live"
+                  ? "Administrator identity is verified live"
                   : "Session and token remain gateway-side"}
             </li>
             <li>
