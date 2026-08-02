@@ -543,6 +543,25 @@ test("download removal confirmation has no automatically detectable accessibilit
   expect(results.violations).toEqual([]);
 });
 
+test("download bulk confirmation has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Bulk download controls cover representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/operations/downloads?test-view=ready");
+  const trigger = page.getByRole("button", { name: "Pause 1 active transfer" });
+  await trigger.click();
+  const cancel = page.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+  await cancel.click();
+  await expect(trigger).toBeFocused();
+});
+
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },

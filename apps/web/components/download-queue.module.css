@@ -12,7 +12,8 @@
 
 .topbar,
 .commandGlass,
-.heroPulse {
+.heroPulse,
+.bulkControls {
   --glass-pointer-x: 22%;
   --glass-pointer-y: 0%;
   -webkit-backdrop-filter: blur(38px) saturate(175%) contrast(1.025) brightness(1.04);
@@ -38,7 +39,8 @@
 
 .topbar::before,
 .commandGlass::before,
-.heroPulse::before {
+.heroPulse::before,
+.bulkControls::before {
   background:
     radial-gradient(
       circle 104px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -72,7 +74,8 @@
 
 .topbar::after,
 .commandGlass::after,
-.heroPulse::after {
+.heroPulse::after,
+.bulkControls::after {
   background:
     radial-gradient(
       circle 128px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -93,13 +96,15 @@
 
 .topbar[data-glass-active]::after,
 .commandGlass[data-glass-active]::after,
-.heroPulse[data-glass-active]::after {
+.heroPulse[data-glass-active]::after,
+.bulkControls[data-glass-active]::after {
   opacity: 0.94;
 }
 
 .topbar > *,
 .commandGlass > *,
-.heroPulse > * {
+.heroPulse > *,
+.bulkControls > * {
   position: relative;
   z-index: 3;
 }
@@ -316,6 +321,176 @@
   z-index: 20;
 }
 
+.bulkControls {
+  align-items: center;
+  border-radius: 23px;
+  display: grid;
+  gap: 12px 18px;
+  grid-template-columns: minmax(230px, 1fr) auto;
+  margin: 0 0 18px;
+  overflow: hidden;
+  padding: 11px 12px;
+}
+
+.bulkHeading,
+.bulkButtons,
+.bulkDecision,
+.bulkDecisionActions {
+  align-items: center;
+  display: flex;
+}
+
+.bulkHeading {
+  gap: 11px;
+  min-width: 0;
+}
+
+.bulkHeading > span,
+.bulkDecisionIcon {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 12px;
+  color: var(--acid);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.bulkHeading strong,
+.bulkHeading small {
+  display: block;
+}
+
+.bulkHeading strong {
+  font-size: 0.76rem;
+  font-weight: 730;
+}
+
+.bulkHeading small {
+  color: var(--paper-2);
+  font-size: 0.65rem;
+  margin-top: 3px;
+}
+
+.bulkButtons {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: 15px;
+  gap: 3px;
+  padding: 3px;
+}
+
+.bulkButtons button,
+.bulkDecisionActions button {
+  align-items: center;
+  border-radius: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.69rem;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 12px;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 170ms ease-out,
+    color 150ms ease-out,
+    transform 130ms ease-out;
+}
+
+.bulkButtons button {
+  color: var(--paper-1);
+}
+
+.bulkButtons button strong {
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+}
+
+.bulkButtons button:hover:not(:disabled) {
+  background: var(--glass-highlight);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+  color: var(--paper-0);
+}
+
+.bulkButtons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.bulkButtons button:active:not(:disabled),
+.bulkDecisionActions button:active {
+  transform: scale(0.96);
+}
+
+.bulkDecision {
+  background: color-mix(in srgb, var(--surface-recessed) 84%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 17px;
+  gap: 12px;
+  grid-column: 1 / -1;
+  padding: 12px;
+}
+
+.bulkDecision[data-status="result"] {
+  border-color: color-mix(in srgb, var(--warning) 26%, var(--line-soft));
+}
+
+.bulkDecision[data-status="result"] .bulkDecisionIcon {
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 25%, var(--line-soft));
+  color: var(--warning);
+}
+
+.bulkDecision[data-status="error"] {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line-soft));
+}
+
+.bulkDecisionCopy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bulkDecisionCopy strong {
+  display: block;
+  font-size: 0.76rem;
+}
+
+.bulkDecisionCopy p {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  line-height: 1.55;
+  margin-top: 4px;
+  max-width: 86ch;
+}
+
+.bulkDecisionActions {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.bulkDecisionActions button {
+  border: 1px solid var(--line-soft);
+  color: var(--paper-1);
+}
+
+.bulkDecisionActions button:hover {
+  background: var(--fill-hover);
+  color: var(--paper-0);
+}
+
+.bulkDecisionActions button[data-primary] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--acid);
+}
+
 .searchControl {
   background: var(--surface-recessed);
   border: 1px solid var(--line-soft);
@@ -345,6 +520,12 @@
 
 .searchControl input::placeholder {
   color: var(--paper-3);
+}
+
+.searchControl:has(input:disabled),
+.filters button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .filters {
@@ -1337,6 +1518,15 @@
   .clientList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .bulkDecision {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .bulkDecisionActions {
+    margin-left: 52px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1383,6 +1573,33 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     top: 78px;
+  }
+
+  .bulkControls {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .bulkButtons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bulkDecision {
+    display: grid;
+    grid-column: 1;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .bulkDecisionActions {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-left: 0;
+  }
+
+  .bulkDecisionActions button:only-child {
+    grid-column: 1 / -1;
   }
 
   .searchControl,
@@ -1510,6 +1727,10 @@
   .itemAction span {
     display: none;
   }
+
+  .bulkButtons button {
+    padding: 0 8px;
+  }
 }
 
 @media (pointer: coarse) {
@@ -1518,6 +1739,8 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .bulkButtons button,
+  .bulkDecisionActions button,
   .itemAction,
   .cancelAction,
   .confirmAction,
@@ -1534,6 +1757,8 @@
   .themeControl button,
   .filters button,
   .refresh,
+  .bulkButtons button,
+  .bulkDecisionActions button,
   .itemAction,
   .cancelAction,
   .confirmAction,
@@ -1541,7 +1766,8 @@
   .primaryAction,
   .topbar::after,
   .commandGlass::after,
-  .heroPulse::after {
+  .heroPulse::after,
+  .bulkControls::after {
     transition: none;
   }
 
@@ -1567,7 +1793,8 @@
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .topbar,
   .commandGlass,
-  .heroPulse {
+  .heroPulse,
+  .bulkControls {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: var(--surface-card-solid);
@@ -1578,7 +1805,9 @@
   .commandGlass::before,
   .commandGlass::after,
   .heroPulse::before,
-  .heroPulse::after {
+  .heroPulse::after,
+  .bulkControls::before,
+  .bulkControls::after {
     display: none;
   }
 }
@@ -1587,6 +1816,7 @@
   .topbar,
   .commandGlass,
   .heroPulse,
+  .bulkControls,
   .metric,
   .queuePanel,
   .clientPanel,
@@ -1603,6 +1833,7 @@
   .topbar,
   .commandGlass,
   .heroPulse,
+  .bulkControls,
   .metric,
   .queuePanel,
   .clientPanel,
@@ -1626,7 +1857,9 @@
   .commandGlass::before,
   .commandGlass::after,
   .heroPulse::before,
-  .heroPulse::after {
+  .heroPulse::after,
+  .bulkControls::before,
+  .bulkControls::after {
     display: none;
   }
 
