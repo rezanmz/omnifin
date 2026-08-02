@@ -23,14 +23,14 @@ describe("Media library client", () => {
     await expect(
       mediaLibraryClient.load({
         cursor: "cursor_abcdefghijklmnop",
-        kind: "episodes",
+        kind: "series",
         limit: 24,
         query: "  Northern Lights  ",
         sort: "year",
       }),
     ).resolves.toEqual(feed);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/media/library?kind=episodes&limit=24&sort=year&query=Northern+Lights&cursor=cursor_abcdefghijklmnop",
+      "/api/media/library?kind=series&limit=24&sort=year&query=Northern+Lights&cursor=cursor_abcdefghijklmnop",
       expect.objectContaining({
         cache: "no-store",
         credentials: "same-origin",
@@ -38,6 +38,43 @@ describe("Media library client", () => {
       }),
     );
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("Living Room Jellyfin");
+  });
+
+  it("loads title details and season pages only through opaque same-origin routes", async () => {
+    const series = readyMediaLibraryOutcome.feed.items.find(
+      (item) => item.media.kind === "series",
+    )!;
+    const detail = {
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      media: series.media,
+      playback: null,
+      seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+      seasonsTruncated: false,
+    };
+    const episodes = {
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      items: [],
+      nextCursor: null,
+      seasonNumber: 2,
+      titleReferenceId: series.media.id,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(detail))
+      .mockResolvedValueOnce(Response.json(episodes));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadTitle!(series.media.id)).resolves.toEqual(detail);
+    await expect(
+      mediaLibraryClient.loadSeasonEpisodes!(series.media.id, 2, {
+        cursor: "cursor_abcdefghijklmnop",
+        limit: 20,
+      }),
+    ).resolves.toEqual(episodes);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `/api/media/library/${series.media.id}`,
+      `/api/media/library/${series.media.id}/seasons/2/episodes?limit=20&cursor=cursor_abcdefghijklmnop`,
+    ]);
   });
 
   it("fails closed when the gateway response violates the browser contract", async () => {

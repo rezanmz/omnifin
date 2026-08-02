@@ -2,6 +2,8 @@ import type {
   LibraryBrowseKind,
   LibraryBrowseResponse,
   LibraryBrowseSort,
+  LibrarySeasonEpisodesResponse,
+  LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
 
 interface ResponseSchema<T> {
@@ -121,28 +123,82 @@ function requestParameters(input: MediaLibraryParameters) {
 
 export interface MediaLibraryClient {
   load(input: MediaLibraryParameters, signal?: AbortSignal): Promise<LibraryBrowseResponse>;
+  loadSeasonEpisodes?(
+    referenceId: string,
+    seasonNumber: number,
+    input?: { cursor?: string; limit?: number },
+    signal?: AbortSignal,
+  ): Promise<LibrarySeasonEpisodesResponse>;
+  loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
+}
+
+const MEDIA_REFERENCE_PATTERN = /^media_[A-Za-z0-9_-]{22}$/u;
+
+function assertMediaReference(referenceId: string) {
+  if (!MEDIA_REFERENCE_PATTERN.test(referenceId)) {
+    throw new MediaLibraryClientError(
+      "invalid_response",
+      "invalid_reference",
+      "The selected library reference is invalid.",
+    );
+  }
+}
+
+async function fetchLibraryJson<T>(path: string, schema: ResponseSchema<T>, signal?: AbortSignal) {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new MediaLibraryClientError(
+      "unavailable",
+      "service_unavailable",
+      "The gateway could not be reached.",
+    );
+  }
+  return parsedResponse(response, schema);
 }
 
 export const mediaLibraryClient: MediaLibraryClient = {
   async load(input, signal) {
-    let response: Response;
-    try {
-      response = await fetch(`/api/media/library?${requestParameters(input).toString()}`, {
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { accept: "application/json" },
-        ...(signal === undefined ? {} : { signal }),
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+    const schemas = (await contractSchemas()).library;
+    return fetchLibraryJson(
+      `/api/media/library?${requestParameters(input).toString()}`,
+      schemas.libraryBrowseResponseSchema,
+      signal,
+    );
+  },
+  async loadSeasonEpisodes(referenceId, seasonNumber, input = {}, signal) {
+    assertMediaReference(referenceId);
+    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0 || seasonNumber > 100_000) {
       throw new MediaLibraryClientError(
-        "unavailable",
-        "service_unavailable",
-        "The gateway could not be reached.",
+        "invalid_response",
+        "invalid_season",
+        "The selected season is invalid.",
       );
     }
+    const parameters = new URLSearchParams({ limit: String(input.limit ?? 30) });
+    if (input.cursor) parameters.set("cursor", input.cursor);
     const schemas = (await contractSchemas()).library;
-    return parsedResponse(response, schemas.libraryBrowseResponseSchema);
+    return fetchLibraryJson(
+      `/api/media/library/${referenceId}/seasons/${seasonNumber}/episodes?${parameters.toString()}`,
+      schemas.librarySeasonEpisodesResponseSchema,
+      signal,
+    );
+  },
+  async loadTitle(referenceId, signal) {
+    assertMediaReference(referenceId);
+    const schemas = (await contractSchemas()).library;
+    return fetchLibraryJson(
+      `/api/media/library/${referenceId}`,
+      schemas.libraryTitleDetailResponseSchema,
+      signal,
+    );
   },
 };
 

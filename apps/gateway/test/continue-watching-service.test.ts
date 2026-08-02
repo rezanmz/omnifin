@@ -1,6 +1,8 @@
 import type {
   JellyfinContinueWatchingResult,
+  JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
+  JellyfinLibraryTitleResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
@@ -9,7 +11,11 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
-import { libraryBrowseResponseSchema } from "@omnifin/contracts/library";
+import {
+  libraryBrowseResponseSchema,
+  librarySeasonEpisodesResponseSchema,
+  libraryTitleDetailResponseSchema,
+} from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -176,15 +182,12 @@ function libraryResult(): JellyfinLibraryResult {
           poster: { itemId: privateSeriesId, type: "Primary" },
         },
         contentRating: "TV-14",
-        episodeNumber: 3,
-        externalId: privateItemId,
-        kind: "episode",
+        externalId: privateSeriesId,
+        kind: "series",
         overview: "A receiver resolves a signal beyond the ice.",
         played: false,
-        positionSeconds: 900,
-        runtimeSeconds: 2_700,
-        seasonNumber: 2,
-        subtitle: "S02E03 · The Long Meridian",
+        positionSeconds: 0,
+        runtimeSeconds: null,
         title: "Northern Lights",
         year: 2026,
       },
@@ -201,6 +204,25 @@ function harness(options: { withIdentity?: boolean } = {}) {
   if (options.withIdentity !== false) insertIdentity(database, config);
   const readContinueWatching = vi.fn(async () => resumeResult());
   const readLibrary = vi.fn(async () => libraryResult());
+  const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
+    item: libraryResult().items[0]!,
+    seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+    seasonsTruncated: false,
+  }));
+  const readLibrarySeasonEpisodes = vi.fn(
+    async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
+      items: [
+        {
+          ...resumeResult().items[0]!,
+          kind: "episode",
+          played: false,
+          title: "The Long Meridian",
+        },
+      ],
+      nextStartIndex: 30,
+      truncated: true,
+    }),
+  );
   const readImage = vi.fn(async () => ({
     body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
     contentType: "image/jpeg" as const,
@@ -209,13 +231,16 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibrarySeasonEpisodes,
+    readLibraryTitle,
   }));
+  let mediaReferenceIndex = 0;
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
     mediaReferences: {
       clock: () => now,
-      createToken: () => "m".repeat(22),
+      createToken: () => (mediaReferenceIndex++ === 0 ? "m" : "e").repeat(22),
     },
   });
   return {
@@ -225,6 +250,8 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibrarySeasonEpisodes,
+    readLibraryTitle,
     service,
   };
 }
@@ -308,11 +335,10 @@ describe("ContinueWatchingService", () => {
           {
             media: {
               id: `media_${"m".repeat(22)}`,
-              kind: "episode",
+              kind: "series",
               title: "Northern Lights",
             },
-            played: false,
-            positionSeconds: 900,
+            playback: null,
           },
         ],
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
@@ -340,7 +366,7 @@ describe("ContinueWatchingService", () => {
       );
 
       const longestQuery = await service.browse(
-        { kind: "episodes", limit: 50, query: "m".repeat(100), sort: "year" },
+        { kind: "series", limit: 50, query: "m".repeat(100), sort: "year" },
         { principal: principal() },
       );
       expect(longestQuery.nextCursor?.length).toBeLessThanOrEqual(512);
@@ -360,6 +386,142 @@ describe("ContinueWatchingService", () => {
         expect.objectContaining({ startIndex: 30, userId: "viewer-external" }),
         undefined,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("opens a series title before paging its episodes through bound opaque references", async () => {
+    const { database, readLibrarySeasonEpisodes, readLibraryTitle, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const detail = await service.readLibraryTitle(referenceId, { principal: principal() });
+
+      expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+      expect(detail).toMatchObject({
+        media: { id: referenceId, kind: "series", title: "Northern Lights" },
+        playback: null,
+        seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+      });
+      expect(readLibraryTitle).toHaveBeenCalledWith(
+        { itemId: privateSeriesId, userId: "viewer-external" },
+        undefined,
+      );
+
+      const episodes = await service.readLibrarySeasonEpisodes(
+        referenceId,
+        2,
+        { limit: 30 },
+        { principal: principal() },
+      );
+      expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(episodes);
+      expect(episodes).toMatchObject({
+        items: [
+          {
+            media: {
+              id: `media_${"e".repeat(22)}`,
+              kind: "episode",
+              title: "The Long Meridian",
+            },
+            playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+          },
+        ],
+        seasonNumber: 2,
+        titleReferenceId: referenceId,
+      });
+      expect(episodes.nextCursor).toMatch(/^v2\./u);
+      expect(JSON.stringify({ detail, episodes })).not.toMatch(
+        /private-jellyfin|private-upstream|viewer-external/u,
+      );
+      expect(readLibrarySeasonEpisodes).toHaveBeenCalledWith(
+        {
+          limit: 30,
+          seasonNumber: 2,
+          seriesId: privateSeriesId,
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+
+      await service.readLibrarySeasonEpisodes(
+        referenceId,
+        2,
+        { cursor: episodes.nextCursor!, limit: 30 },
+        { principal: principal() },
+      );
+      expect(readLibrarySeasonEpisodes).toHaveBeenLastCalledWith(
+        expect.objectContaining({ startIndex: 30 }),
+        undefined,
+      );
+
+      const calls = readLibrarySeasonEpisodes.mock.calls.length;
+      await expect(
+        service.readLibrarySeasonEpisodes(
+          referenceId,
+          3,
+          { cursor: episodes.nextCursor!, limit: 30 },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+      expect(readLibrarySeasonEpisodes).toHaveBeenCalledTimes(calls);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns explicit movie playback state and rejects episode browsing through a movie reference", async () => {
+    const { database, readLibrary, readLibrarySeasonEpisodes, readLibraryTitle, service } =
+      harness();
+    const movie = {
+      ...libraryResult().items[0]!,
+      artwork: { accentColor: "#775544", backdrop: null, blurHash: null, poster: null },
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      played: false,
+      positionSeconds: 1_200,
+      runtimeSeconds: 7_080,
+      title: "The Far Meridian",
+    };
+    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibraryTitle.mockResolvedValueOnce({
+      item: movie,
+      seasons: [],
+      seasonsTruncated: false,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+
+      await expect(
+        service.readLibraryTitle(referenceId, { principal: principal() }),
+      ).resolves.toMatchObject({
+        media: {
+          artwork: { backdropPath: null, posterPath: null },
+          id: referenceId,
+          kind: "movie",
+          title: "The Far Meridian",
+        },
+        playback: { durationSeconds: 7_080, played: false, positionSeconds: 1_200 },
+        seasons: [],
+      });
+      await expect(
+        service.readLibrarySeasonEpisodes(
+          referenceId,
+          1,
+          { limit: 30 },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(readLibrarySeasonEpisodes).not.toHaveBeenCalled();
     } finally {
       database.close();
     }

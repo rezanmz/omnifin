@@ -1,4 +1,11 @@
-import type { LibraryBrowseItem, LibraryBrowseResponse } from "@omnifin/contracts/library";
+import type {
+  LibraryBrowseItem,
+  LibraryBrowseResponse,
+  LibrarySeasonEpisode,
+  LibraryTitleDetailResponse,
+} from "@omnifin/contracts/library";
+
+import type { MediaLibraryClient } from "./media-library";
 
 const generatedAt = "2026-07-30T12:00:00.000Z";
 
@@ -7,7 +14,7 @@ function item(
   input: {
     accent: string;
     contentRating?: string;
-    kind?: "episode" | "movie";
+    kind?: "movie" | "series";
     overview: string;
     played?: boolean;
     positionSeconds?: number;
@@ -19,7 +26,6 @@ function item(
 ): LibraryBrowseItem {
   const kind = input.kind ?? "movie";
   return {
-    durationSeconds: input.runtimeMinutes * 60,
     media: {
       artwork: {
         accentColor: input.accent,
@@ -32,13 +38,19 @@ function item(
       id: `media_${referenceCharacter.repeat(22)}`,
       kind,
       overview: input.overview,
-      runtimeMinutes: input.runtimeMinutes,
+      runtimeMinutes: kind === "movie" ? input.runtimeMinutes : null,
       subtitle: input.subtitle ?? null,
       title: input.title,
       year: input.year,
     },
-    played: input.played ?? false,
-    positionSeconds: input.positionSeconds ?? 0,
+    playback:
+      kind === "movie"
+        ? {
+            durationSeconds: input.runtimeMinutes * 60,
+            played: input.played ?? false,
+            positionSeconds: input.positionSeconds ?? 0,
+          }
+        : null,
   };
 }
 
@@ -55,10 +67,10 @@ export const mediaLibraryDemoItems: LibraryBrowseItem[] = [
   item("b", {
     accent: "#758cc7",
     contentRating: "TV-14",
-    kind: "episode",
+    kind: "series",
     overview: "The observatory follows a pattern hidden inside the northern lights.",
     runtimeMinutes: 48,
-    subtitle: "S02E03 · The Long Meridian",
+    subtitle: "2 seasons",
     title: "Northern Lights",
     year: 2025,
   }),
@@ -81,10 +93,10 @@ export const mediaLibraryDemoItems: LibraryBrowseItem[] = [
   item("e", {
     accent: "#9a6f91",
     contentRating: "TV-PG",
-    kind: "episode",
+    kind: "series",
     overview: "Mara returns to the station as its oldest constellation disappears.",
     runtimeMinutes: 52,
-    subtitle: "S01E06 · A Map of Quiet Stars",
+    subtitle: "1 season",
     title: "Atlas Station",
     year: 2026,
   }),
@@ -105,11 +117,11 @@ export const mediaLibraryDemoItems: LibraryBrowseItem[] = [
   }),
   item("h", {
     accent: "#61758d",
-    kind: "episode",
+    kind: "series",
     overview: "The crew receives a message transmitted from tomorrow morning.",
     positionSeconds: 780,
     runtimeMinutes: 44,
-    subtitle: "S03E01 · Before the Wake",
+    subtitle: "3 seasons",
     title: "Liminal Sea",
     year: 2026,
   }),
@@ -158,3 +170,85 @@ export const unavailableMediaLibraryOutcome = {
   } satisfies LibraryBrowseResponse,
   status: "ready",
 } as const;
+
+function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
+  return {
+    generatedAt,
+    media: item.media,
+    playback: item.playback,
+    seasons:
+      item.media.kind === "series"
+        ? [
+            { episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 1, title: "Season 1" },
+            { episodeCount: 6, playedEpisodeCount: 0, seasonNumber: 2, title: "Season 2" },
+          ]
+        : [],
+    seasonsTruncated: false,
+  };
+}
+
+function demoEpisode(
+  referenceCharacter: string,
+  series: LibraryBrowseItem,
+  seasonNumber: number,
+  episodeNumber: number,
+): LibrarySeasonEpisode {
+  const referenceId = `media_${referenceCharacter.repeat(22)}`;
+  const durationSeconds = (42 + episodeNumber) * 60;
+  return {
+    media: {
+      ...series.media,
+      artwork: {
+        ...series.media.artwork,
+        backdropPath: null,
+        posterPath: null,
+      },
+      id: referenceId,
+      kind: "episode",
+      overview: [
+        "A hidden signal changes the shape of the investigation.",
+        "The crew follows a clue that only appears after midnight.",
+        "An old promise returns with a new set of coordinates.",
+      ][(episodeNumber - 1) % 3]!,
+      runtimeMinutes: Math.ceil(durationSeconds / 60),
+      subtitle: `S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`,
+      title: ["The Long Meridian", "A Map of Quiet Stars", "Before the Wake"][
+        (episodeNumber - 1) % 3
+      ]!,
+    },
+    playback: {
+      durationSeconds,
+      played: episodeNumber <= 3 && seasonNumber === 1,
+      positionSeconds: episodeNumber === 1 && seasonNumber === 2 ? 780 : 0,
+    },
+  };
+}
+
+const demoDetails = new Map(
+  mediaLibraryDemoItems.map((libraryItem) => [libraryItem.media.id, titleDetail(libraryItem)]),
+);
+
+export const mediaLibraryDemoClient: MediaLibraryClient = {
+  async load() {
+    return readyMediaLibraryOutcome.feed;
+  },
+  async loadSeasonEpisodes(referenceId, seasonNumber) {
+    const series = mediaLibraryDemoItems.find((item) => item.media.id === referenceId);
+    if (!series || series.media.kind !== "series") throw new Error("Series unavailable");
+    const characters = seasonNumber === 1 ? ["i", "j", "k"] : ["l", "n", "o"];
+    return {
+      generatedAt,
+      items: characters.map((character, index) =>
+        demoEpisode(character, series, seasonNumber, index + 1),
+      ),
+      nextCursor: null,
+      seasonNumber,
+      titleReferenceId: referenceId,
+    };
+  },
+  async loadTitle(referenceId) {
+    const detail = demoDetails.get(referenceId);
+    if (!detail) throw new Error("Title unavailable");
+    return detail;
+  },
+};

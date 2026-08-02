@@ -49,9 +49,9 @@ describe("MediaLibrary", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("list", { name: "Playable library titles" })).toBeVisible();
+    expect(screen.getByRole("list", { name: "Library titles" })).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(mediaLibraryDemoItems.length);
-    expect(screen.getByRole("button", { name: /Play Ember Coast/u })).toBeVisible();
+    expect(screen.getByRole("button", { name: /View details for Ember Coast/u })).toBeVisible();
     expect(container.innerHTML).not.toContain("externalUserId");
     expect(container.innerHTML).not.toContain("jellyfin-user");
   });
@@ -63,21 +63,25 @@ describe("MediaLibrary", () => {
       <MediaLibrary client={{ load }} initialOutcome={readyMediaLibraryOutcome} live={false} />,
     );
 
-    await user.click(screen.getByRole("radio", { name: "Episodes" }));
+    await user.click(screen.getByRole("radio", { name: "Series" }));
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
-    expect(screen.queryByRole("button", { name: /Play Ember Coast/u })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /View details for Ember Coast/u }),
+    ).not.toBeInTheDocument();
 
     const search = screen.getByRole("searchbox", { name: "Search your library" });
     await user.type(search, "atlas");
     await user.keyboard("{Enter}");
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /Play Atlas Station/u })).toBeVisible();
+    expect(screen.getByRole("button", { name: /View details for Atlas Station/u })).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Clear library search" }));
     await user.click(screen.getByRole("radio", { name: "All" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Sort library" }), "title");
-    const list = screen.getByRole("list", { name: "Playable library titles" });
-    expect(within(list).getAllByRole("button")[0]).toHaveAccessibleName(/Play Atlas Station/u);
+    const list = screen.getByRole("list", { name: "Library titles" });
+    expect(within(list).getAllByRole("button")[0]).toHaveAccessibleName(
+      /View details for Atlas Station/u,
+    );
     expect(load).not.toHaveBeenCalled();
   });
 
@@ -89,7 +93,7 @@ describe("MediaLibrary", () => {
       "aria-busy",
       "true",
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Loading movies and episodes");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading movies and series");
   });
 
   it("renders deliberate empty, unavailable, signed-out, and permission boundaries", () => {
@@ -136,9 +140,13 @@ describe("MediaLibrary", () => {
     );
     render(<MediaLibrary client={{ load }} />);
 
-    expect(await screen.findByRole("button", { name: /Play Ember Coast/u })).toBeVisible();
+    expect(
+      await screen.findByRole("button", { name: /View details for Ember Coast/u }),
+    ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Reveal more" }));
-    expect(await screen.findByRole("button", { name: /Play Northern Lights/u })).toBeVisible();
+    expect(
+      await screen.findByRole("button", { name: /View details for Northern Lights/u }),
+    ).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(load).toHaveBeenLastCalledWith(
       expect.objectContaining({ cursor }),
@@ -146,7 +154,7 @@ describe("MediaLibrary", () => {
     );
   });
 
-  it("opens private playback and returns focus to the selected poster", async () => {
+  it("opens title details first, then starts private playback only from an explicit action", async () => {
     const user = userEvent.setup();
     const playbackClient = {
       prepare: vi.fn(async () => ({
@@ -176,8 +184,12 @@ describe("MediaLibrary", () => {
       />,
     );
 
-    const trigger = screen.getByRole("button", { name: /Play Ember Coast/u });
+    const trigger = screen.getByRole("button", { name: /View details for Ember Coast/u });
     await user.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
+    expect(playbackClient.prepare).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Resume movie" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
     expect(playbackClient.prepare).toHaveBeenCalledWith(
       `media_${"a".repeat(22)}`,
@@ -187,6 +199,69 @@ describe("MediaLibrary", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Close player" }));
+    expect(screen.getByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Close title details" }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("keeps a series as one title and exposes its episodes inside a season hierarchy", async () => {
+    const user = userEvent.setup();
+    const playbackClient = {
+      prepare: vi.fn(async () => ({
+        canManageLibrary: false,
+        csrfToken: "library_playback_csrf_0123456789abcdefghijkl",
+        session: { ...playbackSession, mediaReferenceId: `media_${"i".repeat(22)}` },
+      })),
+      report: vi.fn(async (_sessionId, request) => ({
+        acceptedAt: "2026-07-30T12:30:00.000Z",
+        positionSeconds: request.positionSeconds,
+        sessionId: playbackSessionId,
+        state: "stopped" as const,
+      })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-30T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
+      })),
+    };
+    render(
+      <MediaLibrary
+        initialOutcome={readyMediaLibraryOutcome}
+        live={false}
+        playbackClient={playbackClient}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /View details for Northern Lights/u }));
+    const detail = await screen.findByRole("dialog", { name: "Northern Lights details" });
+    expect(within(detail).getByRole("heading", { name: "Northern Lights" })).toBeVisible();
+    const seasonOne = within(detail).getByRole("tab", { name: /Season 1/u });
+    expect(seasonOne).toHaveAttribute("aria-selected", "true");
+    expect(seasonOne).toHaveAttribute("tabindex", "0");
+    expect(await within(detail).findByRole("list", { name: "Episodes" })).toBeVisible();
+    expect(playbackClient.prepare).not.toHaveBeenCalled();
+
+    seasonOne.focus();
+    await user.keyboard("{ArrowRight}");
+    const seasonTwo = within(detail).getByRole("tab", { name: /Season 2/u });
+    expect(seasonTwo).toHaveFocus();
+    expect(seasonTwo).toHaveAttribute("aria-selected", "true");
+    expect(
+      await within(detail).findByRole("button", { name: "Resume The Long Meridian" }),
+    ).toBeVisible();
+    await user.keyboard("{ArrowLeft}");
+    expect(seasonOne).toHaveFocus();
+    expect(seasonOne).toHaveAttribute("aria-selected", "true");
+
+    await user.click(within(detail).getByRole("button", { name: "Play The Long Meridian" }));
+    expect(await screen.findByRole("dialog", { name: "The Long Meridian" })).toBeVisible();
+    expect(playbackClient.prepare).toHaveBeenCalledWith(
+      `media_${"i".repeat(22)}`,
+      0,
+      expect.any(AbortSignal),
+      expect.objectContaining({ mode: "auto" }),
+    );
   });
 });

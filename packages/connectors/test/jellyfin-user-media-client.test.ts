@@ -39,6 +39,20 @@ const movie = {
   },
 };
 
+const series = {
+  BackdropImageTags: ["series-backdrop"],
+  Id: "series-upstream-1",
+  ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
+  ImageTags: { Primary: "series-poster" },
+  Name: "Northern Lights",
+  OfficialRating: "TV-14",
+  Overview: "An observatory decodes a signal hidden in the aurora.",
+  ProductionYear: 2025,
+  RunTimeTicks: null,
+  Type: "Series",
+  UserData: { Played: false, PlaybackPositionTicks: 0 },
+};
+
 describe("JellyfinUserMediaClient", () => {
   it("reads the inferred user's modern resume feed and normalizes movies", async () => {
     const { client, requests } = clientWithResponses([
@@ -235,19 +249,7 @@ describe("JellyfinUserMediaClient", () => {
             SeriesPrimaryImageTag: null,
             UserData: { Played: false, PlaybackPositionTicks: 1_800_000_000 },
           },
-          {
-            Id: "episode-upstream-1",
-            ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
-            IndexNumber: 3,
-            Name: "The Long Meridian",
-            ParentIndexNumber: 2,
-            RunTimeTicks: 2_700_000_000,
-            SeriesId: "series-upstream-1",
-            SeriesName: "Northern Lights",
-            SeriesPrimaryImageTag: "series-poster",
-            Type: "Episode",
-            UserData: { Played: true, PlaybackPositionTicks: 0 },
-          },
+          series,
           { ...movie, Id: "hidden-overflow-item" },
         ],
       }),
@@ -272,11 +274,11 @@ describe("JellyfinUserMediaClient", () => {
           title: "The Far Meridian",
         }),
         expect.objectContaining({
-          externalId: "episode-upstream-1",
-          kind: "episode",
-          played: true,
+          externalId: "series-upstream-1",
+          kind: "series",
+          played: false,
           positionSeconds: 0,
-          subtitle: "S02E03 · The Long Meridian",
+          runtimeSeconds: null,
           title: "Northern Lights",
         }),
       ],
@@ -287,7 +289,7 @@ describe("JellyfinUserMediaClient", () => {
     expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
       EnableTotalRecordCount: "false",
       EnableUserData: "true",
-      IncludeItemTypes: "Movie,Episode",
+      IncludeItemTypes: "Movie,Series",
       IsMissing: "false",
       IsVirtualItem: "false",
       Limit: "3",
@@ -341,7 +343,7 @@ describe("JellyfinUserMediaClient", () => {
     expect(movieClient.requests[0]?.url.searchParams.get("SortOrder")).toBe("Ascending");
 
     const malformed = clientWithResponses([
-      jsonResponse({ Items: [{ ...movie, Type: "Series" }] }),
+      jsonResponse({ Items: [{ ...movie, Type: "Episode" }] }),
     ]);
     await expect(
       malformed.client.readLibrary({
@@ -361,6 +363,90 @@ describe("JellyfinUserMediaClient", () => {
         userId: "paired-user-id",
       }),
     ).rejects.toBeDefined();
+  });
+
+  it("reads normalized series seasons and paged episodes without leaking scope", async () => {
+    const episode = {
+      Id: "episode-upstream-1",
+      ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
+      IndexNumber: 3,
+      Name: "The Long Meridian",
+      ParentBackdropImageTags: ["series-backdrop"],
+      ParentBackdropItemId: "series-upstream-1",
+      ParentIndexNumber: 2,
+      ProductionYear: 2025,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      SeriesPrimaryImageTag: "series-poster",
+      Type: "Episode",
+      UserData: { Played: false, PlaybackPositionTicks: 900_000_000 },
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse(series),
+      jsonResponse({
+        Items: [
+          {
+            ChildCount: 8,
+            Id: "season-upstream-2",
+            IndexNumber: 2,
+            Name: "Season 2",
+            RecursiveItemCount: 8,
+            Type: "Season",
+            UserData: { Played: false, UnplayedItemCount: 5 },
+          },
+        ],
+      }),
+      jsonResponse({ Items: [episode, { ...episode, Id: "episode-upstream-2", IndexNumber: 4 }] }),
+    ]);
+
+    await expect(
+      client.readLibraryTitle({ itemId: "series-upstream-1", userId: "paired-user-id" }),
+    ).resolves.toMatchObject({
+      item: { externalId: "series-upstream-1", kind: "series", runtimeSeconds: null },
+      seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+      seasonsTruncated: false,
+    });
+    await expect(
+      client.readLibrarySeasonEpisodes({
+        limit: 1,
+        seasonNumber: 2,
+        seriesId: "series-upstream-1",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          externalId: "episode-upstream-1",
+          kind: "episode",
+          positionSeconds: 90,
+          seasonNumber: 2,
+          title: "The Long Meridian",
+        },
+      ],
+      nextStartIndex: 1,
+      truncated: true,
+    });
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/Items/series-upstream-1",
+      "/base/Shows/series-upstream-1/Seasons",
+      "/base/Shows/series-upstream-1/Episodes",
+    ]);
+    expect(Object.fromEntries(requests[1]!.url.searchParams)).toMatchObject({
+      Limit: "101",
+      SortBy: "IndexNumber",
+      SortOrder: "Ascending",
+      UserId: "paired-user-id",
+    });
+    expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
+      IsMissing: "false",
+      Limit: "2",
+      Season: "2",
+      StartIndex: "0",
+      UserId: "paired-user-id",
+    });
+    expect(requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
   });
 
   it("fails closed on malformed resume data and unsafe tokens", async () => {

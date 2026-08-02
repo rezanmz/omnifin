@@ -408,6 +408,9 @@ export class PlaybackSessionService {
     } catch (error) {
       throw new PlaybackSessionError("not_found", { cause: error });
     }
+    if (reference.kind !== "movie" && reference.kind !== "episode") {
+      throw new PlaybackSessionError("not_found");
+    }
 
     let result: JellyfinPlaybackResult;
     try {

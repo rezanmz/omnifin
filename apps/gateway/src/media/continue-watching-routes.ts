@@ -8,6 +8,12 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseJsonSchema,
   libraryBrowseResponseSchema,
+  librarySeasonEpisodesQueryJsonSchema,
+  librarySeasonEpisodesQuerySchema,
+  librarySeasonEpisodesResponseJsonSchema,
+  librarySeasonEpisodesResponseSchema,
+  libraryTitleDetailResponseJsonSchema,
+  libraryTitleDetailResponseSchema,
 } from "@omnifin/contracts/library";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -27,6 +33,32 @@ const artworkParamsSchema = z.strictObject({
   kind: z.enum(["backdrop", "poster"]),
   referenceId: mediaReferenceIdSchema,
 });
+
+const libraryTitleParamsSchema = z.strictObject({
+  referenceId: mediaReferenceIdSchema,
+});
+
+const librarySeasonParamsSchema = z.strictObject({
+  referenceId: mediaReferenceIdSchema,
+  seasonNumber: z.coerce.number().int().nonnegative().max(100_000),
+});
+
+const libraryTitleParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["referenceId"],
+  properties: { referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" } },
+} as const;
+
+const librarySeasonParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["referenceId", "seasonNumber"],
+  properties: {
+    referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+    seasonNumber: { type: "integer", minimum: 0, maximum: 100_000 },
+  },
+} as const;
 
 const artworkParamsJsonSchema = {
   type: "object",
@@ -144,6 +176,124 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
             code: "media_library_unavailable",
             message: "The Jellyfin library is temporarily unavailable.",
             statusCode: 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/:referenceId",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: libraryTitleParamsJsonSchema,
+        response: { 200: libraryTitleDetailResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const { referenceId } = libraryTitleParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return libraryTitleDetailResponseSchema.parse(
+          await service.readLibraryTitle(referenceId, { principal }, controller.signal),
+        );
+      } catch (error) {
+        if (error instanceof MediaLibraryError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "media_library_title_not_found"
+                : "media_library_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "The library title is no longer available."
+                : "The Jellyfin library is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/:referenceId/seasons/:seasonNumber/episodes",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: librarySeasonParamsJsonSchema,
+        querystring: librarySeasonEpisodesQueryJsonSchema,
+        response: { 200: librarySeasonEpisodesResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const { referenceId, seasonNumber } = librarySeasonParamsSchema.parse(request.params);
+      const query = librarySeasonEpisodesQuerySchema.parse(request.query);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return librarySeasonEpisodesResponseSchema.parse(
+          await service.readLibrarySeasonEpisodes(
+            referenceId,
+            seasonNumber,
+            query,
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof MediaLibraryError) {
+          const cursorInvalid = error.reason === "cursor_invalid";
+          const notFound = error.reason === "not_found";
+          throw new SafeHttpError({
+            cause: error,
+            code: cursorInvalid
+              ? "media_library_cursor_invalid"
+              : notFound
+                ? "media_library_title_not_found"
+                : "media_library_unavailable",
+            message: cursorInvalid
+              ? "The season continuation cursor is invalid or no longer current."
+              : notFound
+                ? "The library series is no longer available."
+                : "The Jellyfin library is temporarily unavailable.",
+            statusCode: cursorInvalid ? 400 : notFound ? 404 : 503,
           });
         }
         throw error;

@@ -12,6 +12,12 @@ import {
   libraryItemRefreshRequestSchema,
   libraryMetadataUpdateRequestSchema,
   libraryMutationResponseSchema,
+  librarySeasonEpisodesQueryJsonSchema,
+  librarySeasonEpisodesQuerySchema,
+  librarySeasonEpisodesResponseJsonSchema,
+  librarySeasonEpisodesResponseSchema,
+  libraryTitleDetailResponseJsonSchema,
+  libraryTitleDetailResponseSchema,
 } from "../src/library.js";
 
 const referenceId = `media_${"m".repeat(22)}`;
@@ -41,7 +47,6 @@ const catalogue = {
   generatedAt: "2026-07-28T14:00:00.000Z",
   items: [
     {
-      durationSeconds: 2_700,
       media: {
         artwork: {
           accentColor: "#336699",
@@ -52,15 +57,14 @@ const catalogue = {
         availability: "available" as const,
         contentRating: "TV-14",
         id: referenceId,
-        kind: "episode" as const,
+        kind: "movie" as const,
         overview: "A receiver resolves a signal beyond the ice.",
         runtimeMinutes: 45,
-        subtitle: "S02E03 · The Long Meridian",
-        title: "Northern Lights",
+        subtitle: null,
+        title: "The Long Meridian",
         year: 2026,
       },
-      played: false,
-      positionSeconds: 900,
+      playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
     },
   ],
   nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
@@ -115,7 +119,7 @@ describe("library operation contracts", () => {
     });
   });
 
-  it("normalizes a playable paired-user catalogue with opaque references", () => {
+  it("normalizes a title-level paired-user catalogue with opaque references", () => {
     expect(libraryBrowseResponseSchema.parse(catalogue)).toEqual(catalogue);
     expect(JSON.stringify(catalogue)).not.toMatch(/external|jellyfin\.example|upstream/iu);
     expect(libraryBrowseQuerySchema.parse({ limit: "25" })).toEqual({
@@ -124,12 +128,12 @@ describe("library operation contracts", () => {
       sort: "recent",
     });
     expect(
-      libraryBrowseQuerySchema.parse({ kind: "episodes", query: "  Meridian  ", sort: "title" }),
-    ).toEqual({ kind: "episodes", limit: 30, query: "Meridian", sort: "title" });
+      libraryBrowseQuerySchema.parse({ kind: "series", query: "  Meridian  ", sort: "title" }),
+    ).toEqual({ kind: "series", limit: 30, query: "Meridian", sort: "title" });
     expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
   });
 
-  it("rejects non-playable, cross-reference, or inconsistent catalogue state", () => {
+  it("rejects mismatched playback, cross-reference, or inconsistent catalogue state", () => {
     const item = catalogue.items[0]!;
 
     expect(
@@ -203,6 +207,66 @@ describe("library operation contracts", () => {
     ).toBe(false);
   });
 
+  it("models series details and bounded season episode pages without upstream identity", () => {
+    const seriesReferenceId = `media_${"s".repeat(22)}`;
+    const episodeReferenceId = `media_${"e".repeat(22)}`;
+    const seriesMedia = {
+      ...catalogue.items[0]!.media,
+      artwork: {
+        ...catalogue.items[0]!.media.artwork,
+        backdropPath: `/v1/media/${seriesReferenceId}/images/backdrop`,
+        posterPath: `/v1/media/${seriesReferenceId}/images/poster`,
+      },
+      id: seriesReferenceId,
+      kind: "series" as const,
+      runtimeMinutes: null,
+      title: "Northern Lights",
+    };
+    const season = {
+      episodeCount: 8,
+      playedEpisodeCount: 3,
+      seasonNumber: 2,
+      title: "Season 2",
+    };
+    const detail = {
+      generatedAt: catalogue.generatedAt,
+      media: seriesMedia,
+      playback: null,
+      seasons: [season],
+      seasonsTruncated: false,
+    };
+    expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+
+    const episodes = {
+      generatedAt: catalogue.generatedAt,
+      items: [
+        {
+          media: {
+            ...catalogue.items[0]!.media,
+            artwork: {
+              ...catalogue.items[0]!.media.artwork,
+              backdropPath: `/v1/media/${episodeReferenceId}/images/backdrop`,
+              posterPath: `/v1/media/${episodeReferenceId}/images/poster`,
+            },
+            id: episodeReferenceId,
+            kind: "episode" as const,
+            subtitle: "S02E03",
+            title: "The Long Meridian",
+          },
+          playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+        },
+      ],
+      nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
+      seasonNumber: 2,
+      titleReferenceId: seriesReferenceId,
+    };
+    expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(episodes);
+    expect(librarySeasonEpisodesQuerySchema.parse({ limit: "20" })).toEqual({ limit: 20 });
+    expect(JSON.stringify({ detail, episodes })).not.toMatch(
+      /external|jellyfin\.example|upstream/iu,
+    );
+  });
+
   it("requires a bounded editable metadata field", () => {
     expect(libraryMetadataUpdateRequestSchema.safeParse({}).success).toBe(false);
     expect(
@@ -260,5 +324,9 @@ describe("library operation contracts", () => {
     expect(libraryBrowseQueryJsonSchema).toMatchObject({ type: "object" });
     expect(libraryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryBrowseResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryTitleDetailResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(librarySeasonEpisodesQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(librarySeasonEpisodesResponseJsonSchema).not.toHaveProperty("$schema");
   });
 });

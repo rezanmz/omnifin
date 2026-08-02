@@ -379,6 +379,33 @@ describe("PlaybackSessionService", () => {
     }
   });
 
+  it("rejects a series title reference before contacting Jellyfin playback", async () => {
+    const { config, database, negotiate, service } = harness();
+    const seriesReference = new MediaReferenceService(database, config, {
+      clock: () => now,
+      createToken: () => "s".repeat(22),
+    }).createOrRefresh({ linkId: "viewer-link", linkRevision: 3, userId: "viewer-user" }, [
+      {
+        artwork: { backdropItemId: privateItemId, posterItemId: privateItemId },
+        episodeNumber: null,
+        itemId: "private-upstream-series",
+        kind: "series",
+        seasonNumber: null,
+        title: "Northern Lights",
+        year: 2026,
+      },
+    ])[0]!;
+
+    try {
+      await expect(
+        service.negotiate({ principal: principal() }, seriesReference, negotiation),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(negotiate).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
   it("rejects a connector result that changes the resolved upstream item", async () => {
     const { database, negotiate, reference, service } = harness();
     negotiate.mockResolvedValueOnce({ ...negotiatedResult(), itemId: "different-private-item" });

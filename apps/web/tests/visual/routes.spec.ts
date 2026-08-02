@@ -1038,12 +1038,26 @@ test("light viewer library visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("media-library-light.png", { fullPage: true });
 });
 
+test("series title hierarchy visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Series hierarchy covers representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: "View details for Northern Lights, 2 seasons" }).click();
+  const dialog = page.getByRole("dialog", { name: "Northern Lights details" });
+  await expect(dialog.getByRole("heading", { name: "Northern Lights" })).toBeVisible();
+  await expect(dialog.getByRole("list", { name: "Episodes" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(dialog).toHaveScreenshot("media-library-series-title.png");
+});
+
 test("raised viewer library poster visual baseline", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Hover treatment uses desktop Chromium");
   await page.goto("/library?test-view=ready");
-  await page.getByRole("button", { name: /Play Ember Coast/u }).hover();
+  await page.getByRole("button", { name: /View details for Ember Coast/u }).hover();
   await removeDevelopmentIndicator(page);
-  await expect(page.getByRole("list", { name: "Playable library titles" })).toHaveScreenshot(
+  await expect(page.getByRole("list", { name: "Library titles" })).toHaveScreenshot(
     "media-library-card-hover.png",
   );
 });

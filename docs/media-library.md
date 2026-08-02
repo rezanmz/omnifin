@@ -8,16 +8,28 @@ identifier from the browser.
 
 | Parameter | Values                                           | Default  |
 | --------- | ------------------------------------------------ | -------- |
-| `kind`    | `all`, `movies`, or `episodes`                   | `all`    |
+| `kind`    | `all`, `movies`, or `series`                     | `all`    |
 | `sort`    | `recent`, `title`, or `year`                     | `recent` |
 | `query`   | one to 100 visible characters                    | omitted  |
 | `limit`   | one to 50 items                                  | `30`     |
 | `cursor`  | a previously returned opaque continuation cursor | omitted  |
 
-Each result contains playable movie or episode metadata, watch position, played state, protected
+Each result contains movie or series title metadata, optional movie watch state, and protected
 artwork paths, and an opaque media reference suitable for Omnifin's playback routes. Raw Jellyfin
 item IDs, the paired user ID, tokens, server URLs, connector IDs, filesystem paths, and upstream
 payloads are not returned.
+
+Selecting a catalogue card is an information action, not a playback action. Omnifin resolves the
+opaque reference through `GET /v1/media/library/:referenceId` and returns normalized title facts.
+Movie details include the paired user's playback state. Series details include at most 100 season
+summaries; no episode payload is embedded in the title response.
+
+Series episodes are read only after a season is selected through
+`GET /v1/media/library/:referenceId/seasons/:seasonNumber/episodes`. The endpoint returns at most 50
+episodes and an encrypted continuation cursor. That cursor is bound to the current user, Jellyfin
+link revision, title reference, season number, and page size. It cannot be replayed for another
+series, season, account, or pairing. Episode responses contain fresh opaque playback references;
+the browser never learns Jellyfin's series, season, or episode identifiers.
 
 Pagination cursors are encrypted and bound to the Omnifin user, current Jellyfin identity link,
 link revision, search text, filter, sort order, and page size. Relinking or revoking Jellyfin makes
@@ -37,17 +49,20 @@ without `media.view` are rejected before connector I/O. Responses are private an
 
 ## Viewer experience
 
-`/library` is the user-facing catalogue. It provides bounded search, movie and episode filters,
-recent/title/year sorting, opaque continuation paging, watch progress, played state, and lazy-loaded
-theater playback. The page never receives the Jellyfin user ID, connector address, API token, raw
-item ID, or filesystem path. Artwork and streams remain on Omnifin's authenticated origin.
+`/library` is the user-facing catalogue. It provides bounded search, movie and series filters,
+recent/title/year sorting, opaque continuation paging, movie watch progress, series and season
+hierarchy, and lazy-loaded theater playback behind an explicit play or resume action. Opening a
+card always shows title information first. The page never receives the Jellyfin user ID, connector
+address, API token, raw item ID, or filesystem path. Artwork and streams remain on Omnifin's
+authenticated origin.
 
 The interface has deliberate loading, empty, unavailable, signed-out, and permission-denied
 boundaries. Desktop cards leave headroom for their raised hover and focus treatment; the catalogue
 grid remains directly on the adaptive page backdrop so it does not become a separate opaque panel.
-Keyboard and directional navigation share the same playable-card order, touch layouts keep a
-visible 44-pixel play target, and reduced-motion mode removes nonessential transforms and shimmer.
-Light, dark, and system appearance preferences use the same liquid-material hierarchy.
+Keyboard and directional navigation share the same title-card, season-tab, episode, and explicit
+play order. Touch layouts keep visible 44-pixel actions, and reduced-motion mode removes
+nonessential transforms and shimmer. Light, dark, and system appearance preferences use the same
+liquid-material hierarchy.
 
 Administrative scan, match, metadata, and artwork work remains separate at
 `/operations/library`, so viewer navigation does not expose operator controls by accident.

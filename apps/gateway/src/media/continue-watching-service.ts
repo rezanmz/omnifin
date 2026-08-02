@@ -14,8 +14,14 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseSchema,
   libraryBrowseSortSchema,
+  librarySeasonEpisodesQuerySchema,
+  librarySeasonEpisodesResponseSchema,
+  libraryTitleDetailResponseSchema,
   type LibraryBrowseQuery,
   type LibraryBrowseResponse,
+  type LibrarySeasonEpisodesQuery,
+  type LibrarySeasonEpisodesResponse,
+  type LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import { createHash, X509Certificate } from "node:crypto";
@@ -43,6 +49,17 @@ const libraryCursorPayloadSchema = z.strictObject({
   version: z.literal(1),
 });
 type LibraryCursorPayload = z.infer<typeof libraryCursorPayloadSchema>;
+
+const librarySeasonCursorPayloadSchema = z.strictObject({
+  limit: z.int().positive().max(50),
+  linkId: z.string().regex(IDENTIFIER_PATTERN),
+  linkRevision: z.int().nonnegative().max(2_147_483_647),
+  seasonNumber: z.int().nonnegative().max(100_000),
+  startIndex: z.int().nonnegative().max(1_000_000),
+  titleReferenceId: z.string().regex(/^media_[A-Za-z0-9_-]{22}$/u),
+  version: z.literal(1),
+});
+type LibrarySeasonCursorPayload = z.infer<typeof librarySeasonCursorPayloadSchema>;
 
 interface ContinueWatchingSourceRow {
   baseUrl: string;
@@ -83,7 +100,12 @@ export interface ContinueWatchingDependencies {
   createClient?: (
     input: ContinueWatchingClientFactoryInput,
   ) => Pick<JellyfinUserMediaClient, "readContinueWatching" | "readImage"> &
-    Partial<Pick<JellyfinUserMediaClient, "readLibrary">>;
+    Partial<
+      Pick<
+        JellyfinUserMediaClient,
+        "readLibrary" | "readLibrarySeasonEpisodes" | "readLibraryTitle"
+      >
+    >;
   mediaReferences?: MediaReferenceDependencies;
 }
 
@@ -96,7 +118,7 @@ export class ContinueWatchingError extends Error {
   }
 }
 
-export type MediaLibraryErrorReason = "cursor_invalid" | "unavailable";
+export type MediaLibraryErrorReason = "cursor_invalid" | "not_found" | "unavailable";
 
 export class MediaLibraryError extends Error {
   public readonly code = "media_library_unavailable";
@@ -106,7 +128,9 @@ export class MediaLibraryError extends Error {
     super(
       reason === "cursor_invalid"
         ? "The library continuation cursor is invalid or no longer current."
-        : "The Jellyfin library is temporarily unavailable.",
+        : reason === "not_found"
+          ? "The library title is no longer available."
+          : "The Jellyfin library is temporarily unavailable.",
       options,
     );
     this.name = "MediaLibraryError";
@@ -357,6 +381,140 @@ export class ContinueWatchingService {
     }
   }
 
+  public async readLibraryTitle(
+    referenceId: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryTitleDetailResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaLibraryError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie" && reference.kind !== "series") {
+      throw new MediaLibraryError("not_found");
+    }
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibraryTitle(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (result.item.externalId !== reference.itemId || result.item.kind !== reference.kind) {
+        throw new MediaReferenceError();
+      }
+      const [refreshedReferenceId] = this.#references.createOrRefresh(this.#referenceContext(row), [
+        this.#titleReferenceInput(result.item),
+      ]);
+      if (refreshedReferenceId !== referenceId) throw new MediaReferenceError();
+      return libraryTitleDetailResponseSchema.parse({
+        generatedAt: occurredAt.toISOString(),
+        media: this.#libraryMedia(result.item, referenceId),
+        playback:
+          result.item.kind === "movie" && result.item.runtimeSeconds !== null
+            ? {
+                durationSeconds: result.item.runtimeSeconds,
+                played: result.item.played,
+                positionSeconds: result.item.positionSeconds,
+              }
+            : null,
+        seasons: result.seasons,
+        seasonsTruncated: result.seasonsTruncated,
+      });
+    } catch (error) {
+      if (error instanceof MediaLibraryError) throw error;
+      throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
+  public async readLibrarySeasonEpisodes(
+    referenceId: string,
+    seasonNumber: number,
+    rawQuery: LibrarySeasonEpisodesQuery,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibrarySeasonEpisodesResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const query = librarySeasonEpisodesQuerySchema.parse(rawQuery);
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaLibraryError("not_found", { cause: error });
+    }
+    if (reference.kind !== "series" || !Number.isSafeInteger(seasonNumber) || seasonNumber < 0) {
+      throw new MediaLibraryError("not_found");
+    }
+    const startIndex = query.cursor
+      ? this.#decodeLibrarySeasonCursor(query.cursor, query, row, referenceId, seasonNumber)
+      : 0;
+    try {
+      const client = this.#client(row);
+      if (!client.readLibrarySeasonEpisodes) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibrarySeasonEpisodes(
+        {
+          limit: query.limit,
+          seasonNumber,
+          seriesId: reference.itemId,
+          startIndex,
+          userId: row.externalUserId,
+        },
+        signal,
+      );
+      const referenceIds = this.#references.createOrRefresh(
+        this.#referenceContext(row),
+        result.items.map((item) => ({
+          artwork: {
+            backdropItemId: item.artwork.backdrop?.itemId ?? null,
+            posterItemId: item.artwork.poster?.itemId ?? null,
+          },
+          episodeNumber: item.episodeNumber,
+          itemId: item.externalId,
+          kind: item.kind,
+          seasonNumber: item.seasonNumber,
+          title: item.title,
+          year: item.year,
+        })),
+      );
+      const items = result.items.map((item, index) => ({
+        media: this.#episodeMedia(item, referenceIds[index]!),
+        playback: {
+          durationSeconds: item.runtimeSeconds,
+          played: item.played,
+          positionSeconds: item.positionSeconds,
+        },
+      }));
+      return librarySeasonEpisodesResponseSchema.parse({
+        generatedAt: occurredAt.toISOString(),
+        items,
+        nextCursor:
+          result.nextStartIndex === null
+            ? null
+            : this.#encodeLibrarySeasonCursor({
+                limit: query.limit,
+                linkId: row.linkId,
+                linkRevision: row.linkRevision,
+                seasonNumber,
+                startIndex: result.nextStartIndex,
+                titleReferenceId: referenceId,
+                version: 1,
+              }),
+        seasonNumber,
+        titleReferenceId: referenceId,
+      });
+    } catch (error) {
+      if (error instanceof MediaLibraryError) throw error;
+      throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
   public async readArtwork(
     context: ContinueWatchingContext,
     referenceId: string,
@@ -495,10 +653,10 @@ export class ContinueWatchingService {
           backdropItemId: item.artwork.backdrop?.itemId ?? null,
           posterItemId: item.artwork.poster?.itemId ?? null,
         },
-        episodeNumber: item.episodeNumber,
+        episodeNumber: null,
         itemId: item.externalId,
         kind: item.kind,
-        seasonNumber: item.seasonNumber,
+        seasonNumber: null,
         title: item.title,
         year: item.year,
       })),
@@ -506,26 +664,15 @@ export class ContinueWatchingService {
     const items = result.items.map((item, index) => {
       const id = referenceIds[index]!;
       return {
-        durationSeconds: item.runtimeSeconds,
-        media: {
-          artwork: {
-            accentColor: item.artwork.accentColor,
-            backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
-            blurHash: item.artwork.blurHash,
-            posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
-          },
-          availability: "available" as const,
-          contentRating: item.contentRating,
-          id,
-          kind: item.kind,
-          overview: item.overview,
-          runtimeMinutes: Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
-          subtitle: item.subtitle,
-          title: item.title,
-          year: item.year,
-        },
-        played: item.played,
-        positionSeconds: item.positionSeconds,
+        media: this.#libraryMedia(item, id),
+        playback:
+          item.kind === "movie" && item.runtimeSeconds !== null
+            ? {
+                durationSeconds: item.runtimeSeconds,
+                played: item.played,
+                positionSeconds: item.positionSeconds,
+              }
+            : null,
       };
     });
     return libraryBrowseResponseSchema.parse({
@@ -553,8 +700,108 @@ export class ContinueWatchingService {
     });
   }
 
+  #libraryMedia(
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibrary"]>>["items"][number],
+    id: string,
+  ) {
+    return {
+      artwork: {
+        accentColor: item.artwork.accentColor,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
+        blurHash: item.artwork.blurHash,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+      },
+      availability: "available" as const,
+      contentRating: item.contentRating,
+      id,
+      kind: item.kind,
+      overview: item.overview,
+      runtimeMinutes:
+        item.runtimeSeconds === null ? null : Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+      subtitle: null,
+      title: item.title,
+      year: item.year,
+    };
+  }
+
+  #episodeMedia(
+    item: Awaited<
+      ReturnType<JellyfinUserMediaClient["readLibrarySeasonEpisodes"]>
+    >["items"][number],
+    id: string,
+  ) {
+    return {
+      artwork: {
+        accentColor: item.artwork.accentColor,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
+        blurHash: item.artwork.blurHash,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+      },
+      availability: "available" as const,
+      contentRating: item.contentRating,
+      id,
+      kind: "episode" as const,
+      overview: item.overview,
+      runtimeMinutes: Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+      subtitle: item.subtitle,
+      title: item.title,
+      year: item.year,
+    };
+  }
+
+  #titleReferenceInput(
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>["item"],
+  ) {
+    return {
+      artwork: {
+        backdropItemId: item.artwork.backdrop?.itemId ?? null,
+        posterItemId: item.artwork.poster?.itemId ?? null,
+      },
+      episodeNumber: null,
+      itemId: item.externalId,
+      kind: item.kind,
+      seasonNumber: null,
+      title: item.title,
+      year: item.year,
+    };
+  }
+
+  #referenceContext(row: ContinueWatchingSourceRow) {
+    return { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId };
+  }
+
   #encodeLibraryCursor(value: LibraryCursorPayload) {
     return this.#cipher.encrypt(JSON.stringify(value), "media_library_cursor");
+  }
+
+  #encodeLibrarySeasonCursor(value: LibrarySeasonCursorPayload) {
+    return this.#cipher.encrypt(JSON.stringify(value), "media_library_season_cursor");
+  }
+
+  #decodeLibrarySeasonCursor(
+    value: string,
+    query: LibrarySeasonEpisodesQuery,
+    row: ContinueWatchingSourceRow,
+    titleReferenceId: string,
+    seasonNumber: number,
+  ) {
+    try {
+      const decoded = librarySeasonCursorPayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(value, "media_library_season_cursor")),
+      );
+      if (
+        decoded.linkId !== row.linkId ||
+        decoded.linkRevision !== row.linkRevision ||
+        decoded.limit !== query.limit ||
+        decoded.titleReferenceId !== titleReferenceId ||
+        decoded.seasonNumber !== seasonNumber
+      ) {
+        throw new Error("invalid");
+      }
+      return decoded.startIndex;
+    } catch (error) {
+      throw new MediaLibraryError("cursor_invalid", { cause: error });
+    }
   }
 
   #decodeLibraryCursor(value: string, query: LibraryBrowseQuery, row: ContinueWatchingSourceRow) {
