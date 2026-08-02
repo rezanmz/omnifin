@@ -114,6 +114,27 @@ application boundary; operators must still patch and isolate the host.
   record commit atomically. Audit metadata contains only previous/new role and state plus the
   revoked-session count; client addresses are privacy-hashed.
 
+## Operator audit-trail controls
+
+- Reads require an active account with `audit.view` at both the route and service boundary. Recovery
+  sessions are explicitly denied before audit rows are queried, even though their bounded recovery
+  attempts remain available to a later ordinary administrator.
+- The strict response contains only a keyed opaque event reference, normalized category, bounded
+  event type, outcome, occurrence time, and safe actor summary. Metadata JSON, target, upstream,
+  connector, request, session and identity identifiers, IP hashes, paths, addresses, credentials,
+  assertions, cookies, CSRF values, and raw errors are never selected into the public contract.
+- Current display names are control-stripped and length-bounded. Removed accounts, system activity,
+  and recovery activity receive fixed labels so deleted or inaccessible identity detail is not
+  reconstructed from private fields.
+- Pagination is newest-first and bounded to 50 records. Authenticated-encrypted cursors bind the page
+  size, filters, initial SQLite row boundary, and snapshot time. Filter mismatch, tamper, or another
+  deployment's key fails with a stable invalid-cursor response.
+- The endpoint is rate-limited and non-cacheable. The browser stores neither records nor cursors,
+  preserves verified pages during a pagination failure, and does not provide export or deletion.
+- Audit records remain part of the sensitive SQLite and verified-backup lifecycle. Host logs remain
+  necessary for wider investigation; databases and backup files must never be attached to public
+  support reports.
+
 ## Discovery-feed and artwork controls
 
 - Feed reads require `media.view` before connector selection or credential decryption. Exactly one
@@ -489,10 +510,10 @@ protect host and backup access, and use distinct least-privilege connector crede
 where an upstream service supports them. Internet-facing access should sit behind rate
 limiting and normal infrastructure monitoring.
 
-When implemented, audit records must support investigation without replacing host
-logs, and their retention and export must preserve user privacy. Once product data is
-stored, a database backup may contain private metadata and encrypted secrets while the
-master key separately enables decryption; both require protection.
+Audit records support investigation without replacing host logs. They share the SQLite and
+verified-backup lifecycle, expose no browser export or deletion control, and preserve user privacy at
+the public contract boundary. A database backup contains private metadata and encrypted secrets while
+the master key separately enables decryption; both require protection.
 
 ## Vulnerability scanning policy
 

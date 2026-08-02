@@ -45,6 +45,14 @@ browser control room exposes only normalized secret-free records, preserves mixe
 values while editing, reserves exact provider endpoints before creation, and requires validation
 before offering enablement. Mapping updates are atomic with affected role-derived session
 revocation and reject equivalent configurations without side effects.
+An ordinary administrator can inspect the resulting security and operational history through a
+bounded, privacy-safe audit API and responsive operator ledger. Route and service boundaries both
+require `audit.view` and reject recovery sessions. Authenticated-encrypted cursors bind the initial
+database boundary, snapshot time, page size, category, and outcome; concurrent inserts cannot
+reshuffle an active view. Public records contain only an opaque local event reference, normalized
+type/category/outcome/time, and safe actor summary. Private metadata, targets, upstream and session
+identifiers, IP hashes, paths, destinations, credentials, assertions, and exceptions remain inside
+the gateway database.
 Direct Jellyfin password and Quick Connect login plus link status, both relinking methods, revocation, and
 account-wide local logout are implemented for the deployment-configured connector.
 RP-initiated and provider-initiated back- and front-channel OIDC logout are implemented.

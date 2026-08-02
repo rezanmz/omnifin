@@ -653,6 +653,47 @@ test("empty user access directory visual baseline", async ({ page }, testInfo) =
   await expect(page).toHaveScreenshot("user-access-empty.png", { fullPage: true });
 });
 
+test("operator audit trail visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !visualProjects.has(testInfo.project.name),
+    "The operator ledger covers desktop, phone, tablet, and ten-foot geometry",
+  );
+  await page.goto(routeForProject("/settings/audit?test-view=ready", testInfo.project.name));
+  await page.getByLabel("Loading operator audit trail").waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: "Service configuration updated" }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("operator-audit-trail.png", { fullPage: true });
+});
+
+test("light operator audit trail visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "The light operator ledger covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/settings/audit?test-view=ready");
+  await page.getByLabel("Loading operator audit trail").waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: "Service configuration updated" }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("operator-audit-trail-light.png", { fullPage: true });
+});
+
+test("empty operator audit trail visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "The empty operator ledger covers representative desktop and phone geometry",
+  );
+  await page.goto("/settings/audit?test-view=empty");
+  await page.getByLabel("Loading operator audit trail").waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: "The ledger is quiet." }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("operator-audit-trail-empty.png", { fullPage: true });
+});
+
 test("service connection control room visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),

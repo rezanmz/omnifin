@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   LogOut,
   RefreshCw,
+  ScrollText,
   ShieldCheck,
   Unlink,
   UserRoundCheck,
@@ -493,6 +494,15 @@ export function AccountSecurityPanel({
                           href="/settings/users"
                         >
                           <UsersRound aria-hidden="true" size={17} /> User access
+                        </Link>
+                      ) : null}
+                      {snapshot!.principal.permissions.includes("audit.view") &&
+                      snapshot!.principal.authenticationMethod.kind !== "recovery" ? (
+                        <Link
+                          className="account-action account-action--primary"
+                          href="/settings/audit"
+                        >
+                          <ScrollText aria-hidden="true" size={17} /> Operator audit trail
                         </Link>
                       ) : null}
                       {snapshot!.principal.authenticationMethod.kind === "oidc" ? (

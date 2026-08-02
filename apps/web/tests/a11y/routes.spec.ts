@@ -69,6 +69,18 @@ const routes = [
     path: "/settings/users?test-view=forbidden",
   },
   {
+    label: "operator audit trail",
+    path: "/settings/audit?test-view=ready",
+  },
+  {
+    label: "empty operator audit trail",
+    path: "/settings/audit?test-view=empty",
+  },
+  {
+    label: "restricted operator audit trail",
+    path: "/settings/audit?test-view=forbidden",
+  },
+  {
     label: "service connection control room",
     path: "/settings/connectors?test-view=ready",
   },
@@ -248,13 +260,15 @@ for (const route of routes) {
     await expect(page.locator("main")).toHaveCount(1);
     await expect(page.locator("main")).toBeVisible();
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    const deferredLoadingLabel = route.path.startsWith("/settings/users")
-      ? "Loading user access administration"
-      : route.path.startsWith("/settings/connectors")
-        ? "Loading service connections"
-        : route.path.startsWith("/calendar")
-          ? "Loading acquisition calendar"
-          : undefined;
+    const deferredLoadingLabel = route.path.startsWith("/settings/audit")
+      ? "Loading operator audit trail"
+      : route.path.startsWith("/settings/users")
+        ? "Loading user access administration"
+        : route.path.startsWith("/settings/connectors")
+          ? "Loading service connections"
+          : route.path.startsWith("/calendar")
+            ? "Loading acquisition calendar"
+            : undefined;
     if (deferredLoadingLabel) {
       await page.getByLabel(deferredLoadingLabel).waitFor({ state: "hidden" });
     }
@@ -530,6 +544,7 @@ for (const route of [
     label: "identity provider control room",
     path: "/settings/identity-providers?test-view=ready",
   },
+  { label: "operator audit trail", path: "/settings/audit?test-view=ready" },
   { label: "service control room", path: "/settings/connectors?test-view=ready" },
   { label: "system health", path: "/operations/health?test-view=ready" },
   { label: "indexer intelligence", path: "/operations/indexers?test-view=ready" },

@@ -193,6 +193,26 @@ describe("global search", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it("offers the operator audit trail only with explicit audit authority", () => {
+    const { unmount } = render(
+      <GlobalSearch client={client()} initialOpen initialPermissions={["roles.manage"]} />,
+    );
+    expect(screen.queryByRole("option", { name: /Operator audit trail/i })).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <GlobalSearch
+        client={client()}
+        initialOpen
+        initialPermissions={["roles.manage", "audit.view"]}
+      />,
+    );
+    expect(screen.getByRole("option", { name: /Operator audit trail/i })).toHaveAttribute(
+      "href",
+      "/settings/audit",
+    );
+  });
+
   it("keeps matching destinations available while remote media search is unavailable", async () => {
     let rejectSearch: ((reason: unknown) => void) | undefined;
     const search = vi.fn(

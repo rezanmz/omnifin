@@ -214,6 +214,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   failure handling
 - [Authentication](docs/authentication.md) — OIDC, Jellyfin pairing, roles, sessions,
   and recovery
+- [Operator audit trail](docs/audit-trail.md) — privacy-safe security and operational history,
+  authorization, pagination, retention, and troubleshooting
 - [Discovery](docs/discovery.md) — normalized Seerr search, media intelligence, person
   context, permissions, errors, and browser behavior
 - [Media requests](docs/media-requests.md) — delegated Seerr identity, idempotency,

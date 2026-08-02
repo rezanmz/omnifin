@@ -19,6 +19,7 @@ import {
   manualReleaseRoutes,
   type ManualReleaseRoutesOptions,
 } from "./acquisitions/manual-release-routes.js";
+import { auditTrailRoutes, type AuditTrailRoutesOptions } from "./audit/audit-trail-routes.js";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
@@ -131,6 +132,7 @@ export interface CreateAppOptions {
   oidcProviderAdminDependencies?: OidcProviderAdminRoutesOptions["dependencies"];
   oidcRoleMappingAdminDependencies?: OidcRoleMappingAdminRoutesOptions["dependencies"];
   userAccessAdminDependencies?: UserAccessAdminRoutesOptions["dependencies"];
+  auditTrailDependencies?: AuditTrailRoutesOptions["dependencies"];
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
@@ -562,6 +564,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.userAccessAdminDependencies === undefined
         ? {}
         : { dependencies: options.userAccessAdminDependencies }),
+    });
+    await app.register(auditTrailRoutes, {
+      ...(options.auditTrailDependencies === undefined
+        ? {}
+        : { dependencies: options.auditTrailDependencies }),
     });
     await app.register(jellyfinRoutes, {
       ...(options.jellyfinDependencies === undefined
