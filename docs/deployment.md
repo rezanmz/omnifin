@@ -102,7 +102,8 @@ network deployment. Register
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}` exactly at the OIDC provider;
 for a new configuration, the administration UI can calculate `providerId` as `oidc-{slug}` before
 credentials are submitted. Do not derive callback URLs from proxy forwarding headers. The current branch deliberately has no
-environment-variable OIDC bootstrap. Its permission-checked administration API encrypts
+environment-variable OIDC bootstrap. The recovery UI instead supports a one-time, CSRF- and
+PKCE-bound OIDC first-administrator claim. Its permission-checked administration API encrypts
 client secrets and audits provider creation, replacement, validation, and guarded deletion.
 Authorized administrators and recovery sessions reach the guided control room through
 **Account & access → Identity providers**. It previews exact callback and logout endpoints before

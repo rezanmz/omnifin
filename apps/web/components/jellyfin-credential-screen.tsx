@@ -11,6 +11,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Fingerprint,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
@@ -763,6 +764,21 @@ export function JellyfinCredentialScreen({
                   Quick Connect
                 </button>
               </div>
+
+              {isBootstrap ? (
+                <div className="jellyfin-bootstrap-alternative">
+                  <span aria-hidden="true" />
+                  <a href="/settings/identity-providers?bootstrap=1">
+                    <Fingerprint aria-hidden="true" size={17} />
+                    Set up or claim with OIDC
+                    <ArrowRight aria-hidden="true" size={16} />
+                  </a>
+                  <p>
+                    Authentik and other OIDC providers can establish the first administrator without
+                    a Jellyfin administrator sign-in.
+                  </p>
+                </div>
+              ) : null}
 
               {method === "password" ? (
                 <div

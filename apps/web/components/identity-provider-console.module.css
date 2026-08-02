@@ -802,6 +802,53 @@
   font-size: 0.75rem;
 }
 
+.bootstrapCallout {
+  align-items: center;
+  background:
+    linear-gradient(120deg, rgb(216 255 112 / 9%), transparent 62%), var(--surface-card-solid);
+  border: 1px solid rgb(216 255 112 / 18%);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-top: 18px;
+  padding: clamp(18px, 3vw, 26px);
+}
+
+.bootstrapIcon {
+  align-items: center;
+  background: rgb(216 255 112 / 12%);
+  border: 1px solid rgb(216 255 112 / 18%);
+  border-radius: var(--radius-sm);
+  color: var(--acid);
+  display: flex;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.bootstrapCallout h3 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  margin: 4px 0 6px;
+}
+
+.bootstrapCallout p:not(:global(.section-kicker)) {
+  color: var(--paper-2);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 62ch;
+}
+
+.bootstrapCallout > small {
+  color: var(--paper-2);
+  font-size: 0.72rem;
+  grid-column: 2 / -1;
+}
+
 .telemetryGrid span {
   font-weight: 660;
   letter-spacing: 0.04em;
@@ -1326,6 +1373,16 @@
 
   .telemetryGrid {
     grid-template-columns: 1fr;
+  }
+
+  .bootstrapCallout {
+    align-items: stretch;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .bootstrapCallout > .primaryButton,
+  .bootstrapCallout > small {
+    grid-column: 1 / -1;
   }
 
   .lifecycleActions,

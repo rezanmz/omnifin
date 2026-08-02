@@ -1,4 +1,8 @@
-import { PENDING_LINK_PERMISSIONS, ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
+import {
+  PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
+  PENDING_LINK_PERMISSIONS,
+  ROLE_PERMISSIONS,
+} from "@omnifin/contracts/auth";
 import { describe, expect, it } from "vitest";
 import { buildSessionPrincipal, type SessionPrincipalRecord } from "../src/auth/principal.js";
 
@@ -21,7 +25,13 @@ function oidcRecord(): SessionPrincipalRecord {
       serviceIdentityLinkId: null,
       userId: "user-1",
     },
-    user: { displayName: "Riley", id: "user-1", role: "viewer", status: "active" },
+    user: {
+      displayName: "Riley",
+      id: "user-1",
+      role: "viewer",
+      roleSource: "default",
+      status: "active",
+    },
     externalIdentity: {
       displayClaimsJson: JSON.stringify({
         displayName: "Riley",
@@ -60,6 +70,32 @@ describe("buildSessionPrincipal", () => {
     const unavailable = oidcRecord();
     if (unavailable.serviceLink) unavailable.serviceLink.healthState = "unavailable";
     expect(buildSessionPrincipal(unavailable, now)).toMatchObject({ accountState: "active" });
+  });
+
+  it("lets only a recovery-proven pending OIDC admin configure the installation", () => {
+    const record = oidcRecord();
+    record.user = {
+      ...record.user!,
+      role: "admin",
+      roleSource: "recovery_bootstrap",
+      status: "pending_link",
+    };
+    record.serviceLink = null;
+    record.serviceConnector = null;
+
+    expect(buildSessionPrincipal(record, now)).toMatchObject({
+      accountState: "pending_link",
+      permissions: PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
+      role: "admin",
+    });
+    expect(buildSessionPrincipal(record, now)?.permissions).not.toContain("media.view");
+    expect(buildSessionPrincipal(record, now)?.permissions).not.toContain("playback.use");
+
+    record.user.roleSource = "oidc_mapping";
+    expect(buildSessionPrincipal(record, now)).toMatchObject({
+      accountState: "pending_link",
+      permissions: PENDING_LINK_PERMISSIONS,
+    });
   });
 
   it("downgrades missing, revoked, or relink-required service identities to pairing-only access", () => {
@@ -181,6 +217,7 @@ describe("buildSessionPrincipal", () => {
             displayName: "Unexpected user",
             id: "user-1",
             role: "admin",
+            roleSource: "manual",
             status: "active",
           },
         },

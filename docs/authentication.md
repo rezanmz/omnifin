@@ -143,6 +143,7 @@ gateway directly.
 | `GET /api/auth/providers`                                                      | Return the bounded browser-safe provider list.                                                                                     |
 | `GET /api/auth/oidc/{providerId}/start`                                        | Bind the browser, create a one-time transaction, and start OIDC.                                                                   |
 | `GET /api/auth/oidc/callback/{providerId}`                                     | Consume the transaction, validate the grant, and establish a session.                                                              |
+| `POST /api/auth/bootstrap/oidc/{providerId}/start`                             | Start a CSRF- and recovery-bound OIDC first-administrator claim.                                                                   |
 | `POST /api/auth/oidc/logout`                                                   | Revoke locally, then request RP-initiated provider logout when available.                                                          |
 | `POST /api/auth/oidc/backchannel/{providerId}`                                 | Verify a provider Logout Token and revoke its exact local session scope.                                                           |
 | `GET /api/auth/oidc/frontchannel/{providerId}`                                 | Accept exact session-aware provider logout in a restricted iframe.                                                                 |
@@ -460,14 +461,14 @@ must not be usable as a permanent authentication method. Operators should test r
 after initial setup, store the secret separately from the database, and rotate it after
 use.
 
-On a fresh database, the hidden `/recovery` interface can exchange that session for a
-normal administrator session only after password or Quick Connect proof from a Jellyfin
-account whose upstream policy explicitly marks it as an administrator. The exchange is one
-immediate SQLite transaction: it verifies that no active local administrator exists, reuses
-only an exact immutable server/user identity, records `recovery_bootstrap` role provenance,
-and replaces the recovery session. Ordinary Jellyfin sign-in remains viewer-default and
-never imports upstream administrator authority. Competing proofs can therefore produce at
-most one first administrator.
+On a fresh database, the hidden `/recovery` interface can exchange that session for a normal
+administrator session through either a recovery-bound OIDC authorization or password/Quick Connect
+proof from a Jellyfin administrator. The OIDC transaction binds its purpose and exact recovery
+session inside the encrypted PKCE transaction and bypasses JIT only for that single proven subject.
+One immediate SQLite transaction verifies the first-admin invariant, records
+`recovery_bootstrap` provenance, replaces recovery access, and revokes competing user sessions.
+A pending OIDC bootstrap administrator may configure identity and connectors but has no media or
+playback permissions until explicit Jellyfin pairing. Ordinary sign-in never imports authority.
 
 The implemented recovery boundary allows only one active recovery session: a newly
 verified break-glass login atomically supersedes the prior recovery session and records

@@ -131,6 +131,24 @@ describe("identity provider administration client", () => {
     expect(JSON.parse(String(request.body))).toEqual(input);
   });
 
+  it("starts a recovery-proven OIDC administrator claim without exposing credentials", async () => {
+    const result = {
+      authorizationUrl: "https://id.example.test/application/o/authorize/?state=opaque-state",
+      expiresAt: "2026-07-26T12:10:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(result));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      identityProviderAdminClient.startAdministratorBootstrap(provider.id, csrfToken),
+    ).resolves.toEqual(result);
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/auth/bootstrap/oidc/${provider.id}/start`);
+    expect(request).toMatchObject({ credentials: "same-origin", method: "POST" });
+    expect(new Headers(request.headers).get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(request.body).toBeUndefined();
+  });
+
   it("normalizes a changed session without reflecting untrusted error details", async () => {
     vi.stubGlobal(
       "fetch",

@@ -5,7 +5,11 @@ import {
   type CustomFetch,
   type ServerMetadata,
 } from "openid-client";
-import { sessionResponseSchema } from "@omnifin/contracts/auth";
+import {
+  oidcAdministratorBootstrapStartResponseSchema,
+  PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
+  sessionResponseSchema,
+} from "@omnifin/contracts/auth";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import {
@@ -211,7 +215,160 @@ async function issueBrowserOidcSession(
   return { cookie, csrfToken: body.csrfToken, principal: body.principal };
 }
 
+function issueRecoverySession(app: Awaited<ReturnType<typeof createApp>>) {
+  const issued = app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
+  return {
+    cookie: `__Host-omnifin_session=${issued.sessionToken}`,
+    csrfToken: issued.csrfToken,
+    principal: issued.principal,
+  };
+}
+
 describe("OIDC browser routes", () => {
+  it("claims the first administrator through an exact recovery-bound OIDC transaction", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const recovery = issueRecoverySession(app);
+      const started = await app.inject({
+        headers: {
+          cookie: recovery.cookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: `/v1/auth/bootstrap/oidc/${providerId}/start`,
+      });
+
+      expect(started.statusCode).toBe(200);
+      expect(started.headers["cache-control"]).toBe("no-store");
+      const bootstrap = oidcAdministratorBootstrapStartResponseSchema.parse(started.json());
+      const state = new URL(bootstrap.authorizationUrl).searchParams.get("state");
+      const callback = await app.inject({
+        headers: {
+          cookie: `${recovery.cookie}; ${transactionBindingCookie(started, state)}`,
+        },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=administrator-code&state=${state}`,
+      });
+
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/settings?administrator=ready&jellyfin=pending");
+      const session = callback.cookies.find(({ name }) => name === "__Host-omnifin_session");
+      if (!session) throw new Error("Expected the administrator session cookie.");
+      const inspected = await app.inject({
+        headers: { cookie: `${session.name}=${session.value}` },
+        method: "GET",
+        url: "/v1/auth/session",
+      });
+      const body = sessionResponseSchema.parse(inspected.json());
+      expect(body.principal).toMatchObject({
+        accountState: "pending_link",
+        authenticationMethod: { kind: "oidc", providerId },
+        permissions: PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
+        role: "admin",
+      });
+      expect(body.principal?.permissions).not.toContain("media.view");
+      expect(body.principal?.permissions).not.toContain("playback.use");
+      expect(app.sessionService.resolveAndRefresh(recovery.cookie.split("=", 2)[1])).toBeNull();
+      expect(
+        database.sqlite.prepare("select role, role_source as roleSource, status from users").get(),
+      ).toEqual({ role: "admin", roleSource: "recovery_bootstrap", status: "pending_link" });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.admin.bootstrap' and outcome = 'success'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires recovery CSRF and refuses to bind an OIDC bootstrap to another session", async () => {
+    const { app } = await openRouteHarness();
+    try {
+      const recovery = issueRecoverySession(app);
+      const missingCsrf = await app.inject({
+        headers: { cookie: recovery.cookie, origin: "https://omnifin.example" },
+        method: "POST",
+        url: `/v1/auth/bootstrap/oidc/${providerId}/start`,
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+
+      const started = await app.inject({
+        headers: {
+          cookie: recovery.cookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: `/v1/auth/bootstrap/oidc/${providerId}/start`,
+      });
+      const bootstrap = oidcAdministratorBootstrapStartResponseSchema.parse(started.json());
+      const state = new URL(bootstrap.authorizationUrl).searchParams.get("state");
+      const unrelated = await issueBrowserOidcSession(app);
+      const callback = await app.inject({
+        headers: {
+          cookie: `${unrelated.cookie}; ${transactionBindingCookie(started, state)}`,
+        },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=administrator-code&state=${state}`,
+      });
+
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/login?authError=account_not_authorized");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses OIDC bootstrap once an active administrator exists", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      database.db
+        .insert(users)
+        .values({
+          createdAt: new Date(routeTime.getTime() - 1_000),
+          displayName: "Existing administrator",
+          id: "existing-administrator",
+          role: "admin",
+          roleSource: "manual",
+          status: "active",
+          updatedAt: new Date(routeTime.getTime() - 1_000),
+        })
+        .run();
+      const recovery = issueRecoverySession(app);
+      const started = await app.inject({
+        headers: {
+          cookie: recovery.cookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: `/v1/auth/bootstrap/oidc/${providerId}/start`,
+      });
+      const bootstrap = oidcAdministratorBootstrapStartResponseSchema.parse(started.json());
+      const state = new URL(bootstrap.authorizationUrl).searchParams.get("state");
+      const callback = await app.inject({
+        headers: {
+          cookie: `${recovery.cookie}; ${transactionBindingCookie(started, state)}`,
+        },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=administrator-code&state=${state}`,
+      });
+
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/login?authError=account_not_authorized");
+      expect(database.sqlite.prepare("select count(*) as count from users").get()).toEqual({
+        count: 1,
+      });
+      expect(app.sessionService.resolveAndRefresh(recovery.cookie.split("=", 2)[1])).not.toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("accepts a verified provider back-channel logout without browser credentials", async () => {
     const verifyBackchannelLogoutToken = vi.fn(async () => ({
       expiresAt: new Date(routeTime.getTime() + 5 * 60_000),

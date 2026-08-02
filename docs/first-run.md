@@ -96,19 +96,26 @@ Open `<OMNIFIN_BASE_URL>/recovery` directly. It is intentionally absent from the
 screen, sitemap, and application navigation.
 
 1. Enter the recovery secret from the deployment.
-2. Choose password or Jellyfin Quick Connect.
-3. Authenticate as an account that is currently an administrator in Jellyfin.
-4. Confirm that Omnifin opens an active session and reports the local role as `admin`.
+2. Choose either **Set up or claim with OIDC** or Jellyfin password/Quick Connect.
+3. For OIDC, validate and enable the provider, then use **Continue with OIDC**. For Jellyfin,
+   authenticate as an account that is currently an administrator upstream.
+4. Confirm that Omnifin reports the local role as `admin`.
 
 Password proof is exchanged directly with Jellyfin and discarded immediately. Quick Connect is
 bound to the exact recovery browser session. In both cases, Omnifin verifies Jellyfin's explicit
 administrator policy, stores only the returned token encrypted at rest, and performs user creation,
 role assignment, recovery-session replacement, and auditing in one SQLite transaction.
 
-If Jellyfin is unavailable or the account is not an administrator, Omnifin leaves the short-lived
-recovery session intact for another attempt. If an active Omnifin administrator already exists, the
-bootstrap is refused. Signing in through the normal Jellyfin button does not bootstrap authority;
-new direct accounts are local viewers regardless of their upstream Jellyfin role.
+The OIDC alternative is also bound to the exact CSRF-proven recovery session, provider, PKCE state,
+and callback. It can create the first administrator even when provider JIT provisioning is disabled.
+Until that administrator separately pairs Jellyfin, only identity, connector, role, audit, session,
+and recovery administration are available; library, playback, request, acquisition, download, and
+other media mutations remain denied.
+
+If a provider is unavailable or Jellyfin does not confirm administrator policy for the Jellyfin
+path, Omnifin leaves the short-lived recovery session intact for another attempt. If an Omnifin
+administrator already exists or a recovery-proven OIDC administrator is awaiting Jellyfin pairing,
+bootstrap is refused. Ordinary OIDC and Jellyfin sign-in never bootstrap authority.
 
 After the administrator session is active, open **Account & access → Setup guide**. The guide reads
 only normalized, browser-safe administration contracts and separates the two essential readiness

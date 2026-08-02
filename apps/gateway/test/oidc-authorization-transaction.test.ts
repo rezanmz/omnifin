@@ -405,6 +405,41 @@ describe("OidcAuthorizationTransactionService", () => {
     }
   });
 
+  it("encrypts and consumes the exact recovery session bound to an administrator claim", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const created = await service.create({
+        providerId: "oidc-home",
+        purpose: "administrator_bootstrap",
+        recoverySessionId: "recovery-session-1",
+        returnPath: "/settings",
+      });
+      const stored = database.db.select().from(authTransactions).get();
+      const persisted = JSON.stringify(stored);
+
+      expect(created).toMatchObject({
+        purpose: "administrator_bootstrap",
+        recoverySessionId: "recovery-session-1",
+      });
+      expect(persisted).not.toContain("recovery-session-1");
+      expect(
+        service.consume({
+          browserBindingToken: created.browserBindingToken,
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toMatchObject({
+        purpose: "administrator_bootstrap",
+        recoverySessionId: "recovery-session-1",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("reuses one browser binding while keeping parallel tabs independently consumable", async () => {
     const database = openDatabase(":memory:");
     try {

@@ -16,6 +16,10 @@ export interface OidcSignInInput {
   readonly userAgent?: string;
 }
 
+export interface OidcAdministratorBootstrapInput extends OidcSignInInput {
+  readonly recoverySessionId: string;
+}
+
 export interface OidcSignInDeniedResult {
   readonly reason: OidcIdentityDenialReason;
   readonly status: "denied";
@@ -127,6 +131,50 @@ export class OidcSignInService {
             },
           ),
         )
+        .immediate();
+    } catch (error) {
+      if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof OidcSignInServiceError) throw error;
+      throw new OidcSignInServiceError({ cause: error });
+    }
+  }
+
+  public bootstrapAdministrator(input: OidcAdministratorBootstrapInput): OidcSignInResult {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const bootstrapSession = this.#sessionService.resumeRecoveryBootstrapSession(
+            input.currentSessionToken,
+            input.recoverySessionId,
+          );
+          if (!bootstrapSession) {
+            return internalResult({
+              reason: "invalid_request" as const,
+              status: "denied" as const,
+            });
+          }
+          const identityInput =
+            input.requestId === undefined
+              ? { grant: input.grant }
+              : { grant: input.grant, requestId: input.requestId };
+          const identity = this.#identityService.resolveAdministratorBootstrapInExistingTransaction(
+            identityInput,
+            bootstrapSession.operationTime,
+          );
+          if (identity.status === "denied") {
+            return internalResult({ reason: identity.reason, status: "denied" as const });
+          }
+          const session = this.#sessionService.completeValidatedRecoveryOidcBootstrapSession(
+            bootstrapSession,
+            identity.attribution,
+            {
+              ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+              ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+            },
+          );
+          return internalResult({ session, status: "signed_in" as const });
+        })
         .immediate();
     } catch (error) {
       if (error instanceof SessionIssuanceLimitError) throw error;

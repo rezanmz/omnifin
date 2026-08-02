@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   type OidcProviderAdmin,
   type OidcProviderCapabilities,
@@ -107,6 +108,10 @@ function client(overrides: Partial<IdentityProviderAdminClient> = {}): IdentityP
     })),
     listRoleMappings: vi.fn(async () => [mapping]),
     load: vi.fn(async () => ready()),
+    startAdministratorBootstrap: vi.fn(async () => ({
+      authorizationUrl: "https://identity.example.test/application/o/authorize/?state=fixture",
+      expiresAt: "2026-07-26T12:10:00.000Z",
+    })),
     updateProvider: vi.fn(async (_providerId, input) => ({
       provider: { ...provider, ...input },
       revokedSessions: 0,
@@ -141,6 +146,44 @@ describe("IdentityProviderConsole", () => {
     expect(await screen.findByText(/media-operators/)).toBeVisible();
     expect(screen.getByText("operator")).toBeVisible();
     expect(screen.queryByText(/client secret value/i)).not.toBeInTheDocument();
+  });
+
+  it("offers an explicit OIDC first-admin claim only to recovery access", async () => {
+    const startAdministratorBootstrap = vi.fn(async () => ({
+      authorizationUrl: "https://identity.example.test/application/o/authorize/?state=fixture",
+      expiresAt: "2026-07-26T12:10:00.000Z",
+    }));
+    const recoveryPrincipal: SessionPrincipal = {
+      ...principal,
+      accountState: "recovery",
+      authenticationMethod: { kind: "recovery" },
+      displayName: "Recovery access",
+      linkedServices: [],
+      permissions: [...RECOVERY_PERMISSIONS],
+      userId: null,
+    };
+    render(
+      <IdentityProviderConsole
+        client={client({ startAdministratorBootstrap })}
+        initialMappings={{ [provider.id]: [] }}
+        initialOutcome={{
+          snapshot: {
+            csrfToken,
+            principal: recoveryPrincipal,
+            providers: [{ ...provider, enabled: true }],
+          },
+          status: "ready",
+        }}
+        publicBaseUrl="https://omnifin.example.test"
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: "Continue with OIDC" });
+    expect(button).toBeEnabled();
+    await userEvent.setup().click(button);
+    await waitFor(() =>
+      expect(startAdministratorBootstrap).toHaveBeenCalledWith(provider.id, csrfToken),
+    );
   });
 
   it("guides an Authentik connection from reserved endpoints to a disabled provider", async () => {

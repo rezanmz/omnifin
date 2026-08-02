@@ -74,17 +74,22 @@ const roleMapping = {
   values: ["media-operators"],
 } as const;
 
-async function mockAdministrationReads(page: Page, mappings: readonly object[] = []) {
+async function mockAdministrationReads(
+  page: Page,
+  mappings: readonly object[] = [],
+  sessionPrincipal: object = principal,
+  providers: readonly object[] = [provider],
+) {
   await page.route("**/api/auth/session", async (route) => {
     await route.fulfill({
-      body: JSON.stringify({ csrfToken, principal }),
+      body: JSON.stringify({ csrfToken, principal: sessionPrincipal }),
       contentType: "application/json",
       status: 200,
     });
   });
   await page.route("**/api/admin/auth/oidc/providers", async (route) => {
     await route.fulfill({
-      body: JSON.stringify({ providers: [provider] }),
+      body: JSON.stringify({ providers }),
       contentType: "application/json",
       status: 200,
     });
@@ -100,6 +105,45 @@ async function mockAdministrationReads(page: Page, mappings: readonly object[] =
     },
   );
 }
+
+test("starts the first-administrator OIDC claim only from recovery access", async ({ page }) => {
+  const recoveryPrincipal = {
+    ...principal,
+    accountState: "recovery",
+    authenticationMethod: { kind: "recovery" },
+    displayName: "Recovery access",
+    linkedServices: [],
+    permissions: ["recovery.oidc.manage", "recovery.jellyfin.manage", "recovery.sessions.revoke"],
+    userId: null,
+  };
+  await mockAdministrationReads(page, [], recoveryPrincipal, [{ ...provider, enabled: true }]);
+  let bootstrapRequest: { body: string | null; csrf: string; method: string } | undefined;
+  await page.route(`**/api/auth/bootstrap/oidc/${provider.id}/start`, async (route) => {
+    const request = route.request();
+    bootstrapRequest = {
+      body: request.postData(),
+      csrf: request.headers()["x-omnifin-csrf"] ?? "",
+      method: request.method(),
+    };
+    await route.fulfill({
+      body: JSON.stringify({
+        authorizationUrl: "https://identity.example.test/authorize?state=opaque",
+        expiresAt: "2026-07-26T12:10:00.000Z",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("https://identity.example.test/authorize?state=opaque", async (route) => {
+    await route.fulfill({ body: "Identity provider", contentType: "text/plain", status: 200 });
+  });
+
+  await page.goto("/settings/identity-providers");
+  await expect(page.getByText(/Media and playback stay locked/u)).toBeVisible();
+  await page.getByRole("button", { name: "Continue with OIDC" }).click();
+  await expect(page).toHaveURL("https://identity.example.test/authorize?state=opaque");
+  expect(bootstrapRequest).toEqual({ body: null, csrf: csrfToken, method: "POST" });
+});
 
 test("validates OIDC capabilities with an in-memory CSRF proof and no request body", async ({
   page,
