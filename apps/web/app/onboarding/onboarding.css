@@ -407,11 +407,15 @@
 }
 
 .setup-section {
+  contain-intrinsic-block-size: auto 420px;
+  content-visibility: auto;
   margin-top: clamp(42px, 6vw, 76px);
 }
 
 .stack-verification {
   border-radius: var(--radius-xl);
+  contain-intrinsic-block-size: auto 420px;
+  content-visibility: auto;
   isolation: isolate;
   margin-top: clamp(48px, 7vw, 88px);
   overflow: hidden;
@@ -796,6 +800,8 @@
 
 .deployment-posture {
   border-radius: var(--radius-lg);
+  contain-intrinsic-block-size: auto 310px;
+  content-visibility: auto;
   display: grid;
   gap: 22px 30px;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1211,6 +1217,8 @@
 .setup-safety-note {
   align-items: flex-start;
   border-radius: var(--radius-lg);
+  contain-intrinsic-block-size: auto 110px;
+  content-visibility: auto;
   display: flex;
   gap: 16px;
   margin: 42px 0 18px;
