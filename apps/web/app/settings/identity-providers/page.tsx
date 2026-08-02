@@ -10,7 +10,6 @@ import { IdentityProviderConsoleLoader } from "../../../components/identity-prov
 import { IdentityProviderPageShell } from "../../../components/identity-provider-page-shell";
 import type { IdentityProviderAdminLoadOutcome } from "../../../lib/identity-provider-admin";
 import "../../control-room.css";
-import "../../dashboard.css";
 
 export const metadata: Metadata = { title: "Identity providers" };
 export const dynamic = "force-dynamic";
