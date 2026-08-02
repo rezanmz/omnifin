@@ -6,6 +6,7 @@ import {
   resolveGatewayEndpoint,
   selectTrustedClientAddress,
 } from "./gateway-proxy";
+import { browserPlaybackPath } from "./playback";
 
 function requestFixture({
   body,
@@ -99,6 +100,77 @@ describe("trusted edge address selection", () => {
 });
 
 describe("gateway proxy transport", () => {
+  it("keeps negotiated HLS masters, nested manifests, and segments on the public API path", async () => {
+    const sessionId = `playback_${"p".repeat(22)}`;
+    const mediaReferenceId = `media_${"m".repeat(22)}`;
+    const upstreamPaths: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (endpoint: URL | string | Request) => {
+        const pathname = new URL(String(endpoint)).pathname;
+        upstreamPaths.push(pathname);
+        if (pathname === `/v1/media/${mediaReferenceId}/playback`) {
+          return Response.json(
+            { streamPath: `/v1/playback/${sessionId}/master.m3u8` },
+            { status: 201 },
+          );
+        }
+        if (pathname === `/v1/playback/${sessionId}/master.m3u8`) {
+          return new Response("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls/asset_v2.level\n", {
+            headers: { "content-type": "application/vnd.apple.mpegurl" },
+          });
+        }
+        if (pathname === `/v1/playback/${sessionId}/hls/asset_v2.level`) {
+          return new Response("#EXTM3U\n#EXTINF:4.000,\n./asset_v2.segment\n", {
+            headers: { "content-type": "application/vnd.apple.mpegurl" },
+          });
+        }
+        if (pathname === `/v1/playback/${sessionId}/hls/asset_v2.segment`) {
+          return new Response(new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]), {
+            headers: { "content-type": "video/mp4" },
+          });
+        }
+        return new Response("unexpected", { status: 404 });
+      }),
+    );
+
+    const negotiation = await proxyGatewayRequest(
+      requestFixture({
+        body: "{}",
+        method: "POST",
+        path: `/api/media/${mediaReferenceId}/playback`,
+      }),
+    );
+    const negotiated = (await negotiation.json()) as { streamPath: string };
+    const masterPath = browserPlaybackPath(negotiated.streamPath);
+    const master = await proxyGatewayRequest(requestFixture({ path: masterPath }));
+    const levelReference = (await master.text())
+      .split("\n")
+      .find((line) => line.startsWith("hls/"));
+    expect(levelReference).toBeDefined();
+    const levelPath = new URL(levelReference!, `https://omnifin.example${masterPath}`).pathname;
+    expect(levelPath).toMatch(/^\/api\/playback\//u);
+
+    const level = await proxyGatewayRequest(requestFixture({ path: levelPath }));
+    const segmentReference = (await level.text()).split("\n").find((line) => line.startsWith("./"));
+    expect(segmentReference).toBeDefined();
+    const segmentPath = new URL(segmentReference!, `https://omnifin.example${levelPath}`).pathname;
+    expect(segmentPath).toMatch(/^\/api\/playback\//u);
+
+    const segment = await proxyGatewayRequest(requestFixture({ path: segmentPath }));
+    expect(segment.status).toBe(200);
+    expect(segment.headers.get("content-type")).toBe("video/mp4");
+    expect(new Uint8Array(await segment.arrayBuffer())).toEqual(
+      new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]),
+    );
+    expect(upstreamPaths).toEqual([
+      `/v1/media/${mediaReferenceId}/playback`,
+      `/v1/playback/${sessionId}/master.m3u8`,
+      `/v1/playback/${sessionId}/hls/asset_v2.level`,
+      `/v1/playback/${sessionId}/hls/asset_v2.segment`,
+    ]);
+  });
+
   it("serves only bounded generated discovery artwork in explicit test mode", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
     const upstream = vi.fn();
