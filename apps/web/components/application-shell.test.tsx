@@ -1,14 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApplicationShellBoundary, routeUsesApplicationShell } from "./application-shell";
+import { routeUsesApplicationShell } from "../lib/application-shell-route";
+import { ApplicationShellBoundary } from "./application-shell";
 
 let pathname = "/";
-let testView: string | null = null;
 
 vi.mock("next/navigation", () => ({
   usePathname: () => pathname,
-  useSearchParams: () => new URLSearchParams(testView === null ? "" : `test-view=${testView}`),
 }));
 
 vi.mock("./liquid-glass-environment", () => ({ LiquidGlassEnvironment: () => null }));
@@ -19,7 +18,6 @@ vi.mock("./top-command-bar", () => ({
 describe("ApplicationShellBoundary", () => {
   beforeEach(() => {
     pathname = "/";
-    testView = null;
   });
 
   it("keeps primary navigation and command controls around operational routes", () => {
@@ -69,6 +67,19 @@ describe("ApplicationShellBoundary", () => {
     }
   });
 
+  it("removes the persistent shell when navigation crosses into authentication", () => {
+    pathname = "/login";
+    render(
+      <ApplicationShellBoundary themePreference="system">
+        <main>Sign in</main>
+      </ApplicationShellBoundary>,
+    );
+
+    expect(screen.queryByRole("complementary", { name: "Primary navigation" })).toBeNull();
+    expect(screen.queryByTestId("command-bar")).toBeNull();
+    expect(screen.getByRole("main")).toHaveTextContent("Sign in");
+  });
+
   it("leaves authentication, pairing, recovery, and onboarding routes unshelled", () => {
     for (const publicPath of [
       "/login",
@@ -79,7 +90,6 @@ describe("ApplicationShellBoundary", () => {
     ]) {
       expect(routeUsesApplicationShell(publicPath)).toBe(false);
     }
-    expect(routeUsesApplicationShell("/", "onboarding")).toBe(false);
     expect(routeUsesApplicationShell("/library")).toBe(true);
   });
 });

@@ -1,5 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { APPLICATION_PATHNAME_HEADER } from "./lib/application-shell-route";
+
 export function onboardingRewriteTarget(request: NextRequest) {
   if (request.nextUrl.pathname !== "/" || (request.method !== "GET" && request.method !== "HEAD")) {
     return undefined;
@@ -58,6 +60,10 @@ export function proxy(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
 
   const onboardingTarget = onboardingRewriteTarget(request);
+  requestHeaders.set(
+    APPLICATION_PATHNAME_HEADER,
+    onboardingTarget?.pathname ?? request.nextUrl.pathname,
+  );
   const response = onboardingTarget
     ? NextResponse.rewrite(onboardingTarget, { request: { headers: requestHeaders } })
     : NextResponse.next({ request: { headers: requestHeaders } });

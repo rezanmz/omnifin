@@ -8,6 +8,7 @@ import type { Metadata } from "next";
 import { UserAccessControlLoader } from "../../../components/user-access-control-loader";
 import { UserAccessPageShell } from "../../../components/user-access-page-shell";
 import type { UserAccessAdminLoadOutcome } from "../../../lib/user-access-admin";
+import "../../dashboard.css";
 
 export const metadata: Metadata = { title: "User access" };
 export const dynamic = "force-dynamic";
