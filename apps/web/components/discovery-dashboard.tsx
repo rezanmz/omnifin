@@ -143,6 +143,7 @@ function cardFor(item: DiscoveryFeedItem, locallyRequested: boolean): MediaCardM
     ...(item.artwork.posterPath ? { artworkPath: item.artwork.posterPath } : {}),
     eyebrow: locallyRequested ? "Requested" : metadata || availabilityLabel(item),
     id: item.id,
+    requestable: requestable(item) && !locallyRequested,
     title: item.title,
   };
 }
@@ -522,6 +523,10 @@ function DiscoveryDashboardContent({
               onSelect={(card) => {
                 const item = itemById.get(card.id);
                 if (item) openDetails(item);
+              }}
+              onRequest={(card) => {
+                const item = itemById.get(card.id);
+                if (item && requestable(item) && !requestedIds.has(item.id)) openRequest(item);
               }}
               {...(query.isError ? { statusMessage: "Saved results · refresh interrupted" } : {})}
               title={RAIL_TITLES[rail.kind]}
