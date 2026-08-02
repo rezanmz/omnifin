@@ -490,6 +490,27 @@
   backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
 }
 
+/* Visual regression and reduced-motion profiles keep the finished material
+   without a post-paint state change. Reduced-transparency still wins below. */
+@media (prefers-reduced-motion: reduce) {
+  .navigation-rail,
+  .mobile-navigation,
+  .navigation-preview--mobile .mobile-navigation {
+    -webkit-backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+    backdrop-filter: blur(28px) saturate(175%) contrast(1.025) brightness(1.045);
+  }
+
+  .global-search {
+    -webkit-backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
+    backdrop-filter: blur(26px) saturate(175%) contrast(1.025) brightness(1.045);
+  }
+
+  .top-command-bar__actions {
+    -webkit-backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
+    backdrop-filter: blur(24px) saturate(175%) contrast(1.025) brightness(1.045);
+  }
+}
+
 .connection-pulse {
   align-items: center;
   background: transparent;

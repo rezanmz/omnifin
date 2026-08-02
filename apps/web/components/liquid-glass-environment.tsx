@@ -2,23 +2,50 @@
 
 import { useEffect } from "react";
 
-import { useIdleRender } from "../lib/use-idle-render";
-
 const GLASS_SELECTOR = "[data-liquid-glass]";
 const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
-const GLASS_PAINT_GRACE_MS = 180;
+const MATERIAL_INTENT_EVENTS = ["click", "keydown", "scroll"] as const;
 
 function percentage(value: number, start: number, size: number) {
   return `${Math.min(100, Math.max(0, ((value - start) / size) * 100)).toFixed(2)}%`;
 }
 
 export function LiquidGlassEnvironment() {
-  const materialReady = useIdleRender(GLASS_PAINT_GRACE_MS);
-
   useEffect(() => {
-    if (!materialReady) return;
-    document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, "");
-  }, [materialReady]);
+    if (document.documentElement.hasAttribute(GLASS_READY_ATTRIBUTE)) return;
+
+    let animationFrame = 0;
+    let listening = true;
+
+    const stopListening = () => {
+      if (!listening) return;
+      for (const eventName of MATERIAL_INTENT_EVENTS) {
+        document.removeEventListener(eventName, enableMaterial, true);
+      }
+      listening = false;
+    };
+
+    const enableMaterial = () => {
+      if (animationFrame) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, "");
+        stopListening();
+      });
+    };
+
+    for (const eventName of MATERIAL_INTENT_EVENTS) {
+      document.addEventListener(eventName, enableMaterial, {
+        capture: true,
+        passive: true,
+      });
+    }
+
+    return () => {
+      stopListening();
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
