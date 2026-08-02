@@ -22,8 +22,10 @@ import {
 } from "../integration/seerr-service.mjs";
 import {
   SEERR_FIXTURE_TMDB_ID,
+  SEERR_FIXTURE_TITLE,
   handleSeerrMetadataRequest,
   seerrMovieFixture,
+  seerrSearchFixture,
 } from "../integration/seerr-fixture-server.mjs";
 
 const context = Object.freeze({
@@ -150,7 +152,7 @@ test("uses the supported Docker stop timeout flag", () => {
 test("serves one bounded copyright-free movie only on the exact TMDB route", () => {
   const movie = seerrMovieFixture();
   assert.equal(movie.id, SEERR_FIXTURE_TMDB_ID);
-  assert.equal(movie.title, "The Deterministic Horizon");
+  assert.equal(movie.title, SEERR_FIXTURE_TITLE);
   assert.deepEqual(movie.credits, { cast: [], crew: [] });
   assert.deepEqual(movie.keywords, { keywords: [] });
   assert.ok(JSON.stringify(movie).length < 4_096);
@@ -166,6 +168,20 @@ test("serves one bounded copyright-free movie only on the exact TMDB route", () 
   );
   assert.equal(accepted.result.status, 200);
   assert.equal(JSON.parse(accepted.result.body).id, SEERR_FIXTURE_TMDB_ID);
+
+  const search = responseRecorder();
+  handleSeerrMetadataRequest(
+    {
+      headers: { host: "api.themoviedb.org" },
+      method: "GET",
+      url:
+        "/3/search/multi?api_key=fixture&include_adult=false&language=en-CA&page=1" +
+        "&query=The%20Deterministic%20Horizon",
+    },
+    search.response,
+  );
+  assert.equal(search.result.status, 200);
+  assert.deepEqual(JSON.parse(search.result.body), seerrSearchFixture());
 
   const rejected = responseRecorder();
   handleSeerrMetadataRequest(
@@ -219,6 +235,7 @@ test("container transport is bounded and reconstructs only a validated response"
   assert.match(source, /http:\/\/127\.0\.0\.1:5055\//u);
   assert.equal(source.includes("https://"), false);
   assert.match(source, /Buffer\.from\(payload\.body, "base64"\)/u);
+  assert.match(source, /%\(\?!\[A-Fa-f0-9\]\{2\}\)/u);
 
   const transportSource = readFileSync(
     new URL("../integration/seerr-service.mjs", import.meta.url),
@@ -236,6 +253,20 @@ test("container transport is bounded and reconstructs only a validated response"
   );
   assert.equal(Buffer.from(encoded.body, "base64").toString("utf8"), '{"mediaId":2147480003}');
   assert.equal(encoded.path, "/api/v1/request");
+
+  const search = JSON.parse(
+    serializeSeerrContainerRequest(
+      new URL(
+        "http://fixture.invalid/api/v1/search?language=en-CA&page=1" +
+          "&query=The%20Deterministic%20Horizon",
+      ),
+      { headers: new Headers(), method: "GET" },
+    ),
+  );
+  assert.equal(
+    search.path,
+    "/api/v1/search?language=en-CA&page=1&query=The%20Deterministic%20Horizon",
+  );
 });
 
 test("validates only closed sanitized Seerr reports", () => {

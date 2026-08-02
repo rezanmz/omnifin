@@ -1,4 +1,5 @@
 import type { LoggerOptions } from "pino";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { AppConfig } from "./config.js";
 
 const REDACTED = "[REDACTED]";
@@ -7,6 +8,11 @@ const OPAQUE_OBJECT = "[OPAQUE_OBJECT]";
 const MAX_LOG_NESTING = 24;
 const MAX_ERROR_CAUSE_DEPTH = 6;
 const SAFE_FAILURE_REASONS = new Set(["integrity_failure", "storage_failure"]);
+const SAFE_FAILURE_STAGES = new Set([
+  "connector_negotiation",
+  "session_payload_validation",
+  "session_persistence",
+]);
 const SAFE_INFRASTRUCTURE_ERROR_CODES = new Set([
   "SQLITE_BUSY",
   "SQLITE_BUSY_SNAPSHOT",
@@ -108,21 +114,39 @@ function safeErrorType(value: unknown) {
 }
 
 export function safeFailureDiagnostics(error: unknown) {
+  let connectorErrorCode: string | undefined;
+  let connectorOperation: string | undefined;
+  let connectorService: string | undefined;
   let current: unknown = error;
   let failureReason: string | undefined;
+  let failureStage: string | undefined;
   let infrastructureCode: string | undefined;
+  let upstreamStatus: number | undefined;
   const seen = new WeakSet<object>();
 
   for (let depth = 0; depth < MAX_ERROR_CAUSE_DEPTH && isRecord(current); depth += 1) {
     if (seen.has(current)) break;
     seen.add(current);
     try {
+      if (connectorService === undefined && current instanceof SafeConnectorError) {
+        connectorErrorCode = current.code;
+        connectorOperation = current.operation;
+        connectorService = current.service;
+        if (current.status !== null) upstreamStatus = current.status;
+      }
       if (
         failureReason === undefined &&
         typeof current.reason === "string" &&
         SAFE_FAILURE_REASONS.has(current.reason)
       ) {
         failureReason = current.reason;
+      }
+      if (
+        failureStage === undefined &&
+        typeof current.stage === "string" &&
+        SAFE_FAILURE_STAGES.has(current.stage)
+      ) {
+        failureStage = current.stage;
       }
       if (
         infrastructureCode === undefined &&
@@ -138,8 +162,13 @@ export function safeFailureDiagnostics(error: unknown) {
   }
 
   return {
+    ...(connectorErrorCode === undefined ? {} : { connectorErrorCode }),
+    ...(connectorOperation === undefined ? {} : { connectorOperation }),
+    ...(connectorService === undefined ? {} : { connectorService }),
     ...(failureReason === undefined ? {} : { failureReason }),
+    ...(failureStage === undefined ? {} : { failureStage }),
     ...(infrastructureCode === undefined ? {} : { infrastructureCode }),
+    ...(upstreamStatus === undefined ? {} : { upstreamStatus }),
   };
 }
 

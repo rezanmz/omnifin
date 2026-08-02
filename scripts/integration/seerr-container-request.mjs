@@ -29,7 +29,8 @@ function validatePayload(payload) {
     typeof payload !== "object" ||
     Array.isArray(payload) ||
     typeof payload.path !== "string" ||
-    !/^\/api\/v1\/[A-Za-z0-9?&=/_-]{1,500}$/u.test(payload.path) ||
+    !/^\/api\/v1\/[A-Za-z0-9%?&=/_-]{1,500}$/u.test(payload.path) ||
+    /%(?![A-Fa-f0-9]{2})/u.test(payload.path) ||
     typeof payload.method !== "string" ||
     !ALLOWED_METHODS.has(payload.method) ||
     !Array.isArray(payload.headers) ||

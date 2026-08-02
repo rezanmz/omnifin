@@ -192,8 +192,9 @@ describe("Seerr discovery", () => {
 
   it("normalizes mixed search results without exposing raw upstream artwork", async () => {
     const { adapter, requests } = adapterWithResponses([jsonResponse(searchResponse)]);
+    const query = "Spider-Man: Brand New Day";
 
-    const result = await adapter.search({ language: "en", page: 1, query: "fight" });
+    const result = await adapter.search({ language: "en-CA", page: 1, query });
 
     expect(result).toEqual({
       generatedAt: "2026-07-25T12:00:00.000Z",
@@ -232,15 +233,18 @@ describe("Seerr discovery", () => {
         },
       ],
       page: 1,
-      query: "fight",
+      query,
       totalPages: 4,
       totalResults: 65,
     });
     expect(JSON.stringify(result)).not.toContain("raw-");
     expect(requests[0]?.url.pathname).toBe("/api/v1/search");
-    expect(requests[0]?.url.searchParams.get("query")).toBe("fight");
+    expect(requests[0]?.url.search).toBe(
+      "?language=en-CA&page=1&query=Spider-Man%3A%20Brand%20New%20Day",
+    );
+    expect(requests[0]?.url.searchParams.get("query")).toBe(query);
     expect(requests[0]?.url.searchParams.get("page")).toBe("1");
-    expect(requests[0]?.url.searchParams.get("language")).toBe("en");
+    expect(requests[0]?.url.searchParams.get("language")).toBe("en-CA");
     expect(requests[0]?.init.headers.get("x-api-key")).toBe("fixture-api-key");
   });
 

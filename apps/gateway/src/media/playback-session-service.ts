@@ -1,6 +1,7 @@
 import {
   JellyfinPlaybackClient,
   JellyfinPlaybackUnavailableError,
+  isJellyfinPlaybackTargetPath,
   type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
   type JellyfinPlaybackReportingSession,
@@ -34,8 +35,6 @@ import {
 } from "./media-reference-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
-const PLAYBACK_TARGET_SEGMENT_PATTERN = /^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/u;
-const MAX_PLAYBACK_TARGET_PATH_LENGTH = 4_096;
 const PLAYBACK_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
 const STOPPED_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
@@ -57,26 +56,8 @@ const SENSITIVE_QUERY_NAMES = new Set([
 
 const identifierSchema = z.string().regex(IDENTIFIER_PATTERN);
 
-function isPlaybackTargetPath(value: string) {
-  if (value.length > MAX_PLAYBACK_TARGET_PATH_LENGTH) return false;
-  const segments = value.split("/");
-  if (
-    segments.length < 3 ||
-    segments[0] !== "Videos" ||
-    !IDENTIFIER_PATTERN.test(segments[1] ?? "")
-  ) {
-    return false;
-  }
-  return segments
-    .slice(2)
-    .every(
-      (segment) =>
-        segment !== "." && segment !== ".." && PLAYBACK_TARGET_SEGMENT_PATTERN.test(segment),
-    );
-}
-
 const playbackTargetSchema = z.strictObject({
-  path: z.string().refine(isPlaybackTargetPath),
+  path: z.string().refine(isJellyfinPlaybackTargetPath),
   query: z.string().max(32_768),
 });
 
@@ -181,12 +162,18 @@ export interface PlaybackSessionDependencies {
 
 export type PlaybackSessionErrorReason =
   "not_found" | "range_invalid" | "transition_invalid" | "unavailable";
+export type PlaybackFailureStage =
+  "connector_negotiation" | "session_payload_validation" | "session_persistence";
 
 export class PlaybackSessionError extends Error {
   public readonly code = "playback_session_unavailable";
   public readonly reason: PlaybackSessionErrorReason;
+  public readonly stage: PlaybackFailureStage | undefined;
 
-  public constructor(reason: PlaybackSessionErrorReason, options?: ErrorOptions) {
+  public constructor(
+    reason: PlaybackSessionErrorReason,
+    options?: ErrorOptions & { stage?: PlaybackFailureStage },
+  ) {
     super(
       reason === "transition_invalid"
         ? "The playback session cannot accept that state transition."
@@ -195,10 +182,11 @@ export class PlaybackSessionError extends Error {
           : reason === "not_found"
             ? "The playback session is no longer available."
             : "Playback is temporarily unavailable.",
-      options,
+      options?.cause === undefined ? undefined : { cause: options.cause },
     );
     this.name = "PlaybackSessionError";
     this.reason = reason;
+    this.stage = options?.stage;
   }
 }
 
@@ -420,9 +408,15 @@ export class PlaybackSessionService {
       );
     } catch (error) {
       if (error instanceof JellyfinPlaybackUnavailableError) {
-        throw new PlaybackSessionError("unavailable", { cause: error });
+        throw new PlaybackSessionError("unavailable", {
+          cause: error,
+          stage: "connector_negotiation",
+        });
       }
-      throw new PlaybackSessionError("unavailable", { cause: error });
+      throw new PlaybackSessionError("unavailable", {
+        cause: error,
+        stage: "connector_negotiation",
+      });
     }
     if (result.itemId !== reference.itemId) {
       throw new PlaybackSessionError("unavailable");
@@ -734,7 +728,15 @@ export class PlaybackSessionService {
   ) {
     const now = validTime(this.#clock());
     const expiresAt = now + PLAYBACK_SESSION_TTL_MS;
-    const payload = storedPlayback(result);
+    let payload: StoredPlayback;
+    try {
+      payload = storedPlayback(result);
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", {
+        cause: error,
+        stage: "session_payload_validation",
+      });
+    }
     try {
       return this.#database.sqlite
         .transaction(() => {
@@ -788,7 +790,10 @@ export class PlaybackSessionService {
         .immediate();
     } catch (error) {
       if (error instanceof PlaybackSessionError) throw error;
-      throw new PlaybackSessionError("unavailable", { cause: error });
+      throw new PlaybackSessionError("unavailable", {
+        cause: error,
+        stage: "session_persistence",
+      });
     }
   }
 

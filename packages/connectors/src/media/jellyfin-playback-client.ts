@@ -13,6 +13,8 @@ const MAX_RUNTIME_TICKS = 100_000_000_000_000;
 const MAX_STREAM_INDEX = 4_095;
 const MAX_PLAYBACK_BITRATE = 200_000_000;
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const playbackTargetSegmentPattern = /^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/u;
+const MAX_PLAYBACK_TARGET_PATH_LENGTH = 4_096;
 const sensitiveQueryNames = new Set([
   "access_token",
   "api_key",
@@ -21,6 +23,41 @@ const sensitiveQueryNames = new Set([
   "x-emby-token",
   "x-mediabrowser-token",
 ]);
+
+export function isJellyfinPlaybackTargetPath(value: string) {
+  if (
+    !value ||
+    value.length > MAX_PLAYBACK_TARGET_PATH_LENGTH ||
+    value.startsWith("/") ||
+    /[?#\\\p{Cc}\p{Cf}\s]/u.test(value)
+  ) {
+    return false;
+  }
+  const segments = value.split("/");
+  if (
+    segments.length < 3 ||
+    !/^videos$/iu.test(segments[0] ?? "") ||
+    !identifierPattern.test(segments[1] ?? "")
+  ) {
+    return false;
+  }
+  return segments.slice(2).every((rawSegment) => {
+    if (!playbackTargetSegmentPattern.test(rawSegment)) return false;
+    let segment = rawSegment;
+    try {
+      for (let pass = 0; pass < 2; pass += 1) segment = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    return (
+      segment !== "." &&
+      segment !== ".." &&
+      !segment.includes("/") &&
+      !segment.includes("\\") &&
+      !/[\p{Cc}\p{Cf}\s]/u.test(segment)
+    );
+  });
+}
 
 const identifierSchema = z.string().trim().regex(identifierPattern);
 const nullableIdentifierSchema = identifierSchema.nullable().optional();
@@ -638,26 +675,8 @@ export class JellyfinPlaybackClient {
       throw this.#client.invalidResponse(operation);
     }
     const path = target.pathname.slice(this.#baseUrl.pathname.length);
-    if (!path || path.length > 4_096 || !/^Videos\//iu.test(path)) {
+    if (!isJellyfinPlaybackTargetPath(path)) {
       throw this.#client.invalidResponse(operation);
-    }
-    for (const rawSegment of path.split("/")) {
-      let segment = rawSegment;
-      try {
-        for (let pass = 0; pass < 2; pass += 1) segment = decodeURIComponent(segment);
-      } catch {
-        throw this.#client.invalidResponse(operation);
-      }
-      if (
-        !segment ||
-        segment === "." ||
-        segment === ".." ||
-        segment.includes("/") ||
-        segment.includes("\\") ||
-        /[\p{Cc}\p{Cf}\s]/u.test(segment)
-      ) {
-        throw this.#client.invalidResponse(operation);
-      }
     }
     for (const name of [...target.searchParams.keys()]) {
       if (sensitiveQueryNames.has(name.toLowerCase())) target.searchParams.delete(name);

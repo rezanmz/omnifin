@@ -1,4 +1,8 @@
-import type { JellyfinPlaybackResult } from "@omnifin/connectors/media/jellyfin-playback-client";
+import {
+  JellyfinPlaybackClient,
+  type JellyfinPlaybackResult,
+} from "@omnifin/connectors/media/jellyfin-playback-client";
+import type { ConnectorTransport } from "@omnifin/connectors/types";
 import { ROLE_PERMISSIONS, sessionPrincipalSchema } from "@omnifin/contracts/auth";
 import {
   playbackNegotiationResponseSchema,
@@ -14,12 +18,14 @@ import {
   PlaybackSessionService,
   type PlaybackSessionError,
   type PlaybackClientFactoryInput,
+  type PlaybackSessionDependencies,
 } from "../src/media/playback-session-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:00:00.000Z");
 const privateAccessToken = "private-jellyfin-access-token";
 const privateItemId = "private-upstream-episode";
+const publicResolver = async () => [{ address: "1.1.1.1", family: 4 as const }];
 
 function testConfig(): AppConfig {
   return {
@@ -178,7 +184,7 @@ function negotiatedResult(): JellyfinPlaybackResult {
   };
 }
 
-function harness() {
+function harness(createClientOverride?: NonNullable<PlaybackSessionDependencies["createClient"]>) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
@@ -206,13 +212,14 @@ function harness() {
   });
   const reportPlaybackEvent = vi.fn(async () => undefined);
   const resolvePlaybackTarget = vi.fn((parent) => parent);
-  const createClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
+  const mockedCreateClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
     negotiate,
     readPlaybackTarget,
     reportPlaybackEvent,
     resolvePlaybackTarget,
     streamPlaybackTarget,
   }));
+  const createClient = createClientOverride ?? mockedCreateClient;
   const service = new PlaybackSessionService(database, config, {
     clock: () => now,
     createClient,
@@ -265,6 +272,91 @@ describe("PlaybackSessionService", () => {
         state: "negotiated",
       });
       expect(JSON.stringify(row)).not.toMatch(/private-|upstream-query/u);
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("persists the lowercase HLS target produced by the real Jellyfin connector", async () => {
+    const privateApiKey = "private-returned-jellyfin-api-key";
+    const capturedRequests: URL[] = [];
+    const transport: ConnectorTransport = async (url) => {
+      capturedRequests.push(new URL(url));
+      return new Response(
+        JSON.stringify({
+          MediaSources: [
+            {
+              Bitrate: 9_300_000,
+              Container: "mkv",
+              DefaultAudioStreamIndex: 1,
+              Id: "private-media-source",
+              MediaStreams: [
+                {
+                  BitRate: 9_300_000,
+                  Codec: "hevc",
+                  Height: 1_606,
+                  Index: 0,
+                  Type: "Video",
+                  Width: 3_840,
+                },
+                {
+                  Channels: 6,
+                  Codec: "eac3",
+                  Index: 1,
+                  IsDefault: true,
+                  Language: "eng",
+                  Type: "Audio",
+                },
+              ],
+              RunTimeTicks: 27_000_000_000,
+              SupportsDirectPlay: false,
+              SupportsTranscoding: true,
+              TranscodingContainer: "mp4",
+              TranscodingSubProtocol: "hls",
+              TranscodingUrl:
+                `/videos/${privateItemId}/master.m3u8` +
+                `?MediaSourceId=private-media-source&ApiKey=${privateApiKey}` +
+                "&PlaySessionId=private-play-session",
+            },
+          ],
+          PlaySessionId: "private-play-session",
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    };
+    const createClient = vi.fn((input: PlaybackClientFactoryInput) => {
+      const { accessToken, deviceId, ...target } = input;
+      return new JellyfinPlaybackClient({
+        accessToken,
+        deviceId,
+        target: { ...target, resolveHost: publicResolver, transport },
+      });
+    });
+    const { config, database, reference, service } = harness(createClient);
+    try {
+      const response = await service.negotiate({ principal: principal() }, reference, negotiation);
+
+      expect(response).toMatchObject({
+        delivery: "hls",
+        streamPath: `/v1/playback/${response.sessionId}/master.m3u8`,
+      });
+      expect(capturedRequests[0]?.pathname).toBe(`/Items/${privateItemId}/PlaybackInfo`);
+      const row = database.sqlite
+        .prepare("select encrypted_payload as encryptedPayload from playback_sessions")
+        .get() as { encryptedPayload: string };
+      const payload = JSON.parse(
+        new EnvelopeCipher(config.encryptionKey).decrypt(
+          row.encryptedPayload,
+          `playback_session:jellyfin:${response.sessionId}`,
+        ),
+      ) as { upstreamTarget: { path: string; query: string } };
+      expect(payload.upstreamTarget).toEqual({
+        path: `videos/${privateItemId}/master.m3u8`,
+        query: "MediaSourceId=private-media-source&PlaySessionId=private-play-session",
+      });
+      expect(JSON.stringify(payload)).not.toContain(privateApiKey);
+      expect(JSON.stringify(row)).not.toMatch(/private-|ApiKey/iu);
       expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();
@@ -433,7 +525,42 @@ describe("PlaybackSessionService", () => {
     try {
       await expect(
         service.negotiate({ principal: principal() }, reference, negotiation),
-      ).rejects.toMatchObject({ reason: "unavailable" });
+      ).rejects.toMatchObject({
+        reason: "unavailable",
+        stage: "session_payload_validation",
+      });
+      expect(
+        database.sqlite.prepare("select count(*) as count from playback_sessions").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    `video/${privateItemId}/master.m3u8`,
+    `videos.evil/${privateItemId}/master.m3u8`,
+    `videos%2F../${privateItemId}/master.m3u8`,
+    "videos/../master.m3u8",
+    "videos/invalid id/master.m3u8",
+    `videos/${privateItemId}/%2e%2e/master.m3u8`,
+    `videos/${privateItemId}/%252e%252e/master.m3u8`,
+    `videos/${privateItemId}/%2F/master.m3u8`,
+    `videos/${privateItemId}//master.m3u8`,
+    `https://attacker.example/videos/${privateItemId}/master.m3u8`,
+  ])("rejects unsafe or near-match playback target %s", async (path) => {
+    const { database, negotiate, reference, service } = harness();
+    negotiate.mockResolvedValueOnce({
+      ...negotiatedResult(),
+      upstreamTarget: { path, query: "" },
+    });
+    try {
+      await expect(
+        service.negotiate({ principal: principal() }, reference, negotiation),
+      ).rejects.toMatchObject({
+        reason: "unavailable",
+        stage: "session_payload_validation",
+      });
       expect(
         database.sqlite.prepare("select count(*) as count from playback_sessions").get(),
       ).toEqual({ count: 0 });

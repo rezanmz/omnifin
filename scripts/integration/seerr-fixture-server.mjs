@@ -6,18 +6,19 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 export const SEERR_FIXTURE_TMDB_ID = 2_147_480_003;
+export const SEERR_FIXTURE_TITLE = "The Deterministic Horizon";
 
-const FIXTURE_TITLE = "The Deterministic Horizon";
 const JSON_HEADERS = Object.freeze({
   "cache-control": "no-store",
   "content-type": "application/json; charset=utf-8",
 });
-const ALLOWED_QUERY_KEYS = new Set([
+const DETAIL_QUERY_KEYS = new Set([
   "api_key",
   "append_to_response",
   "include_video_language",
   "language",
 ]);
+const SEARCH_QUERY_KEYS = new Set(["api_key", "include_adult", "language", "page", "query"]);
 
 export function seerrMovieFixture() {
   return {
@@ -32,7 +33,7 @@ export function seerrMovieFixture() {
     imdb_id: null,
     keywords: { keywords: [] },
     original_language: "en",
-    original_title: FIXTURE_TITLE,
+    original_title: SEERR_FIXTURE_TITLE,
     overview: "A bounded synthetic title used only for isolated request verification.",
     popularity: 0,
     poster_path: null,
@@ -45,12 +46,39 @@ export function seerrMovieFixture() {
     spoken_languages: [{ english_name: "English", iso_639_1: "en", name: "English" }],
     status: "Released",
     tagline: "",
-    title: FIXTURE_TITLE,
+    title: SEERR_FIXTURE_TITLE,
     video: false,
     videos: { results: [] },
     vote_average: 0,
     vote_count: 0,
     "watch/providers": { id: SEERR_FIXTURE_TMDB_ID, results: {} },
+  };
+}
+
+export function seerrSearchFixture() {
+  const movie = seerrMovieFixture();
+  return {
+    page: 1,
+    results: [
+      {
+        adult: movie.adult,
+        backdrop_path: movie.backdrop_path,
+        id: movie.id,
+        media_type: "movie",
+        original_language: movie.original_language,
+        original_title: movie.original_title,
+        overview: movie.overview,
+        popularity: movie.popularity,
+        poster_path: movie.poster_path,
+        release_date: movie.release_date,
+        title: movie.title,
+        video: movie.video,
+        vote_average: movie.vote_average,
+        vote_count: movie.vote_count,
+      },
+    ],
+    total_pages: 1,
+    total_results: 1,
   };
 }
 
@@ -70,17 +98,30 @@ export function handleSeerrMetadataRequest(request, response) {
     send(response, 200, { status: "ok" });
     return;
   }
-  if (
-    host !== "api.themoviedb.org" ||
-    url.pathname !== `/3/movie/${SEERR_FIXTURE_TMDB_ID}` ||
-    [...url.searchParams.keys()].some((key) => !ALLOWED_QUERY_KEYS.has(key)) ||
-    !url.searchParams.get("api_key") ||
-    url.searchParams.get("language") !== "en"
-  ) {
+  if (host !== "api.themoviedb.org" || !url.searchParams.get("api_key")) {
     send(response, 404, { error: "not_found" });
     return;
   }
-  send(response, 200, seerrMovieFixture());
+  if (
+    url.pathname === `/3/movie/${SEERR_FIXTURE_TMDB_ID}` &&
+    ![...url.searchParams.keys()].some((key) => !DETAIL_QUERY_KEYS.has(key)) &&
+    url.searchParams.get("language") === "en"
+  ) {
+    send(response, 200, seerrMovieFixture());
+    return;
+  }
+  if (
+    url.pathname === "/3/search/multi" &&
+    ![...url.searchParams.keys()].some((key) => !SEARCH_QUERY_KEYS.has(key)) &&
+    url.searchParams.get("language") === "en-CA" &&
+    url.searchParams.get("page") === "1" &&
+    url.searchParams.get("query") === SEERR_FIXTURE_TITLE &&
+    [null, "false"].includes(url.searchParams.get("include_adult"))
+  ) {
+    send(response, 200, seerrSearchFixture());
+    return;
+  }
+  send(response, 404, { error: "not_found" });
 }
 
 export async function startSeerrFixtureServer() {

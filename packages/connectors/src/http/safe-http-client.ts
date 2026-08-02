@@ -475,7 +475,7 @@ export class SafeHttpClient {
         options.query instanceof URLSearchParams
           ? options.query
           : new URLSearchParams(options.query);
-      url.search = query.toString();
+      url.search = query.toString().replaceAll("+", "%20");
     }
 
     let destination: ResolvedDestination;
