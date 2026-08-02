@@ -246,6 +246,15 @@ const negotiation = {
   subtitleStreamIndex: null,
 };
 
+function publicPlaybackPath(parentPath: string, reference: string) {
+  return new URL(reference, `https://omnifin.example${parentPath}`).pathname;
+}
+
+function gatewayPlaybackPath(publicPath: string) {
+  if (!publicPath.startsWith("/api/playback/")) throw new Error("Unsafe public playback path.");
+  return publicPath.replace(/^\/api\//u, "/v1/");
+}
+
 describe("playback routes", () => {
   it("records an encrypted, audited issue without exposing private media details", async () => {
     const { app, headers, referenceId } = await harness();
@@ -516,16 +525,24 @@ describe("playback routes", () => {
       expect(manifest.statusCode, manifest.body).toBe(200);
       expect(manifest.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
       expect(manifest.headers["cache-control"]).toBe("private, no-store");
-      expect(manifest.body).toMatch(
-        new RegExp(`/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
-      );
+      expect(manifest.body).toMatch(/(?:URI=")?hls\/asset_v2\./u);
+      expect(manifest.body).not.toContain("/v1/");
+      expect(manifest.body).not.toContain("/api/");
       expect(manifest.body).not.toMatch(/private|route-private|media-source|upstream/u);
       expect(resolvePlaybackTarget).toHaveBeenCalledTimes(2);
 
-      const assetPath = manifest.body
-        .split("\n")
-        .find((line) => line.startsWith(`/v1/playback/${playback.sessionId}/hls/`));
-      expect(assetPath).toBeDefined();
+      const assetReference = manifest.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetReference).toBeDefined();
+      const assetPublicPath = publicPlaybackPath(
+        `/api/playback/${playback.sessionId}/master.m3u8`,
+        assetReference!,
+      );
+      expect(assetPublicPath).toMatch(
+        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_v2\\.`),
+      );
+      expect(
+        publicPlaybackPath(`/v1/playback/${playback.sessionId}/master.m3u8`, assetReference!),
+      ).toMatch(new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`));
       const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
       streamPlaybackTarget.mockResolvedValueOnce({
         body: new ReadableStream<Uint8Array>({
@@ -540,7 +557,7 @@ describe("playback routes", () => {
       const asset = await app.inject({
         headers: { cookie: headers.cookie },
         method: "GET",
-        url: assetPath!,
+        url: gatewayPlaybackPath(assetPublicPath),
       });
       expect(asset.statusCode, asset.body).toBe(200);
       expect(asset.rawPayload).toEqual(Buffer.from(bytes));
@@ -559,8 +576,8 @@ describe("playback routes", () => {
     }
   });
 
-  it("rewrites nested HLS manifests and rejects tampered asset tokens before upstream access", async () => {
-    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+  it("keeps a master, nested manifest, and segment inside the public playback proxy", async () => {
+    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness();
     try {
       const created = await app.inject({
         headers,
@@ -588,22 +605,61 @@ describe("playback routes", () => {
         method: "GET",
         url: playback.streamPath,
       });
-      const nestedPath = master.body
-        .split("\n")
-        .find((line) => line.startsWith(`/v1/playback/${playback.sessionId}/hls/`));
-      expect(nestedPath).toBeDefined();
+      const nestedReference = master.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(nestedReference).toBeDefined();
+      expect(master.body).not.toMatch(/\/(?:api|v1)\//u);
+      const nestedPublicPath = publicPlaybackPath(
+        `/api/playback/${playback.sessionId}/master.m3u8`,
+        nestedReference!,
+      );
+      const nestedGatewayPath = publicPlaybackPath(
+        `/v1/playback/${playback.sessionId}/master.m3u8`,
+        nestedReference!,
+      );
+      expect(nestedGatewayPath).toMatch(
+        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
+      );
 
       const nested = await app.inject({
         headers: { cookie: headers.cookie },
         method: "GET",
-        url: nestedPath!,
+        url: gatewayPlaybackPath(nestedPublicPath),
       });
       expect(nested.statusCode, nested.body).toBe(200);
       expect(nested.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
-      expect(nested.body).toMatch(new RegExp(`/v1/playback/${playback.sessionId}/hls/asset_v2\\.`));
+      expect(nested.body).toMatch(/^#EXTM3U\n#EXTINF:4\.000,\n\.\/asset_v2\./u);
+      expect(nested.body).not.toMatch(/\/(?:api|v1)\//u);
       expect(nested.body).not.toMatch(/private|variant\.m3u8|0\.ts/u);
 
-      const token = nestedPath!.split("/").at(-1)!;
+      const segmentReference = nested.body.split("\n").find((line) => line.startsWith("./"));
+      expect(segmentReference).toBeDefined();
+      const segmentPublicPath = publicPlaybackPath(nestedPublicPath, segmentReference!);
+      expect(segmentPublicPath).toMatch(
+        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_v2\\.`),
+      );
+      expect(publicPlaybackPath(nestedGatewayPath, segmentReference!)).toMatch(
+        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
+      );
+      const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
+      streamPlaybackTarget.mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      });
+      const segment = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: gatewayPlaybackPath(segmentPublicPath),
+      });
+      expect(segment.statusCode, segment.body).toBe(200);
+      expect(segment.rawPayload).toEqual(Buffer.from(bytes));
+
+      const token = nestedReference!.split("/").at(-1)!;
       const tokenParts = token.split(".");
       const initializationVector = tokenParts[1]!;
       tokenParts[1] = `${initializationVector.startsWith("A") ? "B" : "A"}${initializationVector.slice(1)}`;

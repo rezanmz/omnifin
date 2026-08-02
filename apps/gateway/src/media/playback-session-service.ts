@@ -44,6 +44,7 @@ const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
 const MAX_ASSET_TOKEN_LENGTH = 8_192;
+type PlaybackAssetPathPrefix = "./" | "hls/";
 const SENSITIVE_QUERY_NAMES = new Set([
   "access_token",
   "api_key",
@@ -553,7 +554,7 @@ export class PlaybackSessionService {
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
-    return this.#manifest(client, session, payload.upstreamTarget, signal);
+    return this.#manifest(client, session, payload.upstreamTarget, "hls/", signal);
   }
 
   public async readAsset(
@@ -584,7 +585,7 @@ export class PlaybackSessionService {
     } catch (error) {
       throw new PlaybackSessionError("not_found", { cause: error });
     }
-    if (isManifestTarget(target)) return this.#manifest(client, session, target, signal);
+    if (isManifestTarget(target)) return this.#manifest(client, session, target, "./", signal);
 
     let response: JellyfinPlaybackStreamResult;
     try {
@@ -655,6 +656,7 @@ export class PlaybackSessionService {
     client: Pick<JellyfinPlaybackClient, "readPlaybackTarget" | "resolvePlaybackTarget">,
     session: PlaybackSessionRow,
     target: JellyfinPlaybackTarget,
+    assetPathPrefix: PlaybackAssetPathPrefix,
     signal?: AbortSignal,
   ) {
     let response: JellyfinPlaybackBytesResult;
@@ -670,7 +672,7 @@ export class PlaybackSessionService {
     if (response.status !== 200) throw new PlaybackSessionError("unavailable");
     const lines = decodeManifest(response.body);
     const rewritten = lines.map((line) =>
-      this.#rewriteManifestLine(client, session.id, target, line),
+      this.#rewriteManifestLine(client, session.id, target, assetPathPrefix, line),
     );
     return {
       body: `${rewritten.join("\n").replace(/\n+$/u, "")}\n`,
@@ -684,16 +686,19 @@ export class PlaybackSessionService {
     client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
     sessionId: string,
     parent: JellyfinPlaybackTarget,
+    assetPathPrefix: PlaybackAssetPathPrefix,
     line: string,
   ) {
     const compacted = line.trim();
     if (!compacted || compacted === "#EXTM3U") return line;
-    if (!compacted.startsWith("#")) return this.#assetPath(client, sessionId, parent, compacted);
+    if (!compacted.startsWith("#")) {
+      return this.#assetPath(client, sessionId, parent, assetPathPrefix, compacted);
+    }
 
     let replacements = 0;
     const rewritten = line.replace(/URI="([^"\r\n]{1,16384})"/gu, (_match, uri: string) => {
       replacements += 1;
-      return `URI="${this.#assetPath(client, sessionId, parent, uri)}"`;
+      return `URI="${this.#assetPath(client, sessionId, parent, assetPathPrefix, uri)}"`;
     });
     if (/\bURI\s*=/iu.test(line) && replacements === 0) {
       throw new PlaybackSessionError("unavailable");
@@ -705,6 +710,7 @@ export class PlaybackSessionService {
     client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
     sessionId: string,
     parent: JellyfinPlaybackTarget,
+    assetPathPrefix: PlaybackAssetPathPrefix,
     uri: string,
   ) {
     let target: JellyfinPlaybackTarget;
@@ -718,7 +724,7 @@ export class PlaybackSessionService {
       playbackAssetContext(sessionId),
     )}`;
     if (token.length > MAX_ASSET_TOKEN_LENGTH) throw new PlaybackSessionError("unavailable");
-    return `/v1/playback/${sessionId}/hls/${token}`;
+    return `${assetPathPrefix}${token}`;
   }
 
   #createSession(
