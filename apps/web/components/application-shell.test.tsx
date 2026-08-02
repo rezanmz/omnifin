@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { routeUsesApplicationShell } from "../lib/application-shell-route";
 import { ApplicationShellBoundary } from "./application-shell";
+import { ApplicationShellNavigation } from "./application-shell-navigation";
 
 let pathname = "/";
 
@@ -10,10 +12,19 @@ vi.mock("next/navigation", () => ({
   usePathname: () => pathname,
 }));
 
-vi.mock("./liquid-glass-environment", () => ({ LiquidGlassEnvironment: () => null }));
-vi.mock("./top-command-bar", () => ({
-  TopCommandBar: () => <div data-testid="command-bar">Command bar</div>,
-}));
+function shell(children: ReactNode) {
+  return (
+    <ApplicationShellBoundary
+      backdrop={<div data-testid="backdrop" />}
+      environment={null}
+      mobileNavigation={<ApplicationShellNavigation mobile />}
+      navigation={<ApplicationShellNavigation />}
+      topCommandBar={<div data-testid="command-bar">Command bar</div>}
+    >
+      {children}
+    </ApplicationShellBoundary>
+  );
+}
 
 describe("ApplicationShellBoundary", () => {
   beforeEach(() => {
@@ -22,11 +33,7 @@ describe("ApplicationShellBoundary", () => {
 
   it("keeps primary navigation and command controls around operational routes", () => {
     pathname = "/operations/health";
-    render(
-      <ApplicationShellBoundary themePreference="system">
-        <main>System health</main>
-      </ApplicationShellBoundary>,
-    );
+    render(shell(<main>System health</main>));
 
     for (const operationsLink of screen.getAllByRole("link", { name: "Operations" })) {
       expect(operationsLink).toHaveAttribute("aria-current", "page");
@@ -36,19 +43,11 @@ describe("ApplicationShellBoundary", () => {
   });
 
   it("preserves the desktop rail while authenticated route content changes", () => {
-    const { rerender } = render(
-      <ApplicationShellBoundary themePreference="system">
-        <main>Discover</main>
-      </ApplicationShellBoundary>,
-    );
+    const { rerender } = render(shell(<main>Discover</main>));
     const navigation = screen.getByRole("complementary", { name: "Primary navigation" });
 
     pathname = "/calendar";
-    rerender(
-      <ApplicationShellBoundary themePreference="system">
-        <main>Calendar</main>
-      </ApplicationShellBoundary>,
-    );
+    rerender(shell(<main>Calendar</main>));
 
     expect(screen.getByRole("complementary", { name: "Primary navigation" })).toBe(navigation);
     expect(screen.getByRole("main")).toHaveTextContent("Calendar");
@@ -56,11 +55,7 @@ describe("ApplicationShellBoundary", () => {
 
   it("marks Settings as the current destination on nested settings routes", () => {
     pathname = "/settings/connectors";
-    render(
-      <ApplicationShellBoundary themePreference="dark">
-        <main>Connectors</main>
-      </ApplicationShellBoundary>,
-    );
+    render(shell(<main>Connectors</main>));
 
     for (const settingsLink of screen.getAllByRole("link", { name: "Settings" })) {
       expect(settingsLink).toHaveAttribute("aria-current", "page");
@@ -69,11 +64,7 @@ describe("ApplicationShellBoundary", () => {
 
   it("removes the persistent shell when navigation crosses into authentication", () => {
     pathname = "/login";
-    render(
-      <ApplicationShellBoundary themePreference="system">
-        <main>Sign in</main>
-      </ApplicationShellBoundary>,
-    );
+    render(shell(<main>Sign in</main>));
 
     expect(screen.queryByRole("complementary", { name: "Primary navigation" })).toBeNull();
     expect(screen.queryByTestId("command-bar")).toBeNull();

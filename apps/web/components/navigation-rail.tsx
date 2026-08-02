@@ -1,5 +1,6 @@
 import { CalendarDays, ClipboardCheck, Compass, Gauge, Library, Settings2 } from "lucide-react";
 import Link from "next/link";
+import type { ApplicationDestination } from "../lib/application-shell-route";
 import { BrandMark } from "./brand-mark";
 import { DirectionalNavigationRegion } from "./directional-navigation-group";
 
@@ -11,9 +12,11 @@ const destinations = [
   { href: "/operations/requests", icon: ClipboardCheck, id: "requests", label: "Requests" },
 ] as const;
 
-export type PrimaryDestination = (typeof destinations)[number]["id"] | "settings";
-
-export function NavigationRail({ current = "discover" }: { current?: PrimaryDestination | null }) {
+export function NavigationRail({
+  current = "discover",
+}: {
+  current?: ApplicationDestination | null;
+}) {
   return (
     <DirectionalNavigationRegion
       ariaLabel="Primary navigation"
@@ -60,7 +63,7 @@ export function NavigationRail({ current = "discover" }: { current?: PrimaryDest
 export function MobileNavigation({
   current = "discover",
 }: {
-  current?: PrimaryDestination | null;
+  current?: ApplicationDestination | null;
 }) {
   return (
     <DirectionalNavigationRegion
