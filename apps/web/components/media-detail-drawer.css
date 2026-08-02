@@ -197,9 +197,35 @@
 
 .media-detail__hero {
   align-items: end;
+  border-radius: 26px;
   display: grid;
   gap: 24px;
   grid-template-columns: 172px minmax(0, 1fr);
+  isolation: isolate;
+  overflow: hidden;
+  padding: 18px;
+  position: relative;
+}
+
+.media-detail__hero:has(.media-detail__hero-backdrop)::after {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--ink-0) 86%, transparent), transparent 78%),
+    linear-gradient(0deg, color-mix(in srgb, var(--ink-0) 72%, transparent), transparent 70%);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+.media-detail__hero-backdrop {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  opacity: 0.54;
+  position: absolute;
+  width: 100%;
+  z-index: -2;
 }
 
 .media-detail__monogram {
@@ -219,6 +245,16 @@
     0 24px 60px color-mix(in srgb, var(--glass-cast-shadow) 72%, transparent);
   overflow: hidden;
   position: relative;
+}
+
+.media-detail__poster,
+.media-detail__person-profile {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+  z-index: 3;
 }
 
 .media-detail__monogram::before,
@@ -630,6 +666,16 @@
   font-style: normal;
   height: 44px;
   justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.media-detail__cast-profile {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
 }
 
 .media-detail__people li > button > span,
@@ -813,6 +859,7 @@
   display: flex;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 
 .media-detail__person-monogram span {

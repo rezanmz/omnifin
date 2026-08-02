@@ -9,8 +9,9 @@ import { discoveryMediaDetailClient, discoveryPersonDetailClient } from "./media
 const response: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "available",
-    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
     id: "movie:603",
@@ -48,6 +49,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: null,
     source: "seerr",
     tmdbId: 6384,
   },
@@ -71,11 +73,60 @@ describe("media detail client", () => {
     );
   });
 
+  it("rewrites only opaque title, cast, and person artwork references", async () => {
+    const reference = `discovery_art_${"a".repeat(22)}`;
+    const upstreamPath = `/v1/discovery/artwork/${reference}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...response,
+          item: {
+            ...response.item,
+            artwork: { backdropPath: upstreamPath, posterPath: upstreamPath },
+            cast: response.item.cast.map((credit) => ({ ...credit, profilePath: upstreamPath })),
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      discoveryMediaDetailClient.load({ kind: "movie", tmdbId: 603 }, { language: "en" }),
+    ).resolves.toMatchObject({
+      item: {
+        artwork: {
+          backdropPath: `/api/discovery/artwork/${reference}`,
+          posterPath: `/api/discovery/artwork/${reference}`,
+        },
+        cast: [{ profilePath: `/api/discovery/artwork/${reference}` }],
+      },
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...personResponse,
+          item: { ...personResponse.item, profilePath: upstreamPath },
+        }),
+      ),
+    );
+    await expect(
+      discoveryPersonDetailClient.load({ tmdbId: 6384 }, { language: "en" }),
+    ).resolves.toMatchObject({
+      item: { profilePath: `/api/discovery/artwork/${reference}` },
+    });
+  });
+
   it.each([
     { code: "authentication_required", expected: "signed_out", status: 401 },
     { code: "permission_denied", expected: "forbidden", status: 403 },
     { code: "discovery_not_configured", expected: "not_configured", status: 503 },
     { code: "discovery_rate_limited", expected: "rate_limited", status: 429 },
+    { code: "discovery_response_invalid", expected: "invalid_response", status: 502 },
+    { code: "discovery_timeout", expected: "timed_out", status: 504 },
+    { code: "discovery_unauthorized", expected: "unauthorized", status: 502 },
+    { code: "discovery_unsupported", expected: "unsupported", status: 502 },
   ])("maps $code to $expected", async ({ code, expected, status }) => {
     vi.stubGlobal(
       "fetch",

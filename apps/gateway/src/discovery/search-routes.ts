@@ -74,7 +74,7 @@ function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
       statusCode: 429,
     });
   }
-  if (error.code === "response_invalid" || error.code === "unsupported_version") {
+  if (error.code === "response_invalid") {
     return new SafeHttpError({
       cause: error,
       code: "discovery_response_invalid",
@@ -82,11 +82,31 @@ function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
       statusCode: 502,
     });
   }
-  if (
-    error.code === "configuration_invalid" ||
-    error.code === "destination_blocked" ||
-    error.code === "invalid_credentials"
-  ) {
+  if (error.code === "unsupported_version") {
+    return new SafeHttpError({
+      cause: error,
+      code: "discovery_unsupported",
+      message: "The connected discovery service version is not supported.",
+      statusCode: 502,
+    });
+  }
+  if (error.code === "invalid_credentials") {
+    return new SafeHttpError({
+      cause: error,
+      code: "discovery_unauthorized",
+      message: "Discovery rejected its configured credentials.",
+      statusCode: 502,
+    });
+  }
+  if (error.code === "timeout") {
+    return new SafeHttpError({
+      cause: error,
+      code: "discovery_timeout",
+      message: "Discovery did not respond in time.",
+      statusCode: 504,
+    });
+  }
+  if (error.code === "configuration_invalid" || error.code === "destination_blocked") {
     return new SafeHttpError({
       cause: error,
       code: "discovery_configuration_unavailable",

@@ -14,6 +14,7 @@ import { DiscoveryDashboard } from "./discovery-dashboard";
 const detailResponse = {
   generatedAt: "2026-07-29T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable" as const,
     cast: [],
     crew: [],

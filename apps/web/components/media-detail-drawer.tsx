@@ -86,11 +86,51 @@ const ERROR_COPY: Record<MediaDetailClientErrorKind, { detail: string; title: st
     detail: "Your session ended. Sign in again to inspect this title.",
     title: "Sign in to continue",
   },
+  timed_out: {
+    detail: "Seerr did not answer before the safety timeout. Your current context remains intact.",
+    title: "Details took too long",
+  },
+  unauthorized: {
+    detail: "Seerr rejected its configured credentials. An administrator can reconnect it safely.",
+    title: "Discovery needs attention",
+  },
+  unsupported: {
+    detail: "The connected Seerr version returned a shape this Omnifin release does not support.",
+    title: "Discovery version unsupported",
+  },
   unavailable: {
     detail: "The gateway or Seerr could not be reached. Nothing in your library was changed.",
     title: "Details are temporarily offline",
   },
 };
+
+function ResilientArtwork({
+  alt,
+  className,
+  loading = "lazy",
+  source,
+}: {
+  alt: string;
+  className: string;
+  loading?: "eager" | "lazy";
+  source: string | null;
+}) {
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  if (source === null || failedSource === source) return null;
+  return (
+    // The authenticated, user-scoped artwork route must be requested by the browser with its session.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      alt={alt}
+      className={className}
+      decoding="async"
+      loading={loading}
+      onError={() => setFailedSource(source)}
+      referrerPolicy="no-referrer"
+      src={source}
+    />
+  );
+}
 
 function detailLanguage() {
   if (typeof navigator === "undefined") return "en";
@@ -240,9 +280,21 @@ function DetailContent({
   return (
     <div className="media-detail__content">
       <section className="media-detail__hero">
-        <div aria-hidden="true" className="media-detail__monogram">
-          <span />
-          <i>{detail.title.slice(0, 1)}</i>
+        <ResilientArtwork
+          alt=""
+          className="media-detail__hero-backdrop"
+          loading="eager"
+          source={detail.artwork.backdropPath}
+        />
+        <div className="media-detail__monogram">
+          <span aria-hidden="true" />
+          <i aria-hidden="true">{detail.title.slice(0, 1)}</i>
+          <ResilientArtwork
+            alt={`${detail.title} poster`}
+            className="media-detail__poster"
+            loading="eager"
+            source={detail.artwork.posterPath}
+          />
         </div>
         <div className="media-detail__hero-copy">
           <div className="media-detail__signal">
@@ -384,7 +436,14 @@ function DetailContent({
                   onClick={() => onInspectPerson(credit.personId)}
                   type="button"
                 >
-                  <i aria-hidden="true">{credit.name.slice(0, 1)}</i>
+                  <i aria-hidden="true">
+                    {credit.name.slice(0, 1)}
+                    <ResilientArtwork
+                      alt=""
+                      className="media-detail__cast-profile"
+                      source={credit.profilePath}
+                    />
+                  </i>
                   <span>
                     <strong>{credit.name}</strong>
                     <small>{credit.character ?? "Cast"}</small>
@@ -514,8 +573,14 @@ function PersonContent({
   return (
     <div className="media-detail__content media-detail__person-content">
       <section className="media-detail__person-hero">
-        <div aria-hidden="true" className="media-detail__person-monogram">
-          <span>{detail.name.slice(0, 1)}</span>
+        <div className="media-detail__person-monogram">
+          <span aria-hidden="true">{detail.name.slice(0, 1)}</span>
+          <ResilientArtwork
+            alt={`${detail.name} portrait`}
+            className="media-detail__person-profile"
+            loading="eager"
+            source={detail.profilePath}
+          />
         </div>
         <div>
           <span>Person context</span>

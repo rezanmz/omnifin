@@ -42,10 +42,16 @@ const series: DiscoverySeriesResult = {
 const movieResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable",
     cast: [
-      { character: "Neo", name: "Keanu Reeves", personId: 6384 },
-      { character: "Morpheus", name: "Laurence Fishburne", personId: 2975 },
+      { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
+      {
+        character: "Morpheus",
+        name: "Laurence Fishburne",
+        personId: 2975,
+        profilePath: null,
+      },
     ],
     crew: [
       { name: "Lana Wachowski", personId: 9340, role: "Director" },
@@ -160,6 +166,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: null,
     source: "seerr",
     tmdbId: 6384,
   },
@@ -167,6 +174,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
 const seriesResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "partial",
     cast: [],
     crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
@@ -231,6 +239,40 @@ describe("media detail drawer", () => {
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("renders proxied artwork and falls back cleanly when an individual image fails", async () => {
+    const artworkResponse: DiscoveryMediaDetailResponse = {
+      ...movieResponse,
+      item: {
+        ...movieResponse.item,
+        artwork: {
+          backdropPath: "/api/discovery/artwork/discovery_art_backdrop0000000000000",
+          posterPath: "/api/discovery/artwork/discovery_art_poster0000000000000000",
+        },
+        cast: movieResponse.item.cast.map((credit, index) => ({
+          ...credit,
+          profilePath: `/api/discovery/artwork/discovery_art_profile00000000000000${index}`,
+        })),
+      },
+    };
+    const { container } = render(
+      <MediaDetailDrawer
+        client={client(async () => artworkResponse)}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    expect(await screen.findByAltText("The Matrix poster")).toBeVisible();
+    expect(container.querySelector(".media-detail__hero-backdrop")).toBeInTheDocument();
+    const profile = container.querySelector<HTMLImageElement>(".media-detail__cast-profile");
+    expect(profile).toBeInTheDocument();
+    const failedSource = profile!.getAttribute("src");
+    fireEvent.error(profile!);
+    expect(container.querySelector(`[src="${failedSource}"]`)).not.toBeInTheDocument();
+    expect(screen.getByText("Keanu Reeves")).toBeVisible();
   });
 
   it("moves between recommendations and person context without closing the drawer", async () => {
