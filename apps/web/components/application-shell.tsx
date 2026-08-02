@@ -1,15 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import {
-  createContext,
-  type CSSProperties,
-  type ReactNode,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { type CSSProperties, type ReactNode, useEffect } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
 import {
@@ -19,26 +11,8 @@ import {
 import type { ThemePreference } from "../lib/theme";
 
 const DEFAULT_ACCENT = "#8de9d5";
-const DEFAULT_SIGNAL: ApplicationShellSignal = {
-  accent: DEFAULT_ACCENT,
-  displayProfile: "standard",
-  status: "attention",
-};
-
 type ShellStyle = CSSProperties & { "--ambient-accent": string };
-
-export interface ApplicationShellSignal {
-  accent: string;
-  displayProfile: "standard" | "ten-foot";
-  status: ServiceStatus;
-}
-
-interface ApplicationShellContextValue {
-  setSignal: (signal: ApplicationShellSignal) => void;
-  signal: ApplicationShellSignal;
-}
-
-const ApplicationShellContext = createContext<ApplicationShellContextValue | null>(null);
+export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
 
 export function ApplicationShellBoundary({
   backdrop,
@@ -56,51 +30,26 @@ export function ApplicationShellBoundary({
   topCommandBar: ReactNode;
 }) {
   const pathname = usePathname();
-  const [registeredSignal, setRegisteredSignal] = useState<{
-    pathname: string;
-    signal: ApplicationShellSignal;
-  }>(() => ({ pathname, signal: DEFAULT_SIGNAL }));
-  const signal = registeredSignal.pathname === pathname ? registeredSignal.signal : DEFAULT_SIGNAL;
-  const context = useMemo<ApplicationShellContextValue>(
-    () => ({
-      setSignal: (nextSignal) =>
-        setRegisteredSignal((current) =>
-          current.pathname === pathname &&
-          current.signal.accent === nextSignal.accent &&
-          current.signal.displayProfile === nextSignal.displayProfile &&
-          current.signal.status === nextSignal.status
-            ? current
-            : { pathname, signal: nextSignal },
-        ),
-      signal,
-    }),
-    [pathname, signal],
-  );
 
   if (!routeUsesApplicationShell(pathname)) return children;
 
   return (
-    <ApplicationShellContext.Provider value={context}>
-      <div
-        className="application-frame"
-        data-display-profile={signal.displayProfile}
-        style={{ "--ambient-accent": signal.accent } as ShellStyle}
-      >
-        {environment}
-        {backdrop}
-        {navigation}
-        <div className="application-shell">
-          {topCommandBar}
-          {children}
-        </div>
-        {mobileNavigation}
+    <div
+      className="application-frame"
+      data-connection-status="attention"
+      data-display-profile="standard"
+      style={{ "--ambient-accent": DEFAULT_ACCENT } as ShellStyle}
+    >
+      {environment}
+      {backdrop}
+      {navigation}
+      <div className="application-shell">
+        {topCommandBar}
+        {children}
       </div>
-    </ApplicationShellContext.Provider>
+      {mobileNavigation}
+    </div>
   );
-}
-
-export function useApplicationShellSignal() {
-  return useContext(ApplicationShellContext)?.signal ?? DEFAULT_SIGNAL;
 }
 
 export function ApplicationShellContent({
@@ -116,12 +65,22 @@ export function ApplicationShellContent({
   status: ServiceStatus;
   themePreference?: ThemePreference;
 }) {
-  const shell = useContext(ApplicationShellContext);
-
   useEffect(() => {
-    shell?.setSignal({ accent, displayProfile, status });
-  }, [accent, displayProfile, shell, status]);
+    const frame = document.querySelector<HTMLElement>(".application-frame");
+    if (!frame) return;
 
-  if (shell) return children;
+    if (frame.dataset.displayProfile !== displayProfile) {
+      frame.dataset.displayProfile = displayProfile;
+    }
+    if (frame.getAttribute(APPLICATION_SHELL_STATUS_ATTRIBUTE) !== status) {
+      frame.setAttribute(APPLICATION_SHELL_STATUS_ATTRIBUTE, status);
+    }
+    for (const surface of frame.querySelectorAll<HTMLElement>(
+      ".cinematic-backdrop, .navigation-rail, .mobile-navigation, .top-command-bar",
+    )) {
+      surface.style.setProperty("--ambient-accent", accent);
+    }
+  }, [accent, displayProfile, status]);
+
   return children;
 }
