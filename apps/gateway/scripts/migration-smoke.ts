@@ -20,6 +20,7 @@ const requiredTables = [
   "auth_transactions",
   "connector_configs",
   "discovery_artwork_references",
+  "download_queue_bulk_operations",
   "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
@@ -87,6 +88,16 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  download_queue_bulk_operations: [
+    "completed_at",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "request_json",
+    "response_json",
+    "results_json",
+    "state",
+    "user_id",
+  ],
   download_queue_removal_operations: [
     "completed_at",
     "connector_id",
@@ -278,6 +289,10 @@ const requiredIndexes = {
     "discovery_artwork_references_expiry_idx",
     "discovery_artwork_references_user_item_unique",
     "discovery_artwork_references_user_last_used_idx",
+  ],
+  download_queue_bulk_operations: [
+    "download_queue_bulk_operations_state_created_idx",
+    "download_queue_bulk_operations_user_key_unique",
   ],
   download_queue_removal_operations: [
     "download_queue_removal_operations_item_idx",
@@ -486,8 +501,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0020_acquisition_queue_recovery",
-  "Current migration journal must end at migration 0020_acquisition_queue_recovery.",
+    currentMigrationTag === "0021_download_queue_bulk_operations",
+  "Current migration journal must end at migration 0021_download_queue_bulk_operations.",
 );
 
 try {
@@ -866,7 +881,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0020.",
+      "Production migration did not advance the historical fixture exactly through migration 0021.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1031,7 +1046,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0020, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0021, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

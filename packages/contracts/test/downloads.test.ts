@@ -6,6 +6,10 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseJsonSchema,
   downloadQueueActionResponseSchema,
+  downloadQueueBulkActionInputJsonSchema,
+  downloadQueueBulkActionInputSchema,
+  downloadQueueBulkActionResponseJsonSchema,
+  downloadQueueBulkActionResponseSchema,
   downloadQueueRemovalInputJsonSchema,
   downloadQueueRemovalInputSchema,
   downloadQueueRemovalResponseJsonSchema,
@@ -255,6 +259,111 @@ describe("download queue contracts", () => {
         ...paused,
         action: "resume",
         item: torrent,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("binds bulk actions to a unique bounded set of exact observed targets", () => {
+    const input = {
+      action: "pause" as const,
+      targets: [
+        {
+          connectorId: torrent.connectorId,
+          expectedState: torrent.state,
+          itemId: torrent.id,
+        },
+      ],
+    };
+
+    expect(downloadQueueBulkActionInputSchema.parse(input)).toEqual(input);
+    expect(downloadQueueBulkActionInputJsonSchema).not.toHaveProperty("$schema");
+    expect(
+      downloadQueueBulkActionInputSchema.safeParse({
+        ...input,
+        targets: [...input.targets, ...input.targets],
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueBulkActionInputSchema.safeParse({
+        action: "resume",
+        targets: input.targets,
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueBulkActionInputSchema.safeParse({ action: "pause", targets: [] }).success,
+    ).toBe(false);
+  });
+
+  it("requires bulk outcomes to report exact results and honest partial state", () => {
+    const target = {
+      connectorId: torrent.connectorId,
+      expectedState: torrent.state,
+      itemId: torrent.id,
+    };
+    const succeeded = {
+      response: {
+        action: "pause" as const,
+        item: { ...torrent, rateBytesPerSecond: 0, state: "paused" as const },
+        previousState: torrent.state,
+        replayed: false,
+        verifiedAt: response.generatedAt,
+      },
+      status: "succeeded" as const,
+      target,
+    };
+    const failed = {
+      code: "rate_limited" as const,
+      retryable: true,
+      status: "failed" as const,
+      target: {
+        connectorId: "sabnzbd-main",
+        expectedState: "queued" as const,
+        itemId: "download_ZYXWVUTSRQPONMLKJIHGFE",
+      },
+    };
+    const bulk = {
+      action: "pause" as const,
+      completedAt: response.generatedAt,
+      operationId: "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+      replayed: false,
+      results: [succeeded, failed],
+      state: "partial" as const,
+      summary: { failed: 1, requested: 2, succeeded: 1 },
+    };
+
+    expect(downloadQueueBulkActionResponseSchema.parse(bulk)).toEqual(bulk);
+    expect(downloadQueueBulkActionResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(
+      downloadQueueBulkActionResponseSchema.safeParse({
+        ...bulk,
+        state: "complete",
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueBulkActionResponseSchema.safeParse({
+        ...bulk,
+        summary: { failed: 0, requested: 2, succeeded: 2 },
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueBulkActionResponseSchema.safeParse({
+        ...bulk,
+        results: [succeeded, { ...failed, target }],
+      }).success,
+    ).toBe(false);
+    expect(
+      downloadQueueBulkActionResponseSchema.safeParse({
+        ...bulk,
+        results: [
+          {
+            ...succeeded,
+            response: {
+              ...succeeded.response,
+              item: { ...succeeded.response.item, id: failed.target.itemId },
+            },
+          },
+          failed,
+        ],
       }).success,
     ).toBe(false);
   });

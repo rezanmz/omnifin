@@ -18,6 +18,9 @@ import {
   DOWNLOAD_QUEUE_MAX_ITEMS,
   downloadQueueActionInputSchema,
   downloadQueueActionResponseSchema,
+  downloadQueueBulkActionInputSchema,
+  downloadQueueBulkActionResponseSchema,
+  downloadQueueBulkResultSchema,
   downloadQueueItemSchema,
   downloadQueuePromotionInputSchema,
   downloadQueuePromotionResponseSchema,
@@ -27,6 +30,10 @@ import {
   type DownloadClientService,
   type DownloadQueueActionInput,
   type DownloadQueueActionResponse,
+  type DownloadQueueBulkActionInput,
+  type DownloadQueueBulkActionResponse,
+  type DownloadQueueBulkFailureCode,
+  type DownloadQueueBulkResult,
   type DownloadQueueClient,
   type DownloadQueueItem,
   type DownloadQueuePromotionInput,
@@ -46,9 +53,14 @@ import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security
 
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const REMOVAL_OPERATION_IDENTIFIER_PATTERN = /^download_removal_[A-Za-z0-9_-]{22}$/u;
+const BULK_OPERATION_IDENTIFIER_PATTERN = /^download_bulk_[A-Za-z0-9_-]{22}$/u;
 const MAX_REMOVAL_OPERATIONS_PER_USER = 1_000;
+const MAX_BULK_OPERATIONS_PER_USER = 200;
 const REMOVAL_RECOVERY_LEASE_MS = 30_000;
+const BULK_RECOVERY_LEASE_MS = 30_000;
 const REMOVAL_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const BULK_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const BULK_MUTATION_CONCURRENCY = 4;
 
 interface DownloadConnectorRow {
   baseUrl: string;
@@ -78,6 +90,16 @@ interface RemovalOperationRow {
   updatedAt: number;
 }
 
+interface BulkOperationRow {
+  fingerprintHash: string;
+  id: string;
+  requestJson: string;
+  responseJson: string | null;
+  resultsJson: string;
+  state: string;
+  updatedAt: number;
+}
+
 export interface DownloadQueueContext {
   ipAddress?: string;
   principal: SessionPrincipal;
@@ -95,6 +117,7 @@ export interface DownloadQueueDependencies {
   clock?: () => Date;
   createAdapter?: (input: DownloadQueueAdapterFactoryInput) => DownloadQueueController;
   createId?: () => string;
+  createBulkOperationId?: () => string;
   createOperationId?: () => string;
   wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -269,6 +292,35 @@ function actionFailureCode(error: unknown) {
   return "upstream_failure";
 }
 
+function bulkFailure(error: unknown): {
+  code: DownloadQueueBulkFailureCode;
+  retryable: boolean;
+} {
+  if (error instanceof DownloadQueueError) {
+    switch (error.reason) {
+      case "target_not_found":
+        return { code: "target_not_found", retryable: false };
+      case "stale_state":
+        return { code: "state_changed", retryable: false };
+      case "response_invalid":
+        return { code: "action_unconfirmed", retryable: true };
+      case "connector_unavailable":
+        return { code: "configuration_unavailable", retryable: true };
+      case "storage_failure":
+        throw error;
+      default:
+        return { code: "action_unavailable", retryable: true };
+    }
+  }
+  if (error instanceof SafeConnectorError) {
+    if (error.code === "rate_limited") return { code: "rate_limited", retryable: true };
+    if (error.code === "response_invalid" || error.code === "unsupported_version") {
+      return { code: "action_unconfirmed", retryable: true };
+    }
+  }
+  return { code: "action_unavailable", retryable: true };
+}
+
 function sameRemovalTarget(left: DownloadQueueItem, right: DownloadQueueItem) {
   return (
     left.id === right.id &&
@@ -354,6 +406,7 @@ export class DownloadQueueService {
   readonly #clock: () => Date;
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<DownloadQueueDependencies["createAdapter"]>;
+  readonly #createBulkOperationId: () => string;
   readonly #createId: () => string;
   readonly #createOperationId: () => string;
   readonly #database: DatabaseHandle;
@@ -369,6 +422,8 @@ export class DownloadQueueService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
+    this.#createBulkOperationId =
+      dependencies.createBulkOperationId ?? (() => `download_bulk_${randomToken(16)}`);
     this.#createId = dependencies.createId ?? randomUUID;
     this.#createOperationId =
       dependencies.createOperationId ?? (() => `download_removal_${randomToken(16)}`);
@@ -500,6 +555,116 @@ export class DownloadQueueService {
       );
       throw error;
     }
+  }
+
+  public async bulkUpdate(
+    rawInput: DownloadQueueBulkActionInput,
+    rawIdempotencyKey: string,
+    context: DownloadQueueContext,
+    signal?: AbortSignal,
+  ): Promise<DownloadQueueBulkActionResponse> {
+    const principal = requirePermission(context.principal, "downloads.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new DownloadQueueError("identity_required");
+    }
+    const input = downloadQueueBulkActionInputSchema.parse(rawInput);
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey);
+    const fingerprintHash = hashToken(JSON.stringify({ input, version: 1 }));
+    const keyHash = hashToken(
+      `${principal.userId}\u0000download_queue_bulk_action\u0000${idempotencyKey}`,
+    );
+    const reservation = this.#reserveBulk(principal.userId, input, keyHash, fingerprintHash);
+    if (reservation.kind === "replay") {
+      return downloadQueueBulkActionResponseSchema.parse({
+        ...reservation.response,
+        replayed: true,
+      });
+    }
+    if (reservation.kind === "conflict") throw new DownloadQueueError("idempotency_conflict");
+    if (reservation.kind === "pending") throw new DownloadQueueError("idempotency_in_progress");
+
+    if (reservation.kind === "reserved") {
+      this.#auditBulk("requested", "success", reservation.operationId, input, context, {
+        requested: input.targets.length,
+      });
+    }
+    const results = [...reservation.results];
+    const completed = new Set(
+      results.map((result) => `${result.target.connectorId}\u0000${result.target.itemId}`),
+    );
+    const remaining = input.targets.filter(
+      (target) => !completed.has(`${target.connectorId}\u0000${target.itemId}`),
+    );
+
+    for (let offset = 0; offset < remaining.length; offset += BULK_MUTATION_CONCURRENCY) {
+      const batch = remaining.slice(offset, offset + BULK_MUTATION_CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map(async (target): Promise<DownloadQueueBulkResult> => {
+          try {
+            const response = await this.update(
+              downloadQueueActionInputSchema.parse(
+                input.action === "pause"
+                  ? {
+                      action: "pause",
+                      connectorId: target.connectorId,
+                      expectedState: target.expectedState,
+                      itemId: target.itemId,
+                    }
+                  : {
+                      action: "resume",
+                      connectorId: target.connectorId,
+                      expectedState: "paused",
+                      itemId: target.itemId,
+                    },
+              ),
+              context,
+              signal,
+            );
+            return downloadQueueBulkResultSchema.parse({
+              response,
+              status: "succeeded",
+              target,
+            });
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            const failure = bulkFailure(error);
+            return downloadQueueBulkResultSchema.parse({
+              ...failure,
+              status: "failed",
+              target,
+            });
+          }
+        }),
+      );
+      results.push(...batchResults);
+      this.#saveBulkProgress(reservation.operationId, results);
+    }
+
+    const byTarget = new Map(
+      results.map((result) => [
+        `${result.target.connectorId}\u0000${result.target.itemId}`,
+        result,
+      ]),
+    );
+    const orderedResults = input.targets.map((target) =>
+      byTarget.get(`${target.connectorId}\u0000${target.itemId}`)!,
+    );
+    if (orderedResults.some((result) => result === undefined)) {
+      throw new DownloadQueueError("storage_failure");
+    }
+    const succeeded = orderedResults.filter((result) => result.status === "succeeded").length;
+    const failed = orderedResults.length - succeeded;
+    const response = downloadQueueBulkActionResponseSchema.parse({
+      action: input.action,
+      completedAt: this.#clock().toISOString(),
+      operationId: reservation.operationId,
+      replayed: false,
+      results: orderedResults,
+      state: failed === 0 ? "complete" : succeeded === 0 ? "failed" : "partial",
+      summary: { failed, requested: orderedResults.length, succeeded },
+    });
+    this.#completeBulk(reservation.operationId, response, input, context);
+    return response;
   }
 
   public async remove(
@@ -824,6 +989,224 @@ export class DownloadQueueService {
     }
   }
 
+  #reserveBulk(
+    userId: string,
+    input: DownloadQueueBulkActionInput,
+    keyHash: string,
+    fingerprintHash: string,
+  ) {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const now = this.#now();
+          this.#database.sqlite
+            .prepare(
+              `delete from download_queue_bulk_operations
+               where user_id = ? and (
+                 (state = 'succeeded' and completed_at <= ?)
+                 or (state = 'pending' and updated_at <= ?)
+               )`,
+            )
+            .run(userId, now - BULK_OPERATION_RETENTION_MS, now - BULK_OPERATION_RETENTION_MS);
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      request_json as requestJson, results_json as resultsJson,
+                      response_json as responseJson, updated_at as updatedAt
+               from download_queue_bulk_operations
+               where user_id = ? and idempotency_key_hash = ?
+               limit 1`,
+            )
+            .get(userId, keyHash) as BulkOperationRow | undefined;
+          if (existing) {
+            if (existing.fingerprintHash !== fingerprintHash) {
+              return { kind: "conflict" as const };
+            }
+            const storedInput = downloadQueueBulkActionInputSchema.parse(
+              JSON.parse(existing.requestJson),
+            );
+            if (JSON.stringify(storedInput) !== JSON.stringify(input)) {
+              throw new DownloadQueueError("storage_failure");
+            }
+            if (existing.state === "succeeded" && existing.responseJson) {
+              return {
+                kind: "replay" as const,
+                response: downloadQueueBulkActionResponseSchema.parse(
+                  JSON.parse(existing.responseJson),
+                ),
+              };
+            }
+            if (existing.state !== "pending" || existing.responseJson) {
+              throw new DownloadQueueError("storage_failure");
+            }
+            if (
+              !Number.isSafeInteger(existing.updatedAt) ||
+              existing.updatedAt < 0 ||
+              existing.updatedAt > now ||
+              now - existing.updatedAt < BULK_RECOVERY_LEASE_MS
+            ) {
+              return { kind: "pending" as const };
+            }
+            const results = downloadQueueBulkResultSchema
+              .array()
+              .parse(JSON.parse(existing.resultsJson));
+            const requestedTargets = new Map(
+              input.targets.map((target) => [
+                `${target.connectorId}\u0000${target.itemId}`,
+                target,
+              ]),
+            );
+            const persistedTargets = new Set<string>();
+            for (const result of results) {
+              const target = `${result.target.connectorId}\u0000${result.target.itemId}`;
+              const requested = requestedTargets.get(target);
+              if (
+                !requested ||
+                result.target.expectedState !== requested.expectedState ||
+                persistedTargets.has(target)
+              ) {
+                throw new DownloadQueueError("storage_failure");
+              }
+              persistedTargets.add(target);
+            }
+            const claimed = this.#database.sqlite
+              .prepare(
+                `update download_queue_bulk_operations
+                 set updated_at = ?
+                 where id = ? and state = 'pending' and updated_at = ?`,
+              )
+              .run(now, existing.id, existing.updatedAt);
+            if (claimed.changes !== 1) return { kind: "pending" as const };
+            return {
+              kind: "recovered" as const,
+              operationId: existing.id,
+              results,
+            };
+          }
+          const count = this.#database.sqlite
+            .prepare(
+              "select count(*) as count from download_queue_bulk_operations where user_id = ?",
+            )
+            .get(userId) as { count: number };
+          if (count.count >= MAX_BULK_OPERATIONS_PER_USER) {
+            throw new DownloadQueueError("operation_limit_reached");
+          }
+          const operationId = this.#bulkOperationId();
+          this.#database.sqlite
+            .prepare(
+              `insert into download_queue_bulk_operations (
+                 id, user_id, idempotency_key_hash, fingerprint_hash, state,
+                 request_json, results_json, created_at, updated_at
+               ) values (?, ?, ?, ?, 'pending', ?, '[]', ?, ?)`,
+            )
+            .run(operationId, userId, keyHash, fingerprintHash, JSON.stringify(input), now, now);
+          return {
+            kind: "reserved" as const,
+            operationId,
+            results: [] as DownloadQueueBulkResult[],
+          };
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #saveBulkProgress(operationId: string, results: DownloadQueueBulkResult[]) {
+    try {
+      const validated = downloadQueueBulkResultSchema.array().parse(results);
+      const updated = this.#database.sqlite
+        .prepare(
+          `update download_queue_bulk_operations
+           set results_json = ?, updated_at = ?
+           where id = ? and state = 'pending'`,
+        )
+        .run(JSON.stringify(validated), this.#now(), operationId);
+      if (updated.changes !== 1) throw new DownloadQueueError("storage_failure");
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeBulk(
+    operationId: string,
+    response: DownloadQueueBulkActionResponse,
+    input: DownloadQueueBulkActionInput,
+    context: DownloadQueueContext,
+  ) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update download_queue_bulk_operations
+               set state = 'succeeded', results_json = ?, response_json = ?,
+                   completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(JSON.stringify(response.results), JSON.stringify(response), now, now, operationId);
+          if (updated.changes !== 1) throw new DownloadQueueError("storage_failure");
+          this.#auditBulk(
+            "completed",
+            response.state === "failed" ? "failure" : "success",
+            operationId,
+            input,
+            context,
+            response.summary,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof DownloadQueueError) throw error;
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
+  #auditBulk(
+    action: "completed" | "requested",
+    outcome: "failure" | "success",
+    operationId: string,
+    input: DownloadQueueBulkActionInput,
+    context: DownloadQueueContext,
+    metadata: Record<string, unknown>,
+    createdAt = this.#now(),
+  ) {
+    try {
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (
+             id, actor_user_id, actor_session_id, actor_auth_method, event_type, outcome,
+             target_type, target_id, request_id, metadata_json, ip_hash, created_at
+           ) values (?, ?, ?, ?, ?, ?, 'download_queue_bulk_operation', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.#createId(),
+          context.principal.userId,
+          context.principal.sessionId,
+          context.principal.authenticationMethod.kind,
+          `download.queue.bulk.${action}`,
+          outcome,
+          operationId,
+          context.requestId ?? null,
+          JSON.stringify({
+            action: input.action,
+            connectorCount: new Set(input.targets.map((target) => target.connectorId)).size,
+            ...metadata,
+          }),
+          context.ipAddress
+            ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+            : null,
+          createdAt,
+        );
+    } catch (error) {
+      throw new DownloadQueueError("storage_failure", { cause: error });
+    }
+  }
+
   #reserveRemoval(
     userId: string,
     input: DownloadQueueRemovalInput,
@@ -1076,6 +1459,14 @@ export class DownloadQueueService {
   #now() {
     const value = this.#clock().getTime();
     if (!Number.isSafeInteger(value) || value < 0) {
+      throw new DownloadQueueError("storage_failure");
+    }
+    return value;
+  }
+
+  #bulkOperationId() {
+    const value = this.#createBulkOperationId();
+    if (!BULK_OPERATION_IDENTIFIER_PATTERN.test(value)) {
       throw new DownloadQueueError("storage_failure");
     }
     return value;
