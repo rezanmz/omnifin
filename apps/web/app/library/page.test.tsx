@@ -39,7 +39,8 @@ describe("LibraryPage", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Every story, in its place." }),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: /Play Ember Coast/u })).toBeVisible();
+    expect(screen.getByRole("button", { name: /View details for Ember Coast/u })).toBeVisible();
+    expect(screen.getByRole("button", { name: /View details for Northern Lights/u })).toBeVisible();
     expect(screen.getByRole("heading", { name: "8 titles in view" })).toBeVisible();
   });
 
@@ -49,6 +50,6 @@ describe("LibraryPage", () => {
     render(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "empty" }) }));
 
     expect(screen.getByRole("heading", { name: "Your paired library is empty." })).toBeVisible();
-    expect(screen.getByText(/Add a playable movie or episode in Jellyfin/u)).toBeVisible();
+    expect(screen.getByText(/Add a movie or series in Jellyfin/u)).toBeVisible();
   });
 });

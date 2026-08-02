@@ -18,10 +18,10 @@ import {
   Clapperboard,
   CloudOff,
   Film,
+  Info,
   Library,
   LoaderCircle,
   LockKeyhole,
-  Play,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -48,6 +48,7 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
 import theaterStyles from "./theater-player.module.css";
 import { TopCommandBar } from "./top-command-bar";
+import type { PlayableLibrarySelection } from "./library-title-drawer";
 import styles from "./media-library.module.css";
 
 const TheaterPlayer = dynamic(
@@ -63,10 +64,30 @@ const TheaterPlayer = dynamic(
   },
 );
 
+const LibraryTitleDrawer = dynamic(
+  () => import("./library-title-drawer").then((module) => module.LibraryTitleDrawer),
+  { ssr: false },
+);
+
+const lazyMediaLibraryDemoClient: MediaLibraryClient = {
+  async load(input, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.load(input, signal);
+  },
+  async loadSeasonEpisodes(referenceId, seasonNumber, input, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.loadSeasonEpisodes!(referenceId, seasonNumber, input, signal);
+  },
+  async loadTitle(referenceId, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.loadTitle!(referenceId, signal);
+  },
+};
+
 const KIND_OPTIONS: { icon: typeof Library; label: string; value: LibraryBrowseKind }[] = [
   { icon: Library, label: "All", value: "all" },
   { icon: Film, label: "Movies", value: "movies" },
-  { icon: Tv, label: "Episodes", value: "episodes" },
+  { icon: Tv, label: "Series", value: "series" },
 ];
 
 const SORT_OPTIONS: { label: string; value: LibraryBrowseSort }[] = [
@@ -131,7 +152,7 @@ function locallyFilteredItems(
     const matchesKind =
       kind === "all" ||
       (kind === "movies" && item.media.kind === "movie") ||
-      (kind === "episodes" && item.media.kind === "episode");
+      (kind === "series" && item.media.kind === "series");
     const matchesQuery =
       !normalizedQuery ||
       [item.media.title, item.media.subtitle, item.media.overview]
@@ -200,7 +221,7 @@ function LoadingLibrary({ themePreference }: { themePreference: ThemePreference 
           ))}
         </div>
         <span className="sr-only" role="status">
-          Loading movies and episodes from your paired Jellyfin account.
+          Loading movies and series from your paired Jellyfin account.
         </span>
       </section>
     </LibraryShell>
@@ -290,7 +311,7 @@ function EmptyLibrary({ clearSearch, filtered }: { clearSearch: () => void; filt
       <p>
         {filtered
           ? "Clear the search or switch media types to bring more of your collection into view."
-          : "Add a playable movie or episode in Jellyfin and it will appear here after the next scan."}
+          : "Add a movie or series in Jellyfin and it will appear here after the next scan."}
       </p>
       {filtered ? (
         <button className="button button--glass" onClick={clearSearch} type="button">
@@ -310,12 +331,14 @@ function LibraryCard({ item, onSelect }: { item: LibraryBrowseItem; onSelect: ()
     item.media.artwork.posterPath ?? item.media.artwork.backdropPath,
   );
   const accent = itemAccent(item);
-  const progress = Math.round((item.positionSeconds / item.durationSeconds) * 100);
+  const progress = item.playback
+    ? Math.round((item.playback.positionSeconds / item.playback.durationSeconds) * 100)
+    : 0;
   const caption = itemCaption(item);
   return (
     <article className={styles.card} style={{ "--library-accent": accent } as PosterStyle}>
       <button
-        aria-label={`Play ${item.media.title}${caption ? `, ${caption}` : ""}`}
+        aria-label={`View details for ${item.media.title}${caption ? `, ${caption}` : ""}`}
         className={styles.cardAction}
         data-directional-item
         data-library-id={item.media.id}
@@ -331,18 +354,18 @@ function LibraryCard({ item, onSelect }: { item: LibraryBrowseItem; onSelect: ()
           <span aria-hidden="true" className={styles.posterOrb} />
           <span aria-hidden="true" className={styles.posterArc} />
           <span aria-hidden="true" className={styles.posterIndex}>
-            {item.media.kind === "episode" ? "EP" : "FM"}
+            {item.media.kind === "series" ? "TV" : "FM"}
           </span>
           <span aria-hidden="true" className={styles.posterShade} />
           <span aria-hidden="true" className={styles.playBadge}>
-            <Play fill="currentColor" size={18} />
+            <Info size={18} />
           </span>
-          {item.played ? (
+          {item.playback?.played ? (
             <span className={styles.watchedBadge}>
               <Check aria-hidden="true" size={12} /> Watched
             </span>
           ) : null}
-          {progress > 0 && !item.played ? (
+          {progress > 0 && !item.playback?.played ? (
             <span
               aria-label={`${progress}% watched`}
               aria-valuemax={100}
@@ -377,6 +400,7 @@ function MediaLibraryContent({
   const [draftQuery, setDraftQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [selected, setSelected] = useState<LibraryBrowseItem | null>(null);
+  const [playing, setPlaying] = useState<PlayableLibrarySelection | null>(null);
   const searchReference = useRef<HTMLInputElement>(null);
   const refreshAvailable = live ?? initialOutcome === undefined;
   const initialFeed = initialOutcome?.status === "ready" ? initialOutcome.feed : undefined;
@@ -592,7 +616,7 @@ function MediaLibraryContent({
 
         {items.length > 0 ? (
           <div
-            aria-label="Playable library titles"
+            aria-label="Library titles"
             className={styles.grid}
             onKeyDown={(event) => handleDirectionalFocus(event, { axis: "grid" })}
             role="list"
@@ -627,7 +651,8 @@ function MediaLibraryContent({
       </section>
 
       {selected ? (
-        <SelectedTheater
+        <LibraryTitleDrawer
+          client={client}
           item={selected}
           onClose={() => {
             const selectedId = selected.media.id;
@@ -638,6 +663,15 @@ function MediaLibraryContent({
                 ?.focus();
             });
           }}
+          onPlay={(selection) => setPlaying(selection)}
+          open
+        />
+      ) : null}
+
+      {playing ? (
+        <SelectedTheater
+          selection={playing}
+          onClose={() => setPlaying(null)}
           {...(playbackClient === undefined ? {} : { playbackClient })}
         />
       ) : null}
@@ -646,27 +680,34 @@ function MediaLibraryContent({
 }
 
 function SelectedTheater({
-  item,
   onClose,
   playbackClient,
+  selection,
 }: {
-  item: LibraryBrowseItem;
   onClose: () => void;
   playbackClient?: PlaybackClient;
+  selection: PlayableLibrarySelection;
 }) {
   const artworkPath = sameOriginMediaPath(
-    item.media.artwork.backdropPath ?? item.media.artwork.posterPath,
+    selection.media.artwork.backdropPath ?? selection.media.artwork.posterPath,
   );
   return (
     <TheaterPlayer
       {...(playbackClient === undefined ? {} : { client: playbackClient })}
       media={{
-        accent: itemAccent(item),
+        accent: selection.media.artwork.accentColor ?? "#6f8d84",
         ...(artworkPath === undefined ? {} : { artworkPath }),
-        eyebrow: itemCaption(item),
-        id: item.media.id,
-        positionSeconds: item.positionSeconds,
-        title: item.media.title,
+        eyebrow:
+          selection.media.subtitle ??
+          [
+            selection.media.year,
+            selection.media.runtimeMinutes ? `${selection.media.runtimeMinutes} min` : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        id: selection.media.id,
+        positionSeconds: selection.playback.positionSeconds,
+        title: selection.media.title,
       }}
       onClose={onClose}
     />
@@ -674,12 +715,17 @@ function SelectedTheater({
 }
 
 export function MediaLibrary({
-  client = mediaLibraryClient,
+  client,
   initialOutcome,
   live,
   playbackClient,
   themePreference = "system",
 }: MediaLibraryProperties) {
+  const resolvedClient =
+    client ??
+    (live === false && initialOutcome?.status === "ready"
+      ? lazyMediaLibraryDemoClient
+      : mediaLibraryClient);
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -689,7 +735,7 @@ export function MediaLibrary({
   return (
     <QueryClientProvider client={queryClient}>
       <MediaLibraryContent
-        client={client}
+        client={resolvedClient}
         {...(initialOutcome === undefined ? {} : { initialOutcome })}
         {...(live === undefined ? {} : { live })}
         {...(playbackClient === undefined ? {} : { playbackClient })}

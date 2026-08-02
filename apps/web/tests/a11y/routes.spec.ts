@@ -362,6 +362,22 @@ test("media detail drawer has no automatically detectable accessibility violatio
   expect(personResults.violations).toEqual([]);
 });
 
+test("series title hierarchy has no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: "View details for Northern Lights, 2 seasons" }).click();
+  const dialog = page.getByRole("dialog", { name: "Northern Lights details" });
+  await expect(dialog.getByRole("list", { name: "Episodes" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("request composer has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {

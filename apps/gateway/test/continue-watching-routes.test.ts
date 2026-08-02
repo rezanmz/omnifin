@@ -1,10 +1,16 @@
 import type {
   JellyfinContinueWatchingResult,
+  JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
+  JellyfinLibraryTitleResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { libraryBrowseResponseSchema } from "@omnifin/contracts/library";
+import {
+  libraryBrowseResponseSchema,
+  librarySeasonEpisodesResponseSchema,
+  libraryTitleDetailResponseSchema,
+} from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -87,15 +93,12 @@ async function harness() {
           poster: { itemId: privateItemId, type: "Primary" },
         },
         contentRating: "PG-13",
-        episodeNumber: null,
         externalId: privateItemId,
         kind: "movie",
         overview: "A signal crosses the horizon.",
         played: false,
         positionSeconds: 1_200,
         runtimeSeconds: 7_200,
-        seasonNumber: null,
-        subtitle: null,
         title: "The Far Meridian",
         year: 2026,
       },
@@ -107,14 +110,33 @@ async function harness() {
     body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
     contentType: "image/png" as const,
   }));
+  const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
+    item: (await readLibrary()).items[0]!,
+    seasons: [],
+    seasonsTruncated: false,
+  }));
+  const readLibrarySeasonEpisodes = vi.fn(
+    async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
+      items: [],
+      nextStartIndex: null,
+      truncated: false,
+    }),
+  );
+  let mediaReferenceIndex = 0;
   const app = await createApp({
     config,
     continueWatchingDependencies: {
       clock: () => now,
-      createClient: () => ({ readContinueWatching, readImage, readLibrary }),
+      createClient: () => ({
+        readContinueWatching,
+        readImage,
+        readLibrary,
+        readLibrarySeasonEpisodes,
+        readLibraryTitle,
+      }),
       mediaReferences: {
         clock: () => now,
-        createToken: () => "r".repeat(22),
+        createToken: () => (mediaReferenceIndex++ === 0 ? "r" : "e").repeat(22),
       },
     },
     sessionDependencies: sessionDependencies(),
@@ -180,7 +202,15 @@ async function harness() {
       userId: "viewer-user",
     },
   });
-  return { app, readContinueWatching, readImage, readLibrary, viewer };
+  return {
+    app,
+    readContinueWatching,
+    readImage,
+    readLibrary,
+    readLibrarySeasonEpisodes,
+    readLibraryTitle,
+    viewer,
+  };
 }
 
 describe("Continue Watching routes", () => {
@@ -244,8 +274,7 @@ describe("Continue Watching routes", () => {
         items: [
           {
             media: { id: `media_${"r".repeat(22)}`, kind: "movie", title: "The Far Meridian" },
-            played: false,
-            positionSeconds: 1_200,
+            playback: { played: false, positionSeconds: 1_200 },
           },
         ],
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
@@ -277,6 +306,98 @@ describe("Continue Watching routes", () => {
       expect(readLibrary).toHaveBeenLastCalledWith(
         expect.objectContaining({ startIndex: 1, userId: "viewer-external" }),
         expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("opens series details before serving an explicitly selected season", async () => {
+    const { app, readLibrary, readLibrarySeasonEpisodes, readLibraryTitle, viewer } =
+      await harness();
+    const series = {
+      artwork: {
+        accentColor: "#557799",
+        backdrop: { itemId: "route-private-series", type: "Backdrop" as const },
+        blurHash: null,
+        poster: { itemId: "route-private-series", type: "Primary" as const },
+      },
+      contentRating: "TV-14",
+      externalId: "route-private-series",
+      kind: "series" as const,
+      overview: "A signal appears over the northern ice.",
+      played: false,
+      positionSeconds: 0,
+      runtimeSeconds: null,
+      title: "Northern Lights",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValueOnce({ items: [series], nextStartIndex: null, truncated: false });
+    readLibraryTitle.mockResolvedValueOnce({
+      item: series,
+      seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+      seasonsTruncated: false,
+    });
+    readLibrarySeasonEpisodes.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: series.artwork,
+          contentRating: "TV-14",
+          episodeNumber: 3,
+          externalId: "route-private-episode",
+          kind: "episode",
+          overview: "The observatory resolves the signal.",
+          played: false,
+          positionSeconds: 900,
+          runtimeSeconds: 2_700,
+          seasonNumber: 2,
+          subtitle: "S02E03",
+          title: "The Long Meridian",
+          year: 2026,
+        },
+      ],
+      nextStartIndex: null,
+      truncated: false,
+    });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=series&sort=title",
+      });
+      const catalogue = libraryBrowseResponseSchema.parse(catalogueResponse.json());
+      const referenceId = catalogue.items[0]!.media.id;
+
+      const detailResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}`,
+      });
+      expect(detailResponse.statusCode, detailResponse.body).toBe(200);
+      expect(libraryTitleDetailResponseSchema.parse(detailResponse.json())).toMatchObject({
+        media: { id: referenceId, kind: "series", title: "Northern Lights" },
+        playback: null,
+        seasons: [{ seasonNumber: 2, title: "Season 2" }],
+      });
+
+      const episodesResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/seasons/2/episodes?limit=30`,
+      });
+      expect(episodesResponse.statusCode, episodesResponse.body).toBe(200);
+      expect(librarySeasonEpisodesResponseSchema.parse(episodesResponse.json())).toMatchObject({
+        items: [
+          {
+            media: { id: `media_${"e".repeat(22)}`, kind: "episode", title: "The Long Meridian" },
+            playback: { positionSeconds: 900 },
+          },
+        ],
+        seasonNumber: 2,
+        titleReferenceId: referenceId,
+      });
+      expect(detailResponse.body + episodesResponse.body).not.toMatch(
+        /route-private|viewer-external|jellyfin\.example/iu,
       );
     } finally {
       await app.close();

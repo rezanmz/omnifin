@@ -7,6 +7,8 @@ import { idempotencyKeySchema } from "./requests.js";
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
 export const LIBRARY_ARTWORK_MAX_RESULTS = 40;
 export const LIBRARY_BROWSE_MAX_ITEMS = 50;
+export const LIBRARY_SEASON_EPISODES_MAX_ITEMS = 50;
+export const LIBRARY_TITLE_MAX_SEASONS = 100;
 
 const safeTextSchema = z
   .string()
@@ -23,7 +25,7 @@ export const libraryCursorSchema = z
   .regex(/^[A-Za-z0-9_.-]+$/u);
 export type LibraryCursor = z.infer<typeof libraryCursorSchema>;
 
-export const libraryBrowseKindSchema = z.enum(["all", "episodes", "movies"]);
+export const libraryBrowseKindSchema = z.enum(["all", "movies", "series"]);
 export type LibraryBrowseKind = z.infer<typeof libraryBrowseKindSchema>;
 
 export const libraryBrowseSortSchema = z.enum(["recent", "title", "year"]);
@@ -38,12 +40,40 @@ export const libraryBrowseQuerySchema = z.strictObject({
 });
 export type LibraryBrowseQuery = z.infer<typeof libraryBrowseQuerySchema>;
 
-export const libraryBrowseItemSchema = z
+export const libraryPlaybackStateSchema = z
   .strictObject({
     durationSeconds: z.int().positive().max(10_000_000),
-    media: mediaSummarySchema,
     played: z.boolean(),
     positionSeconds: z.int().nonnegative().max(10_000_000),
+  })
+  .refine((playback) => playback.positionSeconds <= playback.durationSeconds, {
+    message: "Library playback position cannot exceed duration.",
+    path: ["positionSeconds"],
+  });
+export type LibraryPlaybackState = z.infer<typeof libraryPlaybackStateSchema>;
+
+function validateLibraryMediaArtwork(
+  media: z.infer<typeof mediaSummarySchema>,
+  context: z.RefinementCtx,
+) {
+  for (const [artworkType, path] of Object.entries({
+    backdropPath: media.artwork.backdropPath,
+    posterPath: media.artwork.posterPath,
+  })) {
+    if (path !== null && !path.startsWith(`/v1/media/${media.id}/images/`)) {
+      context.addIssue({
+        code: "custom",
+        message: "Library artwork must belong to the same opaque media reference.",
+        path: ["media", "artwork", artworkType],
+      });
+    }
+  }
+}
+
+export const libraryBrowseItemSchema = z
+  .strictObject({
+    media: mediaSummarySchema,
+    playback: libraryPlaybackStateSchema.nullable(),
   })
   .superRefine((item, context) => {
     if (!mediaReferenceIdSchema.safeParse(item.media.id).success) {
@@ -53,10 +83,10 @@ export const libraryBrowseItemSchema = z
         path: ["media", "id"],
       });
     }
-    if (item.media.kind !== "movie" && item.media.kind !== "episode") {
+    if (item.media.kind !== "movie" && item.media.kind !== "series") {
       context.addIssue({
         code: "custom",
-        message: "Library catalogue items must be directly playable videos.",
+        message: "Library catalogue items must be movie or series titles.",
         path: ["media", "kind"],
       });
     }
@@ -67,27 +97,145 @@ export const libraryBrowseItemSchema = z
         path: ["media", "availability"],
       });
     }
-    if (item.positionSeconds > item.durationSeconds) {
+    if ((item.media.kind === "movie") !== (item.playback !== null)) {
       context.addIssue({
         code: "custom",
-        message: "Library playback position cannot exceed duration.",
-        path: ["positionSeconds"],
+        message: "Only movie catalogue titles can include direct playback state.",
+        path: ["playback"],
       });
     }
-    for (const [artworkType, path] of Object.entries({
-      backdropPath: item.media.artwork.backdropPath,
-      posterPath: item.media.artwork.posterPath,
-    })) {
-      if (path !== null && !path.startsWith(`/v1/media/${item.media.id}/images/`)) {
-        context.addIssue({
-          code: "custom",
-          message: "Library artwork must belong to the same opaque media reference.",
-          path: ["media", "artwork", artworkType],
-        });
-      }
-    }
+    validateLibraryMediaArtwork(item.media, context);
   });
 export type LibraryBrowseItem = z.infer<typeof libraryBrowseItemSchema>;
+
+export const librarySeasonSummarySchema = z
+  .strictObject({
+    episodeCount: z.int().nonnegative().max(100_000),
+    playedEpisodeCount: z.int().nonnegative().max(100_000),
+    seasonNumber: z.int().nonnegative().max(100_000),
+    title: safeTextSchema.max(300),
+  })
+  .refine((season) => season.playedEpisodeCount <= season.episodeCount, {
+    message: "Played episode count cannot exceed the season episode count.",
+    path: ["playedEpisodeCount"],
+  });
+export type LibrarySeasonSummary = z.infer<typeof librarySeasonSummarySchema>;
+
+export const libraryTitleDetailResponseSchema = z
+  .strictObject({
+    generatedAt: timestampSchema,
+    media: mediaSummarySchema,
+    playback: libraryPlaybackStateSchema.nullable(),
+    seasons: z.array(librarySeasonSummarySchema).max(LIBRARY_TITLE_MAX_SEASONS),
+    seasonsTruncated: z.boolean(),
+  })
+  .superRefine((detail, context) => {
+    if (!mediaReferenceIdSchema.safeParse(detail.media.id).success) {
+      context.addIssue({
+        code: "custom",
+        message: "Library title details must use an opaque media reference.",
+        path: ["media", "id"],
+      });
+    }
+    if (detail.media.kind !== "movie" && detail.media.kind !== "series") {
+      context.addIssue({
+        code: "custom",
+        message: "Library title details must describe a movie or series.",
+        path: ["media", "kind"],
+      });
+    }
+    if (detail.media.availability !== "available") {
+      context.addIssue({
+        code: "custom",
+        message: "Library title details must remain available to the paired Jellyfin user.",
+        path: ["media", "availability"],
+      });
+    }
+    const movieShape =
+      detail.media.kind === "movie" &&
+      detail.playback !== null &&
+      detail.seasons.length === 0 &&
+      !detail.seasonsTruncated;
+    const seriesShape = detail.media.kind === "series" && detail.playback === null;
+    if (!movieShape && !seriesShape) {
+      context.addIssue({
+        code: "custom",
+        message: "Library title hierarchy must match its media kind.",
+        path: ["playback"],
+      });
+    }
+    if (
+      new Set(detail.seasons.map(({ seasonNumber }) => seasonNumber)).size !== detail.seasons.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library seasons must have unique numbers.",
+        path: ["seasons"],
+      });
+    }
+    validateLibraryMediaArtwork(detail.media, context);
+  });
+export type LibraryTitleDetailResponse = z.infer<typeof libraryTitleDetailResponseSchema>;
+
+export const librarySeasonEpisodesQuerySchema = z.strictObject({
+  cursor: libraryCursorSchema.optional(),
+  limit: z.coerce.number().int().positive().max(LIBRARY_SEASON_EPISODES_MAX_ITEMS).default(30),
+});
+export type LibrarySeasonEpisodesQuery = z.infer<typeof librarySeasonEpisodesQuerySchema>;
+
+export const librarySeasonEpisodeSchema = z
+  .strictObject({
+    media: mediaSummarySchema,
+    playback: libraryPlaybackStateSchema,
+  })
+  .superRefine((episode, context) => {
+    if (!mediaReferenceIdSchema.safeParse(episode.media.id).success) {
+      context.addIssue({
+        code: "custom",
+        message: "Library episodes must use opaque media references.",
+        path: ["media", "id"],
+      });
+    }
+    if (episode.media.kind !== "episode" || episode.media.availability !== "available") {
+      context.addIssue({
+        code: "custom",
+        message: "Library season entries must be available episodes.",
+        path: ["media", "kind"],
+      });
+    }
+    validateLibraryMediaArtwork(episode.media, context);
+  });
+export type LibrarySeasonEpisode = z.infer<typeof librarySeasonEpisodeSchema>;
+
+export const librarySeasonEpisodesResponseSchema = z
+  .strictObject({
+    generatedAt: timestampSchema,
+    items: z.array(librarySeasonEpisodeSchema).max(LIBRARY_SEASON_EPISODES_MAX_ITEMS),
+    nextCursor: libraryCursorSchema.nullable(),
+    seasonNumber: z.int().nonnegative().max(100_000),
+    titleReferenceId: mediaReferenceIdSchema,
+  })
+  .superRefine((response, context) => {
+    const references = new Set<string>();
+    for (const [index, item] of response.items.entries()) {
+      if (references.has(item.media.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Library episode references must be unique within a page.",
+          path: ["items", index, "media", "id"],
+        });
+      }
+      references.add(item.media.id);
+    }
+    if (response.items.length === 0 && response.nextCursor !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "An empty season page cannot include a continuation cursor.",
+        path: ["nextCursor"],
+      });
+    }
+  });
+export type LibrarySeasonEpisodesResponse = z.infer<typeof librarySeasonEpisodesResponseSchema>;
 
 export const libraryBrowseSourceSchema = z
   .strictObject({
@@ -420,6 +568,15 @@ export const libraryAttentionResponseJsonSchema = withoutSchemaDialect(
 );
 export const libraryBrowseQueryJsonSchema = withoutSchemaDialect(libraryBrowseQuerySchema);
 export const libraryBrowseResponseJsonSchema = withoutSchemaDialect(libraryBrowseResponseSchema);
+export const libraryTitleDetailResponseJsonSchema = withoutSchemaDialect(
+  libraryTitleDetailResponseSchema,
+);
+export const librarySeasonEpisodesQueryJsonSchema = withoutSchemaDialect(
+  librarySeasonEpisodesQuerySchema,
+);
+export const librarySeasonEpisodesResponseJsonSchema = withoutSchemaDialect(
+  librarySeasonEpisodesResponseSchema,
+);
 export const libraryScanRequestJsonSchema = withoutSchemaDialect(libraryScanRequestSchema);
 export const libraryItemRefreshRequestJsonSchema = withoutSchemaDialect(
   libraryItemRefreshRequestSchema,

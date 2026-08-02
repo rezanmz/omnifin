@@ -102,7 +102,7 @@ matrix.
 - Jellyfin playback negotiation, direct play and HLS, range proxying, tracks,
   subtitles, bitrate control, progress, and Continue Watching (implemented;
   protected live evidence pending)
-- Paired-user Jellyfin movie and episode catalogue with bounded search, filters, sorting,
+- Paired-user Jellyfin movie and series catalogue with bounded search, filters, sorting,
   encrypted pagination, protected artwork, responsive viewer states, and lazy theater playback
   (implemented; protected browser and live compatibility evidence pending)
 - Player issue reporting plus a unified local/Seerr resolve and reopen workbench
