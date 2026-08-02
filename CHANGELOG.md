@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.6.0](https://github.com/rezanmz/omnifin/compare/v0.5.2...v0.6.0) (2026-08-02)
+
+
+### Features
+
+* add monthly acquisition calendar ([#189](https://github.com/rezanmz/omnifin/issues/189)) ([77a01a2](https://github.com/rezanmz/omnifin/commit/77a01a2a5ee81573a775736ebb1bd8c5c85f0a50)), closes [#188](https://github.com/rezanmz/omnifin/issues/188)
+* add privacy-safe operator audit trail ([#185](https://github.com/rezanmz/omnifin/issues/185)) ([22ba734](https://github.com/rezanmz/omnifin/commit/22ba73495a2076467aa2a676f4aaf13e3e0a76c5))
+* **db:** add verified scheduled backups ([#183](https://github.com/rezanmz/omnifin/issues/183)) ([93f3488](https://github.com/rezanmz/omnifin/commit/93f3488a2b9a26d97b21cb36bd939470b68b49d3))
+* expose runtime build identity ([#187](https://github.com/rezanmz/omnifin/issues/187)) ([5f6ba38](https://github.com/rezanmz/omnifin/commit/5f6ba38cf0fdd5ccfdfe38ebdfc6ba13106bbc57)), closes [#186](https://github.com/rezanmz/omnifin/issues/186)
+* **gateway:** add deployment doctor ([#169](https://github.com/rezanmz/omnifin/issues/169)) ([8b36a37](https://github.com/rezanmz/omnifin/commit/8b36a37a94358701686252dad4a42b9be6a64add)), closes [#168](https://github.com/rezanmz/omnifin/issues/168)
+* **gateway:** add paired-user library catalogue ([#173](https://github.com/rezanmz/omnifin/issues/173)) ([022871e](https://github.com/rezanmz/omnifin/commit/022871e8a231884e574438e6500213bc55032999)), closes [#172](https://github.com/rezanmz/omnifin/issues/172)
+* **gateway:** add safe failed queue recovery ([6e1f8a7](https://github.com/rezanmz/omnifin/commit/6e1f8a7080f0039a565cb61bb1f884ca077dbf90))
+* **ui:** add live setup readiness ([d9697e6](https://github.com/rezanmz/omnifin/commit/d9697e636894170ce4bef0b58937acf9c4bafbd1))
+* **ui:** add resilient error recovery ([#165](https://github.com/rezanmz/omnifin/issues/165)) ([f9d41e8](https://github.com/rezanmz/omnifin/commit/f9d41e8f7e34c6157aa7c41568032a1cae720972)), closes [#161](https://github.com/rezanmz/omnifin/issues/161)
+* **ui:** surface deployment readiness ([#167](https://github.com/rezanmz/omnifin/issues/167)) ([94ac4dd](https://github.com/rezanmz/omnifin/commit/94ac4dd7add8698dc4db243d50f715213dd2e0bf)), closes [#166](https://github.com/rezanmz/omnifin/issues/166)
+* **web:** add privacy-safe stack verification ([#181](https://github.com/rezanmz/omnifin/issues/181)) ([da6b049](https://github.com/rezanmz/omnifin/commit/da6b04920fa95543f4f75f93cfb148caf9873a69)), closes [#180](https://github.com/rezanmz/omnifin/issues/180)
+* **web:** deliver the viewer library experience ([#175](https://github.com/rezanmz/omnifin/issues/175)) ([acdd7a6](https://github.com/rezanmz/omnifin/commit/acdd7a64201e60858391e90d935f9294e17959c5))
+
+
+### Fixes
+
+* **release:** accept canonical readiness health status ([c407b3f](https://github.com/rezanmz/omnifin/commit/c407b3ff92573db00fad9dda17f577fe31e0f954)), closes [#153](https://github.com/rezanmz/omnifin/issues/153)
+* **release:** keep automated release commits verified ([231a238](https://github.com/rezanmz/omnifin/commit/231a2388a611f30a5514ccd91605f3265d57c875)), closes [#151](https://github.com/rezanmz/omnifin/issues/151)
+* **release:** tolerate branch reference propagation ([#171](https://github.com/rezanmz/omnifin/issues/171)) ([6c280f6](https://github.com/rezanmz/omnifin/commit/6c280f6e8015f8d8f00fe1ff165277ca35b57dcc)), closes [#170](https://github.com/rezanmz/omnifin/issues/170)
+* **release:** tolerate PR head propagation ([#163](https://github.com/rezanmz/omnifin/issues/163)) ([ff1d13c](https://github.com/rezanmz/omnifin/commit/ff1d13c1246d4ed74067fd08d64144cd2f3db79b)), closes [#162](https://github.com/rezanmz/omnifin/issues/162)
+* **release:** tolerate pull request base propagation ([b966f5a](https://github.com/rezanmz/omnifin/commit/b966f5ac02c1a897cc4ece42ec81aa0365825179)), closes [#157](https://github.com/rezanmz/omnifin/issues/157)
+* **release:** validate GraphQL ref metadata ([#160](https://github.com/rezanmz/omnifin/issues/160)) ([a095537](https://github.com/rezanmz/omnifin/commit/a0955378b2f9c468d84257802982cff8182e18ec)), closes [#159](https://github.com/rezanmz/omnifin/issues/159)
+* **release:** validate immutable smoke posture ([ab51f44](https://github.com/rezanmz/omnifin/commit/ab51f44c82133b9ceec1c67c10e94b31902c0a61))
+
+
+### Documentation
+
+* add verified reverse proxy runbook ([#164](https://github.com/rezanmz/omnifin/issues/164)) ([ea84237](https://github.com/rezanmz/omnifin/commit/ea842371d3669bf2361676982b92f2f86d97fcb3)), closes [#156](https://github.com/rezanmz/omnifin/issues/156)
+
 ## [0.5.2](https://github.com/rezanmz/omnifin/compare/v0.5.1...v0.5.2) (2026-08-01)
 
 
