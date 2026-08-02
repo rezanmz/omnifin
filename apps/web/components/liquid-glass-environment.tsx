@@ -2,13 +2,24 @@
 
 import { useEffect } from "react";
 
+import { useIdleRender } from "../lib/use-idle-render";
+
 const GLASS_SELECTOR = "[data-liquid-glass]";
+const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
+const GLASS_PAINT_GRACE_MS = 180;
 
 function percentage(value: number, start: number, size: number) {
   return `${Math.min(100, Math.max(0, ((value - start) / size) * 100)).toFixed(2)}%`;
 }
 
 export function LiquidGlassEnvironment() {
+  const materialReady = useIdleRender(GLASS_PAINT_GRACE_MS);
+
+  useEffect(() => {
+    if (!materialReady) return;
+    document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, "");
+  }, [materialReady]);
+
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let activeSurface: HTMLElement | null = null;
