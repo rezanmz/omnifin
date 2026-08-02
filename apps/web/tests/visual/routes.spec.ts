@@ -1465,7 +1465,25 @@ test("failed queue recovery success visual baseline", async ({ page }, testInfo)
   await timeline.getByRole("button", { name: "Recover stalled download" }).click();
   await timeline.getByLabel("Type REMOVE to confirm").fill("REMOVE");
   await timeline.getByRole("button", { name: "Remove and blocklist" }).click();
-  await expect(timeline.getByText("Removed and blocklisted")).toBeVisible();
+  const success = timeline.locator('.acquisition-event__recovery-status[data-state="success"]');
+  await expect(success).toBeFocused();
+  await success.evaluate((status) => {
+    const scroller = status.closest(".acquisition-timeline__body");
+    const dialog = status.closest(".acquisition-timeline");
+    if (!(scroller instanceof HTMLElement)) {
+      throw new Error("The acquisition recovery status lost its timeline scroll container.");
+    }
+    if (!(dialog instanceof HTMLElement)) {
+      throw new Error("The acquisition recovery status lost its timeline dialog.");
+    }
+
+    const statusBounds = status.getBoundingClientRect();
+    const scrollerBounds = scroller.getBoundingClientRect();
+    dialog.scrollTop = 0;
+    scroller.style.scrollBehavior = "auto";
+    scroller.scrollTop +=
+      statusBounds.top - scrollerBounds.top - (scroller.clientHeight - statusBounds.height) / 2;
+  });
   await page.evaluate(() => document.fonts.ready);
   await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-queue-recovery-success.png");
