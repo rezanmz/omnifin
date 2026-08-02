@@ -160,6 +160,52 @@ describe("AccountSecurityPanel", () => {
     expect(screen.queryByRole("link", { name: "Setup guide" })).not.toBeInTheDocument();
   });
 
+  it("reveals the audit trail only to an authorized non-recovery administrator", () => {
+    const { rerender } = render(<AccountSecurityPanel initialOutcome={ready} />);
+    expect(screen.queryByRole("link", { name: "Operator audit trail" })).not.toBeInTheDocument();
+
+    rerender(
+      <AccountSecurityPanel
+        key="audit-administrator"
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              permissions: [...principal.permissions, "audit.view"],
+              role: "admin",
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Operator audit trail" })).toHaveAttribute(
+      "href",
+      "/settings/audit",
+    );
+
+    rerender(
+      <AccountSecurityPanel
+        key="audit-recovery"
+        initialOutcome={{
+          snapshot: {
+            ...ready.snapshot,
+            principal: {
+              ...principal,
+              accountState: "recovery",
+              authenticationMethod: { kind: "recovery" },
+              permissions: ["audit.view"],
+              role: "admin",
+            },
+          },
+          status: "ready",
+        }}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "Operator audit trail" })).not.toBeInTheDocument();
+  });
+
   it("requires deliberate confirmation before revoking an identity link", async () => {
     const user = userEvent.setup();
     const pendingPrincipal: SessionPrincipal = {
