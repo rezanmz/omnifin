@@ -119,7 +119,8 @@ browser behavior.
 **Status: In development**
 
 - Full compatibility matrix, threat-model-driven security review, load testing,
-  container scans, backup and restore (implemented; protected release evidence pending),
+  container scans, verified backup/restore plus bounded host-scheduled retention (implemented;
+  protected release evidence pending),
   migration and rollback rehearsals (release automation implemented; protected release evidence
   pending)
 - Browser-safe deployment flight check for production runtime, HTTPS sessions, recovery access, and

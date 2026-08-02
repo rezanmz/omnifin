@@ -256,6 +256,11 @@ set is incomplete without the matching encryption master key, recovery secret, d
 configuration, immutable image digest, database, and manifest. Keep secrets separate from the
 database backup and protect backup access as carefully as live access.
 
+After a manual restore rehearsal, use the runbook's bounded `backup-retained` operation from a host
+systemd timer or overlap-locked cron job. The application image contains no scheduler. Alert on its
+non-zero attention exit, pin the Compose image by digest, and replicate successful recovery sets to
+independently protected off-host storage.
+
 ## Upgrade
 
 1. Read the release notes and compatibility changes.
