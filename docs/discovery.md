@@ -96,6 +96,11 @@ references contain only a validated `youtube:{video-id}` token. The browser reco
 YouTube watch URL only after an explicit user action; Omnifin does not embed a third-party
 player or receive a provider URL from Seerr.
 
+Seerr may return unusually large related-video collections for otherwise valid titles. Omnifin
+retains only the first 100 candidates for strict parsing and emits at most six deduplicated,
+type-allowlisted YouTube references. Overflow entries are discarded before validation so they
+cannot make the core title unavailable or influence the normalized trailer order.
+
 Person detail responses add a bounded biography, department, birth and death dates,
 birthplace, and up to 24 deduplicated movie or series credits. Cast and crew entries in a
 media response carry the normalized person identifier needed to open this context. A credit

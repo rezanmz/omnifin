@@ -203,6 +203,10 @@ const upstreamCombinedRatingSchema = z.object({
   rt: upstreamRtRatingSchema.optional(),
 });
 
+function boundedRelatedVideos(value: unknown) {
+  return Array.isArray(value) ? value.slice(0, 100) : value;
+}
+
 const upstreamMovieRecommendationSchema = upstreamMovieResultSchema.extend({
   mediaType: z.literal("movie").optional(),
 });
@@ -234,7 +238,9 @@ const upstreamDetailBase = {
   id: upstreamIdentifierSchema,
   mediaInfo: upstreamMediaInfoSchema,
   overview: upstreamOverviewSchema,
-  relatedVideos: z.array(upstreamRelatedVideoSchema).max(100).default([]),
+  relatedVideos: z
+    .preprocess(boundedRelatedVideos, z.array(upstreamRelatedVideoSchema).max(100))
+    .default([]),
   status: z.string().trim().max(100).nullish(),
   tagline: z.string().trim().max(500).nullish(),
   voteAverage: upstreamVoteAverageSchema,

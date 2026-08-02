@@ -249,6 +249,84 @@ describe("Seerr media details", () => {
     ]);
   });
 
+  it("retains movie details while truncating an oversized related-video collection", async () => {
+    const relatedVideos = Array.from({ length: 159 }, (_, index) => ({
+      key: `bounded-video-${String(index).padStart(3, "0")}`,
+      name: `Trailer ${index + 1}`,
+      site: "YouTube",
+      size: 1_080,
+      type: "Trailer",
+    }));
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        credits: { cast: [], crew: [] },
+        genres: [],
+        id: 603,
+        mediaInfo: null,
+        originalTitle: "The Matrix",
+        overview: "A valid title with an unusually large related-video collection.",
+        releaseDate: "1999-03-30",
+        relatedVideos,
+        runtime: 136,
+        status: "Released",
+        tagline: null,
+        title: "The Matrix",
+        voteAverage: 8.2,
+        voteCount: 27_000,
+      }),
+      jsonResponse({}),
+      jsonResponse({ page: 1, results: [], totalPages: 0, totalResults: 0 }),
+    ]);
+
+    const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en" });
+
+    expect(result.item.title).toBe("The Matrix");
+    expect(result.item.intelligence.trailers).toHaveLength(6);
+    expect(result.item.intelligence.trailers.map(({ id }) => id)).toEqual(
+      relatedVideos.slice(0, 6).map(({ key }) => `youtube:${key}`),
+    );
+    expect(JSON.stringify(result)).not.toContain("bounded-video-100");
+  });
+
+  it("ignores malformed related-video overflow but rejects malformed retained candidates", async () => {
+    const baseDetail = {
+      credits: { cast: [], crew: [] },
+      genres: [],
+      id: 603,
+      mediaInfo: null,
+      originalTitle: "The Matrix",
+      overview: null,
+      releaseDate: "1999-03-30",
+      runtime: 136,
+      status: "Released",
+      tagline: null,
+      title: "The Matrix",
+      voteAverage: 8.2,
+      voteCount: 27_000,
+    };
+    const validVideos = Array.from({ length: 100 }, (_, index) => ({
+      key: `valid-${index}`,
+      name: `Trailer ${index}`,
+      site: "YouTube",
+      type: "Trailer",
+    }));
+    const overflow = adapterWithResponses([
+      jsonResponse({ ...baseDetail, relatedVideos: [...validVideos, { private: true }] }),
+      jsonResponse({}),
+      jsonResponse({ page: 1, results: [], totalPages: 0, totalResults: 0 }),
+    ]).adapter;
+    const retained = adapterWithResponses([
+      jsonResponse({ ...baseDetail, relatedVideos: [{ private: true }, ...validVideos] }),
+    ]).adapter;
+
+    await expect(
+      overflow.detail({ kind: "movie", tmdbId: 603 }, { language: "en" }),
+    ).resolves.toMatchObject({ item: { title: "The Matrix" } });
+    await expect(
+      retained.detail({ kind: "movie", tmdbId: 603 }, { language: "en" }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+  });
+
   it("normalizes series details and season summaries", async () => {
     const { adapter, requests } = adapterWithResponses([
       jsonResponse({
