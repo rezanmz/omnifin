@@ -1,18 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
-import dynamicImport from "next/dynamic";
 import type { ReactNode } from "react";
 
+import { ApplicationShellFrame } from "../components/application-shell-frame";
 import {
   APPLICATION_PATHNAME_HEADER,
   routeUsesApplicationShell,
 } from "../lib/application-shell-route";
 import { readThemePreference } from "../lib/theme-server";
 import "./foundation.css";
-
-const ApplicationShellBoundary = dynamicImport(() =>
-  import("../components/application-shell").then((module) => module.ApplicationShellBoundary),
-);
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
 // framework and application script, including not-found and error surfaces.
@@ -37,7 +33,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const explicitTheme = preference === "system" ? undefined : preference;
   const pathname = (await headers()).get(APPLICATION_PATHNAME_HEADER) ?? "/";
   const content = routeUsesApplicationShell(pathname) ? (
-    <ApplicationShellBoundary themePreference={preference}>{children}</ApplicationShellBoundary>
+    <ApplicationShellFrame themePreference={preference}>{children}</ApplicationShellFrame>
   ) : (
     children
   );

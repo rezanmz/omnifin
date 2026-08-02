@@ -1,8 +1,5 @@
 "use client";
 
-import type { ServiceStatus } from "../lib/dashboard-data";
-import { routeUsesApplicationShell } from "../lib/application-shell-route";
-import type { ThemePreference } from "../lib/theme";
 import { usePathname } from "next/navigation";
 import {
   createContext,
@@ -14,10 +11,12 @@ import {
   useState,
 } from "react";
 
-import { CinematicBackdrop } from "./cinematic-backdrop";
-import { LiquidGlassEnvironment } from "./liquid-glass-environment";
-import { MobileNavigation, NavigationRail, type PrimaryDestination } from "./navigation-rail";
-import { TopCommandBar } from "./top-command-bar";
+import type { ServiceStatus } from "../lib/dashboard-data";
+import {
+  routeUsesApplicationShell,
+  type ApplicationDestination,
+} from "../lib/application-shell-route";
+import type { ThemePreference } from "../lib/theme";
 
 const DEFAULT_ACCENT = "#8de9d5";
 const DEFAULT_SIGNAL: ApplicationShellSignal = {
@@ -28,7 +27,7 @@ const DEFAULT_SIGNAL: ApplicationShellSignal = {
 
 type ShellStyle = CSSProperties & { "--ambient-accent": string };
 
-interface ApplicationShellSignal {
+export interface ApplicationShellSignal {
   accent: string;
   displayProfile: "standard" | "ten-foot";
   status: ServiceStatus;
@@ -36,111 +35,83 @@ interface ApplicationShellSignal {
 
 interface ApplicationShellContextValue {
   setSignal: (signal: ApplicationShellSignal) => void;
+  signal: ApplicationShellSignal;
 }
 
 const ApplicationShellContext = createContext<ApplicationShellContextValue | null>(null);
 
-function destinationForPath(pathname: string): PrimaryDestination | null {
-  if (pathname === "/") return "discover";
-  if (pathname === "/library" || pathname.startsWith("/library/")) return "library";
-  if (pathname === "/calendar" || pathname.startsWith("/calendar/")) return "calendar";
-  if (pathname === "/operations/requests" || pathname.startsWith("/operations/requests/")) {
-    return "requests";
-  }
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
-  if (pathname === "/operations" || pathname.startsWith("/operations/")) return "operations";
-  return null;
-}
-
-function ShellFrame({
-  accent,
-  children,
-  current,
-  displayProfile,
-  status,
-  themePreference,
-}: {
-  accent: string;
-  children: ReactNode;
-  current: PrimaryDestination | null;
-  displayProfile: "standard" | "ten-foot";
-  status: ServiceStatus;
-  themePreference: ThemePreference;
-}) {
-  return (
-    <div
-      className="application-frame"
-      data-display-profile={displayProfile}
-      style={{ "--ambient-accent": accent } as ShellStyle}
-    >
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail current={current} />
-      <div className="application-shell">
-        <TopCommandBar connectionStatus={status} themePreference={themePreference} />
-        {children}
-      </div>
-      <MobileNavigation current={current} />
-    </div>
-  );
-}
-
 export function ApplicationShellBoundary({
+  backdrop,
   children,
-  themePreference,
+  environment,
+  mobileNavigation,
+  navigation,
+  topCommandBar,
 }: {
+  backdrop: ReactNode;
   children: ReactNode;
-  themePreference: ThemePreference;
+  environment: ReactNode;
+  mobileNavigation: ReactNode;
+  navigation: ReactNode;
+  topCommandBar: ReactNode;
 }) {
   const pathname = usePathname();
   const [registeredSignal, setRegisteredSignal] = useState<{
     pathname: string;
     signal: ApplicationShellSignal;
   }>(() => ({ pathname, signal: DEFAULT_SIGNAL }));
+  const signal = registeredSignal.pathname === pathname ? registeredSignal.signal : DEFAULT_SIGNAL;
   const context = useMemo<ApplicationShellContextValue>(
     () => ({
-      setSignal: (signal) =>
+      setSignal: (nextSignal) =>
         setRegisteredSignal((current) =>
           current.pathname === pathname &&
-          current.signal.accent === signal.accent &&
-          current.signal.displayProfile === signal.displayProfile &&
-          current.signal.status === signal.status
+          current.signal.accent === nextSignal.accent &&
+          current.signal.displayProfile === nextSignal.displayProfile &&
+          current.signal.status === nextSignal.status
             ? current
-            : { pathname, signal },
+            : { pathname, signal: nextSignal },
         ),
+      signal,
     }),
-    [pathname],
+    [pathname, signal],
   );
-  const signal = registeredSignal.pathname === pathname ? registeredSignal.signal : DEFAULT_SIGNAL;
 
   if (!routeUsesApplicationShell(pathname)) return children;
 
   return (
     <ApplicationShellContext.Provider value={context}>
-      <ShellFrame
-        accent={signal.accent}
-        current={destinationForPath(pathname)}
-        displayProfile={signal.displayProfile}
-        status={signal.status}
-        themePreference={themePreference}
+      <div
+        className="application-frame"
+        data-display-profile={signal.displayProfile}
+        style={{ "--ambient-accent": signal.accent } as ShellStyle}
       >
-        {children}
-      </ShellFrame>
+        {environment}
+        {backdrop}
+        {navigation}
+        <div className="application-shell">
+          {topCommandBar}
+          {children}
+        </div>
+        {mobileNavigation}
+      </div>
     </ApplicationShellContext.Provider>
   );
+}
+
+export function useApplicationShellSignal() {
+  return useContext(ApplicationShellContext)?.signal ?? DEFAULT_SIGNAL;
 }
 
 export function ApplicationShellContent({
   accent = DEFAULT_ACCENT,
   children,
-  current,
   displayProfile = "standard",
   status,
-  themePreference = "system",
 }: {
   accent?: string;
   children: ReactNode;
-  current: PrimaryDestination;
+  current: ApplicationDestination;
   displayProfile?: "standard" | "ten-foot";
   status: ServiceStatus;
   themePreference?: ThemePreference;
@@ -152,16 +123,5 @@ export function ApplicationShellContent({
   }, [accent, displayProfile, shell, status]);
 
   if (shell) return children;
-
-  return (
-    <ShellFrame
-      accent={accent}
-      current={current}
-      displayProfile={displayProfile}
-      status={status}
-      themePreference={themePreference}
-    >
-      {children}
-    </ShellFrame>
-  );
+  return children;
 }

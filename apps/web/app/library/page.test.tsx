@@ -1,11 +1,27 @@
 import { render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import StandaloneApplicationShell from "../../components/standalone-application-shell";
 import LibraryPage from "./page";
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined }),
 }));
+
+function libraryScreen(content: ReactNode) {
+  return (
+    <StandaloneApplicationShell
+      accent="#6f8d84"
+      current="library"
+      displayProfile="standard"
+      status="attention"
+      themePreference="system"
+    >
+      {content}
+    </StandaloneApplicationShell>
+  );
+}
 
 describe("LibraryPage", () => {
   afterEach(() => {
@@ -19,7 +35,7 @@ describe("LibraryPage", () => {
       vi.fn(() => new Promise<Response>(() => undefined)),
     );
 
-    render(await LibraryPage({ searchParams: Promise.resolve({}) }));
+    render(libraryScreen(await LibraryPage({ searchParams: Promise.resolve({}) })));
 
     expect(screen.getByRole("region", { name: "Gathering your library…" })).toHaveAttribute(
       "aria-busy",
@@ -34,7 +50,9 @@ describe("LibraryPage", () => {
   it("exposes the deterministic paired catalogue only in explicit test mode", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
 
-    render(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "ready" }) }));
+    render(
+      libraryScreen(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "ready" }) })),
+    );
 
     expect(
       screen.getByRole("heading", { level: 1, name: "Every story, in its place." }),
@@ -47,7 +65,9 @@ describe("LibraryPage", () => {
   it("renders a deliberate empty state", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
 
-    render(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "empty" }) }));
+    render(
+      libraryScreen(await LibraryPage({ searchParams: Promise.resolve({ "test-view": "empty" }) })),
+    );
 
     expect(screen.getByRole("heading", { name: "Your paired library is empty." })).toBeVisible();
     expect(screen.getByText(/Add a movie or series in Jellyfin/u)).toBeVisible();
