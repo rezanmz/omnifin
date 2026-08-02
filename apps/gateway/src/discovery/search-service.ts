@@ -2,6 +2,8 @@ import {
   SeerrAdapter,
   type SeerrDiscoveryArtwork,
   type SeerrDiscoveryFeedPage,
+  type SeerrDiscoveryMediaDetail,
+  type SeerrDiscoveryPersonDetail,
 } from "@omnifin/connectors/adapters/seerr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
@@ -23,10 +25,8 @@ import {
   type DiscoveryFeedResponse,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
-  type DiscoveryMediaDetailResponse,
   type DiscoveryPersonDetailParams,
   type DiscoveryPersonDetailQuery,
-  type DiscoveryPersonDetailResponse,
   type DiscoverySearchQuery,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -71,16 +71,16 @@ export interface DiscoverySearchAdapter {
     params: DiscoveryMediaDetailParams,
     query: DiscoveryMediaDetailQuery,
     signal?: AbortSignal,
-  ): Promise<DiscoveryMediaDetailResponse>;
+  ): Promise<SeerrDiscoveryMediaDetail>;
   personDetail(
     params: DiscoveryPersonDetailParams,
     query: DiscoveryPersonDetailQuery,
     signal?: AbortSignal,
-  ): Promise<DiscoveryPersonDetailResponse>;
+  ): Promise<SeerrDiscoveryPersonDetail>;
   search(input: DiscoverySearchQuery, signal?: AbortSignal): Promise<DiscoverySearchResponse>;
   readDiscoveryArtwork?(
     path: string,
-    kind: "backdrop" | "poster",
+    kind: "backdrop" | "poster" | "profile",
     signal?: AbortSignal,
   ): Promise<SeerrDiscoveryArtwork>;
 }
@@ -376,11 +376,56 @@ export class DiscoverySearchService {
     context: DiscoverySearchContext,
     signal?: AbortSignal,
   ) {
-    requirePermission(context.principal, "media.view");
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
     const params = discoveryMediaDetailParamsSchema.parse(paramsInput);
     const query = discoveryMediaDetailQuerySchema.parse(queryInput);
-    const adapter = this.#adapter();
-    return discoveryMediaDetailResponseSchema.parse(await adapter.detail(params, query, signal));
+    const row = this.#connector();
+    const adapter = this.#adapterFor(row);
+    const detail = await adapter.detail(params, query, signal);
+    if (detail.artwork.castProfilePaths.length !== detail.response.item.cast.length) {
+      throw new DiscoverySearchError("connector_integrity_failure");
+    }
+    const inputs = [
+      ...(detail.artwork.backdropPath === null
+        ? []
+        : [{ kind: "backdrop" as const, path: detail.artwork.backdropPath }]),
+      ...(detail.artwork.posterPath === null
+        ? []
+        : [{ kind: "poster" as const, path: detail.artwork.posterPath }]),
+      ...detail.artwork.castProfilePaths.flatMap((path) =>
+        path === null ? [] : [{ kind: "profile" as const, path }],
+      ),
+    ];
+    let references: string[];
+    try {
+      references = this.#references.create(principal.userId, row.id, inputs);
+    } catch (error) {
+      throw new DiscoverySearchError("storage_failure", { cause: error });
+    }
+    let referenceIndex = 0;
+    const artworkPath = (path: string | null) => {
+      if (path === null) return null;
+      const reference = references[referenceIndex++];
+      if (!reference) throw new DiscoverySearchError("storage_failure");
+      return `/v1/discovery/artwork/${reference}`;
+    };
+    const response = discoveryMediaDetailResponseSchema.parse({
+      ...detail.response,
+      item: {
+        ...detail.response.item,
+        artwork: {
+          backdropPath: artworkPath(detail.artwork.backdropPath),
+          posterPath: artworkPath(detail.artwork.posterPath),
+        },
+        cast: detail.response.item.cast.map((credit, index) => ({
+          ...credit,
+          profilePath: artworkPath(detail.artwork.castProfilePaths[index] ?? null),
+        })),
+      },
+    });
+    if (referenceIndex !== references.length) throw new DiscoverySearchError("storage_failure");
+    return response;
   }
 
   public async personDetail(
@@ -389,13 +434,29 @@ export class DiscoverySearchService {
     context: DiscoverySearchContext,
     signal?: AbortSignal,
   ) {
-    requirePermission(context.principal, "media.view");
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
     const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
     const query = discoveryPersonDetailQuerySchema.parse(queryInput);
-    const adapter = this.#adapter();
-    return discoveryPersonDetailResponseSchema.parse(
-      await adapter.personDetail(params, query, signal),
-    );
+    const row = this.#connector();
+    const adapter = this.#adapterFor(row);
+    const detail = await adapter.personDetail(params, query, signal);
+    let profilePath = null;
+    if (detail.profilePath !== null) {
+      try {
+        const [reference] = this.#references.create(principal.userId, row.id, [
+          { kind: "profile", path: detail.profilePath },
+        ]);
+        if (!reference) throw new DiscoveryArtworkReferenceError();
+        profilePath = `/v1/discovery/artwork/${reference}`;
+      } catch (error) {
+        throw new DiscoverySearchError("storage_failure", { cause: error });
+      }
+    }
+    return discoveryPersonDetailResponseSchema.parse({
+      ...detail.response,
+      item: { ...detail.response.item, profilePath },
+    });
   }
 
   #adapter() {

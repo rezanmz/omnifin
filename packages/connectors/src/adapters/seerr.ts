@@ -150,6 +150,7 @@ const upstreamCastCreditSchema = z.object({
   id: upstreamIdentifierSchema,
   name: z.string().trim().min(1).max(160),
   order: z.int().nonnegative().max(100_000).default(100_000),
+  profilePath: upstreamArtworkPathSchema,
 });
 
 const upstreamCrewCreditSchema = z.object({
@@ -158,10 +159,20 @@ const upstreamCrewCreditSchema = z.object({
   name: z.string().trim().min(1).max(160),
 });
 
+function boundedOptionalArray<T>(schema: z.ZodType<T>, maximum: number) {
+  return z.preprocess((value) => {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, maximum).flatMap((candidate) => {
+      const parsed = schema.safeParse(candidate);
+      return parsed.success ? [parsed.data] : [];
+    });
+  }, z.array(schema).max(maximum));
+}
+
 const upstreamCreditsSchema = z
   .object({
-    cast: z.array(upstreamCastCreditSchema).max(1_000).default([]),
-    crew: z.array(upstreamCrewCreditSchema).max(1_000).default([]),
+    cast: boundedOptionalArray(upstreamCastCreditSchema, 200),
+    crew: boundedOptionalArray(upstreamCrewCreditSchema, 200),
   })
   .default({ cast: [], crew: [] });
 
@@ -203,10 +214,6 @@ const upstreamCombinedRatingSchema = z.object({
   rt: upstreamRtRatingSchema.optional(),
 });
 
-function boundedRelatedVideos(value: unknown) {
-  return Array.isArray(value) ? value.slice(0, 100) : value;
-}
-
 const upstreamMovieRecommendationSchema = upstreamMovieResultSchema.extend({
   mediaType: z.literal("movie").optional(),
 });
@@ -214,10 +221,10 @@ const upstreamSeriesRecommendationSchema = upstreamSeriesResultSchema.extend({
   mediaType: z.literal("tv").optional(),
 });
 const upstreamMovieRecommendationPageSchema = z.object({
-  results: z.array(upstreamMovieRecommendationSchema).max(100).default([]),
+  results: boundedOptionalArray(upstreamMovieRecommendationSchema, 100),
 });
 const upstreamSeriesRecommendationPageSchema = z.object({
-  results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
+  results: boundedOptionalArray(upstreamSeriesRecommendationSchema, 100),
 });
 const upstreamMovieFeedPageSchema = z.object({
   page: z.int().min(1).max(500),
@@ -233,14 +240,14 @@ const upstreamSeriesFeedPageSchema = z.object({
 });
 
 const upstreamDetailBase = {
+  backdropPath: upstreamArtworkPathSchema,
   credits: upstreamCreditsSchema,
-  genres: z.array(upstreamGenreSchema).max(100).default([]),
+  genres: boundedOptionalArray(upstreamGenreSchema, 100),
   id: upstreamIdentifierSchema,
   mediaInfo: upstreamMediaInfoSchema,
   overview: upstreamOverviewSchema,
-  relatedVideos: z
-    .preprocess(boundedRelatedVideos, z.array(upstreamRelatedVideoSchema).max(100))
-    .default([]),
+  posterPath: upstreamArtworkPathSchema,
+  relatedVideos: boundedOptionalArray(upstreamRelatedVideoSchema, 100),
   status: z.string().trim().max(100).nullish(),
   tagline: z.string().trim().max(500).nullish(),
   voteAverage: upstreamVoteAverageSchema,
@@ -264,13 +271,13 @@ const upstreamSeasonSummarySchema = z.object({
 
 const upstreamSeriesDetailSchema = z.object({
   ...upstreamDetailBase,
-  episodeRunTime: z.array(z.int().nonnegative().max(10_000)).max(100).default([]),
+  episodeRunTime: boundedOptionalArray(z.int().nonnegative().max(10_000), 100),
   firstAirDate: upstreamDateSchema,
   name: upstreamTitleSchema,
   numberOfEpisodes: z.int().nonnegative().max(100_000).default(0),
   numberOfSeasons: z.int().nonnegative().max(10_000).default(0),
   originalName: upstreamOptionalTitleSchema,
-  seasons: z.array(upstreamSeasonSummarySchema).max(100).default([]),
+  seasons: boundedOptionalArray(upstreamSeasonSummarySchema, 100),
 });
 
 const upstreamPersonDetailSchema = z.object({
@@ -281,6 +288,7 @@ const upstreamPersonDetailSchema = z.object({
   knownForDepartment: z.string().trim().max(160).nullish(),
   name: upstreamTitleSchema,
   placeOfBirth: z.string().trim().max(300).nullish(),
+  profilePath: upstreamArtworkPathSchema,
 });
 
 const upstreamPersonCreditSchema = z.object({
@@ -300,8 +308,8 @@ const upstreamPersonCreditSchema = z.object({
 });
 
 const upstreamPersonCreditsSchema = z.object({
-  cast: z.array(upstreamPersonCreditSchema).max(2_000).default([]),
-  crew: z.array(upstreamPersonCreditSchema).max(2_000).default([]),
+  cast: boundedOptionalArray(upstreamPersonCreditSchema, 500),
+  crew: boundedOptionalArray(upstreamPersonCreditSchema, 500),
   id: upstreamIdentifierSchema,
 });
 
@@ -543,7 +551,7 @@ function normalizedCast(credits: UpstreamCredits) {
       const key = `${credit.id}\0${character ?? ""}`;
       if (seen.has(key)) return [];
       seen.add(key);
-      return [{ character, name: credit.name, personId: credit.id }];
+      return [{ character, name: credit.name, personId: credit.id, profilePath: null }];
     })
     .slice(0, DISCOVERY_DETAIL_MAX_CAST);
 }
@@ -740,6 +748,20 @@ export interface SeerrDiscoveryArtwork {
   contentType: "image/avif" | "image/jpeg" | "image/png" | "image/webp";
 }
 
+export interface SeerrDiscoveryMediaDetail {
+  artwork: {
+    backdropPath: string | null;
+    castProfilePaths: Array<string | null>;
+    posterPath: string | null;
+  };
+  response: DiscoveryMediaDetailResponse;
+}
+
+export interface SeerrDiscoveryPersonDetail {
+  profilePath: string | null;
+  response: DiscoveryPersonDetailResponse;
+}
+
 function feedMovie(
   result: z.infer<typeof upstreamMovieRecommendationSchema>,
 ): SeerrDiscoveryFeedItem {
@@ -860,6 +882,7 @@ function normalizedDetailBase(
   originalTitle: string | null | undefined,
 ) {
   return {
+    artwork: { backdropPath: null, posterPath: null },
     availability: availabilityFromMediaInfo(response.mediaInfo),
     cast: normalizedCast(response.credits),
     crew: normalizedCrew(response.credits),
@@ -1056,7 +1079,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
 
   async readDiscoveryArtwork(
     pathInput: string,
-    kind: "backdrop" | "poster",
+    kind: "backdrop" | "poster" | "profile",
     signal?: AbortSignal,
   ): Promise<SeerrDiscoveryArtwork> {
     if (!this.#apiKey) {
@@ -1070,7 +1093,12 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     }
     const path = upstreamArtworkPathSchema.parse(pathInput);
     if (!path) throw this.#artworkClient().invalidResponse("discovery.artwork");
-    const size = kind === "poster" ? "w600_and_h900_bestv2" : "w1920_and_h800_multi_faces";
+    const size =
+      kind === "backdrop"
+        ? "w1920_and_h800_multi_faces"
+        : kind === "poster"
+          ? "w600_and_h900_bestv2"
+          : "w300_and_h450_bestv2";
     const response = await this.#artworkClient().requestBytes(
       `imageproxy/tmdb/t/p/${size}${path}`,
       {
@@ -1173,7 +1201,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     paramsInput: DiscoveryMediaDetailParams,
     queryInput: DiscoveryMediaDetailQuery,
     signal?: AbortSignal,
-  ): Promise<DiscoveryMediaDetailResponse> {
+  ): Promise<SeerrDiscoveryMediaDetail> {
     if (!this.#apiKey) {
       throw new SafeConnectorError({
         code: "configuration_invalid",
@@ -1230,7 +1258,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       const recommendations = (recommendationResult.value?.results ?? [])
         .map(normalizedMovieRecommendation)
         .slice(0, DISCOVERY_DETAIL_MAX_RECOMMENDATIONS);
-      return discoveryMediaDetailResponseSchema.parse({
+      const normalized = discoveryMediaDetailResponseSchema.parse({
         generatedAt: this.clock.now().toISOString(),
         item: {
           ...normalizedDetailBase(response, response.originalTitle),
@@ -1248,6 +1276,17 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
           year: yearFromDate(response.releaseDate),
         },
       });
+      return {
+        artwork: {
+          backdropPath: response.backdropPath ?? null,
+          castProfilePaths: normalized.item.cast.map(
+            ({ personId }) =>
+              response.credits.cast.find((credit) => credit.id === personId)?.profilePath ?? null,
+          ),
+          posterPath: response.posterPath ?? null,
+        },
+        response: normalized,
+      };
     }
 
     const responsePromise = this.client.requestJson(
@@ -1288,7 +1327,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     const recommendations = (recommendationResult.value?.results ?? [])
       .map(normalizedSeriesRecommendation)
       .slice(0, DISCOVERY_DETAIL_MAX_RECOMMENDATIONS);
-    return discoveryMediaDetailResponseSchema.parse({
+    const normalized = discoveryMediaDetailResponseSchema.parse({
       generatedAt: this.clock.now().toISOString(),
       item: {
         ...normalizedDetailBase(response, response.originalName),
@@ -1314,13 +1353,24 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         year: yearFromDate(response.firstAirDate),
       },
     });
+    return {
+      artwork: {
+        backdropPath: response.backdropPath ?? null,
+        castProfilePaths: normalized.item.cast.map(
+          ({ personId }) =>
+            response.credits.cast.find((credit) => credit.id === personId)?.profilePath ?? null,
+        ),
+        posterPath: response.posterPath ?? null,
+      },
+      response: normalized,
+    };
   }
 
   async personDetail(
     paramsInput: DiscoveryPersonDetailParams,
     queryInput: DiscoveryPersonDetailQuery,
     signal?: AbortSignal,
-  ): Promise<DiscoveryPersonDetailResponse> {
+  ): Promise<SeerrDiscoveryPersonDetail> {
     if (!this.#apiKey) {
       throw new SafeConnectorError({
         code: "configuration_invalid",
@@ -1362,7 +1412,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       throw invalidDetailResponse();
     }
     const credits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
-    return discoveryPersonDetailResponseSchema.parse({
+    const normalized = discoveryPersonDetailResponseSchema.parse({
       generatedAt: this.clock.now().toISOString(),
       item: {
         biography: optionalText(response.biography),
@@ -1374,10 +1424,12 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         department: optionalText(response.knownForDepartment),
         id: `person:${response.id}`,
         name: response.name,
+        profilePath: null,
         source: "seerr",
         tmdbId: response.id,
       },
     });
+    return { profilePath: response.profilePath ?? null, response: normalized };
   }
 
   async resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number> {

@@ -57,8 +57,9 @@ const searchResponse: DiscoverySearchResponse = {
 const detailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "available",
-    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
     id: "movie:603",

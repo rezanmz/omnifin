@@ -41,12 +41,23 @@ const series: DiscoverySeriesResult = {
 const movieResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable",
     cast: [
-      { character: "Neo", name: "Keanu Reeves", personId: 6384 },
-      { character: "Morpheus", name: "Laurence Fishburne", personId: 2975 },
-      { character: "Trinity", name: "Carrie-Anne Moss", personId: 530 },
-      { character: "Agent Smith", name: "Hugo Weaving", personId: 1331 },
+      { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
+      {
+        character: "Morpheus",
+        name: "Laurence Fishburne",
+        personId: 2975,
+        profilePath: null,
+      },
+      { character: "Trinity", name: "Carrie-Anne Moss", personId: 530, profilePath: null },
+      {
+        character: "Agent Smith",
+        name: "Hugo Weaving",
+        personId: 1331,
+        profilePath: null,
+      },
     ],
     crew: [
       { name: "Lana Wachowski", personId: 9340, role: "Director" },
@@ -188,6 +199,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: null,
     source: "seerr",
     tmdbId: 6384,
   },
@@ -195,10 +207,21 @@ const personResponse: DiscoveryPersonDetailResponse = {
 const seriesResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "partial",
     cast: [
-      { character: "Walter White", name: "Bryan Cranston", personId: 17419 },
-      { character: "Jesse Pinkman", name: "Aaron Paul", personId: 84497 },
+      {
+        character: "Walter White",
+        name: "Bryan Cranston",
+        personId: 17419,
+        profilePath: null,
+      },
+      {
+        character: "Jesse Pinkman",
+        name: "Aaron Paul",
+        personId: 84497,
+        profilePath: null,
+      },
     ],
     crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
     episodeCount: 62,

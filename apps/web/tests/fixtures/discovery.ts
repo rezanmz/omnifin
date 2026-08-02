@@ -2,6 +2,10 @@ import type { Page } from "@playwright/test";
 
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
 
+function artworkReference(seed: string) {
+  return `/v1/discovery/artwork/discovery_art_${seed.repeat(22)}`;
+}
+
 export const discoveryFeedFixture = {
   ...demoDiscoveryFeed,
   rails: demoDiscoveryFeed.rails.map((rail) => ({
@@ -68,12 +72,33 @@ export const discoverySearchFixture = {
 export const discoveryMovieDetailFixture = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
+    artwork: { backdropPath: artworkReference("a"), posterPath: artworkReference("b") },
     availability: "unavailable",
     cast: [
-      { character: "Neo", name: "Keanu Reeves", personId: 6384 },
-      { character: "Morpheus", name: "Laurence Fishburne", personId: 2975 },
-      { character: "Trinity", name: "Carrie-Anne Moss", personId: 530 },
-      { character: "Agent Smith", name: "Hugo Weaving", personId: 1331 },
+      {
+        character: "Neo",
+        name: "Keanu Reeves",
+        personId: 6384,
+        profilePath: artworkReference("c"),
+      },
+      {
+        character: "Morpheus",
+        name: "Laurence Fishburne",
+        personId: 2975,
+        profilePath: artworkReference("d"),
+      },
+      {
+        character: "Trinity",
+        name: "Carrie-Anne Moss",
+        personId: 530,
+        profilePath: artworkReference("e"),
+      },
+      {
+        character: "Agent Smith",
+        name: "Hugo Weaving",
+        personId: 1331,
+        profilePath: artworkReference("f"),
+      },
     ],
     crew: [
       { name: "Lana Wachowski", personId: 9340, role: "Director" },
@@ -187,6 +212,7 @@ export const discoveryPersonDetailFixture = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: artworkReference("c"),
     source: "seerr",
     tmdbId: 6384,
   },
@@ -251,6 +277,10 @@ export async function mockDiscoveryFeed(page: Page) {
       status: 200,
     });
   });
+  await mockDiscoveryArtwork(page);
+}
+
+async function mockDiscoveryArtwork(page: Page) {
   await page.route("**/api/discovery/artwork/discovery_art_*", async (route) => {
     await route.fulfill({
       body: discoveryArtwork(route.request().url()),
@@ -262,6 +292,7 @@ export async function mockDiscoveryFeed(page: Page) {
 }
 
 export async function mockDiscoveryDetails(page: Page) {
+  await mockDiscoveryArtwork(page);
   await page.route("**/api/discovery/details/movie/603?**", async (route) => {
     await route.fulfill({
       body: JSON.stringify(discoveryMovieDetailFixture),

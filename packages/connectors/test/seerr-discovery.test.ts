@@ -154,6 +154,9 @@ describe("Seerr discovery", () => {
       new Response(new Uint8Array([255, 216, 255]), {
         headers: { "content-type": "image/jpg" },
       }),
+      new Response(new Uint8Array([255, 216, 255]), {
+        headers: { "content-type": "image/jpeg" },
+      }),
     ]);
 
     await expect(adapter.readDiscoveryArtwork("/poster-safe.png", "poster")).resolves.toEqual({
@@ -164,9 +167,14 @@ describe("Seerr discovery", () => {
       body: new Uint8Array([255, 216, 255]),
       contentType: "image/jpeg",
     });
+    await expect(adapter.readDiscoveryArtwork("/profile-safe.jpg", "profile")).resolves.toEqual({
+      body: new Uint8Array([255, 216, 255]),
+      contentType: "image/jpeg",
+    });
     expect(requests.map(({ url }) => url.pathname)).toEqual([
       "/imageproxy/tmdb/t/p/w600_and_h900_bestv2/poster-safe.png",
       "/imageproxy/tmdb/t/p/w1920_and_h800_multi_faces/backdrop-safe.jpg",
+      "/imageproxy/tmdb/t/p/w300_and_h450_bestv2/profile-safe.jpg",
     ]);
     expect(requests.every(({ init }) => init.headers.get("x-api-key") === "fixture-api-key")).toBe(
       true,

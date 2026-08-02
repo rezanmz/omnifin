@@ -565,6 +565,8 @@ test("media details preserve search context and expose a guarded request handoff
   const drawer = page.locator("dialog.media-detail");
   await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();
   await expect(drawer.getByRole("heading", { name: "The Matrix" })).toBeVisible();
+  await expect(drawer.getByAltText("The Matrix poster")).toBeVisible();
+  await expect(drawer.locator(".media-detail__cast-profile").first()).toBeVisible();
   await expect(drawer.getByText("83%")).toBeVisible();
   await expect(drawer.getByRole("link", { name: /official trailer/iu })).toHaveAttribute(
     "href",
@@ -573,6 +575,7 @@ test("media details preserve search context and expose a guarded request handoff
   await drawer.getByRole("button", { name: /Keanu Reeves/iu }).click();
   await expect(page.getByRole("dialog", { name: "Keanu Reeves person context" })).toBeVisible();
   await expect(drawer.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+  await expect(drawer.getByAltText("Keanu Reeves portrait")).toBeVisible();
   await expect(drawer.getByRole("heading", { name: "Biography" })).toBeVisible();
   await drawer.getByRole("button", { name: "Back to The Matrix" }).click();
   await expect(page.getByRole("dialog", { name: "The Matrix details" })).toBeVisible();

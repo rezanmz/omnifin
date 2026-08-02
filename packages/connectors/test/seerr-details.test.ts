@@ -145,13 +145,19 @@ describe("Seerr media details", () => {
 
     const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en-CA" });
 
-    expect(result).toEqual({
+    expect(result.response).toEqual({
       generatedAt: "2026-07-25T12:00:00.000Z",
       item: {
+        artwork: { backdropPath: null, posterPath: null },
         availability: "available",
         cast: [
-          { character: "Neo", name: "Keanu Reeves", personId: 6384 },
-          { character: "Morpheus", name: "Laurence Fishburne", personId: 2975 },
+          { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
+          {
+            character: "Morpheus",
+            name: "Laurence Fishburne",
+            personId: 2975,
+            profilePath: null,
+          },
         ],
         crew: [
           { name: "Lana Wachowski", personId: 9340, role: "Director" },
@@ -238,7 +244,14 @@ describe("Seerr media details", () => {
         year: 1999,
       },
     });
-    expect(JSON.stringify(result)).not.toMatch(/raw-|private|jellyfin|serviceUrl|https?:/iu);
+    expect(JSON.stringify(result.response)).not.toMatch(
+      /raw-|private|jellyfin|serviceUrl|https?:/iu,
+    );
+    expect(result.artwork).toEqual({
+      backdropPath: "/raw-backdrop.jpg",
+      castProfilePaths: ["/raw.jpg", null],
+      posterPath: "/raw-poster.jpg",
+    });
     expect(requests[0]?.url.pathname).toBe("/api/v1/movie/603");
     expect(requests[0]?.url.searchParams.get("language")).toBe("en-CA");
     expect(requests[0]?.init.headers.get("x-api-key")).toBe("fixture-api-key");
@@ -280,15 +293,15 @@ describe("Seerr media details", () => {
 
     const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en" });
 
-    expect(result.item.title).toBe("The Matrix");
-    expect(result.item.intelligence.trailers).toHaveLength(6);
-    expect(result.item.intelligence.trailers.map(({ id }) => id)).toEqual(
+    expect(result.response.item.title).toBe("The Matrix");
+    expect(result.response.item.intelligence.trailers).toHaveLength(6);
+    expect(result.response.item.intelligence.trailers.map(({ id }) => id)).toEqual(
       relatedVideos.slice(0, 6).map(({ key }) => `youtube:${key}`),
     );
     expect(JSON.stringify(result)).not.toContain("bounded-video-100");
   });
 
-  it("ignores malformed related-video overflow but rejects malformed retained candidates", async () => {
+  it("discards malformed optional video entries without losing valid title details", async () => {
     const baseDetail = {
       credits: { cast: [], crew: [] },
       genres: [],
@@ -321,10 +334,57 @@ describe("Seerr media details", () => {
 
     await expect(
       overflow.detail({ kind: "movie", tmdbId: 603 }, { language: "en" }),
-    ).resolves.toMatchObject({ item: { title: "The Matrix" } });
+    ).resolves.toMatchObject({ response: { item: { title: "The Matrix" } } });
     await expect(
       retained.detail({ kind: "movie", tmdbId: 603 }, { language: "en" }),
-    ).rejects.toMatchObject({ code: "response_invalid" });
+    ).resolves.toMatchObject({ response: { item: { title: "The Matrix" } } });
+  });
+
+  it("bounds and sanitizes optional credits and genres before public validation", async () => {
+    const cast = Array.from({ length: 240 }, (_, index) => ({
+      character: `Character ${index}`,
+      id: index + 1,
+      name: `Performer ${index}`,
+      order: index,
+      profilePath: `/profile-${index}.jpg`,
+    }));
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        backdropPath: "/title-backdrop.jpg",
+        credits: { cast: [{ private: true }, ...cast], crew: [{ private: true }] },
+        genres: [
+          { private: true },
+          ...Array.from({ length: 120 }, (_, id) => ({ id: id + 1, name: `Genre ${id}` })),
+        ],
+        id: 603,
+        mediaInfo: null,
+        originalTitle: "The Matrix",
+        overview: "Core title details remain available.",
+        posterPath: "/title-poster.jpg",
+        releaseDate: "1999-03-30",
+        runtime: 136,
+        status: "Released",
+        tagline: null,
+        title: "The Matrix",
+        voteAverage: 8.2,
+        voteCount: 27_000,
+      }),
+      jsonResponse({}),
+      jsonResponse({ page: 1, results: [{ private: true }], totalPages: 1, totalResults: 1 }),
+    ]);
+
+    const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en" });
+
+    expect(result.response.item).toMatchObject({ title: "The Matrix" });
+    expect(result.response.item.cast).toHaveLength(12);
+    expect(result.response.item.genres).toHaveLength(20);
+    expect(result.response.item.intelligence.recommendations).toEqual([]);
+    expect(result.artwork).toMatchObject({
+      backdropPath: "/title-backdrop.jpg",
+      posterPath: "/title-poster.jpg",
+    });
+    expect(result.artwork.castProfilePaths).toHaveLength(12);
+    expect(JSON.stringify(result.response)).not.toContain("private");
   });
 
   it("normalizes series details and season summaries", async () => {
@@ -361,7 +421,7 @@ describe("Seerr media details", () => {
 
     const result = await adapter.detail({ kind: "series", tmdbId: 1396 }, { language: "en" });
 
-    expect(result.item).toMatchObject({
+    expect(result.response.item).toMatchObject({
       availability: "partial",
       episodeCount: 62,
       id: "series:1396",
@@ -412,7 +472,7 @@ describe("Seerr media details", () => {
 
     const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en" });
 
-    expect(result.item.intelligence).toMatchObject({
+    expect(result.response.item.intelligence).toMatchObject({
       ratings: [expect.objectContaining({ label: "TMDB" })],
       ratingsState: "unavailable",
       recommendations: [],
@@ -455,7 +515,7 @@ describe("Seerr media details", () => {
 
     const result = await adapter.personDetail({ tmdbId: 6384 }, { language: "en-CA" });
 
-    expect(result).toEqual({
+    expect(result.response).toEqual({
       generatedAt: "2026-07-25T12:00:00.000Z",
       item: {
         biography: "An actor known for exacting genre work.",
@@ -477,11 +537,13 @@ describe("Seerr media details", () => {
         department: "Acting",
         id: "person:6384",
         name: "Keanu Reeves",
+        profilePath: null,
         source: "seerr",
         tmdbId: 6384,
       },
     });
-    expect(JSON.stringify(result)).not.toMatch(/private|imdb|profile|https?:/iu);
+    expect(JSON.stringify(result.response)).not.toMatch(/private|imdb|https?:/iu);
+    expect(result.profilePath).toBe("/private-profile.jpg");
     expect(requests.map((request) => request.url.pathname)).toEqual([
       "/api/v1/person/6384",
       "/api/v1/person/6384/combined_credits",

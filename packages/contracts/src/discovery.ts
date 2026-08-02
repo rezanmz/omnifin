@@ -276,6 +276,7 @@ const discoveryCastCreditSchema = z.strictObject({
   character: z.string().trim().min(1).max(200).nullable(),
   name: z.string().trim().min(1).max(160),
   personId: tmdbIdentifierSchema,
+  profilePath: discoveryArtworkPathSchema,
 });
 
 const discoveryCrewCreditSchema = z.strictObject({
@@ -339,6 +340,7 @@ const discoveryMediaIntelligenceSchema = z.strictObject({
 });
 
 const discoveryMediaDetailBase = {
+  artwork: discoveryFeedArtworkSchema,
   availability: discoveryAvailabilitySchema,
   cast: z.array(discoveryCastCreditSchema).max(DISCOVERY_DETAIL_MAX_CAST),
   crew: z.array(discoveryCrewCreditSchema).max(DISCOVERY_DETAIL_MAX_CREW),
@@ -433,6 +435,7 @@ export const discoveryPersonDetailSchema = z.strictObject({
     .max(64)
     .regex(/^person:[1-9][0-9]*$/u),
   name: titleSchema,
+  profilePath: discoveryArtworkPathSchema,
   source: z.literal("seerr"),
   tmdbId: tmdbIdentifierSchema,
 });
