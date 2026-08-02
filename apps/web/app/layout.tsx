@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
+import { ApplicationShellBoundary } from "../components/application-shell";
 import { readThemePreference } from "../lib/theme-server";
+import "./dashboard.css";
 import "./foundation.css";
 
 // Per-request rendering is required so the proxy's CSP nonce reaches every
@@ -49,7 +51,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <a className="skip-link" href="#main-content">
           Skip to main content
         </a>
-        {children}
+        <ApplicationShellBoundary themePreference={preference}>{children}</ApplicationShellBoundary>
       </body>
     </html>
   );

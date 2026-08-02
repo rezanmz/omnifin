@@ -11,9 +11,9 @@ const destinations = [
   { href: "/operations/requests", icon: ClipboardCheck, id: "requests", label: "Requests" },
 ] as const;
 
-type PrimaryDestination = (typeof destinations)[number]["id"];
+export type PrimaryDestination = (typeof destinations)[number]["id"] | "settings";
 
-export function NavigationRail({ current = "discover" }: { current?: PrimaryDestination }) {
+export function NavigationRail({ current = "discover" }: { current?: PrimaryDestination | null }) {
   return (
     <DirectionalNavigationRegion
       ariaLabel="Primary navigation"
@@ -42,7 +42,9 @@ export function NavigationRail({ current = "discover" }: { current?: PrimaryDest
         ))}
       </nav>
       <Link
+        aria-current={current === "settings" ? "page" : undefined}
         className="navigation-rail__item navigation-rail__settings"
+        data-current={current === "settings" || undefined}
         href="/settings"
         aria-label="Settings"
         data-directional-item
@@ -55,7 +57,11 @@ export function NavigationRail({ current = "discover" }: { current?: PrimaryDest
   );
 }
 
-export function MobileNavigation({ current = "discover" }: { current?: PrimaryDestination }) {
+export function MobileNavigation({
+  current = "discover",
+}: {
+  current?: PrimaryDestination | null;
+}) {
   return (
     <DirectionalNavigationRegion
       ariaLabel="Primary navigation"
@@ -79,7 +85,9 @@ export function MobileNavigation({ current = "discover" }: { current?: PrimaryDe
         </Link>
       ))}
       <Link
+        aria-current={current === "settings" ? "page" : undefined}
         className="mobile-navigation__item"
+        data-current={current === "settings" || undefined}
         data-directional-item
         href="/settings"
         prefetch={false}

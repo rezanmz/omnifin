@@ -697,6 +697,34 @@ test("operations navigation opens the system health workspace", async ({ page })
   );
 });
 
+test("authenticated route changes preserve the primary application shell", async ({ page }) => {
+  await page.goto("/?test-view=discovery-performance");
+
+  const rail = page.locator(".navigation-rail");
+  await rail.evaluate((element) => {
+    element.dataset.persistenceProbe = "present";
+  });
+  await rail.getByRole("link", { name: "Operations" }).click();
+
+  await expect(page).toHaveURL(/\/operations\/health$/u);
+  await expect(rail).toHaveAttribute("data-persistence-probe", "present");
+  await expect(rail.getByRole("link", { name: "Operations" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.locator(".navigation-rail")).toHaveCount(1);
+  await expect(page.locator(".top-command-bar")).toHaveCount(1);
+  await expect(page.locator("#main-content")).toHaveCount(1);
+
+  await rail.getByRole("link", { name: "Requests" }).click();
+  await expect(page).toHaveURL(/\/operations\/requests$/u);
+  await expect(rail).toHaveAttribute("data-persistence-probe", "present");
+  await expect(rail.getByRole("link", { name: "Requests" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
 test("system health preserves partial service visibility and private storage boundaries", async ({
   page,
 }) => {
