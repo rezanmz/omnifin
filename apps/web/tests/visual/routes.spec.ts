@@ -405,7 +405,7 @@ test("stack verification report visual baseline", async ({ page }, testInfo) => 
     "Stack verification covers representative desktop and phone geometry",
   );
   await page.goto("/onboarding?test-view=partial&test-verification=attention");
-  await page.getByRole("heading", { name: /Most of the stack answered/u }).scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: /Most of the stack answered/u }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-stack-verification.png", { fullPage: true });
 });
 
