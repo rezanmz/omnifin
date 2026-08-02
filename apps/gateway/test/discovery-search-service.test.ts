@@ -119,8 +119,9 @@ const normalizedResponse: DiscoverySearchResponse = {
 const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: now.toISOString(),
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "available",
-    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+    cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
     id: "movie:603",
@@ -158,6 +159,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: null,
     source: "seerr",
     tmdbId: 6384,
   },
@@ -207,8 +209,18 @@ function harness(
     .run();
   if (options.withConnector !== false) insertSeerr(database, config);
   const search = vi.fn(async () => normalizedResponse);
-  const detail = vi.fn(async () => normalizedDetailResponse);
-  const personDetail = vi.fn(async () => normalizedPersonResponse);
+  const detail = vi.fn(async () => ({
+    artwork: {
+      backdropPath: null as string | null,
+      castProfilePaths: [null] as Array<string | null>,
+      posterPath: null as string | null,
+    },
+    response: normalizedDetailResponse,
+  }));
+  const personDetail = vi.fn(async () => ({
+    profilePath: null as string | null,
+    response: normalizedPersonResponse,
+  }));
   const discover = vi.fn(async (kind: DiscoveryFeedRailKind): Promise<SeerrDiscoveryFeedPage> => ({
     items: [
       {
@@ -512,6 +524,45 @@ describe("discovery search service", () => {
     }
   });
 
+  it("replaces title and cast artwork with user-scoped opaque references", async () => {
+    const test = harness();
+    test.detail.mockResolvedValueOnce({
+      artwork: {
+        backdropPath: "/private/title-backdrop.jpg",
+        castProfilePaths: ["/private/person-profile.jpg"],
+        posterPath: "/private/title-poster.jpg",
+      },
+      response: normalizedDetailResponse,
+    });
+    try {
+      const response = await test.service.detail(
+        { kind: "movie", tmdbId: 603 },
+        { language: "en" },
+        { principal: principal() },
+      );
+      expect(response.item.artwork.backdropPath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(response.item.artwork.posterPath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(response.item.cast[0]?.profilePath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(JSON.stringify(response)).not.toContain("/private/");
+
+      const profileReference = response.item.cast[0]!.profilePath!.split("/").at(-1)!;
+      await test.service.readArtwork({ principal: principal() }, profileReference);
+      expect(test.readDiscoveryArtwork).toHaveBeenLastCalledWith(
+        "/private/person-profile.jpg",
+        "profile",
+        undefined,
+      );
+    } finally {
+      test.database.close();
+    }
+  });
+
   it("authorizes and returns only normalized person context", async () => {
     const { database, personDetail, service } = harness();
     try {
@@ -522,6 +573,27 @@ describe("discovery search service", () => {
       expect(JSON.stringify(normalizedPersonResponse)).not.toContain(privateApiKey);
     } finally {
       database.close();
+    }
+  });
+
+  it("proxies a person portrait without exposing its upstream path", async () => {
+    const test = harness();
+    test.personDetail.mockResolvedValueOnce({
+      profilePath: "/private/person-portrait.webp",
+      response: normalizedPersonResponse,
+    });
+    try {
+      const response = await test.service.personDetail(
+        { tmdbId: 6384 },
+        { language: "en" },
+        { principal: principal() },
+      );
+      expect(response.item.profilePath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(JSON.stringify(response)).not.toContain("/private/");
+    } finally {
+      test.database.close();
     }
   });
 

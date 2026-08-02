@@ -23,20 +23,20 @@ const artworkPathSchema = z
   .regex(/^\/[A-Za-z0-9/_-]+\.(?:jpe?g|png|webp)$/iu)
   .refine((value) => !value.includes("..") && !value.includes("//"));
 const storedArtworkReferenceSchema = z.strictObject({
-  kind: z.enum(["backdrop", "poster"]),
+  kind: z.enum(["backdrop", "poster", "profile"]),
   path: artworkPathSchema,
   schemaVersion: z.literal(1),
 });
 
 export interface DiscoveryArtworkReferenceInput {
-  kind: "backdrop" | "poster";
+  kind: "backdrop" | "poster" | "profile";
   path: string;
 }
 
 export interface ResolvedDiscoveryArtworkReference {
   connectorId: string;
   id: string;
-  kind: "backdrop" | "poster";
+  kind: "backdrop" | "poster" | "profile";
   path: string;
 }
 

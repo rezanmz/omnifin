@@ -29,6 +29,9 @@ export type MediaDetailClientErrorKind =
   | "not_configured"
   | "rate_limited"
   | "signed_out"
+  | "timed_out"
+  | "unauthorized"
+  | "unsupported"
   | "unavailable";
 
 export class MediaDetailClientError extends Error {
@@ -48,7 +51,52 @@ function errorKind(status: number, code: string): MediaDetailClientErrorKind {
   if (status === 403) return "forbidden";
   if (code === "discovery_not_configured") return "not_configured";
   if (status === 429 || code === "discovery_rate_limited") return "rate_limited";
+  if (code === "discovery_timeout") return "timed_out";
+  if (code === "discovery_unauthorized") return "unauthorized";
+  if (code === "discovery_unsupported") return "unsupported";
+  if (code === "discovery_response_invalid") return "invalid_response";
   return "unavailable";
+}
+
+function browserArtworkPath(path: string | null) {
+  if (path === null) return null;
+  const reference = path.match(
+    /^\/v1\/discovery\/artwork\/(discovery_art_[A-Za-z0-9_-]{22})$/u,
+  )?.[1];
+  if (!reference) {
+    throw new MediaDetailClientError(
+      "invalid_response",
+      "invalid_response",
+      "Media details returned an unsafe artwork reference.",
+    );
+  }
+  return `/api/discovery/artwork/${reference}`;
+}
+
+function browserMediaDetail(response: DiscoveryMediaDetailResponse): DiscoveryMediaDetailResponse {
+  return {
+    ...response,
+    item: {
+      ...response.item,
+      artwork: {
+        backdropPath: browserArtworkPath(response.item.artwork.backdropPath),
+        posterPath: browserArtworkPath(response.item.artwork.posterPath),
+      },
+      cast: response.item.cast.map((credit) => ({
+        ...credit,
+        profilePath: browserArtworkPath(credit.profilePath),
+      })),
+    },
+  };
+}
+
+function browserPersonDetail(
+  response: DiscoveryPersonDetailResponse,
+): DiscoveryPersonDetailResponse {
+  return {
+    ...response,
+    item: { ...response.item, profilePath: browserArtworkPath(response.item.profilePath) },
+  };
 }
 
 async function responseError(response: Response) {
@@ -128,7 +176,7 @@ export const discoveryMediaDetailClient: DiscoveryMediaDetailClient = {
         "Media details did not match the public contract.",
       );
     }
-    return parsed.data;
+    return browserMediaDetail(parsed.data);
   },
 };
 
@@ -176,6 +224,6 @@ export const discoveryPersonDetailClient: DiscoveryPersonDetailClient = {
         "Person details did not match the public contract.",
       );
     }
-    return parsed.data;
+    return browserPersonDetail(parsed.data);
   },
 };

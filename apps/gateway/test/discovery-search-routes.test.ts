@@ -79,6 +79,7 @@ const normalizedResponse: DiscoverySearchResponse = {
 const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: now.toISOString(),
   item: {
+    artwork: { backdropPath: null, posterPath: null },
     availability: "available",
     cast: [],
     crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
@@ -121,6 +122,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     department: "Acting",
     id: "person:6384",
     name: "Keanu Reeves",
+    profilePath: null,
     source: "seerr",
     tmdbId: 6384,
   },
@@ -154,7 +156,10 @@ async function normalizedFeedPage(kind: DiscoveryFeedRailKind): Promise<SeerrDis
 
 async function harness(
   searchImplementation = vi.fn(async () => normalizedResponse),
-  personDetailImplementation = vi.fn(async () => normalizedPersonResponse),
+  personDetailImplementation = vi.fn(async () => ({
+    profilePath: null,
+    response: normalizedPersonResponse,
+  })),
   discoverImplementation = vi.fn(normalizedFeedPage),
   artworkImplementation = vi.fn(async () => ({
     body: Uint8Array.from([1, 2, 3, 4]),
@@ -162,7 +167,10 @@ async function harness(
   })),
 ) {
   const config = testConfig();
-  const detailImplementation = vi.fn(async () => normalizedDetailResponse);
+  const detailImplementation = vi.fn(async () => ({
+    artwork: { backdropPath: null, castProfilePaths: [], posterPath: null },
+    response: normalizedDetailResponse,
+  }));
   const app = await createApp({
     config,
     discoverySearchDependencies: {
@@ -560,6 +568,34 @@ describe("discovery search routes", () => {
       expect(response.headers["retry-after"]).toBe("30");
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("discovery_rate_limited");
       expect(response.body).not.toContain("Private upstream details");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["timeout", "discovery_timeout", 504],
+    ["invalid_credentials", "discovery_unauthorized", 502],
+    ["unsupported_version", "discovery_unsupported", 502],
+    ["response_invalid", "discovery_response_invalid", 502],
+  ] as const)("maps %s to the safe %s public failure", async (code, expectedCode, statusCode) => {
+    const upstream = new SafeConnectorError({
+      code,
+      message: "Private upstream diagnostic",
+      operation: "discovery.detail",
+      retryable: code === "timeout",
+      service: "seerr",
+    });
+    const { app, session } = await harness(vi.fn(async () => Promise.reject(upstream)));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/search?query=matrix",
+      });
+      expect(response.statusCode).toBe(statusCode);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(expectedCode);
+      expect(response.body).not.toContain("Private upstream diagnostic");
     } finally {
       await app.close();
     }

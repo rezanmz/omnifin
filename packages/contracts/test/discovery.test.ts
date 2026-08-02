@@ -166,8 +166,9 @@ describe("discovery contracts", () => {
 
   it("accepts normalized movie and series details", () => {
     const common = {
+      artwork: { backdropPath: null, posterPath: null },
       availability: "available",
-      cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384 }],
+      cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
       crew: [{ name: "Lana Wachowski", personId: 9339, role: "Director" }],
       genres: ["Action", "Science Fiction"],
       id: "movie:603",
@@ -248,6 +249,7 @@ describe("discovery contracts", () => {
 
   it("rejects raw upstream fields and unbounded detail collections", () => {
     const detail = {
+      artwork: { backdropPath: null, posterPath: null },
       availability: "unavailable",
       cast: [],
       crew: [],
@@ -297,6 +299,7 @@ describe("discovery contracts", () => {
             character: null,
             name: `Performer ${index}`,
             personId: index + 1,
+            profilePath: null,
           })),
         },
       }).success,
@@ -353,6 +356,7 @@ describe("discovery contracts", () => {
           department: "Acting",
           id: "person:6384",
           name: "Keanu Reeves",
+          profilePath: null,
           source: "seerr",
           tmdbId: 6384,
         },
