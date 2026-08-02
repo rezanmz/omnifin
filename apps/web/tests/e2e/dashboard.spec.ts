@@ -564,7 +564,8 @@ test("production-first onboarding remains a complete route", async ({ page }) =>
   ).toHaveAttribute("href", "/settings/connectors");
   await expect(page.getByRole("searchbox")).toHaveCount(0);
   await expect(page.getByRole("navigation")).toHaveCount(0);
-  await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run stack verification" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("button")).toHaveCount(1);
 });
 
 test("operations navigation opens the system health workspace", async ({ page }) => {
