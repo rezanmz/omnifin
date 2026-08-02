@@ -47,6 +47,29 @@ async function mockQuietContinueWatching(page: Parameters<typeof mockDiscoveryFe
   });
 }
 
+function continueWatchingFeedWithItemCount(count: number) {
+  return {
+    ...demoContinueWatchingFeed,
+    items: Array.from({ length: count }, (_, index) => {
+      const template =
+        demoContinueWatchingFeed.items[index % demoContinueWatchingFeed.items.length]!;
+      return {
+        ...template,
+        media: {
+          ...template.media,
+          artwork: {
+            ...template.media.artwork,
+            backdropPath: null,
+            posterPath: null,
+          },
+          id: `media_${String(index + 1).padStart(22, "0")}`,
+          title: index < 2 ? template.media.title : `${template.media.title} ${index + 1}`,
+        },
+      };
+    }),
+  };
+}
+
 async function expectStationaryPointerTarget(action: Locator) {
   await expect(action).toBeVisible();
   await action.scrollIntoViewIfNeeded();
@@ -155,6 +178,57 @@ test("authenticated Continue Watching renders normalized progress and private ar
     /\/api\/media\/media_b{22}\/images\/poster/u,
   );
   await expect(page.getByText("jellyfin-main")).toHaveCount(0);
+});
+
+test("Continue Watching keeps stable card geometry for sparse and dense feeds", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["chromium", "mobile", "ten-foot"].includes(testInfo.project.name),
+    "Representative pointer, touch, and 10-foot profiles cover responsive rail geometry.",
+  );
+  let itemCount = 2;
+  await page.route("**/api/media/continue-watching", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(continueWatchingFeedWithItemCount(itemCount)),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
+  const widths: number[] = [];
+  for (const count of [1, 2, 7]) {
+    itemCount = count;
+    const path =
+      testInfo.project.name === "ten-foot"
+        ? "/?test-profile=ten-foot&test-view=continue-watching-live"
+        : "/?test-view=continue-watching-live";
+    await page.goto(path);
+    const heading = page.getByRole("heading", { name: "Continue watching" });
+    const rail = heading.locator("xpath=ancestor::section[contains(@class, 'media-rail')]");
+    const cards = rail.locator(".media-card");
+    await expect(cards).toHaveCount(count);
+    const firstBox = await cards.first().boundingBox();
+    expect(firstBox).not.toBeNull();
+    widths.push(firstBox!.width);
+    await expect(cards.first().locator(".media-card__action")).toBeVisible();
+
+    if (count === 2) {
+      const trailingSpace = await rail.locator(".media-rail__scroller").evaluate((scroller) => {
+        const last = scroller.lastElementChild?.getBoundingClientRect();
+        const bounds = scroller.getBoundingClientRect();
+        if (!last) return 0;
+        return Math.max(0, bounds.right - last.right);
+      });
+      expect(trailingSpace).toBeGreaterThanOrEqual(16);
+    }
+  }
+
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+  const maximumWidth =
+    testInfo.project.name === "ten-foot" ? 300 : testInfo.project.name === "mobile" ? 182 : 230;
+  expect(Math.max(...widths)).toBeLessThanOrEqual(maximumWidth + 1);
+  expect(Math.min(...widths)).toBeGreaterThanOrEqual(144);
 });
 
 test("connected discovery renders live artwork and opens real title details", async ({ page }) => {
