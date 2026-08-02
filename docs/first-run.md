@@ -150,3 +150,8 @@ contains the SQLite backup and manifest, the immutable image digest, deployment 
 the matching encryption key and recovery secret stored separately. Follow the
 [backup and restore runbook](operations/backup-and-restore.md) before the installation holds data you
 cannot replace.
+
+After the manual restore rehearsal succeeds, configure the runbook's one-shot
+`backup-retained` command through a host systemd timer or an overlap-locked cron entry. Alert on every
+non-zero exit and keep an independently protected off-host copy; local retention alone is not a
+recovery strategy.

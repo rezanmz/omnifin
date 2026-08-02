@@ -446,6 +446,37 @@ before a public support claim.
   recovery secrets for the doctor. The command performs no database, backup, session, or upstream
   mutation and provides no insecure TLS override.
 
+## Scheduled-backup retention controls
+
+- **Spoofing:** the retained-backup command accepts no output or deletion path. It writes only beneath
+  the configured private backup directory and recognizes a strict UTC-plus-random generated basename.
+  Retention candidates require an exact database/manifest pair in the existing backup format and the
+  managed-retention manifest marker; generated-looking manual backups are preserved and rejected.
+- **Tampering:** a new recovery point is independently verified before retention begins. Every
+  candidate is a private regular file pair and passes manifest, byte-count, SHA-256, SQLite integrity,
+  foreign-key, migration-count, and schema checks before any pair is retired. Symlinks, partial pairs,
+  scan failures, hard failures, and tampered bytes stop pruning while preserving the new verified pair.
+- **Repudiation:** each invocation emits one structured result with operation, state, safe basenames,
+  counts, digests, and an enumerated attention reason. Host schedulers retain the invocation time,
+  exit code, image digest, and unit identity; Omnifin never writes paths or exception text to the
+  report.
+- **Information disclosure:** output and errors exclude the configured directory, database path,
+  environment, credentials, and raw filesystem messages. Backup contents remain sensitive and require
+  private local and off-host access control.
+- **Denial of service:** retention is bounded to `2..365`, directory enumeration stops after 10,000
+  entries, generated candidate evaluation stops after 730 pairs, and verification is sequential.
+  An invalid or excessive set preserves the new verified backup and returns temporary failure instead
+  of continuing deletion.
+- **Elevation of privilege:** scheduling stays outside the rootless distroless image. The operation has
+  no arbitrary target, wildcard, recursive removal, network call, or privilege transition. Pair
+  retirement uses same-directory renames, directory synchronization, explicit rollback, and a
+  fail-closed attention state for cleanup or rollback failure.
+
+Clock rollback cannot make the current recovery point an expiry target. Generated points within a
+15-minute overlap window are also protected, so concurrent starts temporarily exceed retention rather
+than delete one another's result. systemd single-instance execution or an external cron `flock` remains
+the normal first line of overlap prevention.
+
 When media proxying is implemented, responses must enforce an approved upstream
 origin, safe content types, byte-range limits, authorization on every request, and
 cache rules that do not expose one user's protected content to another.

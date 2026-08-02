@@ -1,4 +1,4 @@
-const VALUE_ARGUMENTS = new Set(["--input", "--output", "--rollback-output"]);
+const VALUE_ARGUMENTS = new Set(["--input", "--output", "--retain", "--rollback-output"]);
 const FLAG_ARGUMENTS = new Set(["--confirm-gateway-stopped"]);
 
 export interface MaintenanceArguments {
@@ -31,6 +31,20 @@ export function requireMaintenanceValue(arguments_: MaintenanceArguments, name: 
   const value = arguments_.values.get(name);
   if (!value) throw new Error("usage");
   return value;
+}
+
+export function requireMaintenanceInteger(
+  arguments_: MaintenanceArguments,
+  name: string,
+  bounds: { maximum: number; minimum: number },
+) {
+  const value = requireMaintenanceValue(arguments_, name);
+  if (!/^[1-9]\d*$/.test(value)) throw new Error("usage");
+  const integer = Number(value);
+  if (!Number.isSafeInteger(integer) || integer < bounds.minimum || integer > bounds.maximum) {
+    throw new Error("usage");
+  }
+  return integer;
 }
 
 export function assertOnlyMaintenanceValues(arguments_: MaintenanceArguments, allowed: string[]) {

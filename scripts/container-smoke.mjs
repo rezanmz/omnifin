@@ -13,6 +13,9 @@ const DIAGNOSTIC_ERROR_CHARACTERS = 4_000;
 const DIAGNOSTIC_DOCKER_TIMEOUT = 5_000;
 const DIAGNOSTIC_DOCKER_MAX_BUFFER = 512 * 1_024;
 const IMMUTABLE_IMAGE_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/u;
+const RETAINED_BACKUP_FILE_PATTERN =
+  /^omnifin-auto-\d{8}T\d{9}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.sqlite$/u;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 
 const secretAssignmentPattern =
@@ -226,6 +229,55 @@ export function parseDoctorSmokeReport(rawReport, imageReference) {
     )
   ) {
     throw new Error("maintenance_doctor_report_invalid");
+  }
+  return report;
+}
+
+export function parseRetainedBackupSmokeReport(rawReport) {
+  let report;
+  try {
+    report = JSON.parse(rawReport);
+  } catch {
+    throw new Error("maintenance_retained_backup_report_invalid");
+  }
+  const backup = report?.backup;
+  const retention = report?.retention;
+  if (
+    !report ||
+    report.operation !== "backup-retained" ||
+    report.status !== "ok" ||
+    !backup ||
+    !Number.isSafeInteger(backup.bytes) ||
+    backup.bytes < 1 ||
+    !SHA256_PATTERN.test(backup.databaseSha256) ||
+    !RETAINED_BACKUP_FILE_PATTERN.test(backup.fileName) ||
+    backup.manifestFileName !== `${backup.fileName}.manifest.json` ||
+    !Number.isSafeInteger(backup.migrationCount) ||
+    backup.migrationCount < 0 ||
+    !SHA256_PATTERN.test(backup.schemaSha256) ||
+    !retention ||
+    retention.state !== "ready" ||
+    !Number.isSafeInteger(retention.candidates) ||
+    retention.candidates !== 1 ||
+    retention.removed !== 0 ||
+    retention.retained !== 1 ||
+    Object.keys(backup).some(
+      (key) =>
+        ![
+          "bytes",
+          "databaseSha256",
+          "fileName",
+          "manifestFileName",
+          "migrationCount",
+          "schemaSha256",
+        ].includes(key),
+    ) ||
+    Object.keys(retention).some(
+      (key) => !["candidates", "removed", "retained", "state"].includes(key),
+    ) ||
+    Object.keys(report).some((key) => !["backup", "operation", "retention", "status"].includes(key))
+  ) {
+    throw new Error("maintenance_retained_backup_report_invalid");
   }
   return report;
 }
@@ -499,6 +551,12 @@ async function main() {
       [...maintenanceRuntime, "verify", "--input", "/backups/container-smoke.sqlite"],
       "maintenance_backup_verification",
     );
+    parseRetainedBackupSmokeReport(
+      docker(
+        [...maintenanceRuntime, "backup-retained", "--retain", "2"],
+        "maintenance_retained_backup",
+      ),
+    );
 
     docker(
       [
@@ -565,6 +623,7 @@ async function main() {
           "gateway_api",
           "maintenance_backup",
           "maintenance_backup_verification",
+          "maintenance_retained_backup",
           "maintenance_doctor",
           "maintenance_doctor_argument_rejection",
           "web_health",

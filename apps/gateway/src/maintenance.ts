@@ -2,6 +2,7 @@ import process from "node:process";
 import {
   clearDatabaseMaintenanceLock,
   createDatabaseBackup,
+  createRetainedDatabaseBackup,
   MaintenanceError,
   restoreDatabaseBackup,
   verifyDatabaseBackup,
@@ -10,20 +11,22 @@ import { runDeploymentDoctor } from "./operations/deployment-doctor.js";
 import {
   assertOnlyMaintenanceValues,
   parseMaintenanceArguments,
+  requireMaintenanceInteger,
   requireMaintenanceValue,
 } from "./operations/maintenance-arguments.js";
 
 const USAGE = `Usage:
   omnifin maintenance doctor
   omnifin maintenance backup --output /backups/omnifin.sqlite
+  omnifin maintenance backup-retained --retain 14
   omnifin maintenance verify --input /backups/omnifin.sqlite
   omnifin maintenance restore --input /backups/omnifin.sqlite \\
     --rollback-output /backups/pre-restore.sqlite --confirm-gateway-stopped
   omnifin maintenance unlock --confirm-gateway-stopped
 `;
 
-function writeResult(operation: string, result: object) {
-  process.stdout.write(`${JSON.stringify({ operation, status: "ok", ...result })}\n`);
+function writeResult(operation: string, result: object, status: "attention" | "ok" = "ok") {
+  process.stdout.write(`${JSON.stringify({ operation, status, ...result })}\n`);
 }
 
 async function run() {
@@ -75,6 +78,24 @@ async function run() {
         ...(imageReference ? { imageReference } : {}),
       }),
     );
+    return;
+  }
+
+  if (operation === "backup-retained") {
+    assertOnlyMaintenanceValues(arguments_, ["--retain"]);
+    if (arguments_.flags.size > 0) throw new Error("usage");
+    const result = await createRetainedDatabaseBackup({
+      backupDirectory: process.env.OMNIFIN_BACKUP_DIRECTORY ?? "/backups",
+      databasePath,
+      retentionCount: requireMaintenanceInteger(arguments_, "--retain", {
+        maximum: 365,
+        minimum: 2,
+      }),
+      ...(imageReference ? { imageReference } : {}),
+    });
+    const status = result.retention.state === "ready" ? "ok" : "attention";
+    writeResult(operation, result, status);
+    if (status === "attention") process.exitCode = 75;
     return;
   }
 

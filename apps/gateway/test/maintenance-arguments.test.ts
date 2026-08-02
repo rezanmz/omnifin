@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertOnlyMaintenanceValues,
   parseMaintenanceArguments,
+  requireMaintenanceInteger,
   requireMaintenanceValue,
 } from "../src/operations/maintenance-arguments.js";
 
@@ -19,6 +20,22 @@ describe("maintenance argument grammar", () => {
     expect(requireMaintenanceValue(parsed, "--rollback-output")).toBe("/backups/rollback.sqlite");
     expect(parsed.flags).toEqual(new Set(["--confirm-gateway-stopped"]));
   });
+
+  it("parses an explicitly bounded retention count", () => {
+    const parsed = parseMaintenanceArguments(["--retain", "14"]);
+
+    expect(requireMaintenanceInteger(parsed, "--retain", { maximum: 365, minimum: 2 })).toBe(14);
+  });
+
+  it.each(["0", "1", "2.5", "02", "366", "9007199254740992"])(
+    "rejects invalid retention value %s",
+    (value) => {
+      const parsed = parseMaintenanceArguments(["--retain", value]);
+      expect(() =>
+        requireMaintenanceInteger(parsed, "--retain", { maximum: 365, minimum: 2 }),
+      ).toThrow("usage");
+    },
+  );
 
   it.each([
     ["unknown argument", ["--public-url", "https://elsewhere.test"]],

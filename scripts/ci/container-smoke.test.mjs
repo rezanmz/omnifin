@@ -6,8 +6,45 @@ import {
   collectContainerDiagnostics,
   createFailureReport,
   parseDoctorSmokeReport,
+  parseRetainedBackupSmokeReport,
   redactDiagnosticText,
 } from "../container-smoke.mjs";
+
+test("retained backup smoke reports accept only the bounded privacy-safe contract", () => {
+  const fileName = "omnifin-auto-20260801T120000000Z-00000000-0000-4000-8000-000000000001.sqlite";
+  const report = {
+    operation: "backup-retained",
+    status: "ok",
+    backup: {
+      bytes: 4096,
+      databaseSha256: "a".repeat(64),
+      fileName,
+      manifestFileName: `${fileName}.manifest.json`,
+      migrationCount: 12,
+      schemaSha256: "b".repeat(64),
+    },
+    retention: { candidates: 1, removed: 0, retained: 1, state: "ready" },
+  };
+
+  assert.deepEqual(parseRetainedBackupSmokeReport(JSON.stringify(report)), report);
+  assert.throws(
+    () =>
+      parseRetainedBackupSmokeReport(
+        JSON.stringify({ ...report, backupDirectory: "/private/backups" }),
+      ),
+    /maintenance_retained_backup_report_invalid/u,
+  );
+  assert.throws(
+    () =>
+      parseRetainedBackupSmokeReport(
+        JSON.stringify({
+          ...report,
+          backup: { ...report.backup, manifestFileName: "different.manifest.json" },
+        }),
+      ),
+    /maintenance_retained_backup_report_invalid/u,
+  );
+});
 
 test("deployment doctor smoke reports accept only the bounded preview posture", () => {
   const mutableImage = "omnifin:smoke-fixture";
