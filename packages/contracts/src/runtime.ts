@@ -5,6 +5,8 @@ const semverPattern =
 const stableSemverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const fullRevisionPattern = /^[0-9a-f]{40}$/u;
 
+export const RUNTIME_IDENTITY_RESPONSE_MAX_BYTES = 4_096;
+
 export const runtimeChannelSchema = z.enum(["development", "edge", "stable"]);
 export const runtimeVerificationSchema = z.enum(["development", "verified"]);
 export const runtimeVersionSchema = z.string().trim().min(1).max(128).regex(semverPattern);

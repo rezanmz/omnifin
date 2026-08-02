@@ -54,12 +54,22 @@ RUN mkdir -p apps/web/public \
 
 FROM ${NODE_IMAGE} AS runtime-layout
 
+ARG CHANNEL=development
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+ARG SOURCE_URL=https://github.com/rezanmz/omnifin
+
 RUN install --directory --mode=0700 /layout/backups /layout/data \
     && install --directory --mode=0755 /layout/bin
 
 COPY docker/entrypoint.mjs docker/healthcheck.mjs /layout/bin/
 
-RUN chmod 0444 /layout/bin/*.mjs
+RUN OMNIFIN_BUILD_CHANNEL="${CHANNEL}" \
+    OMNIFIN_BUILD_VERSION="${VERSION}" \
+    OMNIFIN_BUILD_REVISION="${REVISION}" \
+    OMNIFIN_BUILD_SOURCE_URL="${SOURCE_URL}" \
+    node --input-type=module --eval 'import { writeFileSync } from "node:fs"; const channel = process.env.OMNIFIN_BUILD_CHANNEL; const revision = channel === "development" || process.env.OMNIFIN_BUILD_REVISION === "unknown" ? null : process.env.OMNIFIN_BUILD_REVISION; writeFileSync("/layout/build-identity.json", JSON.stringify({ channel, license: "AGPL-3.0-only", revision, schemaVersion: 1, sourceUrl: process.env.OMNIFIN_BUILD_SOURCE_URL, verification: channel === "development" ? "development" : "verified", version: process.env.OMNIFIN_BUILD_VERSION }));' \
+    && chmod 0444 /layout/bin/*.mjs /layout/build-identity.json
 
 FROM ${RUNTIME_IMAGE} AS runtime
 
@@ -99,6 +109,7 @@ COPY --from=build --chown=65532:65532 /workspace/apps/web/.next/static /opt/omni
 COPY --from=build --chown=65532:65532 /workspace/apps/web/public /opt/omnifin/web/public
 COPY --from=build --chown=65532:65532 /workspace/apps/web/public /opt/omnifin/web/apps/web/public
 COPY --from=runtime-layout --chown=0:0 /layout/bin /opt/omnifin/bin
+COPY --from=runtime-layout --chown=65532:65532 --chmod=0444 /layout/build-identity.json /opt/omnifin/build-identity.json
 
 USER 65532:65532
 WORKDIR /opt/omnifin

@@ -27,6 +27,11 @@ test("the image embeds a fail-closed development runtime identity by default", (
     assert.match(dockerfile, new RegExp(`OMNIFIN_BUILD_${variable}=\\$\\{${variable}\\}`, "u"));
   }
   assert.match(dockerfile, /org\.opencontainers\.image\.source="\$\{SOURCE_URL\}"/u);
+  assert.match(dockerfile, /\/layout\/build-identity\.json/u);
+  assert.match(
+    dockerfile,
+    /COPY --from=runtime-layout[^\n]+\/layout\/build-identity\.json \/opt\/omnifin\/build-identity\.json/u,
+  );
 });
 
 test("edge candidates bind their API identity to the verified protected-main source", () => {

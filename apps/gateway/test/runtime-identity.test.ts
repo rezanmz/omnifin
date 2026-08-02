@@ -41,6 +41,40 @@ describe("loadRuntimeIdentity", () => {
     });
   });
 
+  it("prefers the identity baked into the image over runtime environment overrides", () => {
+    const bakedIdentity = {
+      channel: "stable",
+      license: "AGPL-3.0-only",
+      revision,
+      schemaVersion: 1,
+      sourceUrl: `https://github.com/rezanmz/omnifin/tree/${revision}`,
+      verification: "verified",
+      version: "1.2.3",
+    } as const;
+
+    expect(
+      loadRuntimeIdentity(
+        {
+          OMNIFIN_BUILD_CHANNEL: "development",
+          OMNIFIN_BUILD_VERSION: "0.0.0-dev",
+        },
+        { readBakedIdentity: () => JSON.stringify(bakedIdentity) },
+      ),
+    ).toEqual(bakedIdentity);
+  });
+
+  it("fails closed when a baked identity is malformed instead of using an environment fallback", () => {
+    expect(() =>
+      loadRuntimeIdentity(
+        {
+          OMNIFIN_BUILD_CHANNEL: "development",
+          OMNIFIN_BUILD_VERSION: "0.0.0-dev",
+        },
+        { readBakedIdentity: () => '{"version":"latest"}' },
+      ),
+    ).toThrowError("The runtime build identity is invalid or unverifiable.");
+  });
+
   it.each([
     {
       OMNIFIN_BUILD_CHANNEL: "stable",

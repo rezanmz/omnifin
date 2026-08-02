@@ -475,9 +475,9 @@ function imageRuntimeIdentity(image) {
   };
 }
 
-function inContainerRuntimeIdentityRequest(container, expectedIdentity, operation) {
+function inContainerRuntimeIdentityRequest(container, url, expectedIdentity, operation) {
   const source = [
-    'const response = await fetch("http://127.0.0.1:4000/v1/runtime", { redirect: "error" });',
+    `const response = await fetch(${JSON.stringify(url)}, { redirect: "error" });`,
     "if (!response.ok) process.exit(1);",
     "const body = await response.json();",
     'console.log(JSON.stringify({ body, cacheControl: response.headers.get("cache-control"), setCookie: response.headers.get("set-cookie") }));',
@@ -599,7 +599,12 @@ async function main() {
     containers.push({ component: "gateway", name: gateway });
     await waitForHealthy(gateway, "gateway_health");
     inContainerRequest(gateway, "http://127.0.0.1:4000/readyz", "gateway_readiness");
-    inContainerRuntimeIdentityRequest(gateway, expectedRuntimeIdentity, "gateway_runtime_identity");
+    inContainerRuntimeIdentityRequest(
+      gateway,
+      "http://127.0.0.1:4000/v1/runtime",
+      expectedRuntimeIdentity,
+      "gateway_runtime_identity",
+    );
     inContainerProvidersRequest(gateway, "http://127.0.0.1:4000/v1/auth/providers", "gateway_api");
 
     const maintenanceRuntime = [
@@ -694,6 +699,12 @@ async function main() {
       "http://127.0.0.1:3000/api/auth/providers",
       "web_gateway_proxy",
     );
+    inContainerRuntimeIdentityRequest(
+      web,
+      "http://127.0.0.1:3000/api/runtime",
+      expectedRuntimeIdentity,
+      "web_runtime_identity",
+    );
     parseDoctorSmokeReport(
       dockerExpectExit([...maintenanceRuntime, "doctor"], "maintenance_doctor", 78),
       image,
@@ -721,6 +732,7 @@ async function main() {
           "maintenance_doctor_argument_rejection",
           "web_health",
           "web_gateway_proxy",
+          "web_runtime_identity",
         ],
       })}\n`,
     );
