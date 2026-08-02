@@ -875,6 +875,11 @@
     gap: 8px;
   }
 
+  .eventRow {
+    contain-intrinsic-block-size: none;
+    content-visibility: visible;
+  }
+
   .eventMeta {
     align-items: start;
     flex-direction: column;
