@@ -60,6 +60,30 @@ describe("MediaRail", () => {
     expect(container.innerHTML).not.toContain("unexpected.example");
   });
 
+  it("renders protected artwork in a browser-native lazy image", () => {
+    const artworkPath = "/api/media/media_bbbbbbbbbbbbbbbbbbbbbb/images/poster";
+    const { container } = render(
+      <MediaRail
+        items={[
+          {
+            accent: "#51675b",
+            artworkPath,
+            eyebrow: "Continue watching",
+            id: "protected-artwork",
+            title: "Northern Lights",
+          },
+        ]}
+        title="Continue watching"
+      />,
+    );
+
+    expect(container.querySelector("img.media-card__artwork-image")).toHaveAttribute(
+      "src",
+      artworkPath,
+    );
+    expect(container.innerHTML).not.toContain("data-artwork-src");
+  });
+
   it("moves focus between posters with directional keys", async () => {
     const scrollTo = vi.fn();
     HTMLElement.prototype.scrollTo = scrollTo;
