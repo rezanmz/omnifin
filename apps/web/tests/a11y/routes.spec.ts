@@ -188,6 +188,10 @@ const routes = [
     path: "/calendar?test-view=ready",
   },
   {
+    label: "monthly acquisition calendar",
+    path: "/calendar?test-view=month",
+  },
+  {
     label: "empty acquisition calendar",
     path: "/calendar?test-view=empty",
   },

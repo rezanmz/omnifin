@@ -45,3 +45,26 @@ test("calendar title search preserves the verified source plane", async ({ page 
   await expect(page.getByRole("heading", { name: "Radarr · Cinema" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sonarr · Television" })).toBeVisible();
 });
+
+test("calendar month view keeps every day and event detail reachable", async ({ page }) => {
+  await page.goto("/calendar?test-view=month");
+
+  await expect(page.getByRole("heading", { name: "Month at a glance" })).toBeVisible();
+  await expect(
+    page.getByRole("grid", { name: /Month acquisition calendar, July 2026/u }),
+  ).toBeVisible();
+  await expect(page.getByRole("gridcell")).toHaveCount(42);
+  await expect(page.getByRole("button", { name: "Month view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  const eventCard = page.getByRole("button", { name: /Inspect The Far Meridian/i });
+  await eventCard.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("dialog").getByRole("heading", { name: "The Far Meridian" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(eventCard).toBeFocused();
+});

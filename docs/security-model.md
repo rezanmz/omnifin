@@ -295,7 +295,7 @@ application boundary; operators must still patch and isolate the host.
   aggregate response size are independently bounded and schema-validated. Gateway-signed cursors
   are bound to the exact requested range and compared in constant time.
 - `GET /v1/acquisitions/calendar` is abort-aware, rate-limited, explicitly non-cacheable, and
-  read-only. The browser offers search, filtering, week navigation, and refresh but no monitoring,
+  read-only. The browser offers search, filtering, bounded week/month navigation, and refresh but no monitoring,
   search, grab, deletion, or rescheduling mutation in this slice.
 
 ## Indexer Intelligence controls

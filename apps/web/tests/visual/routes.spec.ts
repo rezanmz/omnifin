@@ -949,6 +949,18 @@ test("acquisition calendar visual baseline", async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot("acquisition-calendar.png", { fullPage: true });
 });
 
+test("monthly acquisition calendar visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Monthly acquisition calendars cover representative desktop and phone geometry",
+  );
+  await page.goto("/calendar?test-view=month");
+  await page.getByRole("heading", { name: "Month at a glance" }).waitFor();
+  await page.getByRole("gridcell").first().waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("acquisition-calendar-month.png", { fullPage: true });
+});
+
 test("light acquisition calendar visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !lightVisualProjects.has(testInfo.project.name),

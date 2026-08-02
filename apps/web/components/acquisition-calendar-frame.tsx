@@ -3,28 +3,12 @@ import { CalendarClock, CircleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { ThemePreference } from "../lib/theme";
+import { formatCalendarPeriod, type CalendarView } from "../lib/calendar-period";
 import { AcquisitionCalendarTopbar } from "./acquisition-calendar-topbar";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { ThemeProvider } from "./theme-provider";
 import styles from "./acquisition-calendar.module.css";
-
-function formatWeek(calendar: AcquisitionCalendarResponse) {
-  const start = new Date(calendar.startAt);
-  const end = new Date(Date.parse(calendar.endAt) - 1);
-  const startLabel = new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(start);
-  const endLabel = new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: start.getUTCMonth() === end.getUTCMonth() ? undefined : "short",
-    timeZone: "UTC",
-    year: start.getUTCFullYear() === end.getUTCFullYear() ? undefined : "numeric",
-  }).format(end);
-  return `${startLabel} — ${endLabel}, ${end.getUTCFullYear()}`;
-}
 
 export function AcquisitionCalendarFrame({
   children,
@@ -47,7 +31,13 @@ export function AcquisitionCalendarFrame({
   );
 }
 
-export function AcquisitionCalendarHero({ calendar }: { calendar: AcquisitionCalendarResponse }) {
+export function AcquisitionCalendarHero({
+  calendar,
+  view = "week",
+}: {
+  calendar: AcquisitionCalendarResponse;
+  view?: CalendarView;
+}) {
   const attention = calendar.summary.missing + calendar.summary.queued;
   return (
     <section className={styles.hero} aria-labelledby="acquisition-calendar-title">
@@ -73,7 +63,7 @@ export function AcquisitionCalendarHero({ calendar }: { calendar: AcquisitionCal
               ? `${attention} ${attention === 1 ? "arrival needs" : "arrivals need"} attention`
               : `${calendar.summary.total} arrivals mapped`}
           </strong>
-          <small>{formatWeek(calendar)}</small>
+          <small>{formatCalendarPeriod(calendar, view)}</small>
         </div>
       </div>
     </section>
