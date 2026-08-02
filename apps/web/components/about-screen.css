@@ -1,4 +1,7 @@
 .about-layout {
+  --font-display: "Newsreader", var(--font-critical-display);
+
+  font-family: "Manrope Variable", var(--font-body);
   min-height: 100dvh;
   overflow: hidden;
   padding: clamp(20px, 4vw, 58px);

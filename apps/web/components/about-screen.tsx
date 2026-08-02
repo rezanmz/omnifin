@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
+import "@fontsource-variable/manrope/wght.css";
+import "@fontsource/newsreader/latin-400.css";
+import "@fontsource/newsreader/latin-500.css";
 import type { DisplayProfile } from "../lib/dashboard-data";
 import type { RuntimeIdentityLoadOutcome } from "../lib/runtime-identity";
 import { AppearanceSelector } from "./appearance-selector";
