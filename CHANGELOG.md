@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0](https://github.com/rezanmz/omnifin/compare/v0.6.0...v0.7.0) (2026-08-02)
+
+
+### Features
+
+* add safe bulk download queue controls ([#191](https://github.com/rezanmz/omnifin/issues/191)) ([5bd90c0](https://github.com/rezanmz/omnifin/commit/5bd90c0d9c3940f6639c2f38ccbaccd0243e7634)), closes [#190](https://github.com/rezanmz/omnifin/issues/190)
+* **auth:** allow recovery-bound OIDC admin bootstrap ([#198](https://github.com/rezanmz/omnifin/issues/198)) ([58040a2](https://github.com/rezanmz/omnifin/commit/58040a22c43ec6c33876f8a4c997d149e077b0c8)), closes [#192](https://github.com/rezanmz/omnifin/issues/192)
+* **web:** add series title details ([#199](https://github.com/rezanmz/omnifin/issues/199)) ([e19c77e](https://github.com/rezanmz/omnifin/commit/e19c77ec23cd5817f2adc21d2e4ab32cfa502148)), closes [#193](https://github.com/rezanmz/omnifin/issues/193)
+
+
+### Fixes
+
+* align Seerr queries and Jellyfin HLS targets ([#210](https://github.com/rezanmz/omnifin/issues/210)) ([8a15c31](https://github.com/rezanmz/omnifin/commit/8a15c319714cb84b56477b2610112860a42545bc)), closes [#208](https://github.com/rezanmz/omnifin/issues/208) [#209](https://github.com/rezanmz/omnifin/issues/209)
+* tolerate bounded media metadata ([#196](https://github.com/rezanmz/omnifin/issues/196)) ([d3ad6ce](https://github.com/rezanmz/omnifin/commit/d3ad6cee505558f9bf6c18d4eacad2aa76c085dc)), closes [#194](https://github.com/rezanmz/omnifin/issues/194) [#195](https://github.com/rezanmz/omnifin/issues/195)
+* **web:** contain discovery spotlight artwork ([#207](https://github.com/rezanmz/omnifin/issues/207)) ([f770eec](https://github.com/rezanmz/omnifin/commit/f770eecf2632ced76237114366ce60da6d51f3e1)), closes [#205](https://github.com/rezanmz/omnifin/issues/205)
+
+
+### Documentation
+
+* **auth:** document OIDC first-admin bootstrap ([#200](https://github.com/rezanmz/omnifin/issues/200)) ([8d2cf3e](https://github.com/rezanmz/omnifin/commit/8d2cf3e4c3d7b80bf551c22ed77c4a5a4be2aee5))
+
 ## [0.6.0](https://github.com/rezanmz/omnifin/compare/v0.5.2...v0.6.0) (2026-08-02)
 
 
