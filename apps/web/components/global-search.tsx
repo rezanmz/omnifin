@@ -41,6 +41,13 @@ import {
 } from "../lib/discovery-search";
 import type { MediaRequestClient } from "../lib/media-requests";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
+import {
+  captureDocumentScrollPosition,
+  focusWithoutDocumentScroll,
+  restoreDocumentScrollPosition,
+  revealWithinScrollContainer,
+  type DocumentScrollPosition,
+} from "../lib/focus-preservation";
 import type { DetailMedia } from "./media-detail-drawer";
 import type { RequestableMedia } from "./request-composer";
 
@@ -588,14 +595,15 @@ export function GlobalSearch({
   );
   const rootReference = useRef<HTMLDivElement>(null);
   const inputReference = useRef<HTMLInputElement>(null);
+  const editScrollReference = useRef<DocumentScrollPosition | null>(null);
+  const pointerScrollReference = useRef<DocumentScrollPosition | null>(null);
   const suppressFocusOpenReference = useRef(false);
   const normalizedQuery = query.trim();
   const requestKey = `${normalizedQuery}\0${retry}`;
 
   useLayoutEffect(() => {
     if (!initialFocus) return;
-    inputReference.current?.focus();
-    inputReference.current?.select();
+    focusWithoutDocumentScroll(inputReference.current, { select: true });
   }, [initialFocus]);
 
   useEffect(() => {
@@ -603,8 +611,7 @@ export function GlobalSearch({
       if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey)) return;
       event.preventDefault();
       setOpen(true);
-      inputReference.current?.focus();
-      inputReference.current?.select();
+      focusWithoutDocumentScroll(inputReference.current, { select: true });
     };
     const dismiss = (event: PointerEvent) => {
       if (!rootReference.current?.contains(event.target as Node)) setOpen(false);
@@ -694,7 +701,8 @@ export function GlobalSearch({
   const focusResult = useCallback((position: "first" | "last") => {
     const options = rootReference.current?.querySelectorAll<HTMLElement>("[data-search-option]");
     const target = position === "first" ? options?.[0] : options?.[options.length - 1];
-    target?.focus();
+    focusWithoutDocumentScroll(target);
+    if (target) revealWithinScrollContainer(target);
   }, []);
 
   function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
@@ -727,13 +735,14 @@ export function GlobalSearch({
       event.preventDefault();
       suppressFocusOpenReference.current = true;
       setOpen(false);
-      inputReference.current?.focus();
+      focusWithoutDocumentScroll(inputReference.current);
       return;
     }
     if (target) {
       event.preventDefault();
       event.stopPropagation();
-      target.focus();
+      focusWithoutDocumentScroll(target);
+      revealWithinScrollContainer(target);
     }
   }
 
@@ -762,15 +771,39 @@ export function GlobalSearch({
         onChange={(event) => {
           setQuery(event.currentTarget.value);
           setOpen(true);
+          restoreDocumentScrollPosition(editScrollReference.current);
+          editScrollReference.current = null;
+        }}
+        onBeforeInput={() => {
+          editScrollReference.current = captureDocumentScrollPosition();
         }}
         onFocus={() => {
+          restoreDocumentScrollPosition(pointerScrollReference.current);
+          pointerScrollReference.current = null;
           if (suppressFocusOpenReference.current) {
             suppressFocusOpenReference.current = false;
             return;
           }
           setOpen(true);
         }}
-        onKeyDown={handleInputKeyDown}
+        onKeyDown={(event) => {
+          if (
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")
+          ) {
+            editScrollReference.current = captureDocumentScrollPosition();
+          }
+          handleInputKeyDown(event);
+        }}
+        onPointerDown={(event) => {
+          pointerScrollReference.current = captureDocumentScrollPosition();
+          if (document.activeElement !== event.currentTarget) {
+            event.preventDefault();
+            focusWithoutDocumentScroll(event.currentTarget);
+          }
+        }}
         placeholder="Search everything…"
         ref={inputReference}
         role="combobox"
@@ -783,7 +816,7 @@ export function GlobalSearch({
           className="global-search__clear"
           onClick={() => {
             setQuery("");
-            inputReference.current?.focus();
+            focusWithoutDocumentScroll(inputReference.current);
           }}
           type="button"
         >

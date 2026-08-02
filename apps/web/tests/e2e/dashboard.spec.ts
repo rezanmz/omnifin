@@ -428,6 +428,34 @@ test("global search discloses live discovery with keyboard and touch-safe contro
   await expect(search).toHaveValue("matrix");
 });
 
+test("global search preserves the document position while focusing and typing", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await page.goto("/");
+
+  const initialScrollPosition = await page.evaluate(() => {
+    document.documentElement.style.scrollBehavior = "auto";
+    const maximum = document.documentElement.scrollHeight - window.innerHeight;
+    window.scrollTo(0, Math.min(1200, Math.max(0, maximum)));
+    return window.scrollY;
+  });
+  expect(initialScrollPosition).toBeGreaterThan(200);
+
+  const search = page.getByRole("combobox", { name: "Search media and commands" });
+  const bounds = await search.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  await expect(search).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(initialScrollPosition);
+
+  for (const character of "matrix") {
+    await page.keyboard.type(character);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(initialScrollPosition);
+  }
+  await expect(page.getByRole("option", { name: /The Matrix/i })).toBeVisible();
+});
+
 test("command palette reveals only destinations allowed by the current session", async ({
   page,
 }) => {

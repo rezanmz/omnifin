@@ -5,6 +5,12 @@ import type { ComponentType, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { GlobalSearchProperties } from "./global-search";
+import {
+  captureDocumentScrollPosition,
+  focusWithoutDocumentScroll,
+  restoreDocumentScrollPosition,
+  type DocumentScrollPosition,
+} from "../lib/focus-preservation";
 
 function GlobalSearchPlaceholder({
   activate,
@@ -23,6 +29,9 @@ function GlobalSearchPlaceholder({
   query?: string;
   setQuery?: (query: string) => void;
 }) {
+  const editScrollReference = useRef<DocumentScrollPosition | null>(null);
+  const pointerScrollReference = useRef<DocumentScrollPosition | null>(null);
+
   return (
     <div className="global-search" data-liquid-glass>
       <Search aria-hidden="true" className="global-search__icon" size={18} strokeWidth={1.7} />
@@ -43,13 +52,37 @@ function GlobalSearchPlaceholder({
         onClick={activate}
         onChange={(event) => {
           setQuery?.(event.currentTarget.value);
+          restoreDocumentScrollPosition(editScrollReference.current);
+          editScrollReference.current = null;
           activate?.();
         }}
-        onFocus={activate}
+        onBeforeInput={() => {
+          editScrollReference.current = captureDocumentScrollPosition();
+        }}
+        onFocus={() => {
+          restoreDocumentScrollPosition(pointerScrollReference.current);
+          pointerScrollReference.current = null;
+          activate?.();
+        }}
         onKeyDown={(event) => {
+          if (
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")
+          ) {
+            editScrollReference.current = captureDocumentScrollPosition();
+          }
           if (event.key === "ArrowDown" || event.key === "Enter") activate?.();
         }}
         onPointerEnter={preload}
+        onPointerDown={(event) => {
+          pointerScrollReference.current = captureDocumentScrollPosition();
+          if (document.activeElement !== event.currentTarget) {
+            event.preventDefault();
+            focusWithoutDocumentScroll(event.currentTarget);
+          }
+        }}
         placeholder="Search everything…"
         ref={inputReference}
         role="combobox"
