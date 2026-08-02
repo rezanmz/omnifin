@@ -5,6 +5,10 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./audit": {
+      "types": "./dist/audit.d.ts",
+      "default": "./dist/audit.js"
+    },
     "./acquisition": {
       "types": "./dist/acquisition.d.ts",
       "default": "./dist/acquisition.js"
