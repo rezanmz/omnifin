@@ -110,5 +110,7 @@ describe("ApplicationShellBoundary", () => {
       expect(routeUsesApplicationShell(publicPath)).toBe(false);
     }
     expect(routeUsesApplicationShell("/library")).toBe(true);
+    expect(routeUsesApplicationShell("/about")).toBe(true);
+    expect(routeUsesApplicationShell("/unknown-route")).toBe(false);
   });
 });
