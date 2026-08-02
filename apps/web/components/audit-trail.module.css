@@ -487,8 +487,6 @@
 }
 
 .eventRow {
-  content-visibility: auto;
-  contain-intrinsic-block-size: 116px;
   display: grid;
   gap: 14px;
   grid-template-columns: 34px minmax(0, 1fr);
@@ -873,11 +871,6 @@
     align-items: start;
     flex-direction: column;
     gap: 8px;
-  }
-
-  .eventRow {
-    contain-intrinsic-block-size: none;
-    content-visibility: visible;
   }
 
   .eventMeta {
