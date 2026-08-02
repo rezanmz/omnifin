@@ -41,7 +41,6 @@ import {
   type MediaLibraryClient,
   type MediaLibraryLoadOutcome,
 } from "../lib/media-library";
-import { mediaLibraryDemoClient } from "../lib/media-library-demo";
 import type { PlaybackClient } from "../lib/playback";
 import type { ThemePreference } from "../lib/theme";
 import { CinematicBackdrop } from "./cinematic-backdrop";
@@ -69,6 +68,21 @@ const LibraryTitleDrawer = dynamic(
   () => import("./library-title-drawer").then((module) => module.LibraryTitleDrawer),
   { ssr: false },
 );
+
+const lazyMediaLibraryDemoClient: MediaLibraryClient = {
+  async load(input, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.load(input, signal);
+  },
+  async loadSeasonEpisodes(referenceId, seasonNumber, input, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.loadSeasonEpisodes!(referenceId, seasonNumber, input, signal);
+  },
+  async loadTitle(referenceId, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.loadTitle!(referenceId, signal);
+  },
+};
 
 const KIND_OPTIONS: { icon: typeof Library; label: string; value: LibraryBrowseKind }[] = [
   { icon: Library, label: "All", value: "all" },
@@ -710,7 +724,7 @@ export function MediaLibrary({
   const resolvedClient =
     client ??
     (live === false && initialOutcome?.status === "ready"
-      ? mediaLibraryDemoClient
+      ? lazyMediaLibraryDemoClient
       : mediaLibraryClient);
   const [queryClient] = useState(
     () =>
