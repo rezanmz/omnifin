@@ -1469,12 +1469,17 @@ test("failed queue recovery success visual baseline", async ({ page }, testInfo)
   await expect(success).toBeFocused();
   await success.evaluate((status) => {
     const scroller = status.closest(".acquisition-timeline__body");
+    const dialog = status.closest(".acquisition-timeline");
     if (!(scroller instanceof HTMLElement)) {
       throw new Error("The acquisition recovery status lost its timeline scroll container.");
+    }
+    if (!(dialog instanceof HTMLElement)) {
+      throw new Error("The acquisition recovery status lost its timeline dialog.");
     }
 
     const statusBounds = status.getBoundingClientRect();
     const scrollerBounds = scroller.getBoundingClientRect();
+    dialog.scrollTop = 0;
     scroller.style.scrollBehavior = "auto";
     scroller.scrollTop +=
       statusBounds.top - scrollerBounds.top - (scroller.clientHeight - statusBounds.height) / 2;
