@@ -1095,6 +1095,9 @@ test("liquid glass chrome responds optically to pointer position", async ({ page
   );
   await page.goto("/");
 
+  await page.keyboard.press("Tab");
+  await expect(page.locator("html")).toHaveAttribute("data-liquid-glass-ready", "");
+
   const search = page.locator(".global-search");
   const bounds = await search.boundingBox();
   expect(bounds).not.toBeNull();
