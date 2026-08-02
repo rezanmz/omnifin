@@ -5,6 +5,7 @@ import {
   copyFile,
   lstat,
   open,
+  opendir,
   readFile,
   realpath,
   rename,
@@ -20,6 +21,14 @@ import { databaseMaintenanceLockPath } from "./maintenance-lock.js";
 const BACKUP_FORMAT = "omnifin-sqlite-backup";
 const BACKUP_FORMAT_VERSION = 1;
 const PRIVATE_MODE_MASK = 0o077;
+const RETAINED_BACKUP_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const RETAINED_BACKUP_FILE_PATTERN =
+  /^omnifin-auto-\d{8}T\d{9}Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.sqlite$/;
+const MAX_RETAINED_BACKUPS = 365;
+const MIN_RETAINED_BACKUPS = 2;
+const MAX_RETENTION_DIRECTORY_ENTRIES = 10_000;
+const RETENTION_OVERLAP_GRACE_MS = 15 * 60 * 1_000;
 
 const backupManifestSchema = z
   .object({
@@ -45,6 +54,7 @@ export type MaintenanceFailureCode =
   | "backup_manifest_invalid"
   | "backup_mismatch"
   | "backup_path_invalid"
+  | "backup_retention_invalid"
   | "database_not_quiescent"
   | "database_path_invalid"
   | "database_maintenance_active"
@@ -72,6 +82,24 @@ export interface BackupResult {
   schemaSha256: string;
 }
 
+export interface RetainedBackupResult {
+  backup: BackupResult;
+  retention: {
+    candidates: number;
+    deferred?: number;
+    reason?:
+      | "retention_cleanup_failed"
+      | "retention_delete_failed"
+      | "retention_rollback_failed"
+      | "retention_scan_limit_exceeded"
+      | "retention_set_invalid";
+    removed: number;
+    retained: number;
+    state: "attention" | "ready";
+    unavailable?: number;
+  };
+}
+
 export interface RestoreResult {
   databaseSha256: string;
   restoredFileName: string;
@@ -93,6 +121,21 @@ interface BackupOptions {
   imageReference?: string;
   now?: Date;
   outputPath: string;
+}
+
+interface RetainedBackupOptions {
+  backupDirectory: string;
+  createId?: () => string;
+  databasePath: string;
+  imageReference?: string;
+  now?: Date;
+  retentionCount: number;
+  scanLimit?: number;
+}
+
+interface RetainedBackupDependencies {
+  removeFile?: typeof unlink;
+  renameFile?: typeof rename;
 }
 
 interface RestoreOptions {
@@ -312,6 +355,191 @@ function resolvedFilePath(value: string, failureCode: MaintenanceFailureCode) {
   return path.resolve(value);
 }
 
+function retainedBackupFileName(now: Date, id: string) {
+  if (Number.isNaN(now.getTime()) || !RETAINED_BACKUP_ID_PATTERN.test(id)) {
+    throw new MaintenanceError("backup_retention_invalid");
+  }
+  const timestamp = now.toISOString().replaceAll(/[-:.]/g, "");
+  return `omnifin-auto-${timestamp}-${id}.sqlite`;
+}
+
+async function readBoundedDirectoryEntries(directory: string, limit: number) {
+  const entries: string[] = [];
+  const handle = await opendir(directory);
+  try {
+    while (true) {
+      const entry = await handle.read();
+      if (!entry) return { entries, exceeded: false };
+      if (entries.length >= limit) return { entries, exceeded: true };
+      entries.push(entry.name);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+async function applyRetainedBackupLimit(
+  backupDirectory: string,
+  currentBackupPath: string,
+  currentCreatedAt: number,
+  retentionCount: number,
+  scanLimit: number,
+  dependencies: Required<RetainedBackupDependencies>,
+) {
+  const scan = await readBoundedDirectoryEntries(backupDirectory, scanLimit);
+  if (scan.exceeded) {
+    return {
+      candidates: 0,
+      reason: "retention_scan_limit_exceeded" as const,
+      removed: 0,
+      retained: 0,
+      state: "attention" as const,
+    };
+  }
+  const entries = scan.entries;
+  const backupFileNames = entries.filter((fileName) => RETAINED_BACKUP_FILE_PATTERN.test(fileName));
+  const manifestBackupFileNames = entries
+    .filter((fileName) => fileName.endsWith(".manifest.json"))
+    .map((fileName) => fileName.slice(0, -".manifest.json".length))
+    .filter((fileName) => RETAINED_BACKUP_FILE_PATTERN.test(fileName));
+  const fileNames = [...new Set([...backupFileNames, ...manifestBackupFileNames])];
+  const backupFileNameSet = new Set(backupFileNames);
+  const manifestBackupFileNameSet = new Set(manifestBackupFileNames);
+  if (
+    fileNames.some(
+      (fileName) => !backupFileNameSet.has(fileName) || !manifestBackupFileNameSet.has(fileName),
+    )
+  ) {
+    return {
+      candidates: fileNames.length,
+      reason: "retention_set_invalid" as const,
+      removed: 0,
+      retained: fileNames.length,
+      state: "attention" as const,
+    };
+  }
+  let candidates: { backupPath: string; createdAt: string }[];
+  try {
+    candidates = await Promise.all(
+      fileNames.map(async (fileName) => {
+        const backupPath = path.join(backupDirectory, fileName);
+        const verified = await readAndValidateManifest(backupPath);
+        return { backupPath, createdAt: verified.manifest.createdAt };
+      }),
+    );
+  } catch {
+    return {
+      candidates: fileNames.length,
+      reason: "retention_set_invalid" as const,
+      removed: 0,
+      retained: fileNames.length,
+      state: "attention" as const,
+    };
+  }
+  candidates.sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.backupPath.localeCompare(right.backupPath),
+  );
+  const retained = candidates.slice(-retentionCount);
+  if (!retained.some((candidate) => candidate.backupPath === currentBackupPath)) {
+    retained.shift();
+    const current = candidates.find((candidate) => candidate.backupPath === currentBackupPath);
+    if (!current) {
+      return {
+        candidates: candidates.length,
+        reason: "retention_set_invalid" as const,
+        removed: 0,
+        retained: candidates.length,
+        state: "attention" as const,
+      };
+    }
+    retained.push(current);
+  }
+  const retainedPaths = new Set(retained.map((candidate) => candidate.backupPath));
+  for (const candidate of candidates) {
+    if (
+      Math.abs(Date.parse(candidate.createdAt) - currentCreatedAt) <= RETENTION_OVERLAP_GRACE_MS
+    ) {
+      retainedPaths.add(candidate.backupPath);
+    }
+  }
+  const expired = candidates.filter((candidate) => !retainedPaths.has(candidate.backupPath));
+  let removed = 0;
+  for (const candidate of expired) {
+    const token = randomUUID();
+    const retiredBackupPath = path.join(
+      backupDirectory,
+      `.${path.basename(candidate.backupPath)}.${token}.retired`,
+    );
+    const retiredManifestPath = `${retiredBackupPath}.manifest.json`;
+    let backupMoved = false;
+    let manifestMoved = false;
+    try {
+      await dependencies.renameFile(manifestPath(candidate.backupPath), retiredManifestPath);
+      manifestMoved = true;
+      await dependencies.renameFile(candidate.backupPath, retiredBackupPath);
+      backupMoved = true;
+      await syncDirectory(backupDirectory);
+    } catch {
+      let rollbackFailed = false;
+      if (backupMoved) {
+        try {
+          await dependencies.renameFile(retiredBackupPath, candidate.backupPath);
+        } catch {
+          rollbackFailed = true;
+        }
+      }
+      if (manifestMoved) {
+        try {
+          await dependencies.renameFile(retiredManifestPath, manifestPath(candidate.backupPath));
+        } catch {
+          rollbackFailed = true;
+        }
+      }
+      if (backupMoved || manifestMoved) {
+        try {
+          await syncDirectory(backupDirectory);
+        } catch {
+          rollbackFailed = true;
+        }
+      }
+      return {
+        candidates: candidates.length,
+        reason: rollbackFailed
+          ? ("retention_rollback_failed" as const)
+          : ("retention_delete_failed" as const),
+        removed,
+        retained: candidates.length - removed - (rollbackFailed ? 1 : 0),
+        state: "attention" as const,
+        ...(rollbackFailed ? { unavailable: 1 } : {}),
+      };
+    }
+    removed += 1;
+    try {
+      await dependencies.removeFile(retiredManifestPath);
+      await dependencies.removeFile(retiredBackupPath);
+      await syncDirectory(backupDirectory);
+    } catch {
+      return {
+        candidates: candidates.length,
+        reason: "retention_cleanup_failed" as const,
+        removed,
+        retained: candidates.length - removed,
+        state: "attention" as const,
+      };
+    }
+  }
+  const deferred = Math.max(0, retainedPaths.size - retentionCount);
+  return {
+    candidates: candidates.length,
+    ...(deferred > 0 ? { deferred } : {}),
+    removed,
+    retained: retainedPaths.size,
+    state: "ready" as const,
+  };
+}
+
 async function assertDistinctPaths(...filePaths: string[]) {
   if (new Set(filePaths).size !== filePaths.length) {
     throw new MaintenanceError("backup_path_invalid");
@@ -397,6 +625,52 @@ export async function createDatabaseBackup(options: BackupOptions): Promise<Back
     sqlite?.close();
     await optionalUnlink(temporaryPath);
   }
+}
+
+export async function createRetainedDatabaseBackup(
+  options: RetainedBackupOptions,
+  dependencies: RetainedBackupDependencies = {},
+): Promise<RetainedBackupResult> {
+  if (
+    !Number.isInteger(options.retentionCount) ||
+    options.retentionCount < MIN_RETAINED_BACKUPS ||
+    options.retentionCount > MAX_RETAINED_BACKUPS ||
+    (options.scanLimit !== undefined &&
+      (!Number.isInteger(options.scanLimit) ||
+        options.scanLimit < 1 ||
+        options.scanLimit > MAX_RETENTION_DIRECTORY_ENTRIES))
+  ) {
+    throw new MaintenanceError("backup_retention_invalid");
+  }
+
+  const now = options.now ?? new Date();
+  const fileName = retainedBackupFileName(now, (options.createId ?? randomUUID)());
+  const backupPath = path.join(
+    resolvedFilePath(options.backupDirectory, "backup_path_invalid"),
+    fileName,
+  );
+  const backup = await createDatabaseBackup({
+    databasePath: options.databasePath,
+    outputPath: backupPath,
+    ...(options.imageReference ? { imageReference: options.imageReference } : {}),
+    now,
+  });
+  await verifyDatabaseBackup({ backupPath });
+
+  return {
+    backup,
+    retention: await applyRetainedBackupLimit(
+      path.dirname(backupPath),
+      backupPath,
+      now.getTime(),
+      options.retentionCount,
+      options.scanLimit ?? MAX_RETENTION_DIRECTORY_ENTRIES,
+      {
+        removeFile: dependencies.removeFile ?? unlink,
+        renameFile: dependencies.renameFile ?? rename,
+      },
+    ),
+  };
 }
 
 export async function verifyDatabaseBackup(options: VerifyOptions): Promise<BackupResult> {
