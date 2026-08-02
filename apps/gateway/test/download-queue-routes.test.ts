@@ -3,6 +3,7 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   downloadQueueActionResponseSchema,
+  downloadQueueBulkActionResponseSchema,
   downloadQueuePromotionResponseSchema,
   downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
@@ -622,6 +623,138 @@ describe("download queue routes", () => {
       );
       expect(limited.body).not.toContain("Private qBittorrent rate-limit detail");
       expect(updateDownloadQueueItem).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("authorizes and idempotently applies a bounded bulk queue action", async () => {
+    const { app, operator, readDownloadQueue, updateDownloadQueueItem, viewer } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      const payload = {
+        action: "pause",
+        targets: [
+          {
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+        ],
+      } as const;
+
+      const denied = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": "viewer-bulk-route-fixture",
+          origin: baseUrl,
+          "x-omnifin-csrf": viewer.csrfToken,
+        },
+        method: "POST",
+        payload,
+        url: "/v1/downloads/queue/bulk-actions",
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("permission_denied");
+
+      const missingProof = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload,
+        url: "/v1/downloads/queue/bulk-actions",
+      });
+      expect(missingProof.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(missingProof.json()).error.code).toBe("invalid_request");
+
+      readDownloadQueue
+        .mockResolvedValueOnce({
+          generatedAt: now.toISOString(),
+          items: [
+            {
+              addedAt: "2026-07-28T02:50:00.000Z",
+              category: "movies",
+              etaSeconds: 90,
+              externalId: privateUpstreamId,
+              leechers: 3,
+              progress: 0.8,
+              rateBytesPerSecond: 8_000_000,
+              remainingBytes: 2_000_000_000,
+              seeders: 28,
+              sizeBytes: 10_000_000_000,
+              state: "downloading",
+              title: "The.Far.Meridian.2160p",
+            },
+          ],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          generatedAt: now.toISOString(),
+          items: [
+            {
+              addedAt: "2026-07-28T02:50:00.000Z",
+              category: "movies",
+              etaSeconds: null,
+              externalId: privateUpstreamId,
+              leechers: 3,
+              progress: 0.8,
+              rateBytesPerSecond: 0,
+              remainingBytes: 2_000_000_000,
+              seeders: 28,
+              sizeBytes: 10_000_000_000,
+              state: "paused",
+              title: "The.Far.Meridian.2160p",
+            },
+          ],
+          truncated: false,
+        });
+      const request = (body: object = payload) =>
+        app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            "idempotency-key": "bulk-route-fixture",
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: body,
+          url: "/v1/downloads/queue/bulk-actions",
+        });
+      const completed = await request();
+
+      expect(completed.statusCode, completed.body).toBe(200);
+      expect(downloadQueueBulkActionResponseSchema.parse(completed.json())).toMatchObject({
+        action: "pause",
+        replayed: false,
+        state: "complete",
+        summary: { failed: 0, requested: 1, succeeded: 1 },
+      });
+      expect(completed.headers["idempotency-replayed"]).toBe("false");
+      expect(completed.headers["cache-control"]).toBe("no-store");
+      expect(completed.body).not.toContain(privateUpstreamId);
+      expect(completed.body).not.toContain(privatePassword);
+      expect(updateDownloadQueueItem).toHaveBeenCalledOnce();
+
+      const replayed = await request();
+      expect(replayed.statusCode, replayed.body).toBe(200);
+      expect(downloadQueueBulkActionResponseSchema.parse(replayed.json()).replayed).toBe(true);
+      expect(replayed.headers["idempotency-replayed"]).toBe("true");
+      expect(updateDownloadQueueItem).toHaveBeenCalledOnce();
+
+      const conflicted = await request({
+        action: "resume",
+        targets: [{ ...payload.targets[0], expectedState: "paused" }],
+      });
+      expect(conflicted.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(conflicted.json()).error.code).toBe("idempotency_key_conflict");
     } finally {
       await app.close();
     }

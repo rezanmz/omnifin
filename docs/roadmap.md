@@ -80,10 +80,10 @@ desktop, tablet, mobile, and 10-foot layouts pass.
   plus broader queue mutations
 - Prowlarr Indexer Intelligence (implemented with isolated exact-provider safe-test evidence;
   protected live evidence pending)
-- qBittorrent and SABnzbd live queues with exact-item pause/resume, verified front-of-queue
-  promotion, and downloaded-file-preserving removal (implemented with deterministic contracts and
-  isolated digest-pinned upstream gates; protected live evidence and broader queue mutations
-  pending)
+- qBittorrent and SABnzbd live queues with exact-item and crash-resumable current-view bulk
+  pause/resume, verified front-of-queue promotion, and downloaded-file-preserving removal
+  (implemented with deterministic contracts and isolated digest-pinned upstream gates; protected
+  live evidence and broader destructive queue mutations pending)
 - Unified Radarr, Sonarr, and Prowlarr health plus path-free Radarr/Sonarr capacity telemetry with
   bounded shared live snapshots and a visible foreground-polling fallback (implemented with
   isolated real-service read gates; protected live evidence pending)

@@ -1073,6 +1073,82 @@ export const downloadQueueRemovalOperations = sqliteTable(
   ],
 );
 
+export const downloadQueueBulkOperations = sqliteTable(
+  "download_queue_bulk_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded"] })
+      .notNull()
+      .default("pending"),
+    requestJson: text("request_json").notNull(),
+    resultsJson: text("results_json").notNull().default("[]"),
+    responseJson: text("response_json"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("download_queue_bulk_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("download_queue_bulk_operations_state_created_idx").on(table.state, table.createdAt),
+    check(
+      "download_queue_bulk_operations_id_check",
+      sql`length(${table.id}) = 36
+        and substr(${table.id}, 1, 14) = 'download_bulk_'
+        and substr(${table.id}, 15) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_bulk_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_bulk_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_bulk_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded')`,
+    ),
+    check(
+      "download_queue_bulk_operations_request_json_check",
+      sql`json_valid(${table.requestJson}) and json_type(${table.requestJson}) = 'object'`,
+    ),
+    check(
+      "download_queue_bulk_operations_results_json_check",
+      sql`json_valid(${table.resultsJson}) and json_type(${table.resultsJson}) = 'array'`,
+    ),
+    check(
+      "download_queue_bulk_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "download_queue_bulk_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "download_queue_bulk_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

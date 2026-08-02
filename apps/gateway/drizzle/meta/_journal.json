@@ -148,6 +148,13 @@
       "when": 1785609524962,
       "tag": "0020_acquisition_queue_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1785664390484,
+      "tag": "0021_download_queue_bulk_operations",
+      "breakpoints": true
     }
   ]
 }

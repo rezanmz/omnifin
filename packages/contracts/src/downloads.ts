@@ -8,6 +8,7 @@ import {
 
 export const DOWNLOAD_QUEUE_MAX_ITEMS = 200;
 export const DOWNLOAD_QUEUE_MAX_CLIENTS = 20;
+export const DOWNLOAD_QUEUE_MAX_BULK_TARGETS = DOWNLOAD_QUEUE_MAX_ITEMS;
 export const DOWNLOAD_QUEUE_MAX_ITEM_BYTES = Math.floor(
   Number.MAX_SAFE_INTEGER / DOWNLOAD_QUEUE_MAX_ITEMS,
 );
@@ -69,6 +70,50 @@ export const downloadQueueActionInputSchema = z.discriminatedUnion("action", [
   }),
 ]);
 export type DownloadQueueActionInput = z.infer<typeof downloadQueueActionInputSchema>;
+
+const downloadQueuePauseTargetSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueuePausableStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+
+const downloadQueueResumeTargetSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: z.literal("paused"),
+  itemId: downloadQueueItemIdSchema,
+});
+
+function targetsAreUnique(
+  targets: readonly { connectorId: string; itemId: string }[],
+  context: z.core.$RefinementCtx,
+) {
+  const seen = new Set<string>();
+  for (const [index, target] of targets.entries()) {
+    const key = `${target.connectorId}\u0000${target.itemId}`;
+    if (seen.has(key)) {
+      context.addIssue({
+        code: "custom",
+        message: "Bulk download targets must be unique.",
+        path: ["targets", index, "itemId"],
+      });
+    }
+    seen.add(key);
+  }
+}
+
+export const downloadQueueBulkActionInputSchema = z
+  .discriminatedUnion("action", [
+    z.strictObject({
+      action: z.literal("pause"),
+      targets: z.array(downloadQueuePauseTargetSchema).min(1).max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+    }),
+    z.strictObject({
+      action: z.literal("resume"),
+      targets: z.array(downloadQueueResumeTargetSchema).min(1).max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+    }),
+  ])
+  .superRefine((input, context) => targetsAreUnique(input.targets, context));
+export type DownloadQueueBulkActionInput = z.infer<typeof downloadQueueBulkActionInputSchema>;
 
 export const downloadQueueItemSchema = z
   .strictObject({
@@ -407,6 +452,120 @@ export const downloadQueueActionResponseSchema = z
   });
 export type DownloadQueueActionResponse = z.infer<typeof downloadQueueActionResponseSchema>;
 
+export const downloadQueueBulkOperationIdSchema = z
+  .string()
+  .regex(/^download_bulk_[A-Za-z0-9_-]{22}$/u);
+
+export const downloadQueueBulkFailureCodeSchema = z.enum([
+  "action_unavailable",
+  "action_unconfirmed",
+  "configuration_unavailable",
+  "rate_limited",
+  "state_changed",
+  "target_not_found",
+]);
+export type DownloadQueueBulkFailureCode = z.infer<typeof downloadQueueBulkFailureCodeSchema>;
+
+const downloadQueueBulkTargetSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  expectedState: downloadQueueItemStateSchema,
+  itemId: downloadQueueItemIdSchema,
+});
+
+export const downloadQueueBulkResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    response: downloadQueueActionResponseSchema,
+    status: z.literal("succeeded"),
+    target: downloadQueueBulkTargetSchema,
+  }),
+  z.strictObject({
+    code: downloadQueueBulkFailureCodeSchema,
+    retryable: z.boolean(),
+    status: z.literal("failed"),
+    target: downloadQueueBulkTargetSchema,
+  }),
+]);
+export type DownloadQueueBulkResult = z.infer<typeof downloadQueueBulkResultSchema>;
+
+export const downloadQueueBulkActionResponseSchema = z
+  .strictObject({
+    action: downloadQueueActionSchema,
+    completedAt: z.iso.datetime({ offset: true }),
+    operationId: downloadQueueBulkOperationIdSchema,
+    replayed: z.boolean(),
+    results: z.array(downloadQueueBulkResultSchema).min(1).max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+    state: z.enum(["complete", "failed", "partial"]),
+    summary: z.strictObject({
+      failed: z.int().nonnegative().max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+      requested: z.int().positive().max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+      succeeded: z.int().nonnegative().max(DOWNLOAD_QUEUE_MAX_BULK_TARGETS),
+    }),
+  })
+  .superRefine((bulk, context) => {
+    const seen = new Set<string>();
+    let succeeded = 0;
+    let failed = 0;
+    for (const [index, result] of bulk.results.entries()) {
+      const key = `${result.target.connectorId}\u0000${result.target.itemId}`;
+      if (seen.has(key)) {
+        context.addIssue({
+          code: "custom",
+          message: "Bulk download results must identify unique targets.",
+          path: ["results", index, "target", "itemId"],
+        });
+      }
+      seen.add(key);
+      const targetStateValid =
+        bulk.action === "pause"
+          ? downloadQueuePausableStateSchema.safeParse(result.target.expectedState).success
+          : result.target.expectedState === "paused";
+      if (!targetStateValid) {
+        context.addIssue({
+          code: "custom",
+          message: "A bulk result target must be valid for the requested action.",
+          path: ["results", index, "target", "expectedState"],
+        });
+      }
+      if (result.status === "succeeded") {
+        succeeded += 1;
+        if (
+          result.response.action !== bulk.action ||
+          result.response.item.connectorId !== result.target.connectorId ||
+          result.response.item.id !== result.target.itemId ||
+          (!result.response.replayed &&
+            result.response.previousState !== result.target.expectedState)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "A successful bulk result must verify the exact requested target.",
+            path: ["results", index, "response"],
+          });
+        }
+      } else failed += 1;
+    }
+
+    const expectedState = failed === 0 ? "complete" : succeeded === 0 ? "failed" : "partial";
+    if (
+      bulk.summary.requested !== bulk.results.length ||
+      bulk.summary.succeeded !== succeeded ||
+      bulk.summary.failed !== failed
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Bulk download summary counts must match the returned results.",
+        path: ["summary"],
+      });
+    }
+    if (bulk.state !== expectedState) {
+      context.addIssue({
+        code: "custom",
+        message: "Bulk download state must reflect the per-target outcomes.",
+        path: ["state"],
+      });
+    }
+  });
+export type DownloadQueueBulkActionResponse = z.infer<typeof downloadQueueBulkActionResponseSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -422,6 +581,12 @@ export const downloadQueueActionInputJsonSchema = withoutSchemaDialect(
 );
 export const downloadQueueActionResponseJsonSchema = withoutSchemaDialect(
   downloadQueueActionResponseSchema,
+);
+export const downloadQueueBulkActionInputJsonSchema = withoutSchemaDialect(
+  downloadQueueBulkActionInputSchema,
+);
+export const downloadQueueBulkActionResponseJsonSchema = withoutSchemaDialect(
+  downloadQueueBulkActionResponseSchema,
 );
 export const downloadQueueRemovalInputJsonSchema = withoutSchemaDialect(
   downloadQueueRemovalInputSchema,

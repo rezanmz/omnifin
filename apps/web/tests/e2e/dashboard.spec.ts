@@ -630,6 +630,29 @@ test("download queue supports focused search and attention filtering", async ({ 
   await expect(resume).toBeFocused();
 });
 
+test("download queue bulk controls preserve exact filtered scope and cancel focus", async ({
+  page,
+}) => {
+  await page.goto("/operations/downloads?test-view=ready");
+  const pause = page.getByRole("button", { name: "Pause 1 active transfer" });
+  await expect(pause).toBeEnabled();
+  await expect(
+    page.getByText(/All visible transfers · 2 clients · exact targets only/u),
+  ).toBeVisible();
+  await pause.click();
+  await expect(page.getByText("Pause 1 transfer?")).toBeVisible();
+  const cancel = page.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  await expectStationaryPointerTarget(cancel);
+  await cancel.click();
+  await expect(pause).toBeFocused();
+
+  await page.getByRole("button", { name: "Attention" }).click();
+  await expect(page.getByRole("button", { name: "Pause 0 active transfers" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Resume 0 paused transfers" })).toBeDisabled();
+  await expect(page.getByText(/Filtered scope · 1 client · exact targets only/u)).toBeVisible();
+});
+
 test("indexer intelligence hydrates without changing deterministic telemetry", async ({ page }) => {
   const hydrationErrors: string[] = [];
   const recordHydrationError = (message: string) => {

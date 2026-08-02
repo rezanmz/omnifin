@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   DownloadQueueAction,
+  DownloadQueueBulkActionInput,
   DownloadQueueItem,
   DownloadQueueItemState,
   DownloadQueueResponse,
@@ -19,6 +20,7 @@ import {
   Gauge,
   HardDrive,
   Layers3,
+  ListChecks,
   LoaderCircle,
   LockKeyhole,
   Monitor,
@@ -125,6 +127,14 @@ interface QueuePromotionState {
   itemId: string;
   message: string;
   status: "error" | "submitting";
+}
+
+interface QueueBulkState {
+  action: DownloadQueueAction;
+  idempotencyKey: string;
+  items: DownloadQueueItem[];
+  message: string;
+  status: "confirming" | "error" | "result" | "submitting";
 }
 
 export interface DownloadQueueProperties {
@@ -762,6 +772,7 @@ function ReadyQueue({
   const [filter, setFilter] = useState<QueueFilter>("all");
   const [query, setQuery] = useState("");
   const [actionState, setActionState] = useState<QueueActionState | null>(null);
+  const [bulkState, setBulkState] = useState<QueueBulkState | null>(null);
   const [promotionState, setPromotionState] = useState<QueuePromotionState | null>(null);
   const [removalState, setRemovalState] = useState<QueueRemovalState | null>(null);
   const [operationAnnouncement, setOperationAnnouncement] = useState("");
@@ -784,13 +795,34 @@ function ReadyQueue({
     });
   }, [filter, query, queue.items]);
   const filtered = filter !== "all" || query.trim().length > 0;
+  const bulkPauseItems = useMemo(
+    () => visibleItems.filter((item) => ACTIVE_STATES.has(item.state)),
+    [visibleItems],
+  );
+  const bulkResumeItems = useMemo(
+    () => visibleItems.filter((item) => item.state === "paused"),
+    [visibleItems],
+  );
+  const visibleClientCount = useMemo(
+    () => new Set(visibleItems.map((item) => item.connectorId)).size,
+    [visibleItems],
+  );
   const actionAvailable = Boolean(client.act && client.loadEligibility);
+  const bulkAvailable = Boolean(client.bulkAct && client.loadEligibility);
   const promotionAvailable = Boolean(client.promote && client.loadEligibility);
   const removalAvailable = Boolean(client.remove && client.loadEligibility);
   const actionLocked =
     actionState?.status === "submitting" ||
+    bulkState?.status === "submitting" ||
     promotionState?.status === "submitting" ||
     removalState?.status === "submitting";
+
+  const clearBulkReturnFocus = () => {
+    const triggers = document.querySelectorAll<HTMLButtonElement>(
+      'button[data-bulk-return-focus="true"]',
+    );
+    for (const trigger of triggers) trigger.removeAttribute("data-bulk-return-focus");
+  };
 
   useEffect(() => {
     if (actionState !== null || actionReturnFocus.current === null) return;
@@ -813,6 +845,8 @@ function ReadyQueue({
 
   const beginAction = (item: DownloadQueueItem, action: DownloadQueueAction) => {
     if (actionLocked) return;
+    clearBulkReturnFocus();
+    setBulkState(null);
     setPromotionState(null);
     setRemovalState(null);
     setActionState({ action, itemId: item.id, message: "", status: "confirming" });
@@ -825,7 +859,9 @@ function ReadyQueue({
 
   const beginRemoval = (item: DownloadQueueItem) => {
     if (actionLocked) return;
+    clearBulkReturnFocus();
     setActionState(null);
+    setBulkState(null);
     setPromotionState(null);
     setOperationAnnouncement("");
     setRemovalState({
@@ -835,6 +871,112 @@ function ReadyQueue({
       message: "",
       status: "confirming",
     });
+  };
+
+  const beginBulk = (
+    action: DownloadQueueAction,
+    items: DownloadQueueItem[],
+    trigger: HTMLButtonElement,
+  ) => {
+    if (actionLocked || items.length === 0) return;
+    setActionState(null);
+    setPromotionState(null);
+    setRemovalState(null);
+    setOperationAnnouncement("");
+    clearBulkReturnFocus();
+    trigger.dataset.bulkReturnFocus = "true";
+    setBulkState({
+      action,
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      items: [...items],
+      message: "",
+      status: "confirming",
+    });
+  };
+
+  const cancelBulk = () => {
+    const trigger = document.querySelector<HTMLButtonElement>(
+      'button[data-bulk-return-focus="true"]',
+    );
+    clearBulkReturnFocus();
+    setBulkState(null);
+    globalThis.requestAnimationFrame(() => trigger?.focus());
+  };
+
+  const confirmBulk = async () => {
+    if (!bulkState || !client.bulkAct || !client.loadEligibility) return;
+    const operation = bulkState;
+    setBulkState({ ...operation, message: "", status: "submitting" });
+    try {
+      const eligibility = await client.loadEligibility();
+      if (eligibility.status !== "ready") {
+        const message =
+          eligibility.status === "signed_out"
+            ? "Your session ended. Sign in again before changing these transfers."
+            : eligibility.status === "forbidden"
+              ? "Operator access is required to change these transfers."
+              : "The session could not be verified. No bulk action was started.";
+        setBulkState({ ...operation, message, status: "error" });
+        return;
+      }
+      const input: DownloadQueueBulkActionInput =
+        operation.action === "pause"
+          ? {
+              action: "pause",
+              targets: operation.items.map((item) => ({
+                connectorId: item.connectorId,
+                expectedState: item.state as "checking" | "downloading" | "moving",
+                itemId: item.id,
+              })),
+            }
+          : {
+              action: "resume",
+              targets: operation.items.map((item) => ({
+                connectorId: item.connectorId,
+                expectedState: "paused",
+                itemId: item.id,
+              })),
+            };
+      const result = await client.bulkAct(input, {
+        csrfToken: eligibility.snapshot.csrfToken,
+        idempotencyKey: operation.idempotencyKey,
+      });
+      const changedItems = new Map(
+        result.results.flatMap((entry) =>
+          entry.status === "succeeded" ? [[entry.response.item.id, entry.response.item]] : [],
+        ),
+      );
+      queryClient.setQueryData<DownloadQueueResponse>(["download-queue"], (current) => {
+        if (!current) return current;
+        const items = current.items.map((item) => changedItems.get(item.id) ?? item);
+        return queueWithItems(current, items, result.completedAt);
+      });
+      const changed = result.summary.succeeded;
+      const verb = operation.action === "pause" ? "paused" : "resumed";
+      if (result.summary.failed === 0) {
+        clearBulkReturnFocus();
+        setBulkState(null);
+        setOperationAnnouncement(
+          `${changed} ${changed === 1 ? "transfer" : "transfers"} ${verb} and reverified.`,
+        );
+      } else {
+        setBulkState({
+          ...operation,
+          message: `${changed} ${changed === 1 ? "transfer was" : "transfers were"} ${verb}; ${result.summary.failed} ${result.summary.failed === 1 ? "target needs" : "targets need"} review after changing or becoming unavailable.`,
+          status: "result",
+        });
+        void onRefresh();
+      }
+    } catch (error) {
+      const message =
+        error instanceof DownloadQueueClientError
+          ? error.message
+          : "The bulk action could not be verified. Its idempotency proof is retained for a safe retry.";
+      setBulkState({ ...operation, message, status: "error" });
+      if (error instanceof DownloadQueueClientError && error.kind === "stale") {
+        void onRefresh();
+      }
+    }
   };
 
   const confirmAction = async (item: DownloadQueueItem, action: DownloadQueueAction) => {
@@ -950,7 +1092,9 @@ function ReadyQueue({
 
   const promoteItem = async (item: DownloadQueueItem) => {
     if (!client.promote || !client.loadEligibility || actionLocked) return;
+    clearBulkReturnFocus();
     setActionState(null);
+    setBulkState(null);
     setRemovalState(null);
     setOperationAnnouncement("");
     setPromotionState({ itemId: item.id, message: "", status: "submitting" });
@@ -1039,6 +1183,7 @@ function ReadyQueue({
               <Search aria-hidden="true" size={17} />
               <input
                 autoComplete="off"
+                disabled={bulkState !== null}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Find a transfer or client"
                 type="search"
@@ -1050,6 +1195,7 @@ function ReadyQueue({
                 <button
                   aria-pressed={filter === value}
                   data-selected={filter === value || undefined}
+                  disabled={bulkState !== null}
                   key={value}
                   onClick={() => setFilter(value)}
                   type="button"
@@ -1084,6 +1230,113 @@ function ReadyQueue({
               )}
             </button>
           </div>
+
+          {bulkAvailable ? (
+            <section
+              aria-labelledby="bulk-queue-controls-title"
+              className={styles.bulkControls}
+              data-liquid-glass
+            >
+              <div className={styles.bulkHeading}>
+                <span aria-hidden="true">
+                  <ListChecks size={18} />
+                </span>
+                <div>
+                  <strong id="bulk-queue-controls-title">Current-view controls</strong>
+                  <small>
+                    {filtered ? "Filtered scope" : "All visible transfers"} · {visibleClientCount}{" "}
+                    {visibleClientCount === 1 ? "client" : "clients"} · exact targets only
+                  </small>
+                </div>
+              </div>
+              <div className={styles.bulkButtons}>
+                <button
+                  aria-label={`Pause ${bulkPauseItems.length} active ${bulkPauseItems.length === 1 ? "transfer" : "transfers"}`}
+                  disabled={actionLocked || bulkState !== null || bulkPauseItems.length === 0}
+                  onClick={(event) => beginBulk("pause", bulkPauseItems, event.currentTarget)}
+                  type="button"
+                >
+                  <Pause aria-hidden="true" size={16} />
+                  <span>Pause active</span>
+                  <strong>{String(bulkPauseItems.length).padStart(2, "0")}</strong>
+                </button>
+                <button
+                  aria-label={`Resume ${bulkResumeItems.length} paused ${bulkResumeItems.length === 1 ? "transfer" : "transfers"}`}
+                  disabled={actionLocked || bulkState !== null || bulkResumeItems.length === 0}
+                  onClick={(event) => beginBulk("resume", bulkResumeItems, event.currentTarget)}
+                  type="button"
+                >
+                  <Play aria-hidden="true" size={16} />
+                  <span>Resume paused</span>
+                  <strong>{String(bulkResumeItems.length).padStart(2, "0")}</strong>
+                </button>
+              </div>
+              {bulkState ? (
+                <div
+                  aria-label="Bulk queue action"
+                  className={styles.bulkDecision}
+                  data-status={bulkState.status}
+                  role={
+                    bulkState.status === "confirming"
+                      ? "group"
+                      : bulkState.status === "error"
+                        ? "alert"
+                        : "status"
+                  }
+                >
+                  <span aria-hidden="true" className={styles.bulkDecisionIcon}>
+                    {bulkState.status === "submitting" ? (
+                      <LoaderCircle className={styles.spinner} size={18} />
+                    ) : bulkState.status === "result" ? (
+                      <TriangleAlert size={18} />
+                    ) : (
+                      <ShieldCheck size={18} />
+                    )}
+                  </span>
+                  <div className={styles.bulkDecisionCopy}>
+                    <strong>
+                      {bulkState.status === "confirming"
+                        ? `${bulkState.action === "pause" ? "Pause" : "Resume"} ${bulkState.items.length} ${bulkState.items.length === 1 ? "transfer" : "transfers"}?`
+                        : bulkState.status === "submitting"
+                          ? `Revalidating ${bulkState.items.length} exact ${bulkState.items.length === 1 ? "target" : "targets"}…`
+                          : bulkState.status === "result"
+                            ? "Bulk action completed with exceptions"
+                            : "Bulk action needs attention"}
+                    </strong>
+                    <p>
+                      {bulkState.message ||
+                        "Omnifin will recheck every opaque target before mutation, keep client concurrency bounded, and report each outcome independently."}
+                    </p>
+                  </div>
+                  <div className={styles.bulkDecisionActions}>
+                    {bulkState.status === "confirming" ? (
+                      <>
+                        <button autoFocus onClick={cancelBulk} type="button">
+                          Cancel
+                        </button>
+                        <button data-primary onClick={() => void confirmBulk()} type="button">
+                          {bulkState.action === "pause" ? "Confirm pause" : "Confirm resume"}
+                        </button>
+                      </>
+                    ) : bulkState.status === "error" ? (
+                      <>
+                        <button onClick={cancelBulk} type="button">
+                          Cancel
+                        </button>
+                        <button data-primary onClick={() => void confirmBulk()} type="button">
+                          Retry safely
+                        </button>
+                      </>
+                    ) : bulkState.status === "result" ? (
+                      <button data-primary onClick={cancelBulk} type="button">
+                        Review refreshed queue
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           {queue.state === "degraded" ? (
             <div className={styles.degradedNotice} role="status">

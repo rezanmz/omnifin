@@ -145,6 +145,33 @@ and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly
 `nzo_id`. Raw hashes, `nzo_id` values, credentials, cookies, and upstream responses never reach the
 browser or audit metadata.
 
+## Safe current-view bulk pause and resume
+
+`POST /v1/downloads/queue/bulk-actions` coordinates pause or resume for 1–200 explicit opaque
+targets. It accepts no wildcard, client-native identifier, path, category, URL, deletion option, or
+arbitrary command. The operator workspace captures only eligible transfers in the current search
+and filter, displays the exact count and client scope, and requires confirmation before submitting.
+
+The route requires an active `downloads.manage` session, same-origin CSRF proof, a per-user
+`Idempotency-Key`, a 64 KiB body limit, a six-per-minute operation limit, and no-store responses. The gateway
+durably reserves a canonical request, revalidates every target through the existing exact-item
+action path, and limits concurrent mutations to four. It never forwards a client-native bulk
+command. Each qBittorrent hash or SABnzbd `nzo_id` is resolved and mutated independently inside the
+secret boundary.
+
+Results preserve input order and report a normalized success or bounded failure for every target,
+so partial completion is explicit. Progress is stored after each bounded batch. A recent pending
+operation is rejected; after a 30-second lease expires, the same idempotency proof resumes only
+missing targets from durable progress. Exact-item replay makes the narrow crash interval between an
+upstream write and progress storage safe. Up to 200 records are retained per user. Completed and
+abandoned-pending records expire after 30 days and are pruned transactionally before new
+reservations, preventing a crashed client from exhausting the ledger indefinitely.
+
+Bulk requested/completed audit events contain the operation ID, action, target count, client count,
+and normalized outcome counts. Existing per-item audit records retain exact public target evidence.
+Raw identifiers, idempotency keys, credentials, paths, and private upstream responses are never
+stored in audit metadata or returned to the browser.
+
 ## Exact-item front-of-queue promotion
 
 `POST /v1/downloads/queue/promotions` applies the same active-user, `downloads.manage`, same-origin,
@@ -190,7 +217,6 @@ contain only bounded public identifiers, the normalized snapshot, an operation i
 fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency keys,
 credentials, cookies, paths, and upstream bodies remain inside the gateway.
 
-Arbitrary numeric priorities or positions, relocation, category changes, blocklisting, deletion of
-downloaded content, and bulk mutations remain intentionally absent. They require their own
-destructive-action and recovery design plus disposable live-service evidence before the interface
-can expose them.
+Arbitrary numeric priorities or positions, relocation, category changes, blocklisting, and deletion
+of downloaded content remain intentionally absent. Bulk pause/resume is deliberately limited to
+explicit, freshly revalidated targets and cannot express those broader mutations.

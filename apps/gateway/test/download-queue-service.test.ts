@@ -7,6 +7,7 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import {
+  downloadQueueBulkActionResponseSchema,
   downloadQueuePromotionResponseSchema,
   downloadQueueRemovalResponseSchema,
   downloadQueueResponseSchema,
@@ -206,6 +207,7 @@ function harness(options: { capable?: boolean; withConnectors?: boolean } = {}) 
   const service = new DownloadQueueService(database, config, {
     clock: () => now,
     createAdapter,
+    createBulkOperationId: () => "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
     createId: () => `download-action-audit-${++identifier}`,
     createOperationId: () => "download_removal_ABCDEFGHIJKLMNOPQRSTUV",
     wait,
@@ -566,6 +568,277 @@ describe("download queue service", () => {
         { action: "resume", externalId: UPSTREAM_ID },
         undefined,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("applies one idempotent bulk pause across qBittorrent and SABnzbd exact targets", async () => {
+    const { actions, database, readers, service } = harness();
+    const activeSabQueue = {
+      ...queueResult("sabnzbd"),
+      items: [
+        {
+          ...queueResult("sabnzbd").items[0]!,
+          rateBytesPerSecond: 2_048,
+          state: "downloading" as const,
+        },
+      ],
+    };
+    const pausedQbittorrentQueue = {
+      ...queueResult("qbittorrent"),
+      items: [
+        {
+          ...queueResult("qbittorrent").items[0]!,
+          rateBytesPerSecond: 0,
+          state: "paused" as const,
+        },
+      ],
+    };
+    const pausedSabQueue = {
+      ...activeSabQueue,
+      items: [{ ...activeSabQueue.items[0]!, rateBytesPerSecond: 0, state: "paused" as const }],
+    };
+    readers.sabnzbd.mockResolvedValue(activeSabQueue);
+    try {
+      const items = (await service.read({ principal: principal() })).items;
+      const input = {
+        action: "pause" as const,
+        targets: items.map((item) => ({
+          connectorId: item.connectorId,
+          expectedState: "downloading" as const,
+          itemId: item.id,
+        })),
+      };
+      readers.qbittorrent
+        .mockResolvedValueOnce(queueResult("qbittorrent"))
+        .mockResolvedValueOnce(pausedQbittorrentQueue);
+      readers.sabnzbd.mockResolvedValueOnce(activeSabQueue).mockResolvedValueOnce(pausedSabQueue);
+
+      const result = await service.bulkUpdate(input, "bulk-pause-both-clients", {
+        ipAddress: "203.0.113.12",
+        principal: principal(),
+        requestId: "bulk-request-1",
+      });
+
+      expect(downloadQueueBulkActionResponseSchema.parse(result)).toMatchObject({
+        action: "pause",
+        operationId: "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+        replayed: false,
+        state: "complete",
+        summary: { failed: 0, requested: 2, succeeded: 2 },
+      });
+      expect(result.results.map(({ status }) => status)).toEqual(["succeeded", "succeeded"]);
+      expect(actions.qbittorrent).toHaveBeenCalledWith(
+        { action: "pause", externalId: UPSTREAM_ID },
+        undefined,
+      );
+      expect(actions.sabnzbd).toHaveBeenCalledWith(
+        { action: "pause", externalId: UPSTREAM_ID },
+        undefined,
+      );
+      expect(
+        database.sqlite.prepare("select state from download_queue_bulk_operations").pluck().get(),
+      ).toBe("succeeded");
+      const auditTypes = database.sqlite
+        .prepare("select event_type from audit_events order by rowid")
+        .pluck()
+        .all() as string[];
+      expect(auditTypes[0]).toBe("download.queue.bulk.requested");
+      expect(auditTypes.at(-1)).toBe("download.queue.bulk.completed");
+      expect(JSON.stringify(result)).not.toContain(UPSTREAM_ID);
+
+      const replayed = await service.bulkUpdate(input, "bulk-pause-both-clients", {
+        principal: principal(),
+      });
+      expect(replayed.replayed).toBe(true);
+      expect(actions.qbittorrent).toHaveBeenCalledOnce();
+      expect(actions.sabnzbd).toHaveBeenCalledOnce();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reports honest per-target bulk failures while completing safe targets", async () => {
+    const { actions, database, readers, service } = harness();
+    const activeSabQueue = {
+      ...queueResult("sabnzbd"),
+      items: [
+        {
+          ...queueResult("sabnzbd").items[0]!,
+          rateBytesPerSecond: 2_048,
+          state: "downloading" as const,
+        },
+      ],
+    };
+    readers.sabnzbd.mockResolvedValue(activeSabQueue);
+    try {
+      const items = (await service.read({ principal: principal() })).items;
+      readers.qbittorrent.mockResolvedValueOnce(queueResult("qbittorrent")).mockResolvedValueOnce({
+        ...queueResult("qbittorrent"),
+        items: [
+          {
+            ...queueResult("qbittorrent").items[0]!,
+            rateBytesPerSecond: 0,
+            state: "paused",
+          },
+        ],
+      });
+      readers.sabnzbd.mockResolvedValueOnce({
+        ...activeSabQueue,
+        items: [{ ...activeSabQueue.items[0]!, state: "queued" }],
+      });
+
+      const result = await service.bulkUpdate(
+        {
+          action: "pause",
+          targets: items.map((item) => ({
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          })),
+        },
+        "bulk-partial-fixture",
+        { principal: principal() },
+      );
+
+      expect(result).toMatchObject({
+        state: "partial",
+        summary: { failed: 1, requested: 2, succeeded: 1 },
+      });
+      expect(result.results[0]).toMatchObject({ status: "succeeded" });
+      expect(result.results[1]).toMatchObject({
+        code: "state_changed",
+        retryable: false,
+        status: "failed",
+      });
+      expect(actions.qbittorrent).toHaveBeenCalledOnce();
+      expect(actions.sabnzbd).not.toHaveBeenCalled();
+      const stored = database.sqlite
+        .prepare("select response_json as responseJson from download_queue_bulk_operations")
+        .get() as { responseJson: string };
+      expect(downloadQueueBulkActionResponseSchema.parse(JSON.parse(stored.responseJson))).toEqual(
+        result,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("recovers an expired bulk lease from persisted per-target progress", async () => {
+    const { actions, database, readers, service } = harness();
+    const activeSabQueue = {
+      ...queueResult("sabnzbd"),
+      items: [
+        {
+          ...queueResult("sabnzbd").items[0]!,
+          rateBytesPerSecond: 2_048,
+          state: "downloading" as const,
+        },
+      ],
+    };
+    readers.sabnzbd.mockResolvedValue(activeSabQueue);
+    try {
+      const items = (await service.read({ principal: principal() })).items;
+      const input = {
+        action: "pause" as const,
+        targets: items.map((item) => ({
+          connectorId: item.connectorId,
+          expectedState: "downloading" as const,
+          itemId: item.id,
+        })),
+      };
+      const idempotencyKey = "bulk-recovery-fixture";
+      const persistedResult = {
+        code: "state_changed" as const,
+        retryable: false,
+        status: "failed" as const,
+        target: input.targets[0]!,
+      };
+      database.sqlite
+        .prepare(
+          `insert into download_queue_bulk_operations (
+             id, user_id, idempotency_key_hash, fingerprint_hash, state,
+             request_json, results_json, created_at, updated_at
+           ) values (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        )
+        .run(
+          "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+          "operator-user",
+          hashToken(`operator-user\u0000download_queue_bulk_action\u0000${idempotencyKey}`),
+          hashToken(JSON.stringify({ input, version: 1 })),
+          JSON.stringify(input),
+          JSON.stringify([persistedResult]),
+          now.getTime() - 31_000,
+          now.getTime() - 31_000,
+        );
+      readers.sabnzbd.mockResolvedValueOnce(activeSabQueue).mockResolvedValueOnce({
+        ...activeSabQueue,
+        items: [{ ...activeSabQueue.items[0]!, rateBytesPerSecond: 0, state: "paused" }],
+      });
+
+      const result = await service.bulkUpdate(input, idempotencyKey, {
+        principal: principal(),
+      });
+
+      expect(result).toMatchObject({
+        operationId: "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+        state: "partial",
+        summary: { failed: 1, requested: 2, succeeded: 1 },
+      });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
+      expect(actions.sabnzbd).toHaveBeenCalledOnce();
+      expect(result.results[0]).toEqual(persistedResult);
+      expect(result.results[1]).toMatchObject({ status: "succeeded" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when persisted bulk progress is rebound to another observed state", async () => {
+    const { actions, database, service } = harness();
+    try {
+      const item = (await service.read({ principal: principal() })).items[0]!;
+      const input = {
+        action: "pause" as const,
+        targets: [
+          {
+            connectorId: item.connectorId,
+            expectedState: "downloading" as const,
+            itemId: item.id,
+          },
+        ],
+      };
+      const idempotencyKey = "bulk-progress-rebinding-fixture";
+      database.sqlite
+        .prepare(
+          `insert into download_queue_bulk_operations (
+             id, user_id, idempotency_key_hash, fingerprint_hash, state,
+             request_json, results_json, created_at, updated_at
+           ) values (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        )
+        .run(
+          "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+          "operator-user",
+          hashToken(`operator-user\u0000download_queue_bulk_action\u0000${idempotencyKey}`),
+          hashToken(JSON.stringify({ input, version: 1 })),
+          JSON.stringify(input),
+          JSON.stringify([
+            {
+              code: "state_changed",
+              retryable: false,
+              status: "failed",
+              target: { ...input.targets[0], expectedState: "queued" },
+            },
+          ]),
+          now.getTime() - 31_000,
+          now.getTime() - 31_000,
+        );
+
+      await expect(
+        service.bulkUpdate(input, idempotencyKey, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "storage_failure" });
+      expect(actions.qbittorrent).not.toHaveBeenCalled();
     } finally {
       database.close();
     }

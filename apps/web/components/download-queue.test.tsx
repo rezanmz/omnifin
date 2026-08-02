@@ -84,6 +84,105 @@ describe("DownloadQueue", () => {
     expect(screen.queryByText("Glass.Horizon.2025.1080p.BluRay")).not.toBeInTheDocument();
   });
 
+  it("scopes bulk controls to the exact current view and restores cancel focus", async () => {
+    const user = userEvent.setup();
+    renderQueue();
+
+    const pause = screen.getByRole("button", { name: "Pause 1 active transfer" });
+    expect(screen.getByRole("button", { name: "Resume 1 paused transfer" })).toBeEnabled();
+    expect(
+      screen.getByText(/All visible transfers · 2 clients · exact targets only/u),
+    ).toBeVisible();
+    await user.click(pause);
+
+    expect(screen.getByText("Pause 1 transfer?")).toBeVisible();
+    expect(screen.getByText(/recheck every opaque target/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(screen.getByRole("searchbox", { name: "Search downloads" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Attention" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(pause).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: "Attention" }));
+    expect(screen.getByRole("button", { name: "Pause 0 active transfers" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Resume 0 paused transfers" })).toBeDisabled();
+    expect(screen.getByText(/Filtered scope · 1 client · exact targets only/u)).toBeVisible();
+  });
+
+  it("bulk-pauses the captured active view and applies only verified successes", async () => {
+    const user = userEvent.setup();
+    const item = demoDownloadQueue.items[0]!;
+    const paused = {
+      ...item,
+      etaSeconds: null,
+      rateBytesPerSecond: 0,
+      state: "paused" as const,
+    };
+    const bulkAct = vi.fn(async () => ({
+      action: "pause" as const,
+      completedAt: "2026-07-28T03:00:08.000Z",
+      operationId: "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+      replayed: false,
+      results: [
+        {
+          response: {
+            action: "pause" as const,
+            item: paused,
+            previousState: "downloading" as const,
+            replayed: false,
+            verifiedAt: "2026-07-28T03:00:08.000Z",
+          },
+          status: "succeeded" as const,
+          target: {
+            connectorId: item.connectorId,
+            expectedState: "downloading" as const,
+            itemId: item.id,
+          },
+        },
+      ],
+      state: "complete" as const,
+      summary: { failed: 0, requested: 1, succeeded: 1 },
+    }));
+    renderQueue(ready, {
+      client: {
+        bulkAct,
+        load: async () => demoDownloadQueue,
+        loadEligibility: async () => ({
+          snapshot: { csrfToken: "download-queue-csrf", principal: operator },
+          status: "ready",
+        }),
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Pause 1 active transfer" }));
+    await user.click(screen.getByRole("button", { name: "Confirm pause" }));
+
+    await waitFor(() => expect(bulkAct).toHaveBeenCalledOnce());
+    expect(bulkAct).toHaveBeenCalledWith(
+      {
+        action: "pause",
+        targets: [
+          {
+            connectorId: item.connectorId,
+            expectedState: "downloading",
+            itemId: item.id,
+          },
+        ],
+      },
+      {
+        csrfToken: "download-queue-csrf",
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "1 transfer paused and reverified.",
+    );
+    const card = screen.getByText(item.title).closest("article")!;
+    expect(within(card).getByText("Paused")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Pause 0 active transfers" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Resume 2 paused transfers" })).toBeEnabled();
+  });
+
   it("refreshes through the injected live client while keeping the last verified geometry", async () => {
     const user = userEvent.setup();
     const load = vi.fn(async () => demoDownloadQueue);

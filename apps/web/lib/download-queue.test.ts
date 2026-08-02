@@ -313,6 +313,55 @@ describe("download queue client", () => {
     );
   });
 
+  it("sends a strict idempotent bulk action and binds every returned target", async () => {
+    const item = demoDownloadQueue.items[0]!;
+    const target = {
+      connectorId: item.connectorId,
+      expectedState: "downloading" as const,
+      itemId: item.id,
+    };
+    const response = {
+      action: "pause" as const,
+      completedAt: demoDownloadQueue.generatedAt,
+      operationId: "download_bulk_ABCDEFGHIJKLMNOPQRSTUV",
+      replayed: false,
+      results: [
+        {
+          response: {
+            action: "pause" as const,
+            item: { ...item, etaSeconds: null, rateBytesPerSecond: 0, state: "paused" as const },
+            previousState: "downloading" as const,
+            replayed: false,
+            verifiedAt: demoDownloadQueue.generatedAt,
+          },
+          status: "succeeded" as const,
+          target,
+        },
+      ],
+      state: "complete" as const,
+      summary: { failed: 0, requested: 1, succeeded: 1 },
+    };
+    const fetchMock = vi.fn(() => json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadQueueClient.bulkAct!(
+        { action: "pause", targets: [target] },
+        { csrfToken: "fixture-csrf", idempotencyKey: "bulk-fixture-key" },
+      ),
+    ).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/downloads/queue/bulk-actions",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "idempotency-key": "bulk-fixture-key",
+          "x-omnifin-csrf": "fixture-csrf",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("sends one idempotent removal and verifies the preserved-content response", async () => {
     const item = demoDownloadQueue.items[0]!;
     const response = {

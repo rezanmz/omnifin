@@ -2,6 +2,8 @@ import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import type {
   DownloadQueueActionInput,
   DownloadQueueActionResponse,
+  DownloadQueueBulkActionInput,
+  DownloadQueueBulkActionResponse,
   DownloadQueuePromotionInput,
   DownloadQueuePromotionResponse,
   DownloadQueueRemovalInput,
@@ -203,6 +205,10 @@ export interface DownloadQueueClient {
     input: DownloadQueueActionInput,
     options: DownloadQueueActionOptions,
   ): Promise<DownloadQueueActionResponse>;
+  bulkAct?(
+    input: DownloadQueueBulkActionInput,
+    options: DownloadQueueRemovalOptions,
+  ): Promise<DownloadQueueBulkActionResponse>;
   load(signal?: AbortSignal): Promise<DownloadQueueResponse>;
   loadEligibility?(signal?: AbortSignal): Promise<DownloadQueueEligibility>;
   promote?(
@@ -350,6 +356,46 @@ export const downloadQueueClient: DownloadQueueClient = {
         "invalid_response",
         "invalid_response",
         "The gateway returned an action response outside the public contract.",
+      );
+    }
+    return parsed.data;
+  },
+
+  async bulkAct(input, options) {
+    const { downloads } = await contractSchemas();
+    const body = downloads.downloadQueueBulkActionInputSchema.parse(input);
+    const response = await fetchSameOrigin("/api/downloads/queue/bulk-actions", {
+      body: JSON.stringify(body),
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": options.idempotencyKey,
+        [CSRF_HEADER]: options.csrfToken,
+      },
+      method: "POST",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!response.ok) throw await actionResponseError(response);
+    const parsed = downloads.downloadQueueBulkActionResponseSchema.safeParse(
+      await safeJson(response),
+    );
+    if (
+      !parsed.success ||
+      parsed.data.action !== body.action ||
+      parsed.data.results.length !== body.targets.length ||
+      parsed.data.results.some((result, index) => {
+        const target = body.targets[index];
+        return (
+          !target ||
+          result.target.connectorId !== target.connectorId ||
+          result.target.itemId !== target.itemId ||
+          result.target.expectedState !== target.expectedState
+        );
+      })
+    ) {
+      throw new DownloadQueueClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned a bulk action response outside the public contract.",
       );
     }
     return parsed.data;

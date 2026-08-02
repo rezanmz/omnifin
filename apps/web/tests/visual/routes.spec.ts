@@ -884,6 +884,22 @@ test("download queue confirmation visual baseline", async ({ page }, testInfo) =
   await expect(page).toHaveScreenshot("download-queue-confirmation.png", { fullPage: true });
 });
 
+test("download queue bulk confirmation visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Bulk queue confirmations cover representative desktop and phone geometry",
+  );
+  await page.goto("/operations/downloads?test-view=ready");
+  await page.getByRole("button", { name: "Pause 1 active transfer" }).click();
+  await page.getByText("Pause 1 transfer?").waitFor();
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+  });
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("download-queue-bulk-confirmation.png", { fullPage: true });
+});
+
 test("download queue removal confirmation visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),

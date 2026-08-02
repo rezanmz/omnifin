@@ -4,6 +4,10 @@ import {
   downloadQueueActionInputSchema,
   downloadQueueActionResponseJsonSchema,
   downloadQueueActionResponseSchema,
+  downloadQueueBulkActionInputJsonSchema,
+  downloadQueueBulkActionInputSchema,
+  downloadQueueBulkActionResponseJsonSchema,
+  downloadQueueBulkActionResponseSchema,
   downloadQueuePromotionInputJsonSchema,
   downloadQueuePromotionInputSchema,
   downloadQueuePromotionResponseJsonSchema,
@@ -76,14 +80,14 @@ function serviceError(error: DownloadQueueError) {
       return new SafeHttpError({
         cause: error,
         code: "idempotency_key_conflict",
-        message: "The idempotency key was already used for a different queue removal.",
+        message: "The idempotency key was already used for a different queue operation.",
         statusCode: 409,
       });
     case "idempotency_in_progress":
       return new SafeHttpError({
         cause: error,
-        code: "download_queue_removal_in_progress",
-        message: "That queue removal is already in progress.",
+        code: "download_queue_operation_in_progress",
+        message: "That queue operation is already in progress.",
         statusCode: 409,
       });
     case "operation_failed":
@@ -96,8 +100,8 @@ function serviceError(error: DownloadQueueError) {
     case "operation_limit_reached":
       return new SafeHttpError({
         cause: error,
-        code: "download_queue_removal_limit_reached",
-        message: "Too many queue removal records are retained for this account.",
+        code: "download_queue_operation_limit_reached",
+        message: "Too many queue operation records are retained for this account.",
         statusCode: 429,
       });
     case "queue_order_unavailable":
@@ -311,6 +315,50 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
       lifetime.unref();
       request.raw.once("aborted", close);
       reply.raw.once("close", close);
+    },
+  );
+
+  app.post(
+    "/v1/downloads/queue/bulk-actions",
+    {
+      bodyLimit: 65_536,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 6, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: downloadQueueBulkActionInputJsonSchema,
+        response: { 200: downloadQueueBulkActionResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "downloads.manage",
+      );
+      const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const result = downloadQueueBulkActionResponseSchema.parse(
+          await queue.bulkUpdate(
+            downloadQueueBulkActionInputSchema.parse(request.body),
+            idempotencyKey,
+            { ipAddress: request.ip, principal, requestId: request.id },
+            controller.signal,
+          ),
+        );
+        reply.header("idempotency-replayed", String(result.replayed));
+        return result;
+      } catch (error) {
+        if (error instanceof DownloadQueueError) throw serviceError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
     },
   );
 

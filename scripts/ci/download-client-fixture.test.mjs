@@ -173,6 +173,7 @@ test("accepts only identifier-free, path-free fixture evidence", () => {
   const report = validateSanitizedReport({
     checks: {
       authentication: "passed",
+      coordinatedPauseResume: "passed",
       credentialRejection: "passed",
       exactPause: "passed",
       exactPromotion: "passed",

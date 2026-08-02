@@ -11,6 +11,9 @@ const staticClient: DownloadQueueClient = {
   act: async () => {
     throw new Error("Story actions stop at confirmation.");
   },
+  bulkAct: async () => {
+    throw new Error("Story bulk actions stop at the eligibility boundary.");
+  },
   load: async () => demoDownloadQueue,
   loadEligibility: async () => ({ status: "unavailable" }),
   promote: async () => {
@@ -72,6 +75,26 @@ export const PauseConfirmation: Story = {
     );
     await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
     await expect(canvas.getByText("Pause this transfer?")).toBeVisible();
+  },
+};
+export const BulkPauseConfirmation: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Pause 1 active transfer" }));
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await expect(canvas.getByText("Pause 1 transfer?")).toBeVisible();
+    await expect(canvas.getByText(/recheck every opaque target/u)).toBeVisible();
+  },
+};
+export const BulkEligibilityFailure: Story = {
+  play: async ({ canvasElement, userEvent }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Pause 1 active transfer" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Confirm pause" }));
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "The session could not be verified. No bulk action was started.",
+    );
+    await expect(canvas.getByRole("button", { name: "Retry safely" })).toBeVisible();
   },
 };
 export const ResumeConfirmation: Story = {

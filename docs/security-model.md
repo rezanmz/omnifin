@@ -264,9 +264,9 @@ application boundary; operators must still patch and isolate the host.
   aggregate response size are independently bounded and schema-validated.
 - `GET /v1/downloads/queue` is abort-aware, rate-limited, and explicitly non-cacheable. Filtering
   and refresh remain browser-local reads.
-- Pause, resume, and removal use separate strict action contracts containing one connector, one
-  opaque item, and its observed state. The `POST` routes require an active user, session-bound CSRF
-  and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
+- Single-item pause, resume, and removal use separate strict action contracts containing one
+  connector, one opaque item, and its observed state. Their `POST` routes require an active user,
+  session-bound CSRF and same-origin validation, a 1 KiB body limit, mutation rate limiting, and
   `download.queue.mutate` on the selected healthy connector.
 - The gateway resolves the opaque ID against a fresh exact-connector queue read, rejects missing or
   stale targets, writes a durable requested audit before mutation, and verifies the desired state
@@ -278,8 +278,13 @@ application boundary; operators must still patch and isolate the host.
   exact item to disappear. Recovery reuses the public item snapshot and fails closed on identifier
   reuse. qBittorrent is always called with `deleteFiles=false`, and SABnzbd is never called with
   `del_files=1`, preserving downloaded content.
+- Bulk pause/resume requires a per-user idempotency key and 1–200 explicit opaque targets captured
+  from the current browser view. The gateway persists ordered progress, revalidates and mutates each
+  target through the exact-item path with concurrency capped at four, reports every outcome, and can
+  resume missing targets after an expired recovery lease. It never sends a client-native bulk
+  command or stores raw identifiers in its operation ledger or audit metadata.
 - The public contracts cannot express downloaded-file deletion, relocation, categories, priorities,
-  arbitrary URLs, bulk identifiers, or client-native command fields.
+  arbitrary URLs, wildcards, native identifiers, or client-native command fields.
 
 ## Acquisition-calendar read controls
 
