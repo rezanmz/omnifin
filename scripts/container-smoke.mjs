@@ -403,6 +403,96 @@ function inContainerProvidersRequest(container, url, operation) {
   docker(["exec", container, "node", "--input-type=module", "--eval", source], operation);
 }
 
+export function parseRuntimeIdentity(rawResponse, expectedIdentity) {
+  let response;
+  try {
+    response = JSON.parse(rawResponse);
+  } catch {
+    throw new Error("runtime_identity_response_invalid");
+  }
+  const expectedKeys = [
+    "channel",
+    "license",
+    "revision",
+    "schemaVersion",
+    "sourceUrl",
+    "verification",
+    "version",
+  ];
+  const body = response?.body;
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    Object.keys(body).sort().join(",") !== expectedKeys.join(",") ||
+    expectedKeys.some((key) => body[key] !== expectedIdentity?.[key]) ||
+    response.cacheControl !== "public, max-age=3600, stale-if-error=86400" ||
+    response.setCookie !== null ||
+    Object.keys(response).sort().join(",") !== "body,cacheControl,setCookie"
+  ) {
+    throw new Error("runtime_identity_response_invalid");
+  }
+  return body;
+}
+
+function imageRuntimeIdentity(image) {
+  const rawEnvironment = docker(
+    ["image", "inspect", "--format", "{{json .Config.Env}}", image],
+    "image_runtime_identity_inspection",
+  );
+  let entries;
+  try {
+    entries = JSON.parse(rawEnvironment);
+  } catch {
+    throw new SmokeFailure("image_runtime_identity");
+  }
+  if (!Array.isArray(entries)) throw new SmokeFailure("image_runtime_identity");
+  const environment = Object.fromEntries(
+    entries
+      .filter((entry) => typeof entry === "string" && entry.startsWith("OMNIFIN_BUILD_"))
+      .map((entry) => {
+        const separator = entry.indexOf("=");
+        return separator > 0
+          ? [entry.slice(0, separator), entry.slice(separator + 1)]
+          : [entry, ""];
+      }),
+  );
+  const channel = environment.OMNIFIN_BUILD_CHANNEL;
+  if (!channel || !environment.OMNIFIN_BUILD_VERSION || !environment.OMNIFIN_BUILD_SOURCE_URL) {
+    throw new SmokeFailure("image_runtime_identity");
+  }
+  return {
+    channel,
+    license: "AGPL-3.0-only",
+    revision:
+      channel === "development" || environment.OMNIFIN_BUILD_REVISION === "unknown"
+        ? null
+        : environment.OMNIFIN_BUILD_REVISION,
+    schemaVersion: 1,
+    sourceUrl: environment.OMNIFIN_BUILD_SOURCE_URL,
+    verification: channel === "development" ? "development" : "verified",
+    version: environment.OMNIFIN_BUILD_VERSION,
+  };
+}
+
+function inContainerRuntimeIdentityRequest(container, expectedIdentity, operation) {
+  const source = [
+    'const response = await fetch("http://127.0.0.1:4000/v1/runtime", { redirect: "error" });',
+    "if (!response.ok) process.exit(1);",
+    "const body = await response.json();",
+    'console.log(JSON.stringify({ body, cacheControl: response.headers.get("cache-control"), setCookie: response.headers.get("set-cookie") }));',
+  ].join("");
+  const response = docker(
+    ["exec", container, "node", "--input-type=module", "--eval", source],
+    operation,
+  );
+  try {
+    return parseRuntimeIdentity(response, expectedIdentity);
+  } catch {
+    throw new SmokeFailure(operation);
+  }
+}
+
 async function main() {
   let options;
   try {
@@ -450,6 +540,7 @@ async function main() {
     if (runtimeEntrypoint !== '["/nodejs/bin/node","/opt/omnifin/bin/entrypoint.mjs"]') {
       throw new SmokeFailure("image_entrypoint");
     }
+    const expectedRuntimeIdentity = imageRuntimeIdentity(image);
 
     // Bind-mounted smoke secrets are read-only and world-readable only inside a
     // private 0700 temporary directory so the rootless container UID can read them.
@@ -508,6 +599,7 @@ async function main() {
     containers.push({ component: "gateway", name: gateway });
     await waitForHealthy(gateway, "gateway_health");
     inContainerRequest(gateway, "http://127.0.0.1:4000/readyz", "gateway_readiness");
+    inContainerRuntimeIdentityRequest(gateway, expectedRuntimeIdentity, "gateway_runtime_identity");
     inContainerProvidersRequest(gateway, "http://127.0.0.1:4000/v1/auth/providers", "gateway_api");
 
     const maintenanceRuntime = [
@@ -620,6 +712,7 @@ async function main() {
           "shell_free_entrypoint",
           "gateway_health",
           "gateway_readiness",
+          "gateway_runtime_identity",
           "gateway_api",
           "maintenance_backup",
           "maintenance_backup_verification",

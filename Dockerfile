@@ -63,12 +63,14 @@ RUN chmod 0444 /layout/bin/*.mjs
 
 FROM ${RUNTIME_IMAGE} AS runtime
 
+ARG CHANNEL=development
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
+ARG SOURCE_URL=https://github.com/rezanmz/omnifin
 
 LABEL org.opencontainers.image.title="Omnifin" \
       org.opencontainers.image.description="Secure control plane for a self-hosted media stack" \
-      org.opencontainers.image.source="https://github.com/rezanmz/omnifin" \
+      org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
@@ -80,6 +82,10 @@ ENV NODE_ENV=production \
     OMNIFIN_DATABASE_URL=/data/omnifin.db \
     OMNIFIN_GATEWAY_URL=http://gateway:4000 \
     OMNIFIN_WEB_TRUST_PROXY_HOPS=0 \
+    OMNIFIN_BUILD_CHANNEL=${CHANNEL} \
+    OMNIFIN_BUILD_VERSION=${VERSION} \
+    OMNIFIN_BUILD_REVISION=${REVISION} \
+    OMNIFIN_BUILD_SOURCE_URL=${SOURCE_URL} \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
