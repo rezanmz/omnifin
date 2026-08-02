@@ -75,7 +75,7 @@ function playbackResult(): JellyfinPlaybackResult {
     positionSeconds: 1_200,
     subtitleTracks: [],
     upstreamTarget: {
-      path: `Videos/${privateItemId}/master.m3u8`,
+      path: `videos/${privateItemId}/master.m3u8`,
       query: "MediaSourceId=private-media-source",
     },
   };
@@ -549,7 +549,7 @@ describe("playback routes", () => {
         expect.objectContaining({
           maxResponseBytes: 512 * 1_024 * 1_024,
           target: {
-            path: `Videos/${privateItemId}/hls1/main/0.m4s`,
+            path: `videos/${privateItemId}/hls1/main/0.m4s`,
             query: "segment=0",
           },
         }),

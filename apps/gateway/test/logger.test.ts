@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import pino from "pino";
 import { Writable } from "node:stream";
 import type { AppConfig } from "../src/config.js";
@@ -115,6 +116,33 @@ describe("gateway logger", () => {
     expect(record.failureReason).toBe("integrity_failure");
     expect(record.infrastructureCode).toBe("SQLITE_CONSTRAINT_PRIMARYKEY");
     expect(output).not.toMatch(/private database path|row value|private administration context/iu);
+  });
+
+  it("retains only safe connector and playback-stage diagnostics", () => {
+    const connectorError = new SafeConnectorError({
+      code: "upstream_error",
+      message: "private upstream body and search title",
+      operation: "discovery.search",
+      retryable: false,
+      service: "seerr",
+      status: 400,
+    });
+    const playbackError = Object.assign(
+      new Error("private item and path", { cause: connectorError }),
+      { stage: "session_payload_validation" },
+    );
+    const publicError = new Error("public failure", { cause: playbackError });
+
+    const diagnostics = safeFailureDiagnostics(publicError);
+
+    expect(diagnostics).toEqual({
+      connectorErrorCode: "upstream_error",
+      connectorOperation: "discovery.search",
+      connectorService: "seerr",
+      failureStage: "session_payload_validation",
+      upstreamStatus: 400,
+    });
+    expect(JSON.stringify(diagnostics)).not.toMatch(/private|item|path|search title/iu);
   });
 
   it("redacts sensitive key variants at arbitrary request-body depths without hiding metadata", async () => {

@@ -77,6 +77,38 @@ describe("SafeHttpClient", () => {
     expect(mock.requests[0]?.pinnedAddresses).toEqual([{ address: "1.1.1.1", family: 4 }]);
   });
 
+  it("percent-encodes URL query spaces while preserving literal plus signs", async () => {
+    const mock = createMockTransport([new Response("ok")]);
+    const client = clientWith(mock.transport);
+
+    await client.requestText("api/v3/search", {
+      operation: "search",
+      query: new URLSearchParams({
+        language: "en-CA",
+        query: "Brand New Day + extras",
+      }),
+    });
+
+    expect(mock.requests[0]?.url.search).toBe(
+      "?language=en-CA&query=Brand%20New%20Day%20%2B%20extras",
+    );
+  });
+
+  it("retains form encoding for URLSearchParams request bodies", async () => {
+    const mock = createMockTransport([new Response("ok")]);
+    const client = clientWith(mock.transport);
+
+    await client.requestText("api/v2/auth/login", {
+      body: new URLSearchParams({ password: "two words + symbol", username: "operator name" }),
+      method: "POST",
+      operation: "authenticate",
+    });
+
+    expect(new TextDecoder().decode(mock.requests[0]?.init.body)).toBe(
+      "password=two+words+%2B+symbol&username=operator+name",
+    );
+  });
+
   it("never includes an upstream body, URL, or credential in a public error", async () => {
     const upstreamSecret = "api-key-super-secret";
     const mock = createMockTransport([

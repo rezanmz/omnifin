@@ -15,7 +15,7 @@ import {
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
 import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
-import { SEERR_FIXTURE_TMDB_ID } from "./seerr-fixture-server.mjs";
+import { SEERR_FIXTURE_TITLE, SEERR_FIXTURE_TMDB_ID } from "./seerr-fixture-server.mjs";
 
 const seerrTargets = applyCompatibilityTargetOverride({
   seerr: {
@@ -33,6 +33,7 @@ export const SEERR_CHECK_NAMES = Object.freeze([
   "credentialRejection",
   "delegatedIdentity",
   "duplicateRejection",
+  "multiWordSearch",
   "pendingRequestCreation",
   "requestDecline",
   "requestReview",
@@ -645,6 +646,21 @@ async function runFixture(context) {
     }),
   );
   if (userId !== 2) throw new SeerrFixtureFailure("delegated_identity_invalid");
+
+  const search = await connectorOperation("multi_word_search", () =>
+    connector.search({ language: "en-CA", page: 1, query: SEERR_FIXTURE_TITLE }),
+  );
+  if (
+    search.query !== SEERR_FIXTURE_TITLE ||
+    search.page !== 1 ||
+    search.totalResults !== 1 ||
+    search.items.length !== 1 ||
+    search.items[0]?.kind !== "movie" ||
+    search.items[0]?.tmdbId !== SEERR_FIXTURE_TMDB_ID ||
+    search.items[0]?.title !== SEERR_FIXTURE_TITLE
+  ) {
+    throw new SeerrFixtureFailure("multi_word_search_invalid");
+  }
 
   const created = await connectorOperation("pending_request_creation", () =>
     connector.createMediaRequest(
