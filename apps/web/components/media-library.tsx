@@ -43,11 +43,8 @@ import {
 } from "../lib/media-library";
 import type { PlaybackClient } from "../lib/playback";
 import type { ThemePreference } from "../lib/theme";
-import { CinematicBackdrop } from "./cinematic-backdrop";
-import { LiquidGlassEnvironment } from "./liquid-glass-environment";
-import { MobileNavigation, NavigationRail } from "./navigation-rail";
+import { ApplicationShellContent } from "./application-shell";
 import theaterStyles from "./theater-player.module.css";
-import { TopCommandBar } from "./top-command-bar";
 import type { PlayableLibrarySelection } from "./library-title-drawer";
 import styles from "./media-library.module.css";
 
@@ -185,18 +182,21 @@ function LibraryShell({
   themePreference?: ThemePreference;
 }) {
   return (
-    <div className="application-frame" style={{ "--ambient-accent": accent } as AmbientStyle}>
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail current="library" />
-      <div className="application-shell">
-        <TopCommandBar connectionStatus={connectionStatus} themePreference={themePreference} />
-        <main className={`${styles.library} dashboard`} id="main-content" tabIndex={-1}>
-          {children}
-        </main>
-      </div>
-      <MobileNavigation current="library" />
-    </div>
+    <ApplicationShellContent
+      accent={accent}
+      current="library"
+      status={connectionStatus}
+      themePreference={themePreference}
+    >
+      <main
+        className={`${styles.library} dashboard`}
+        id="main-content"
+        style={{ "--ambient-accent": accent } as AmbientStyle}
+        tabIndex={-1}
+      >
+        {children}
+      </main>
+    </ApplicationShellContent>
   );
 }
 
