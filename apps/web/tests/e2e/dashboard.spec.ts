@@ -1095,15 +1095,15 @@ test("liquid glass chrome responds optically to pointer position", async ({ page
   );
   await page.goto("/");
 
-  await page.keyboard.press("Tab");
-  await expect(page.locator("html")).toHaveAttribute("data-liquid-glass-ready", "");
-
   const search = page.locator(".global-search");
   const bounds = await search.boundingBox();
   expect(bounds).not.toBeNull();
   await page.mouse.move(bounds!.x + bounds!.width * 0.72, bounds!.y + bounds!.height * 0.45);
 
   await expect(search).toHaveAttribute("data-glass-active", "");
+  await expect(page.locator("html")).not.toHaveAttribute("data-liquid-glass-ready", "");
+  await page.keyboard.press("Tab");
+  await expect(page.locator("html")).toHaveAttribute("data-liquid-glass-ready", "");
   const optics = await search.evaluate((surface) => {
     const style = getComputedStyle(surface);
     return {
