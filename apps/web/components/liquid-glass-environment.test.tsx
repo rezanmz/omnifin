@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
@@ -6,32 +6,40 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 describe("LiquidGlassEnvironment", () => {
   afterEach(() => {
     document.documentElement.removeAttribute("data-liquid-glass-ready");
-    vi.useRealTimers();
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
-  it("lets meaningful content paint before enabling backdrop refinement", () => {
-    vi.useFakeTimers();
-    let idleCallback: IdleRequestCallback | undefined;
-    const requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
-      idleCallback = callback;
+  it("keeps expensive backdrop refinement out of the initial content paint", () => {
+    let animationCallback: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      animationCallback = callback;
       return 17;
     });
-    vi.stubGlobal("requestIdleCallback", requestIdleCallback);
-    vi.stubGlobal("cancelIdleCallback", vi.fn());
 
     render(<LiquidGlassEnvironment />);
 
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
-    act(() => vi.advanceTimersByTime(179));
-    expect(requestIdleCallback).not.toHaveBeenCalled();
+    fireEvent.pointerMove(document.body, { clientX: 12, clientY: 18 });
+    expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
+    vi.mocked(window.requestAnimationFrame).mockClear();
 
-    act(() => vi.advanceTimersByTime(1));
-    expect(requestIdleCallback).toHaveBeenCalledOnce();
+    fireEvent.click(document.body);
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
 
-    act(() => idleCallback?.({ didTimeout: false, timeRemaining: () => 12 }));
+    act(() => animationCallback?.(performance.now()));
     expect(document.documentElement).toHaveAttribute("data-liquid-glass-ready");
+  });
+
+  it("cancels a pending material refinement when it unmounts", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(23);
+    const cancelAnimationFrame = vi.spyOn(window, "cancelAnimationFrame");
+    const view = render(<LiquidGlassEnvironment />);
+
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    view.unmount();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(23);
+    expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
   });
 });
