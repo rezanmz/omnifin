@@ -50,6 +50,7 @@ const cursorPayloadSchema = z.strictObject({
     .nullable(),
   limit: z.number().int().min(1).max(50),
   outcome: z.enum(["success", "denied", "failure"]).nullable(),
+  snapshotAt: z.number().int().nonnegative(),
   snapshotRowId: z.number().int().nonnegative(),
   version: z.literal(1),
 });
@@ -166,9 +167,13 @@ export class AuditTrailService {
     const query = auditEventListQuerySchema.parse(rawQuery);
     const cursor = query.cursor ? this.#decodeCursor(query.cursor, query) : null;
     try {
+      const snapshotAt = cursor?.snapshotAt ?? this.#clock().getTime();
+      if (!Number.isSafeInteger(snapshotAt) || snapshotAt < 0) {
+        throw new Error("Invalid audit snapshot time.");
+      }
       const snapshotRowId = cursor?.snapshotRowId ?? this.#snapshotRowId();
-      const where = ["audit_events.rowid <= ?"];
-      const parameters: Array<number | string> = [snapshotRowId];
+      const where = ["audit_events.rowid <= ?", "audit_events.created_at <= ?"];
+      const parameters: Array<number | string> = [snapshotRowId, snapshotAt];
       if (query.category) where.push(CATEGORY_SQL[query.category]);
       if (query.outcome) {
         where.push("audit_events.outcome = ?");
@@ -214,7 +219,7 @@ export class AuditTrailService {
       const last = visibleRows.at(-1);
       return auditEventListResponseSchema.parse({
         events,
-        generatedAt: this.#clock().toISOString(),
+        generatedAt: new Date(snapshotAt).toISOString(),
         nextCursor:
           rows.length > visibleRows.length && last
             ? this.#encodeCursor({
@@ -223,6 +228,7 @@ export class AuditTrailService {
                 category: query.category ?? null,
                 limit: query.limit,
                 outcome: query.outcome ?? null,
+                snapshotAt,
                 snapshotRowId,
                 version: 1,
               })

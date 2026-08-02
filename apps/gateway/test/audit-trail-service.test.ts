@@ -210,6 +210,7 @@ describe("audit trail service", () => {
       });
       const second = service.list({ cursor: first.nextCursor!, limit: 10 }, principal());
       expect(second.events).toHaveLength(10);
+      expect(second.generatedAt).toBe(first.generatedAt);
       expect(new Set([...first.events, ...second.events].map((event) => event.id)).size).toBe(20);
       expect(JSON.stringify(second)).not.toContain("arrived-after-snapshot");
       expect(() =>
