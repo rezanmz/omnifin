@@ -19,11 +19,11 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MobileNavigation, NavigationRail, type PrimaryDestination } from "./navigation-rail";
 import { TopCommandBar } from "./top-command-bar";
 
-const DEFAULT_ACCENT = "#6f8d84";
+const DEFAULT_ACCENT = "#8de9d5";
 const DEFAULT_SIGNAL: ApplicationShellSignal = {
   accent: DEFAULT_ACCENT,
   displayProfile: "standard",
-  status: "healthy",
+  status: "attention",
 };
 
 type ShellStyle = CSSProperties & { "--ambient-accent": string };
@@ -99,7 +99,15 @@ export function ApplicationShellBoundary({
   }>(() => ({ pathname, signal: DEFAULT_SIGNAL }));
   const context = useMemo<ApplicationShellContextValue>(
     () => ({
-      setSignal: (signal) => setRegisteredSignal({ pathname, signal }),
+      setSignal: (signal) =>
+        setRegisteredSignal((current) =>
+          current.pathname === pathname &&
+          current.signal.accent === signal.accent &&
+          current.signal.displayProfile === signal.displayProfile &&
+          current.signal.status === signal.status
+            ? current
+            : { pathname, signal },
+        ),
     }),
     [pathname],
   );
