@@ -62,6 +62,11 @@ contain only normalized booleans, versions, and immutable image references; they
 server, user, session, Quick Connect, media, device, path, port, token, and credential
 identifiers.
 
+The production playback parser also has a deterministic compatibility case for Jellyfin sources
+that include an EmbeddedImage/MJPEG artwork stream beside valid video, audio, and subtitle streams.
+The artwork entry is ignored and never reaches the browser; the known playback streams retain their
+strict bounds and malformed or oversized known-stream collections still fail closed.
+
 This isolated matrix proves deterministic media construction and Omnifin-to-Jellyfin
 identity and playback behavior across the targeted range without depending on copyrighted
 media, a maintainer's server, or local container capacity. It remains development evidence:

@@ -216,6 +216,96 @@ describe("JellyfinPlaybackClient", () => {
     });
   });
 
+  it("ignores embedded artwork streams without weakening playback-stream validation", async () => {
+    const sourceWithEmbeddedArtwork = {
+      ...directSource,
+      MediaStreams: [
+        ...mediaStreams,
+        {
+          Codec: "mjpeg",
+          Height: 1_080,
+          Index: 5,
+          Type: "EmbeddedImage",
+          Width: 1_920,
+        },
+      ],
+    };
+    const { client } = clientWithResponses([
+      jsonResponse({
+        MediaSources: [sourceWithEmbeddedArtwork],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]);
+
+    const result = await client.negotiate({
+      audioStreamIndex: 1,
+      itemId: "movie-upstream-1",
+      maxStreamingBitrate: 20_000_000,
+      mode: "auto",
+      positionSeconds: 0,
+      subtitleStreamIndex: null,
+    });
+
+    expect(result).toMatchObject({
+      audioTracks: [{ index: 1 }, { index: 2 }],
+      delivery: "direct",
+      media: { audioCodec: "aac", videoCodec: "h264" },
+      subtitleTracks: [{ index: 3 }, { index: 4 }],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/EmbeddedImage|mjpeg/iu);
+  });
+
+  it("still rejects oversized stream collections and malformed known playback streams", async () => {
+    const oversized = clientWithResponses([
+      jsonResponse({
+        MediaSources: [
+          {
+            ...directSource,
+            MediaStreams: Array.from({ length: 513 }, (_, index) => ({
+              Codec: "mjpeg",
+              Index: index,
+              Type: "EmbeddedImage",
+            })),
+          },
+        ],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]).client;
+    const malformedKnown = clientWithResponses([
+      jsonResponse({
+        MediaSources: [
+          {
+            ...directSource,
+            MediaStreams: [...mediaStreams, { Index: 5, Type: "Video", Width: 100_000 }],
+          },
+        ],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]).client;
+    const malformedEntry = clientWithResponses([
+      jsonResponse({
+        MediaSources: [{ ...directSource, MediaStreams: [...mediaStreams, null] }],
+        PlaySessionId: "play-session-upstream-1",
+      }),
+    ]).client;
+    const input = {
+      audioStreamIndex: 1,
+      itemId: "movie-upstream-1",
+      maxStreamingBitrate: 20_000_000,
+      mode: "auto" as const,
+      positionSeconds: 0,
+      subtitleStreamIndex: null,
+    };
+
+    await expect(oversized.negotiate(input)).rejects.toMatchObject({ code: "response_invalid" });
+    await expect(malformedKnown.negotiate(input)).rejects.toMatchObject({
+      code: "response_invalid",
+    });
+    await expect(malformedEntry.negotiate(input)).rejects.toMatchObject({
+      code: "response_invalid",
+    });
+  });
+
   it("falls back to the same-origin HLS target and removes returned credential parameters", async () => {
     const hlsSource = {
       ...directSource,

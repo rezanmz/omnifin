@@ -65,7 +65,10 @@ ratings, validated YouTube trailer references, recommendations, person biographi
 credits, and partial optional-intelligence failure. Gateway evidence separately proves that
 raw paths and numeric routing identifiers are replaced with expiring, user-bound opaque
 references before reaching the browser, and that provider URLs and raw upstream payloads do
-not cross the gateway. A separate fresh Seerr 3.4.1 instance runs on an internal network with one
+not cross the gateway. Related-video collections are truncated to the first 100 candidates before
+strict candidate validation, then normalized to at most six safe trailer references; excess Seerr
+video metadata cannot hide an otherwise valid title. A separate fresh Seerr 3.4.1 instance runs on
+an internal network with one
 bounded HTTPS metadata fixture. The production adapter must resolve the exact delegated identity,
 create one pending request, reject its duplicate, list it for review, decline it, and verify the
 fresh declined state. The closed report is written only after all service, identity, metadata,
@@ -81,7 +84,9 @@ rejection, polling, and authentication. Its production playback connector must t
 range playback, a seeked HLS transcode, alternate audio and subtitle selection, progress
 persistence, and playback renegotiation after a server restart. Its production user-media connector
 must also search the imported fixture through the exact paired user's catalogue endpoint and return
-one normalized playable movie. The sanitized evidence records the
+one normalized playable movie. Playback negotiation validates Audio, Subtitle, and Video streams
+strictly while discarding bounded non-playback entries such as Jellyfin EmbeddedImage artwork before
+track selection. The sanitized evidence records the
 exact Jellyfin image, version, and normalized checks without retaining service, account, Quick
 Connect, token, media, path, or credential identifiers. The range is fixture-verified as of
 2026-07-31; it remains a target rather than a public support claim until protected live evidence

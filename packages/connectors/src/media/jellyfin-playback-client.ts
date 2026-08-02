@@ -44,6 +44,18 @@ const mediaStreamSchema = z.object({
   Width: z.int().nonnegative().max(16_384).nullish(),
 });
 
+function playbackMediaStreams(value: unknown) {
+  if (!Array.isArray(value) || value.length > 512) return value;
+  return value.filter((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      return true;
+    }
+    const type = Object.getOwnPropertyDescriptor(candidate, "Type")?.value;
+    if (typeof type !== "string") return true;
+    return type === "Audio" || type === "Subtitle" || type === "Video";
+  });
+}
+
 const mediaSourceSchema = z.object({
   Bitrate: z.int().positive().max(MAX_PLAYBACK_BITRATE).nullish(),
   Container: z.string().trim().min(1).max(64).nullish(),
@@ -51,7 +63,7 @@ const mediaSourceSchema = z.object({
   DefaultSubtitleStreamIndex: z.int().nonnegative().max(MAX_STREAM_INDEX).nullish(),
   Id: identifierSchema,
   LiveStreamId: nullableIdentifierSchema,
-  MediaStreams: z.array(mediaStreamSchema).max(256).nullish(),
+  MediaStreams: z.preprocess(playbackMediaStreams, z.array(mediaStreamSchema).max(256).nullish()),
   RequiredHttpHeaders: z.record(z.string(), z.string().nullable()).nullish(),
   RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
   SupportsDirectPlay: z.boolean().optional(),
