@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 for (const route of [
   "/",
   "/login",
+  "/about?test-view=verified",
   "/settings",
   "/settings/identity-providers?test-view=ready",
   "/settings/audit?test-view=ready",

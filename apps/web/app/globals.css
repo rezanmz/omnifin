@@ -2575,6 +2575,21 @@
   margin-top: 28px;
 }
 
+.login-card__footer a {
+  color: inherit;
+  min-height: 44px;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition:
+    color 150ms ease-out,
+    text-decoration-color 150ms ease-out;
+}
+
+.login-card__footer a:hover {
+  color: var(--paper-0);
+  text-decoration-color: currentColor;
+}
+
 .account-layout {
   min-height: 100dvh;
   padding: clamp(22px, 4vw, 54px);

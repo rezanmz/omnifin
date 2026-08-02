@@ -54,6 +54,7 @@ describe("LoginScreen", () => {
       "href",
       "/api/auth/oidc/oidc-backup/start",
     );
+    expect(screen.getByRole("link", { name: "About Omnifin" })).toHaveAttribute("href", "/about");
   });
 
   it("moves through interactive methods with TV-style vertical navigation", async () => {

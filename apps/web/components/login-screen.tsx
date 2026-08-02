@@ -163,6 +163,8 @@ function LoginFooter() {
       <span>No telemetry</span>
       <span aria-hidden="true">·</span>
       <span>Credentials stay in the gateway</span>
+      <span aria-hidden="true">·</span>
+      <a href="/about">About Omnifin</a>
     </footer>
   );
 }
