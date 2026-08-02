@@ -91,7 +91,9 @@ describe("AcquisitionCalendar", () => {
       "true",
     );
     expect(screen.getByRole("grid", { name: /Month acquisition calendar/u })).toBeVisible();
-    expect(screen.getAllByRole("gridcell")).toHaveLength(42);
+    const cells = screen.getAllByRole("gridcell");
+    expect(cells).toHaveLength(42);
+    expect(cells.every((cell) => cell.tagName === "DIV")).toBe(true);
     expect(screen.getByRole("button", { name: "Previous month" })).toBeEnabled();
     expect(screen.getByText("premieres this month")).toBeVisible();
     expect(load).toHaveBeenCalledWith(

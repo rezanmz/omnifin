@@ -855,7 +855,7 @@
 }
 
 .monthDay[data-outside] > header {
-  opacity: 0.55;
+  opacity: 0.72;
 }
 
 .monthDay[data-today] {

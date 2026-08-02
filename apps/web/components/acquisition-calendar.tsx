@@ -462,7 +462,7 @@ function MonthGrid({
                 year: "numeric",
               }).format(day);
               return (
-                <section
+                <div
                   aria-label={`${dateLabel}, ${items.length} ${items.length === 1 ? "arrival" : "arrivals"}`}
                   className={styles.monthDay}
                   data-outside={day.getUTCMonth() !== activeMonth || undefined}
@@ -498,7 +498,7 @@ function MonthGrid({
                       </button>
                     ) : null}
                   </div>
-                </section>
+                </div>
               );
             })}
           </div>
