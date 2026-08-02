@@ -946,7 +946,7 @@
   background: transparent;
   display: grid;
   gap: clamp(12px, 1.45vw, 22px);
-  grid-auto-columns: minmax(170px, 1fr);
+  grid-auto-columns: clamp(170px, 18vw, 230px);
   grid-auto-flow: column;
   margin: -26px -18px -8px;
   overflow-x: auto;
@@ -2322,7 +2322,7 @@
 
   .media-rail__scroller,
   .dashboard-skeleton__rail {
-    grid-auto-columns: minmax(165px, 28%);
+    grid-auto-columns: clamp(165px, 24vw, 220px);
   }
 
   .calendar-strip__grid,
@@ -2448,7 +2448,7 @@
   .media-rail__scroller,
   .dashboard-skeleton__rail {
     gap: 12px;
-    grid-auto-columns: minmax(144px, 44%);
+    grid-auto-columns: clamp(144px, 44vw, 182px);
     margin-right: calc(var(--content-gutter) * -1);
   }
 
@@ -2806,7 +2806,7 @@ html:has([data-display-profile="ten-foot"]) {
 }
 
 [data-display-profile="ten-foot"] .media-rail__scroller {
-  grid-auto-columns: minmax(240px, 1fr);
+  grid-auto-columns: clamp(240px, 14vw, 300px);
 }
 
 [data-display-profile="ten-foot"] .onboarding__hero {

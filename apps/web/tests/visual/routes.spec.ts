@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { emptyContinueWatchingFeed } from "../../lib/continue-watching-demo";
+import {
+  demoContinueWatchingFeed,
+  emptyContinueWatchingFeed,
+} from "../../lib/continue-watching-demo";
 import {
   mockAcquisitionQueueRecovery,
   mockAcquisitionRecoverySession,
@@ -101,6 +104,29 @@ async function mockQuietContinueWatching(page: Page) {
       status: 200,
     });
   });
+}
+
+function continueWatchingFeedWithItemCount(count: number) {
+  return {
+    ...demoContinueWatchingFeed,
+    items: Array.from({ length: count }, (_, index) => {
+      const template =
+        demoContinueWatchingFeed.items[index % demoContinueWatchingFeed.items.length]!;
+      return {
+        ...template,
+        media: {
+          ...template.media,
+          artwork: {
+            ...template.media.artwork,
+            backdropPath: null,
+            posterPath: null,
+          },
+          id: `media_${String(index + 1).padStart(22, "0")}`,
+          title: index < 2 ? template.media.title : `${template.media.title} ${index + 1}`,
+        },
+      };
+    }),
+  };
 }
 
 async function mockSignedOutDashboard(page: Page) {
@@ -228,6 +254,34 @@ test("connected discovery dashboard visual baseline", async ({ page }, testInfo)
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
 });
+
+for (const itemCount of [1, 2, 7] as const) {
+  for (const theme of ["dark", "light"] as const) {
+    test(`Continue Watching ${itemCount}-item ${theme} visual baseline`, async ({
+      page,
+    }, testInfo) => {
+      test.skip(
+        testInfo.project.name !== "chromium",
+        "One deterministic desktop engine covers sparse and dense rail geometry.",
+      );
+      if (theme === "light") await useLightTheme(page);
+      await page.route("**/api/media/continue-watching", async (route) => {
+        await route.fulfill({
+          body: JSON.stringify(continueWatchingFeedWithItemCount(itemCount)),
+          contentType: "application/json",
+          status: 200,
+        });
+      });
+      await page.goto("/?test-view=continue-watching-live");
+      const rail = page
+        .getByRole("heading", { name: "Continue watching" })
+        .locator("xpath=ancestor::section[contains(@class, 'media-rail')]");
+      await expect(rail.locator(".media-card")).toHaveCount(itemCount);
+      await removeDevelopmentIndicator(page);
+      await expect(rail).toHaveScreenshot(`continue-watching-${itemCount}-${theme}.png`);
+    });
+  }
+}
 
 test("light connected discovery dashboard visual baseline", async ({ page }, testInfo) => {
   test.skip(
