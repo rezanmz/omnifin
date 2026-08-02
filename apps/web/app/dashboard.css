@@ -1808,8 +1808,7 @@
     inset 0 0 18px color-mix(in srgb, var(--glass-caustic) 42%, transparent),
     0 20px 50px color-mix(in srgb, var(--glass-cast-shadow) 68%, transparent),
     0 4px 10px color-mix(in srgb, var(--glass-cast-shadow) 46%, transparent);
-  contain-intrinsic-block-size: auto 88px;
-  content-visibility: auto;
+  /* Keep the disclosure eagerly painted so Firefox cannot retarget its first pointer activation. */
   isolation: isolate;
   overflow: hidden;
   position: relative;
