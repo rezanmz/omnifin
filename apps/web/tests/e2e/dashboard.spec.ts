@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   demoContinueWatchingFeed,
   emptyContinueWatchingFeed,
@@ -52,35 +52,47 @@ async function expectStationaryPointerTarget(action: Locator) {
   await action.scrollIntoViewIfNeeded();
   await action.hover();
   await expect
-    .poll(() => action.evaluate((element) => getComputedStyle(element).transform))
-    .toBe("none");
-
-  const settled = await action.boundingBox();
-  expect(settled).not.toBeNull();
-  await action.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
-  const afterFrames = await action.boundingBox();
-  expect(afterFrames).not.toBeNull();
-  expect(afterFrames?.x).toBeCloseTo(settled!.x, 2);
-  expect(afterFrames?.y).toBeCloseTo(settled!.y, 2);
-  expect(afterFrames?.width).toBeCloseTo(settled!.width, 2);
-  expect(afterFrames?.height).toBeCloseTo(settled!.height, 2);
-  await expect
     .poll(() =>
-      action.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        const hit = document.elementFromPoint(
-          bounds.x + bounds.width / 2,
-          bounds.y + bounds.height / 2,
+      action.evaluate(async (element) => {
+        const before = element.getBoundingClientRect();
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
-        return hit === element || element.contains(hit);
+        const after = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          after.x + after.width / 2,
+          after.y + after.height / 2,
+        );
+        const stationary = [
+          Math.abs(before.x - after.x),
+          Math.abs(before.y - after.y),
+          Math.abs(before.width - after.width),
+          Math.abs(before.height - after.height),
+        ].every((delta) => delta < 0.1);
+        return (
+          stationary &&
+          getComputedStyle(element).transform === "none" &&
+          (hit === element || element.contains(hit))
+        );
       }),
     )
     .toBe(true);
+}
+
+async function openAcquisitionTimeline(page: Page) {
+  const disclosure = page.getByRole("button", { name: /2 acquisitions moving/i });
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+
+  const operation = page.getByRole("button", {
+    name: "Inspect acquisition history for The Far Meridian",
+  });
+  await expectStationaryPointerTarget(operation);
+  await operation.click();
+
+  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  await expect(timeline).toBeVisible();
+  return timeline;
 }
 
 test("dashboard supports keyboard-first operational disclosure", async ({ page }) => {
@@ -169,13 +181,7 @@ test("operators can inspect a title-level acquisition trace before choosing reco
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
-  await page
-    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
-    .click();
-
-  const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await expect(timeline).toBeVisible();
+  const timeline = await openAcquisitionTimeline(page);
   await expect(timeline.getByRole("heading", { name: "The Far Meridian" })).toBeVisible();
   await expect(timeline.getByText("Release grabbed")).toBeVisible();
   await expect(timeline.getByText("Download failed", { exact: true })).toBeVisible();
@@ -221,12 +227,7 @@ test("a strict live provenance snapshot replaces only its selected target", asyn
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
-  await page
-    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
-    .click();
-
-  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  const timeline = await openAcquisitionTimeline(page);
   await expect(timeline.getByRole("heading", { name: "No acquisition events yet" })).toBeVisible();
   const requestedUrl = new URL(requestedUrls[0]!);
   expect(`${requestedUrl.pathname}${requestedUrl.search}`).toBe(
@@ -242,12 +243,7 @@ test("operators can explicitly pause whole-title monitoring without touching fil
   await mockAcquisitionMonitoringSession(page);
   const capture = await mockAcquisitionMonitoringUpdate(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
-  await page
-    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
-    .click();
-
-  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  const timeline = await openAcquisitionTimeline(page);
   const monitoringAction = timeline.getByRole("button", {
     name: "Pause monitoring for The Far Meridian",
   });
@@ -309,12 +305,7 @@ test("operators can queue one exact-target acquisition search", async ({ page })
   await mockAcquisitionRecoverySession(page);
   const capture = await mockAcquisitionSearch(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
-  await page
-    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
-    .click();
-
-  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  const timeline = await openAcquisitionTimeline(page);
   const recoveryAction = timeline.getByRole("button", { name: "Review search" });
   await expectStationaryPointerTarget(recoveryAction);
   await recoveryAction.click();
@@ -333,12 +324,7 @@ test("operators can remove and blocklist one exact stalled queue item", async ({
   await mockAcquisitionRecoverySession(page);
   const capture = await mockAcquisitionQueueRecovery(page);
   await page.goto("/?test-view=queue-recovery");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
-  await page
-    .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
-    .click();
-
-  const timeline = page.getByRole("dialog", { name: "Signal history" });
+  const timeline = await openAcquisitionTimeline(page);
   await timeline.getByRole("button", { name: "Recover stalled download" }).click();
   await expect(
     timeline.getByText(/removes the item and its data from the download client/u),
@@ -637,8 +623,10 @@ test("download queue supports focused search and attention filtering", async ({ 
   const resume = page.getByRole("button", { name: "Resume Signal.S01E07.1080p.WEB-DL" });
   await resume.click();
   await expect(page.getByText("Resume this transfer?")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Cancel" })).toBeFocused();
-  await page.getByRole("button", { name: "Cancel" }).click();
+  const cancel = page.getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  await expectStationaryPointerTarget(cancel);
+  await cancel.click();
   await expect(resume).toBeFocused();
 });
 
