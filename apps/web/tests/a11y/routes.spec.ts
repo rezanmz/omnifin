@@ -32,6 +32,9 @@ const routes = [
   { label: "setup signed-out boundary", path: "/onboarding?test-view=signed-out" },
   { label: "setup permission boundary", path: "/onboarding?test-view=forbidden" },
   { label: "configured login", path: "/login" },
+  { label: "verified build identity", path: "/about?test-view=verified" },
+  { label: "development build identity", path: "/about?test-view=development" },
+  { label: "unavailable build identity", path: "/about?test-view=unavailable" },
   { label: "unconfigured login", path: "/login?test-view=unconfigured" },
   { label: "unavailable login", path: "/login?test-view=unavailable" },
   { label: "login authentication error", path: "/login?authError=invalid_request" },
@@ -539,6 +542,7 @@ test("download removal confirmation has no automatically detectable accessibilit
 for (const route of [
   { label: "dashboard", path: "/" },
   { label: "login", path: "/login" },
+  { label: "build identity", path: "/about?test-view=verified" },
   { label: "account appearance", path: "/settings" },
   {
     label: "identity provider control room",

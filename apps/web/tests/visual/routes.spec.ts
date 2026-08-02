@@ -124,6 +124,42 @@ async function mockSignedOutDashboard(page: Page) {
   });
 }
 
+test("build identity visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !visualProjects.has(testInfo.project.name),
+    "Build identity covers representative Chromium viewports",
+  );
+  await page.goto(routeForProject("/about?test-view=verified", testInfo.project.name));
+  await page.getByText("Release verified").waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("about-build-identity.png", { fullPage: true });
+});
+
+test("light build identity visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light build identity covers desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/about?test-view=verified");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("about-build-identity-light.png", { fullPage: true });
+});
+
+for (const state of ["development", "unavailable"] as const) {
+  test(`${state} build identity visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Build identity states cover desktop and phone geometry",
+    );
+    await page.goto(`/about?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`about-build-identity-${state}.png`, { fullPage: true });
+  });
+}
+
 async function waitForVisibleDiscoveryArtwork(page: Page) {
   const artwork = page
     .getByRole("region", { name: "Trending now" })

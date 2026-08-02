@@ -1,4 +1,5 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { runtimeIdentitySchema } from "@omnifin/contracts/runtime";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,6 +95,23 @@ describe("gateway application", () => {
 
     expect(close).toHaveBeenCalledOnce();
     expect(() => database.sqlite.prepare("select 1").get()).toThrow(/not open/i);
+  });
+
+  it("exposes the public runtime identity without requiring a session", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    try {
+      const response = await app.inject({ method: "GET", url: "/v1/runtime" });
+
+      expect(response.statusCode).toBe(200);
+      expect(runtimeIdentitySchema.parse(response.json())).toMatchObject({
+        channel: "development",
+        revision: null,
+        verification: "development",
+      });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    } finally {
+      await app.close();
+    }
   });
 
   it("reports liveness and database readiness without leaking details", async () => {

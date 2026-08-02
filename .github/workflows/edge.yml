@@ -90,6 +90,28 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Derive runtime identity
+        id: runtime
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+          const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+          const fullRevision = /^[0-9a-f]{40}$/u;
+          if (!stableVersion.test(manifest.version) || !fullRevision.test(process.env.VERIFIED_SHA ?? "")) {
+            throw new Error("The edge runtime identity source is invalid.");
+          }
+          const version = `${manifest.version}-edge.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`;
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          EOF
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - name: Set up Docker Buildx
@@ -110,6 +132,8 @@ jobs:
             org.opencontainers.image.title=Omnifin
             org.opencontainers.image.description=Self-hosted media control plane
             org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}/tree/${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.version=${{ steps.runtime.outputs.version }}
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
       - name: Build and push candidate without edge aliases
         id: build
@@ -120,6 +144,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=edge
           context: .
           file: Dockerfile
+          build-args: |
+            CHANNEL=edge
+            VERSION=${{ steps.runtime.outputs.version }}
+            REVISION=${{ github.event.workflow_run.head_sha }}
+            SOURCE_URL=https://github.com/${{ github.repository }}/tree/${{ github.event.workflow_run.head_sha }}
           labels: ${{ steps.metadata.outputs.labels }}
           platforms: linux/amd64,linux/arm64
           provenance: mode=max

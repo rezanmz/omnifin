@@ -159,6 +159,7 @@ sudo install -d -m 0700 -o 65532 -g 65532 backups
 docker compose --env-file .env --file compose.yaml pull
 docker compose --env-file .env --file compose.yaml up --detach --wait
 curl --fail --silent --show-error http://127.0.0.1:3000/healthz
+curl --fail --silent --show-error http://127.0.0.1:3000/api/runtime
 ```
 
 Compose bind-mounts local secret files without changing their host ownership, while the Omnifin
@@ -171,6 +172,8 @@ reverse proxy in front of the web service before using secure cookies or OIDC. C
 [reverse proxy runbook](docs/operations/reverse-proxy.md) for one-hop Caddy and Nginx examples and
 an end-to-end verification checklist, then use the [first-run guide](docs/first-run.md) to create the
 first administrator and rehearse a verified backup before adding irreplaceable configuration.
+The public `/about` screen presents the same local runtime identity, exact corresponding source, and
+light/dark/system appearance control without requiring a session or contacting an external service.
 
 ## Development preview
 
@@ -212,6 +215,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
 
 - [Architecture](docs/architecture.md) — components, trust boundaries, data, and
   failure handling
+- [Runtime build identity](docs/runtime-identity.md) — local version, immutable source,
+  release verification, privacy boundary, and support workflow
 - [Authentication](docs/authentication.md) — OIDC, Jellyfin pairing, roles, sessions,
   and recovery
 - [Operator audit trail](docs/audit-trail.md) — privacy-safe security and operational history,

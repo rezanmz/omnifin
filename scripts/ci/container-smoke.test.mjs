@@ -7,8 +7,58 @@ import {
   createFailureReport,
   parseDoctorSmokeReport,
   parseRetainedBackupSmokeReport,
+  parseRuntimeIdentity,
   redactDiagnosticText,
 } from "../container-smoke.mjs";
+
+test("runtime identity smoke accepts only the exact public image identity", () => {
+  const revision = "0123456789abcdef0123456789abcdef01234567";
+  const expected = {
+    channel: "stable",
+    license: "AGPL-3.0-only",
+    revision,
+    schemaVersion: 1,
+    sourceUrl: `https://github.com/rezanmz/omnifin/tree/${revision}`,
+    verification: "verified",
+    version: "1.2.3",
+  };
+
+  assert.deepEqual(
+    parseRuntimeIdentity(
+      JSON.stringify({
+        body: expected,
+        cacheControl: "public, max-age=3600, stale-if-error=86400",
+        setCookie: null,
+      }),
+      expected,
+    ),
+    expected,
+  );
+  assert.throws(
+    () =>
+      parseRuntimeIdentity(
+        JSON.stringify({
+          body: { ...expected, version: "latest" },
+          cacheControl: "public, max-age=3600, stale-if-error=86400",
+          setCookie: null,
+        }),
+        expected,
+      ),
+    /runtime_identity_response_invalid/u,
+  );
+  assert.throws(
+    () =>
+      parseRuntimeIdentity(
+        JSON.stringify({
+          body: { ...expected, internalPath: "/private/runtime" },
+          cacheControl: "public, max-age=3600, stale-if-error=86400",
+          setCookie: null,
+        }),
+        expected,
+      ),
+    /runtime_identity_response_invalid/u,
+  );
+});
 
 test("retained backup smoke reports accept only the bounded privacy-safe contract", () => {
   const fileName = "omnifin-auto-20260801T120000000Z-00000000-0000-4000-8000-000000000001.sqlite";

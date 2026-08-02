@@ -375,7 +375,7 @@ jobs:
             org.opencontainers.image.title=Omnifin
             org.opencontainers.image.description=Self-hosted media control plane
             org.opencontainers.image.licenses=AGPL-3.0-only
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}/tree/${{ inputs.release_sha }}
             org.opencontainers.image.version=${{ inputs.version }}
             org.opencontainers.image.revision=${{ inputs.release_sha }}
             io.github.omnifin.release-profile=${{ needs.release-coverage.outputs.profile }}
@@ -384,6 +384,11 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           annotations: ${{ steps.metadata.outputs.annotations }}
+          build-args: |
+            CHANNEL=stable
+            VERSION=${{ inputs.version }}
+            REVISION=${{ inputs.release_sha }}
+            SOURCE_URL=https://github.com/${{ github.repository }}/tree/${{ inputs.release_sha }}
           context: .
           file: Dockerfile
           labels: ${{ steps.metadata.outputs.labels }}

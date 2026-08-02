@@ -91,6 +91,13 @@ registry credentials. Only that verified digest may be copied to `sha-<commit>` 
 `edge`; an existing SHA tag is accepted only when it already resolves to the same
 digest. A final anonymous pull verifies the promoted aliases.
 
+Each edge image bakes an `edge` SemVer identity, the exact protected-main SHA, and the
+matching immutable corresponding-source URL into a read-only image file. Stable images
+do the same with the reviewed release version and release SHA. The gateway refuses to
+start when those fields are inconsistent, and the candidate smoke harness requires the
+live public identity to match the image metadata before promotion. See the
+[runtime build identity contract](runtime-identity.md).
+
 ## Stable release trust boundary
 
 The publishing workflow accepts only a stable `vMAJOR.MINOR.PATCH` tag, the matching
@@ -176,7 +183,8 @@ rehearsal succeed.
 ## Verification coverage
 
 The digest smoke harness verifies the rootless runtime, gateway liveness and
-readiness, a representative versioned API read, migration-backed startup, and web
+readiness, the exact session-free build identity, a representative authenticated-boundary API read,
+migration-backed startup, and web
 health. Pull-request CI also loads its locally built image and runs this same harness,
 so an image that merely compiles cannot satisfy `CI`. The reviewed phase fixture matrix
 and migration rehearsal run as source gates before a stable image is built. The separate

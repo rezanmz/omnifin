@@ -63,6 +63,7 @@ For a tagged release bundle, pull and start the exact digest from its environmen
 docker compose --env-file .env --file compose.yaml pull
 docker compose --env-file .env --file compose.yaml up --detach --wait
 curl --fail --silent --show-error http://127.0.0.1:3000/healthz
+curl --fail --silent --show-error http://127.0.0.1:3000/api/runtime
 docker compose --env-file .env --file compose.yaml exec -T gateway \
   /nodejs/bin/node /opt/omnifin/bin/healthcheck.mjs http://127.0.0.1:4000/readyz
 ```
@@ -71,8 +72,12 @@ Source-checkpoint reviewers use `docker compose up --detach --build --wait` from
 instead. Do not add `--build` to release-bundle commands: the bundle deliberately contains no build
 context and must run the already verified image.
 
-The web check proves liveness. The private gateway check additionally reaches the process that owns
-SQLite and upstream secrets. Inspect `docker compose ps` and sanitized logs if either check fails.
+The web check proves liveness. The runtime response must report the selected release version,
+`stable`, `verified`, and a full revision whose corresponding-source URL ends in that same revision.
+The private gateway check additionally reaches the process that owns SQLite and upstream secrets.
+Open `<OMNIFIN_BASE_URL>/about` to inspect and copy the same privacy-safe identity without signing
+in. Inspect `docker compose ps` and sanitized logs if any check fails; do not substitute a guessed
+version when the runtime identity is unavailable.
 
 After the public HTTPS origin and immutable image digest are configured, run the read-only
 [deployment doctor](operations/deployment-doctor.md):

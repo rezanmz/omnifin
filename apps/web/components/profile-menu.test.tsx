@@ -22,6 +22,7 @@ describe("ProfileMenu", () => {
       "href",
       "/settings",
     );
+    expect(screen.getByRole("link", { name: /about omnifin/i })).toHaveAttribute("href", "/about");
 
     await user.keyboard("{Escape}");
     expect(

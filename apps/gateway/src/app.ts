@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { createApiError } from "@omnifin/contracts/errors";
+import type { RuntimeIdentity } from "@omnifin/contracts/runtime";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
@@ -73,6 +74,8 @@ import {
   type LibraryOperationRoutesOptions,
 } from "./library/operation-routes.js";
 import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
+import { runtimeIdentityRoutes } from "./runtime/identity-routes.js";
+import { loadRuntimeIdentity } from "./runtime/identity.js";
 import {
   continueWatchingRoutes,
   type ContinueWatchingRoutesOptions,
@@ -159,6 +162,7 @@ export interface CreateAppOptions {
   deploymentReadinessDependencies?: DeploymentReadinessRoutesOptions["dependencies"];
   stackVerificationDependencies?: StackVerificationRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
+  runtimeIdentity?: RuntimeIdentity;
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -243,6 +247,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   let app: FastifyInstance | undefined;
 
   try {
+    const runtimeIdentity = options.runtimeIdentity ?? loadRuntimeIdentity();
     if (options.migrate !== false) {
       try {
         database.migrate();
@@ -445,6 +450,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     });
 
     await app.register(healthRoutes);
+    await app.register(runtimeIdentityRoutes, { identity: runtimeIdentity });
     await app.register(authProviderRoutes);
     await app.register(connectorAdminRoutes, {
       ...(options.connectorAdminDependencies === undefined
