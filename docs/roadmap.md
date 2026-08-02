@@ -42,7 +42,8 @@ claim live-service compatibility; those profiles remain gated by later phases.
 - Local roles and permissions, recovery access, opaque session rotation, logout, and
   audit records, including a privacy-safe operator trail and browser-safe administrator role and
   account-state controls
-- Recovery-bound first-administrator bootstrap with fresh Jellyfin administrator proof
+- Recovery-bound first-administrator bootstrap through configured OIDC or fresh Jellyfin
+  administrator proof
 - Encrypted connector configuration, capability negotiation, and partial-failure
   contracts
 

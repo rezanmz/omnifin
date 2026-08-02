@@ -62,36 +62,43 @@ secrets, Jellyfin access tokens, connector credentials, and local session and re
 state. Direct Jellyfin sign-in is the first workflow that writes an encrypted upstream
 token; passwords are used only for the upstream exchange and are never persisted.
 
-The `OMNIFIN_JELLYFIN_URL` setting bootstraps the single Jellyfin connector used for the first
-administrator, direct authentication, pairing, and media operations. It must be a canonical HTTPS URL
-without embedded credentials, a query, or a fragment. An operator who deliberately
+The `OMNIFIN_JELLYFIN_URL` setting bootstraps the single Jellyfin connector used for direct
+authentication, pairing, media operations, and the optional Jellyfin first-administrator path. It
+must be a canonical HTTPS URL without embedded credentials, a query, or a fragment. An operator who deliberately
 targets a trusted private-network HTTP endpoint must also set
-`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. That acknowledgement enables only the
+`OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED=true`. That acknowledgement enables only the connector
 configured for that server. Treat this acknowledgement as a deployment-specific trust decision,
 not as a substitute for network isolation.
 
 ## First administrator
 
-A fresh database has no privileged local user. Before configuring OIDC or additional services:
+A fresh database has no privileged local user. Establish exactly one recovery-bound administrator:
 
-1. Configure `OMNIFIN_JELLYFIN_URL` and start the gateway and web processes.
+1. Start the gateway and web processes. Configure `OMNIFIN_JELLYFIN_URL` first when using the
+   Jellyfin bootstrap path; the OIDC path may pair Jellyfin afterward.
 2. Open `<OMNIFIN_BASE_URL>/recovery` directly. The route is intentionally absent from normal
    sign-in navigation and is marked `noindex`.
-3. Enter the deployment recovery secret, then choose Jellyfin password or Quick Connect.
-4. Prove a Jellyfin account whose current Jellyfin policy has `IsAdministrator=true`.
+3. Enter the deployment recovery secret, then either configure, validate, and continue with an
+   OIDC provider or choose Jellyfin password/Quick Connect.
+4. Complete the exact PKCE-bound OIDC callback or prove a Jellyfin account whose current policy has
+   `IsAdministrator=true`.
 
-Omnifin keys the account by the immutable Jellyfin server and user identifiers. A password is sent
-only to Jellyfin and discarded immediately; only the returned token is encrypted at rest. The
-database transaction refuses the operation if an active local administrator already exists,
-creates or reuses the exact Jellyfin identity, promotes it with `recovery_bootstrap` provenance,
-and replaces recovery access with a normal Jellyfin-attributed administrator session. Other active
-sessions for that same local user are revoked.
+The OIDC path keys the identity by immutable `(issuer, sub)` and binds its provider, state, nonce,
+PKCE verifier, purpose, and initiating recovery session. It replaces recovery access with an
+OIDC-attributed administrator session but grants no library, playback, request, acquisition, or
+download access until the administrator explicitly pairs a Jellyfin account.
 
-Ordinary Jellyfin sign-in never inherits Jellyfin administrator authority and provisions a local
-`viewer` by default. The hidden bootstrap endpoint is the only initial bridge, and it requires both
-the short-lived recovery session and current proof of Jellyfin administrator control. Denials leave
-the recovery session intact so an operator can correct the account or an upstream outage without
-re-entering the secret. See the [first-run runbook](first-run.md) for exact commands and checks.
+The Jellyfin path keys the account by immutable server and user identifiers. A password is sent only
+to Jellyfin and discarded immediately; only the returned token is encrypted at rest. The database
+transaction creates or reuses the exact Jellyfin identity and replaces recovery access with a
+Jellyfin-attributed administrator session. Both paths refuse the operation if an active local
+administrator already exists and revoke other active sessions for the claimed local user.
+
+Ordinary OIDC and Jellyfin sign-in never bootstrap authority; Jellyfin sign-in provisions a local
+`viewer` by default even when the upstream account is an administrator. Only the hidden bootstrap
+flow can make the initial claim, and every denial leaves recovery access intact so an operator can
+correct provider, account, or upstream availability without re-entering the secret. See the
+[first-run runbook](first-run.md) for exact commands and checks.
 
 `OMNIFIN_BASE_URL` must contain only the canonical public origin, with no credentials,
 path, query, or fragment. Production requires HTTPS except for a loopback-only source

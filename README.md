@@ -202,12 +202,13 @@ set +a
 pnpm dev
 ```
 
-Set `OMNIFIN_JELLYFIN_URL` before the first start. Once both processes are healthy,
-open the private `/recovery` route and prove control of an administrator account on
-that Jellyfin server. Omnifin discards the password, encrypts the resulting Jellyfin
-token, creates the first local administrator atomically, and replaces the short-lived
-recovery session. See the [first-run guide](docs/first-run.md) for password and Quick
-Connect instructions, proxy requirements, and failure recovery.
+Once both processes are healthy, open the private `/recovery` route. Establish the first
+administrator through either a configured OIDC provider or fresh Jellyfin administrator proof;
+the recovery-bound claim is single-use and replaces the short-lived recovery session atomically.
+Set `OMNIFIN_JELLYFIN_URL` before starting when using the Jellyfin path. An OIDC administrator can
+configure and administer the installation before pairing Jellyfin, but media access stays denied
+until that explicit pairing succeeds. See the [first-run guide](docs/first-run.md) for both paths,
+proxy requirements, and failure recovery.
 
 See the [development guide](docs/development.md) for checks and repository conventions,
 or the [deployment guide](docs/deployment.md) for the intended production model.
