@@ -610,8 +610,6 @@
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art {
   background: #101914;
-  filter: saturate(1.08) contrast(1.02);
-  transform: scale(1.012);
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art::after {

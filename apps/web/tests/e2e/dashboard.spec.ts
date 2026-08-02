@@ -169,7 +169,37 @@ test("connected discovery renders live artwork and opens real title details", as
   await expect(page.getByRole("heading", { name: "Series people are watching" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Coming soon" })).toBeVisible();
   await expect(page.getByText("View all")).toHaveCount(0);
-  await expect(page.locator('.hero-spotlight[data-artwork-source="remote"]')).toBeVisible();
+  const spotlight = page.locator('.hero-spotlight[data-artwork-source="remote"]');
+  await expect(spotlight).toBeVisible();
+  const spotlightGeometry = await spotlight.evaluate((hero) => {
+    const artwork = hero.querySelector<HTMLElement>(".hero-spotlight__art");
+    if (!artwork) throw new Error("Spotlight artwork is missing.");
+    const heroBox = hero.getBoundingClientRect();
+    const artworkBox = artwork.getBoundingClientRect();
+    const style = getComputedStyle(artwork);
+    return {
+      artwork: {
+        bottom: artworkBox.bottom,
+        left: artworkBox.left,
+        right: artworkBox.right,
+        top: artworkBox.top,
+      },
+      filter: style.filter,
+      hero: {
+        bottom: heroBox.bottom,
+        left: heroBox.left,
+        right: heroBox.right,
+        top: heroBox.top,
+      },
+      transform: style.transform,
+    };
+  });
+  expect(spotlightGeometry.filter).toBe("none");
+  expect(spotlightGeometry.transform).toBe("none");
+  expect(spotlightGeometry.artwork.left).toBeGreaterThanOrEqual(spotlightGeometry.hero.left);
+  expect(spotlightGeometry.artwork.top).toBeGreaterThanOrEqual(spotlightGeometry.hero.top);
+  expect(spotlightGeometry.artwork.right).toBeLessThanOrEqual(spotlightGeometry.hero.right);
+  expect(spotlightGeometry.artwork.bottom).toBeLessThanOrEqual(spotlightGeometry.hero.bottom);
 
   await page.getByRole("button", { exact: true, name: "View details" }).click();
   const detail = page.getByRole("dialog", { name: "The Far Meridian details" });
