@@ -18,6 +18,7 @@ const startupFailureDefinitions = {
   recovery_secret_conflict: { category: "secrets" },
   recovery_secret_file_unreadable: { category: "secrets" },
   recovery_secret_invalid: { category: "secrets" },
+  runtime_identity_invalid: { category: "configuration" },
   server_listen_failed: { category: "listener" },
   unexpected_startup_failure: { category: "unexpected" },
 } as const;
@@ -51,6 +52,7 @@ const startupFailureMessages: Record<StartupFailureCode, string> = {
   recovery_secret_file_unreadable: "The configured recovery-secret file could not be read.",
   recovery_secret_invalid:
     "OMNIFIN_RECOVERY_SECRET must be canonical base64 encoding of 32 to 128 bytes.",
+  runtime_identity_invalid: "The runtime build identity is invalid or unverifiable.",
   server_listen_failed: "The gateway could not bind its configured listener.",
   unexpected_startup_failure: "The gateway encountered an unexpected startup failure.",
 };
