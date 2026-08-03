@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { demoDashboard } from "../lib/dashboard-data";
@@ -12,6 +12,7 @@ describe("OperationsDock", () => {
     render(<OperationsDock operations={demoDashboard.operations} />);
 
     const toggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");

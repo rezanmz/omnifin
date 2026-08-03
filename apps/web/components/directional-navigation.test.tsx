@@ -81,6 +81,7 @@ describe("directional navigation", () => {
     render(<OperationsDock operations={demoDashboard.operations} />);
 
     const summary = screen.getByRole("button", { name: /2 acquisitions moving/i });
+    await waitFor(() => expect(summary).toBeEnabled());
     await user.click(summary);
     summary.focus();
     await user.keyboard("{ArrowDown}");
