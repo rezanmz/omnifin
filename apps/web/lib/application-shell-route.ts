@@ -1,5 +1,3 @@
-export const APPLICATION_PATHNAME_HEADER = "x-omnifin-pathname";
-
 export type ApplicationDestination =
   "calendar" | "discover" | "library" | "operations" | "requests" | "settings";
 
@@ -13,8 +11,4 @@ export function applicationDestinationForPath(pathname: string): ApplicationDest
   if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
   if (pathname === "/operations" || pathname.startsWith("/operations/")) return "operations";
   return null;
-}
-
-export function routeUsesApplicationShell(pathname: string) {
-  return pathname === "/about" || applicationDestinationForPath(pathname) !== null;
 }
