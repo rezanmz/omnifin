@@ -624,6 +624,7 @@
   }
 
   .metrics {
+    margin-top: calc(80px + env(safe-area-inset-bottom));
     width: 100%;
   }
 
