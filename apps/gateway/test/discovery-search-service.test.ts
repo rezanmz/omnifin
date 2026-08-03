@@ -1,5 +1,8 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
-import type { SeerrDiscoveryFeedPage } from "@omnifin/connectors/adapters/seerr";
+import type {
+  SeerrDiscoveryBrowsePage,
+  SeerrDiscoveryFeedPage,
+} from "@omnifin/connectors/adapters/seerr";
 import {
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -190,7 +193,12 @@ function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-ma
 }
 
 function harness(
-  options: { withArtwork?: boolean; withConnector?: boolean; withFeed?: boolean } = {},
+  options: {
+    withArtwork?: boolean;
+    withBrowse?: boolean;
+    withConnector?: boolean;
+    withFeed?: boolean;
+  } = {},
 ) {
   const config = testConfig();
   const database = openDatabase(":memory:");
@@ -244,11 +252,42 @@ function harness(
     ],
     totalResults: 1,
   }));
+  const browse = vi.fn(
+    async (input: {
+      kind: "movie" | "series";
+      page: number;
+    }): Promise<SeerrDiscoveryBrowsePage> => ({
+      items: [
+        {
+          artwork: {
+            backdropPath: "/private/browse-backdrop.jpg",
+            posterPath: "/private/browse-poster.webp",
+          },
+          media: {
+            availability: "unavailable",
+            id: `${input.kind}:${input.kind === "movie" ? 603 : 1396}`,
+            kind: input.kind,
+            originalTitle: null,
+            overview: "A bounded browse result.",
+            source: "seerr",
+            title: "Browse result",
+            tmdbId: input.kind === "movie" ? 603 : 1396,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        },
+      ],
+      page: input.page,
+      totalPages: 4,
+      totalResults: 65,
+    }),
+  );
   const readDiscoveryArtwork = vi.fn(async () => ({
     body: Uint8Array.from([1, 2, 3, 4]),
     contentType: "image/webp" as const,
   }));
   const createAdapter = vi.fn((): DiscoverySearchAdapter => ({
+    ...(options.withBrowse === false ? {} : { browse }),
     detail,
     ...(options.withFeed === false ? {} : { discover }),
     personDetail,
@@ -261,6 +300,7 @@ function harness(
   });
   return {
     config,
+    browse,
     createAdapter,
     database,
     detail,
@@ -273,6 +313,61 @@ function harness(
 }
 
 describe("discovery search service", () => {
+  it("normalizes browse criteria and replaces every upstream artwork path", async () => {
+    const { browse, database, service } = harness();
+    try {
+      const response = await service.browse(
+        {
+          availability: "requestable",
+          genre: "science-fiction",
+          kind: "movie",
+          locale: "en-CA",
+          page: 2,
+          sort: "rating",
+        },
+        { principal: principal() },
+      );
+
+      expect(response).toMatchObject({
+        criteria: {
+          availability: "requestable",
+          genre: "science-fiction",
+          kind: "movie",
+          locale: "en-CA",
+          page: 2,
+          sort: "rating",
+        },
+        page: 2,
+        totalPages: 4,
+        totalResults: 65,
+      });
+      expect(browse).toHaveBeenCalledWith(response.criteria, undefined);
+      expect(response.items[0]?.artwork.backdropPath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(response.items[0]?.artwork.posterPath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(JSON.stringify(response)).not.toContain("/private/");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when the connector lacks browse capability", async () => {
+    const test = harness({ withBrowse: false });
+    try {
+      await expect(
+        test.service.browse(
+          { availability: "any", kind: "movie", locale: "en", page: 1, sort: "popularity" },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "connector_integrity_failure" });
+    } finally {
+      test.database.close();
+    }
+  });
+
   it("fans out four feed rails and replaces every upstream artwork path", async () => {
     const { database, discover, readDiscoveryArtwork, service } = harness();
     try {

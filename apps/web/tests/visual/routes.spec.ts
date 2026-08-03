@@ -9,6 +9,7 @@ import {
 } from "../fixtures/acquisition-recovery";
 import {
   longTitleDiscoveryFeedFixture,
+  mockDiscoveryArtwork,
   mockDiscoveryDetails,
   mockDiscoveryFeed,
   mockDiscoverySearch,
@@ -334,6 +335,31 @@ test("light dashboard visual baseline", async ({ page }, testInfo) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page).toHaveScreenshot("dashboard-light.png", { fullPage: true });
+});
+
+test("browse discovery visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Browse discovery covers representative desktop and phone geometry",
+  );
+  await mockDiscoveryArtwork(page);
+  await page.goto("/browse?test-view=ready");
+  await page.getByRole("heading", { level: 1, name: "Browse without the guesswork." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("browse-discovery.png", { fullPage: true });
+});
+
+test("light browse discovery visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light Browse discovery covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await mockDiscoveryArtwork(page);
+  await page.goto("/browse?test-view=ready");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("browse-discovery-light.png", { fullPage: true });
 });
 
 test("light profile controls visual baseline", async ({ page }, testInfo) => {

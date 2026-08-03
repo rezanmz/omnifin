@@ -1,6 +1,7 @@
 import {
   SeerrAdapter,
   type SeerrDiscoveryArtwork,
+  type SeerrDiscoveryBrowsePage,
   type SeerrDiscoveryFeedPage,
   type SeerrDiscoveryMediaDetail,
   type SeerrDiscoveryPersonDetail,
@@ -9,7 +10,10 @@ import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import {
+  DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE,
   DISCOVERY_FEED_MAX_ITEMS_PER_RAIL,
+  discoveryBrowseQuerySchema,
+  discoveryBrowseResponseSchema,
   discoveryFeedQuerySchema,
   discoveryFeedResponseSchema,
   discoveryMediaDetailParamsSchema,
@@ -20,6 +24,8 @@ import {
   discoveryPersonDetailResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
+  type DiscoveryBrowseQuery,
+  type DiscoveryBrowseResponse,
   type DiscoveryFeedQuery,
   type DiscoveryFeedRailKind,
   type DiscoveryFeedResponse,
@@ -62,6 +68,7 @@ export interface DiscoverySearchContext {
 }
 
 export interface DiscoverySearchAdapter {
+  browse?(input: DiscoveryBrowseQuery, signal?: AbortSignal): Promise<SeerrDiscoveryBrowsePage>;
   discover?(
     kind: DiscoveryFeedRailKind,
     input: DiscoveryFeedQuery,
@@ -321,6 +328,61 @@ export class DiscoverySearchService {
       generatedAt: occurredAt.toISOString(),
       rails,
       state,
+    });
+  }
+
+  public async browse(
+    input: DiscoveryBrowseQuery,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryBrowseResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
+    const criteria = discoveryBrowseQuerySchema.parse(input);
+    const row = this.#connector();
+    const adapter = this.#adapterFor(row);
+    const browse = adapter.browse?.bind(adapter);
+    if (!browse) throw new DiscoverySearchError("connector_integrity_failure");
+    const page = await browse(criteria, signal);
+    const rawItems = page.items.slice(0, DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE);
+    const artworkInputs = rawItems.flatMap(({ artwork }) => [
+      ...(artwork.backdropPath === null
+        ? []
+        : [{ kind: "backdrop" as const, path: artwork.backdropPath }]),
+      ...(artwork.posterPath === null
+        ? []
+        : [{ kind: "poster" as const, path: artwork.posterPath }]),
+    ]);
+    let artworkReferences: string[];
+    try {
+      artworkReferences = this.#references.create(principal.userId, row.id, artworkInputs);
+    } catch (error) {
+      throw new DiscoverySearchError("storage_failure", { cause: error });
+    }
+    let referenceIndex = 0;
+    const artworkPath = (path: string | null) => {
+      if (path === null) return null;
+      const reference = artworkReferences[referenceIndex++];
+      if (!reference) throw new DiscoverySearchError("storage_failure");
+      return `/v1/discovery/artwork/${reference}`;
+    };
+    const items = rawItems.map(({ artwork, media }) => ({
+      ...media,
+      artwork: {
+        backdropPath: artworkPath(artwork.backdropPath),
+        posterPath: artworkPath(artwork.posterPath),
+      },
+    }));
+    if (referenceIndex !== artworkReferences.length) {
+      throw new DiscoverySearchError("storage_failure");
+    }
+    return discoveryBrowseResponseSchema.parse({
+      criteria,
+      generatedAt: this.#clock().toISOString(),
+      items,
+      page: page.page,
+      totalPages: page.totalPages,
+      totalResults: page.totalResults,
     });
   }
 

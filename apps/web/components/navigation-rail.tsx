@@ -1,10 +1,19 @@
-import { CalendarDays, ClipboardCheck, Compass, Gauge, Library, Settings2 } from "lucide-react";
+import {
+  CalendarDays,
+  ClipboardCheck,
+  Compass,
+  Gauge,
+  Library,
+  Search,
+  Settings2,
+} from "lucide-react";
 import Link from "next/link";
 import { BrandMark } from "./brand-mark";
 import { DirectionalNavigationRegion } from "./directional-navigation-group";
 
 const destinations = [
   { href: "/", icon: Compass, id: "discover", label: "Discover" },
+  { href: "/browse", icon: Search, id: "browse", label: "Browse" },
   { href: "/library", icon: Library, id: "library", label: "Library" },
   { href: "/calendar", icon: CalendarDays, id: "calendar", label: "Calendar" },
   { href: "/operations/health", icon: Gauge, id: "operations", label: "Operations" },
@@ -78,15 +87,6 @@ export function MobileNavigation({ current = "discover" }: { current?: PrimaryDe
           <span>{label}</span>
         </Link>
       ))}
-      <Link
-        className="mobile-navigation__item"
-        data-directional-item
-        href="/settings"
-        prefetch={false}
-      >
-        <Settings2 aria-hidden="true" size={20} strokeWidth={1.65} />
-        <span>Settings</span>
-      </Link>
     </DirectionalNavigationRegion>
   );
 }

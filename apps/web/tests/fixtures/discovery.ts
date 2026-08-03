@@ -1,6 +1,10 @@
-import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
+import {
+  discoveryBrowseQuerySchema,
+  type DiscoveryFeedResponse,
+} from "@omnifin/contracts/discovery";
 import type { Page } from "@playwright/test";
 
+import { demoBrowseResponse } from "../../lib/discovery-browse-demo";
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
 
 function artworkReference(seed: string) {
@@ -301,7 +305,7 @@ export async function mockDiscoveryFeed(
   await mockDiscoveryArtwork(page);
 }
 
-async function mockDiscoveryArtwork(page: Page) {
+export async function mockDiscoveryArtwork(page: Page) {
   await page.route("**/api/discovery/artwork/discovery_art_*", async (route) => {
     await route.fulfill({
       body: discoveryArtwork(route.request().url()),
@@ -310,6 +314,43 @@ async function mockDiscoveryArtwork(page: Page) {
       status: 200,
     });
   });
+}
+
+export async function mockDiscoveryBrowse(page: Page) {
+  await page.route("**/api/discovery/browse?**", async (route) => {
+    const criteria = discoveryBrowseQuerySchema.parse(
+      Object.fromEntries(new URL(route.request().url()).searchParams),
+    );
+    const items = demoBrowseResponse.items.map((item, index) => ({
+      ...item,
+      artwork: {
+        backdropPath:
+          item.artwork.backdropPath?.replace("/api/discovery/artwork/", "/v1/discovery/artwork/") ??
+          null,
+        posterPath:
+          item.artwork.posterPath?.replace("/api/discovery/artwork/", "/v1/discovery/artwork/") ??
+          null,
+      },
+      id: criteria.kind === "series" ? `series:${item.tmdbId + 10_000}` : item.id,
+      kind: criteria.kind,
+      title: criteria.kind === "series" ? `${item.title} Files` : item.title,
+      tmdbId: criteria.kind === "series" ? item.tmdbId + 10_000 : item.tmdbId,
+      voteAverage: Math.max(0, (item.voteAverage ?? 0) - index * 0.01),
+    }));
+    await route.fulfill({
+      body: JSON.stringify({
+        criteria,
+        generatedAt: "2026-08-02T12:00:00.000Z",
+        items,
+        page: criteria.page,
+        totalPages: 12,
+        totalResults: 238,
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await mockDiscoveryArtwork(page);
 }
 
 export async function mockDiscoveryDetails(page: Page) {

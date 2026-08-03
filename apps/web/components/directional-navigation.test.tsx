@@ -17,6 +17,10 @@ describe("directional navigation", () => {
     discover.focus();
     await user.keyboard("{ArrowDown}");
 
+    expect(screen.getByRole("link", { name: "Browse" })).toHaveFocus();
+    expect(screen.getByRole("link", { name: "Browse" })).toHaveAttribute("href", "/browse");
+    await user.keyboard("{ArrowDown}");
+
     expect(screen.getByRole("link", { name: "Library" })).toHaveFocus();
     expect(screen.getByRole("link", { name: "Library" })).toHaveAttribute("href", "/library");
     expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute("href", "/calendar");
