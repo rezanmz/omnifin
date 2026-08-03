@@ -196,6 +196,17 @@ function demoEpisode(
   const referenceId = `media_${referenceCharacter.repeat(22)}`;
   const durationSeconds = (42 + episodeNumber) * 60;
   return {
+    airDate: `2026-0${Math.min(9, seasonNumber + 2)}-${String(episodeNumber * 3).padStart(2, "0")}`,
+    communityRating: 7.4 + episodeNumber / 10,
+    credits: [
+      { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
+      { name: "Inez Laurent", role: "Captain Rhea Sol", type: "cast" },
+      { name: "Jon Bell", role: null, type: "director" },
+      { name: "Ari Chen", role: null, type: "writer" },
+    ],
+    creditsTruncated: false,
+    criticRating: episodeNumber === 2 ? 84 : null,
+    genres: ["Drama", "Science fiction"],
     media: {
       ...series.media,
       artwork: {
@@ -221,6 +232,7 @@ function demoEpisode(
       played: episodeNumber <= 3 && seasonNumber === 1,
       positionSeconds: episodeNumber === 1 && seasonNumber === 2 ? 780 : 0,
     },
+    studios: ["Northlight Pictures"],
   };
 }
 

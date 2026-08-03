@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -56,6 +56,13 @@ interface StepContent {
   requirement: "Essential" | "Optional" | "Recommended";
   settingsHref: string;
   surfaceHref?: string;
+}
+
+function followDocumentNavigation(event: ReactMouseEvent<HTMLAnchorElement>) {
+  if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+    return;
+  event.preventDefault();
+  window.location.assign(event.currentTarget.href);
 }
 
 type DeploymentCheckId = Extract<
@@ -444,7 +451,7 @@ function SetupBoundary({
           Continue to sign in <ArrowRight aria-hidden="true" size={17} />
         </Link>
       ) : forbidden ? (
-        <Link className="button button--glass" href="/settings">
+        <Link className="button button--glass" href="/settings" onClick={followDocumentNavigation}>
           Review account access <ArrowRight aria-hidden="true" size={17} />
         </Link>
       ) : (
@@ -483,11 +490,17 @@ function SetupHero({ model }: { model: SetupReadinessModel }) {
             className="button button--primary"
             data-directional-item
             href={nextContent?.settingsHref ?? "/"}
+            onClick={followDocumentNavigation}
           >
             {nextContent?.action ?? "Enter the dashboard"}
             <ArrowRight aria-hidden="true" size={17} />
           </Link>
-          <Link className="button button--glass" data-directional-item href="/settings/connectors">
+          <Link
+            className="button button--glass"
+            data-directional-item
+            href="/settings/connectors"
+            onClick={followDocumentNavigation}
+          >
             <Server aria-hidden="true" size={17} /> Service connections
           </Link>
         </div>
@@ -632,7 +645,7 @@ export function OnboardingDashboard({
             )}
             {outcome?.status === "ready" ? "Private readiness" : "Setup guide"}
           </span>
-          <Link className="onboarding-masthead__back" href="/">
+          <Link className="onboarding-masthead__back" href="/" onClick={followDocumentNavigation}>
             <ArrowLeft aria-hidden="true" size={16} /> Home
           </Link>
         </div>

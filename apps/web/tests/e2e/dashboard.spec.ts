@@ -581,6 +581,7 @@ test("global search preserves the document position while focusing and typing", 
   expect(initialScrollPosition).toBeGreaterThan(200);
 
   const search = page.getByRole("combobox", { name: "Search media and commands" });
+  await expect(search).toBeEnabled();
   const bounds = await search.boundingBox();
   expect(bounds).not.toBeNull();
   await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
@@ -758,6 +759,34 @@ test("operations navigation opens the system health workspace", async ({ page })
   await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute(
     "href",
     "/operations/health",
+  );
+});
+
+test("authenticated route changes preserve the primary application shell", async ({ page }) => {
+  await page.goto("/?test-view=discovery-performance");
+
+  const rail = page.locator(".navigation-rail");
+  await rail.evaluate((element) => {
+    element.dataset.persistenceProbe = "present";
+  });
+  await rail.getByRole("link", { name: "Operations" }).click();
+
+  await expect(page).toHaveURL(/\/operations\/health$/u);
+  await expect(rail).toHaveAttribute("data-persistence-probe", "present");
+  await expect(rail.getByRole("link", { name: "Operations" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.locator(".navigation-rail")).toHaveCount(1);
+  await expect(page.locator(".top-command-bar")).toHaveCount(1);
+  await expect(page.locator("#main-content")).toHaveCount(1);
+
+  await rail.getByRole("link", { name: "Requests" }).click();
+  await expect(page).toHaveURL(/\/operations\/requests$/u);
+  await expect(rail).toHaveAttribute("data-persistence-probe", "present");
+  await expect(rail.getByRole("link", { name: "Requests" })).toHaveAttribute(
+    "aria-current",
+    "page",
   );
 });
 
@@ -1137,6 +1166,9 @@ test("liquid glass chrome responds optically to pointer position", async ({ page
   await page.mouse.move(bounds!.x + bounds!.width * 0.72, bounds!.y + bounds!.height * 0.45);
 
   await expect(search).toHaveAttribute("data-glass-active", "");
+  await expect(page.locator("html")).not.toHaveAttribute("data-liquid-glass-ready", "");
+  await page.keyboard.press("Tab");
+  await expect(page.locator("html")).toHaveAttribute("data-liquid-glass-ready", "");
   const optics = await search.evaluate((surface) => {
     const style = getComputedStyle(surface);
     return {
@@ -1178,6 +1210,7 @@ test("reduced motion removes nonessential transition travel", async ({ page }, t
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
+  await page.locator(".media-card__action").first().waitFor();
 
   const motion = await page.evaluate(() => {
     const card = document.querySelector<HTMLElement>(".media-card__action")!;

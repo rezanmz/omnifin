@@ -1,6 +1,11 @@
-import type { KeyboardEvent } from "react";
-
 export type DirectionalAxis = "grid" | "horizontal" | "vertical";
+
+interface DirectionalKeyboardEvent {
+  currentTarget: EventTarget | null;
+  key: string;
+  preventDefault: () => void;
+  target: EventTarget | null;
+}
 
 interface DirectionalFocusOptions {
   axis: DirectionalAxis;
@@ -101,7 +106,7 @@ function scrollFocusedItem(target: HTMLElement, scope: HTMLElement, selector?: s
 }
 
 export function handleDirectionalFocus(
-  event: KeyboardEvent<HTMLElement>,
+  event: DirectionalKeyboardEvent,
   { axis, itemSelector = defaultItemSelector, scrollContainerSelector }: DirectionalFocusOptions,
 ) {
   const { key } = event;
@@ -113,6 +118,7 @@ export function handleDirectionalFocus(
   if (!(eventTarget instanceof HTMLElement) || isTextEditingArrow(eventTarget, key)) return;
   const current = eventTarget.closest<HTMLElement>(itemSelector);
   const scope = event.currentTarget;
+  if (!(scope instanceof HTMLElement)) return;
   if (!current || !scope.contains(current)) return;
 
   const items = Array.from(scope.querySelectorAll<HTMLElement>(itemSelector)).filter(

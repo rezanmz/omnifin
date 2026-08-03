@@ -99,6 +99,26 @@ async function removeDevelopmentIndicator(page: Page) {
   });
 }
 
+async function stabilizeDashboardForFullPageCapture(page: Page) {
+  await page.locator(".operations-dock").waitFor();
+  await page.addStyleTag({
+    content: `
+      .dashboard > .media-rail,
+      .dashboard > .calendar-strip,
+      .dashboard > .operations-dock,
+      .dashboard > .deferred-discovery-rails {
+        content-visibility: visible !important;
+      }
+    `,
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
 async function mockQuietContinueWatching(page: Page) {
   await page.route("**/api/media/continue-watching", async (route) => {
     await route.fulfill({
@@ -183,7 +203,7 @@ for (const state of ["development", "unavailable"] as const) {
       "Build identity states cover desktop and phone geometry",
     );
     await page.goto(`/about?test-view=${state}`);
-    await page.locator("main").waitFor();
+    await page.locator('main:not([aria-busy="true"])').waitFor();
     await removeDevelopmentIndicator(page);
     await expect(page).toHaveScreenshot(`about-build-identity-${state}.png`, { fullPage: true });
   });
@@ -247,7 +267,7 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
     "Visual baselines use representative Chromium viewports",
   );
   await page.goto(routeForProject("/", testInfo.project.name));
-  await page.locator("main").waitFor();
+  await stabilizeDashboardForFullPageCapture(page);
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
 });
 
@@ -261,6 +281,7 @@ test("connected discovery dashboard visual baseline", async ({ page }, testInfo)
   await page.goto("/?test-view=continue-watching-live");
   await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
   await waitForVisibleDiscoveryArtwork(page);
+  await stabilizeDashboardForFullPageCapture(page);
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
 });
@@ -321,6 +342,7 @@ test("light connected discovery dashboard visual baseline", async ({ page }, tes
   await page.goto("/?test-view=continue-watching-live");
   await page.getByRole("heading", { level: 1, name: "The Far Meridian" }).waitFor();
   await waitForVisibleDiscoveryArtwork(page);
+  await stabilizeDashboardForFullPageCapture(page);
   await removeDevelopmentIndicator(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page).toHaveScreenshot("dashboard-live-discovery-light.png", { fullPage: true });
@@ -334,6 +356,7 @@ test("light dashboard visual baseline", async ({ page }, testInfo) => {
   await useLightTheme(page);
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await stabilizeDashboardForFullPageCapture(page);
   await expect(page).toHaveScreenshot("dashboard-light.png", { fullPage: true });
 });
 
@@ -366,6 +389,7 @@ test("light profile controls visual baseline", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
   await useLightTheme(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("button", { name: "Open profile menu" }).click();
   await expect(page.getByRole("dialog", { name: "Profile and appearance" })).toBeVisible();
   await expect(page).toHaveScreenshot("dashboard-profile-menu-light.png", { fullPage: true });
@@ -392,6 +416,7 @@ test("permission-aware command palette visual baseline", async ({ page }, testIn
   );
   await mockMediaRequestSession(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("combobox", { name: "Search media and commands" }).click();
   await page.getByRole("option", { name: /Calendar/i }).waitFor();
   await removeDevelopmentIndicator(page);
@@ -406,6 +431,7 @@ test("light permission-aware command palette visual baseline", async ({ page }, 
   await useLightTheme(page);
   await mockMediaRequestSession(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("combobox", { name: "Search media and commands" }).click();
   await page.getByRole("option", { name: /Calendar/i }).waitFor();
   await removeDevelopmentIndicator(page);
@@ -1413,7 +1439,11 @@ for (const state of ["loading", "empty", "offline", "terminal-error", "quiet"] a
       "State baselines cover representative desktop and phone geometry",
     );
     await page.goto(`/?test-view=${state}`);
-    await page.locator("main").waitFor();
+    if (state === "quiet") {
+      await stabilizeDashboardForFullPageCapture(page);
+    } else {
+      await page.locator("main").waitFor();
+    }
     await expect(page).toHaveScreenshot(`dashboard-${state}.png`, { fullPage: true });
   });
 }
@@ -1622,6 +1652,7 @@ test("focus-visible visual baseline", async ({ page }, testInfo) => {
     "Focus treatment covers representative desktop and phone geometry",
   );
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("link", { name: "Browse library" }).focus();
   await expect(page.getByRole("link", { name: "Browse library" })).toBeFocused();
   await expect(page).toHaveScreenshot("dashboard-focus-visible.png", { fullPage: true });

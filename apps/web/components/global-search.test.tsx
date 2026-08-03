@@ -113,6 +113,40 @@ describe("global search", () => {
     );
   });
 
+  it("restores the activation position after the lazy search handoff", async () => {
+    let scrollLeft = 0;
+    let scrollTop = 1_200;
+    const originalScrollX = Object.getOwnPropertyDescriptor(window, "scrollX");
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, get: () => scrollLeft },
+      scrollY: { configurable: true, get: () => scrollTop },
+    });
+    vi.mocked(window.scrollTo).mockImplementation(((left: number, top?: number) => {
+      scrollLeft = left;
+      scrollTop = top ?? scrollTop;
+    }) as typeof window.scrollTo);
+
+    try {
+      render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+      const placeholder = screen.getByRole("combobox");
+      fireEvent.pointerDown(placeholder);
+
+      // Firefox may apply scroll anchoring while React replaces the inert placeholder.
+      // The handoff must restore the position captured before that DOM replacement.
+      scrollTop = 1_283;
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+      );
+      await waitFor(() => expect(scrollTop).toBe(1_200));
+    } finally {
+      vi.mocked(window.scrollTo).mockReset();
+      if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
+      if (originalScrollY) Object.defineProperty(window, "scrollY", originalScrollY);
+    }
+  });
+
   it("opens normalized title details without keeping the search console behind the dialog", async () => {
     const user = userEvent.setup();
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
