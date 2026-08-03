@@ -3,7 +3,10 @@ import type { Metadata } from "next";
 import { DownloadQueue } from "../../../../components/download-queue";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import type { DownloadQueueLoadOutcome } from "../../../../lib/download-queue";
-import { demoDownloadQueue, demoDownloadQueueGeneratedAt } from "../../../../lib/download-queue-demo";
+import {
+  demoDownloadQueue,
+  demoDownloadQueueGeneratedAt,
+} from "../../../../lib/download-queue-demo";
 import { readThemePreference } from "../../../../lib/theme-server";
 import "../../../globals.css";
 

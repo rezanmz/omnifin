@@ -3,7 +3,10 @@ import type { Metadata } from "next";
 
 import { AboutScreen } from "../../../components/about-screen";
 import { ThemeProvider } from "../../../components/theme-provider";
-import { loadRuntimeIdentity, type RuntimeIdentityLoadOutcome } from "../../../lib/runtime-identity";
+import {
+  loadRuntimeIdentity,
+  type RuntimeIdentityLoadOutcome,
+} from "../../../lib/runtime-identity";
 import { readThemePreference } from "../../../lib/theme-server";
 import "../../globals.css";
 

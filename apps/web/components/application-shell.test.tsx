@@ -12,11 +12,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 function shell(children: ReactNode) {
-  return (
-    <ApplicationShellFrame themePreference="system">
-      {children}
-    </ApplicationShellFrame>
-  );
+  return <ApplicationShellFrame themePreference="system">{children}</ApplicationShellFrame>;
 }
 
 describe("ApplicationShellFrame", () => {
