@@ -82,7 +82,12 @@ function playbackResult(): JellyfinPlaybackResult {
   };
 }
 
-async function harness(options: { playbackIssueTokens?: readonly string[] } = {}) {
+async function harness(
+  options: {
+    playbackIssueTokens?: readonly string[];
+    playbackSessionTokens?: readonly string[];
+  } = {},
+) {
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
@@ -96,6 +101,8 @@ async function harness(options: { playbackIssueTokens?: readonly string[] } = {}
     },
   );
   let issueTokenIndex = 0;
+  let playbackAssetToken = 0;
+  let playbackSessionToken = 0;
   const app = await createApp({
     config,
     continueWatchingDependencies: {
@@ -130,6 +137,7 @@ async function harness(options: { playbackIssueTokens?: readonly string[] } = {}
     },
     playbackDependencies: {
       clock: () => now,
+      createAssetToken: () => Buffer.alloc(16, ++playbackAssetToken).toString("base64url"),
       createClient: () => ({
         negotiate,
         readPlaybackTarget,
@@ -137,7 +145,7 @@ async function harness(options: { playbackIssueTokens?: readonly string[] } = {}
         resolvePlaybackTarget,
         streamPlaybackTarget,
       }),
-      createToken: () => "p".repeat(22),
+      createToken: () => options.playbackSessionTokens?.[playbackSessionToken++] ?? "p".repeat(22),
     },
     playbackIssueDependencies: {
       clock: () => now,
@@ -562,7 +570,7 @@ describe("playback routes", () => {
       expect(manifest.statusCode, manifest.body).toBe(200);
       expect(manifest.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
       expect(manifest.headers["cache-control"]).toBe("private, no-store");
-      expect(manifest.body).toMatch(/(?:URI=")?hls\/asset_v2\./u);
+      expect(manifest.body).toMatch(/(?:URI=")?hls\/asset_h1\.[A-Za-z0-9_-]{22}/u);
       expect(manifest.body).not.toContain("/v1/");
       expect(manifest.body).not.toContain("/api/");
       expect(manifest.body).not.toMatch(/private|route-private|media-source|upstream/u);
@@ -575,11 +583,13 @@ describe("playback routes", () => {
         assetReference!,
       );
       expect(assetPublicPath).toMatch(
-        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_v2\\.`),
+        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_h1\\.[A-Za-z0-9_-]{22}$`),
       );
       expect(
         publicPlaybackPath(`/v1/playback/${playback.sessionId}/master.m3u8`, assetReference!),
-      ).toMatch(new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`));
+      ).toMatch(
+        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_h1\\.[A-Za-z0-9_-]{22}$`),
+      );
       const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
       streamPlaybackTarget.mockResolvedValueOnce({
         body: new ReadableStream<Uint8Array>({
@@ -613,7 +623,7 @@ describe("playback routes", () => {
     }
   });
 
-  it("routes realistic encrypted HLS asset tokens longer than 512 characters", async () => {
+  it("keeps realistic Jellyfin transcode targets behind short encrypted handles", async () => {
     const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness();
     try {
       const created = await app.inject({
@@ -639,7 +649,16 @@ describe("playback routes", () => {
       const assetReference = manifest.body.split("\n").find((line) => line.startsWith("hls/"));
       expect(assetReference).toBeDefined();
       const assetToken = assetReference!.split("/").at(-1)!;
-      expect(assetToken.length).toBeGreaterThan(512);
+      expect(assetToken).toMatch(/^asset_h1\.[A-Za-z0-9_-]{22}$/u);
+      expect(assetToken).toHaveLength(31);
+      const storedHandle = app.database.sqlite
+        .prepare(
+          `select encrypted_target as encryptedTarget, target_digest as targetDigest
+           from playback_asset_handles where id = ?`,
+        )
+        .get(assetToken) as { encryptedTarget: string; targetDigest: string };
+      expect(storedHandle.targetDigest).toMatch(/^[A-Za-z0-9_-]{22}$/u);
+      expect(storedHandle.encryptedTarget).not.toMatch(/private|MediaSourceId|VideoBitrate/u);
 
       const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
       streamPlaybackTarget.mockResolvedValueOnce({
@@ -673,7 +692,307 @@ describe("playback routes", () => {
     }
   });
 
-  it("keeps the playback asset router bounded at the encrypted token limit", async () => {
+  it("reuses a session-bound handle for repeated manifest reads", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const upstreamManifest = {
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      } as const;
+      readPlaybackTarget
+        .mockResolvedValueOnce(upstreamManifest)
+        .mockResolvedValueOnce(upstreamManifest);
+
+      const first = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      const second = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.body).toBe(first.body);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a valid HLS handle when it is replayed against another session", async () => {
+    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness({
+      playbackSessionTokens: ["p".repeat(22), "q".repeat(22)],
+    });
+    try {
+      const firstCreated = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const firstPlayback = playbackNegotiationResponseSchema.parse(firstCreated.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const firstManifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: firstPlayback.streamPath,
+      });
+      const firstAssetReference = firstManifest.body
+        .split("\n")
+        .find((line) => line.startsWith("hls/"));
+      expect(firstAssetReference).toBeDefined();
+
+      const secondCreated = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const secondPlayback = playbackNegotiationResponseSchema.parse(secondCreated.json());
+      expect(secondPlayback.sessionId).not.toBe(firstPlayback.sessionId);
+
+      const replayed = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${secondPlayback.sessionId}/${firstAssetReference}`,
+      });
+
+      expect(replayed.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(replayed.json()).error.code).toBe("playback_session_not_found");
+      expect(streamPlaybackTarget).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves concurrent segment retries through one persisted handle", async () => {
+    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      const assetReference = manifest.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetReference).toBeDefined();
+      const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
+      streamPlaybackTarget.mockImplementation(async () => ({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      }));
+
+      const responses = await Promise.all(
+        Array.from({ length: 24 }, () =>
+          app.inject({
+            headers: { cookie: headers.cookie },
+            method: "GET",
+            url: `/v1/playback/${playback.sessionId}/${assetReference}`,
+          }),
+        ),
+      );
+
+      expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+      expect(responses.every((response) => response.rawPayload.equals(Buffer.from(bytes)))).toBe(
+        true,
+      );
+      expect(streamPlaybackTarget).toHaveBeenCalledTimes(24);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("revokes persisted HLS handles as soon as playback stops", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      const assetReference = manifest.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetReference).toBeDefined();
+
+      const stopped = await app.inject({
+        headers,
+        method: "POST",
+        payload: { event: "stopped", positionSeconds: 1_210 },
+        url: `/v1/playback/${playback.sessionId}/progress`,
+      });
+      expect(stopped.statusCode, stopped.body).toBe(200);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
+
+      const revoked = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/${assetReference}`,
+      });
+      expect(revoked.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(revoked.json()).error.code).toBe("playback_session_not_found");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("cascades HLS handle cleanup when the Jellyfin identity is unlinked", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(manifest.statusCode, manifest.body).toBe(200);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1 });
+
+      app.database.sqlite.prepare("delete from service_identity_links").run();
+
+      expect(
+        app.database.sqlite
+          .prepare("select count(*) as count from playback_sessions where id = ?")
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("honors legacy encrypted HLS assets until their playback session expires", async () => {
+    const { app, headers, referenceId, streamPlaybackTarget } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const legacyTarget = {
+        path: `videos/${privateItemId}/hls1/main/0.m4s`,
+        query: "segment=0",
+      };
+      const legacyToken = `asset_${new EnvelopeCipher(testConfig().encryptionKey).encrypt(
+        JSON.stringify({ schemaVersion: 1, target: legacyTarget }),
+        `playback_asset:jellyfin:${playback.sessionId}`,
+      )}`;
+      const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
+      streamPlaybackTarget.mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      });
+
+      const asset = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/hls/${legacyToken}`,
+      });
+
+      expect(asset.statusCode, asset.body).toBe(200);
+      expect(asset.rawPayload).toEqual(Buffer.from(bytes));
+      expect(streamPlaybackTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ target: legacyTarget }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps legacy playback assets routable and bounded during rolling upgrades", async () => {
     const { app, headers } = await harness();
     const sessionId = `playback_${"p".repeat(22)}`;
     try {
@@ -737,7 +1056,7 @@ describe("playback routes", () => {
         nestedReference!,
       );
       expect(nestedGatewayPath).toMatch(
-        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
+        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_h1\\.[A-Za-z0-9_-]{22}$`),
       );
 
       const nested = await app.inject({
@@ -747,7 +1066,7 @@ describe("playback routes", () => {
       });
       expect(nested.statusCode, nested.body).toBe(200);
       expect(nested.headers["content-type"]).toMatch(/^application\/vnd\.apple\.mpegurl/u);
-      expect(nested.body).toMatch(/^#EXTM3U\n#EXTINF:4\.000,\n\.\/asset_v2\./u);
+      expect(nested.body).toMatch(/^#EXTM3U\n#EXTINF:4\.000,\n\.\/asset_h1\.[A-Za-z0-9_-]{22}/u);
       expect(nested.body).not.toMatch(/\/(?:api|v1)\//u);
       expect(nested.body).not.toMatch(/private|variant\.m3u8|0\.ts/u);
 
@@ -755,10 +1074,10 @@ describe("playback routes", () => {
       expect(segmentReference).toBeDefined();
       const segmentPublicPath = publicPlaybackPath(nestedPublicPath, segmentReference!);
       expect(segmentPublicPath).toMatch(
-        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_v2\\.`),
+        new RegExp(`^/api/playback/${playback.sessionId}/hls/asset_h1\\.[A-Za-z0-9_-]{22}$`),
       );
       expect(publicPlaybackPath(nestedGatewayPath, segmentReference!)).toMatch(
-        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_v2\\.`),
+        new RegExp(`^/v1/playback/${playback.sessionId}/hls/asset_h1\\.[A-Za-z0-9_-]{22}$`),
       );
       const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
       streamPlaybackTarget.mockResolvedValueOnce({

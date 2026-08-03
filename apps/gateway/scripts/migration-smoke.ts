@@ -34,6 +34,7 @@ const requiredTables = [
   "oidc_logout_receipts",
   "oidc_providers",
   "operational_failures",
+  "playback_asset_handles",
   "playback_sessions",
   "role_mappings",
   "service_identity_links",
@@ -199,6 +200,13 @@ const requiredColumns = {
     "state",
     "user_id",
   ],
+  playback_asset_handles: [
+    "encrypted_target",
+    "expires_at",
+    "last_used_at",
+    "playback_session_id",
+    "target_digest",
+  ],
   playback_sessions: [
     "encrypted_payload",
     "expires_at",
@@ -340,6 +348,10 @@ const requiredIndexes = {
   oidc_logout_receipts: [
     "oidc_logout_receipts_expiry_idx",
     "oidc_logout_receipts_provider_jti_unique",
+  ],
+  playback_asset_handles: [
+    "playback_asset_handles_expiry_idx",
+    "playback_asset_handles_session_target_idx",
   ],
   playback_sessions: ["playback_sessions_expiry_idx", "playback_sessions_user_updated_idx"],
   service_identity_links: ["service_identity_links_connector_idx"],
@@ -500,9 +512,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0021_download_queue_bulk_operations",
-  "Current migration journal must end at migration 0021_download_queue_bulk_operations.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0022_playback_asset_handles",
+  "Current migration journal must end at migration 0022_playback_asset_handles.",
 );
 
 try {
@@ -881,7 +892,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0021.",
+      "Production migration did not advance the historical fixture exactly through migration 0022.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1046,7 +1057,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0021, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0022, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

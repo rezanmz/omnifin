@@ -28,7 +28,12 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher, randomToken } from "../security/crypto.js";
+import {
+  constantTimeTextEqual,
+  EnvelopeCipher,
+  privacyHash,
+  randomToken,
+} from "../security/crypto.js";
 import {
   MediaReferenceService,
   type MediaReferenceDependencies,
@@ -44,6 +49,10 @@ const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
 const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
+const MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION = 20_000;
+const MAX_PLAYBACK_ASSET_HANDLES_GLOBAL = 250_000;
+const PLAYBACK_ASSET_HANDLE_PATTERN = /^asset_h1\.[A-Za-z0-9_-]{22}$/u;
+const LEGACY_PLAYBACK_ASSET_PATTERN = /^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 type PlaybackAssetPathPrefix = "./" | "hls/";
 const SENSITIVE_QUERY_NAMES = new Set([
   "access_token",
@@ -96,6 +105,7 @@ const storedPlaybackAssetSchema = z.strictObject({
   schemaVersion: z.literal(1),
   target: playbackTargetSchema,
 });
+type StoredPlaybackAsset = z.infer<typeof storedPlaybackAssetSchema>;
 
 interface PlaybackSourceRow {
   baseUrl: string;
@@ -136,6 +146,12 @@ interface PlaybackSessionRow {
   userId: string;
 }
 
+interface PlaybackAssetHandleRow {
+  encryptedTarget: string;
+  id: string;
+  targetDigest: string;
+}
+
 export interface PlaybackSessionContext {
   principal: SessionPrincipal;
 }
@@ -147,6 +163,7 @@ export interface PlaybackClientFactoryInput extends ConnectorTargetConfig {
 
 export interface PlaybackSessionDependencies {
   clock?: () => Date;
+  createAssetToken?: () => string;
   createClient?: (
     input: PlaybackClientFactoryInput,
   ) => Pick<
@@ -207,6 +224,10 @@ function playbackContext(sessionId: string) {
 
 function playbackAssetContext(sessionId: string) {
   return `playback_asset:jellyfin:${sessionId}`;
+}
+
+function playbackAssetHandleContext(sessionId: string, handleId: string) {
+  return `playback_asset_handle:jellyfin:${sessionId}:${handleId}`;
 }
 
 function validTime(now: Date) {
@@ -356,6 +377,7 @@ export class PlaybackSessionService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
+  readonly #createAssetToken: () => string;
   readonly #createClient: NonNullable<PlaybackSessionDependencies["createClient"]>;
   readonly #createToken: () => string;
   readonly #database: DatabaseHandle;
@@ -370,6 +392,7 @@ export class PlaybackSessionService {
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
+    this.#createAssetToken = dependencies.createAssetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#createToken = dependencies.createToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
@@ -484,24 +507,34 @@ export class PlaybackSessionService {
         : session.expiresAt;
     try {
       const updated = this.#database.sqlite
-        .prepare(
-          `update playback_sessions
-           set state = ?, position_seconds = ?, revision = revision + 1,
-               last_reported_at = ?, expires_at = ?, updated_at = ?
-           where id = ? and user_id = ? and revision = ? and state = ? and expires_at > ?`,
-        )
-        .run(
-          state,
-          positionSeconds,
-          now,
-          expiresAt,
-          now,
-          session.id,
-          source.linkUserId,
-          session.revision,
-          session.state,
-          now,
-        );
+        .transaction(() => {
+          const result = this.#database.sqlite
+            .prepare(
+              `update playback_sessions
+               set state = ?, position_seconds = ?, revision = revision + 1,
+                   last_reported_at = ?, expires_at = ?, updated_at = ?
+               where id = ? and user_id = ? and revision = ? and state = ? and expires_at > ?`,
+            )
+            .run(
+              state,
+              positionSeconds,
+              now,
+              expiresAt,
+              now,
+              session.id,
+              source.linkUserId,
+              session.revision,
+              session.state,
+              now,
+            );
+          if (result.changes === 1 && state === "stopped") {
+            this.#database.sqlite
+              .prepare("delete from playback_asset_handles where playback_session_id = ?")
+              .run(session.id);
+          }
+          return result;
+        })
+        .immediate();
       if (updated.changes !== 1) throw new PlaybackSessionError("transition_invalid");
       return playbackProgressResponseSchema.parse({
         acceptedAt: new Date(now).toISOString(),
@@ -564,24 +597,24 @@ export class PlaybackSessionService {
     signal?: AbortSignal,
   ) {
     if (
-      token.length < 64 ||
       token.length > MAX_PLAYBACK_ASSET_TOKEN_LENGTH ||
-      !/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token)
+      (!PLAYBACK_ASSET_HANDLE_PATTERN.test(token) && !LEGACY_PLAYBACK_ASSET_PATTERN.test(token))
     ) {
       throw new PlaybackSessionError("not_found");
     }
-    const { client, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
+    const { client, now, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
     let target: JellyfinPlaybackTarget;
     try {
-      const asset = storedPlaybackAssetSchema.parse(
-        JSON.parse(
-          this.#cipher.decrypt(token.slice("asset_".length), playbackAssetContext(session.id)),
-        ),
-      );
-      target = asset.target;
+      target = PLAYBACK_ASSET_HANDLE_PATTERN.test(token)
+        ? this.#assetHandleTarget(session, token, now)
+        : storedPlaybackAssetSchema.parse(
+            JSON.parse(
+              this.#cipher.decrypt(token.slice("asset_".length), playbackAssetContext(session.id)),
+            ),
+          ).target;
     } catch (error) {
       throw new PlaybackSessionError("not_found", { cause: error });
     }
@@ -643,10 +676,12 @@ export class PlaybackSessionService {
     const principal = requirePermission(context.principal, "media.view");
     playbackSessionIdSchema.parse(sessionId);
     const source = this.#source(principal);
-    const session = this.#session(source, sessionId, validTime(this.#clock()));
+    const now = validTime(this.#clock());
+    const session = this.#session(source, sessionId, now);
     if (session.state === "stopped") throw new PlaybackSessionError("not_found");
     return {
       client: this.#client(source, maxResponseBytes),
+      now,
       payload: this.#payload(session),
       session,
     };
@@ -672,7 +707,7 @@ export class PlaybackSessionService {
     if (response.status !== 200) throw new PlaybackSessionError("unavailable");
     const lines = decodeManifest(response.body);
     const rewritten = lines.map((line) =>
-      this.#rewriteManifestLine(client, session.id, target, assetPathPrefix, line),
+      this.#rewriteManifestLine(client, session, target, assetPathPrefix, line),
     );
     return {
       body: `${rewritten.join("\n").replace(/\n+$/u, "")}\n`,
@@ -684,7 +719,7 @@ export class PlaybackSessionService {
 
   #rewriteManifestLine(
     client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
-    sessionId: string,
+    session: PlaybackSessionRow,
     parent: JellyfinPlaybackTarget,
     assetPathPrefix: PlaybackAssetPathPrefix,
     line: string,
@@ -692,13 +727,13 @@ export class PlaybackSessionService {
     const compacted = line.trim();
     if (!compacted || compacted === "#EXTM3U") return line;
     if (!compacted.startsWith("#")) {
-      return this.#assetPath(client, sessionId, parent, assetPathPrefix, compacted);
+      return this.#assetPath(client, session, parent, assetPathPrefix, compacted);
     }
 
     let replacements = 0;
     const rewritten = line.replace(/URI="([^"\r\n]{1,16384})"/gu, (_match, uri: string) => {
       replacements += 1;
-      return `URI="${this.#assetPath(client, sessionId, parent, assetPathPrefix, uri)}"`;
+      return `URI="${this.#assetPath(client, session, parent, assetPathPrefix, uri)}"`;
     });
     if (/\bURI\s*=/iu.test(line) && replacements === 0) {
       throw new PlaybackSessionError("unavailable");
@@ -708,7 +743,7 @@ export class PlaybackSessionService {
 
   #assetPath(
     client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
-    sessionId: string,
+    session: PlaybackSessionRow,
     parent: JellyfinPlaybackTarget,
     assetPathPrefix: PlaybackAssetPathPrefix,
     uri: string,
@@ -719,14 +754,164 @@ export class PlaybackSessionService {
     } catch (error) {
       throw new PlaybackSessionError("unavailable", { cause: error });
     }
-    const token = `asset_${this.#cipher.encrypt(
-      JSON.stringify(storedPlaybackAssetSchema.parse({ schemaVersion: 1, target })),
-      playbackAssetContext(sessionId),
-    )}`;
-    if (token.length > MAX_PLAYBACK_ASSET_TOKEN_LENGTH) {
+    return `${assetPathPrefix}${this.#assetHandle(session, target)}`;
+  }
+
+  #assetHandle(session: PlaybackSessionRow, target: JellyfinPlaybackTarget) {
+    const now = validTime(this.#clock());
+    if (session.expiresAt <= now || session.state === "stopped") {
+      throw new PlaybackSessionError("not_found");
+    }
+    const stored = storedPlaybackAssetSchema.parse({ schemaVersion: 1, target });
+    const encoded = JSON.stringify(stored);
+    const targetDigest = privacyHash(
+      "playback_asset",
+      `${session.id}\u0000${encoded}`,
+      this.#config.encryptionKey,
+    );
+
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          this.#database.sqlite
+            .prepare("delete from playback_sessions where expires_at <= ?")
+            .run(now);
+
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, target_digest as targetDigest, encrypted_target as encryptedTarget
+               from playback_asset_handles
+               where playback_session_id = ? and target_digest = ? and expires_at > ?`,
+            )
+            .get(session.id, targetDigest, now) as PlaybackAssetHandleRow | undefined;
+          if (existing) {
+            this.#assertAssetHandleTarget(session.id, existing, stored);
+            this.#touchAssetHandle(existing.id, now);
+            return existing.id;
+          }
+
+          const sessionCount = this.#database.sqlite
+            .prepare(
+              "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+            )
+            .get(session.id) as { count: number };
+          if (sessionCount.count >= MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION) {
+            throw new PlaybackSessionError("unavailable");
+          }
+          const globalCount = this.#database.sqlite
+            .prepare("select count(*) as count from playback_asset_handles")
+            .get() as { count: number };
+          if (globalCount.count >= MAX_PLAYBACK_ASSET_HANDLES_GLOBAL) {
+            throw new PlaybackSessionError("unavailable");
+          }
+
+          for (let attempt = 0; attempt < MAX_CREATION_ATTEMPTS; attempt += 1) {
+            const handleId = `asset_h1.${this.#createAssetToken()}`;
+            if (!PLAYBACK_ASSET_HANDLE_PATTERN.test(handleId)) {
+              throw new PlaybackSessionError("unavailable");
+            }
+            try {
+              this.#database.sqlite
+                .prepare(
+                  `insert into playback_asset_handles (
+                    id, playback_session_id, target_digest, encrypted_target,
+                    expires_at, last_used_at, created_at, updated_at
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  handleId,
+                  session.id,
+                  targetDigest,
+                  this.#cipher.encrypt(encoded, playbackAssetHandleContext(session.id, handleId)),
+                  session.expiresAt,
+                  now,
+                  now,
+                  now,
+                );
+              return handleId;
+            } catch (error) {
+              const concurrent = this.#database.sqlite
+                .prepare(
+                  `select id, target_digest as targetDigest, encrypted_target as encryptedTarget
+                   from playback_asset_handles
+                   where playback_session_id = ? and target_digest = ? and expires_at > ?`,
+                )
+                .get(session.id, targetDigest, now) as PlaybackAssetHandleRow | undefined;
+              if (concurrent) {
+                this.#assertAssetHandleTarget(session.id, concurrent, stored);
+                this.#touchAssetHandle(concurrent.id, now);
+                return concurrent.id;
+              }
+              const collision = this.#database.sqlite
+                .prepare("select 1 from playback_asset_handles where id = ?")
+                .get(handleId);
+              if (!collision) throw error;
+            }
+          }
+          throw new PlaybackSessionError("unavailable");
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+  }
+
+  #assetHandleTarget(session: PlaybackSessionRow, handleId: string, now: number) {
+    try {
+      const row = this.#database.sqlite
+        .prepare(
+          `select id, target_digest as targetDigest, encrypted_target as encryptedTarget
+           from playback_asset_handles
+           where id = ? and playback_session_id = ? and expires_at > ?`,
+        )
+        .get(handleId, session.id, now) as PlaybackAssetHandleRow | undefined;
+      if (!row) throw new PlaybackSessionError("not_found");
+      const stored = this.#storedAssetHandleTarget(session.id, row);
+      const encoded = JSON.stringify(stored);
+      const expectedDigest = privacyHash(
+        "playback_asset",
+        `${session.id}\u0000${encoded}`,
+        this.#config.encryptionKey,
+      );
+      if (!constantTimeTextEqual(expectedDigest, row.targetDigest)) {
+        throw new PlaybackSessionError("not_found");
+      }
+      return stored.target;
+    } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
+      throw new PlaybackSessionError("not_found", { cause: error });
+    }
+  }
+
+  #assertAssetHandleTarget(
+    sessionId: string,
+    row: PlaybackAssetHandleRow,
+    expected: StoredPlaybackAsset,
+  ) {
+    const stored = this.#storedAssetHandleTarget(sessionId, row);
+    if (JSON.stringify(stored) !== JSON.stringify(expected)) {
       throw new PlaybackSessionError("unavailable");
     }
-    return `${assetPathPrefix}${token}`;
+  }
+
+  #storedAssetHandleTarget(sessionId: string, row: PlaybackAssetHandleRow) {
+    return storedPlaybackAssetSchema.parse(
+      JSON.parse(
+        this.#cipher.decrypt(row.encryptedTarget, playbackAssetHandleContext(sessionId, row.id)),
+      ),
+    );
+  }
+
+  #touchAssetHandle(handleId: string, now: number) {
+    const updated = this.#database.sqlite
+      .prepare(
+        `update playback_asset_handles
+         set last_used_at = ?, updated_at = ?
+         where id = ? and expires_at > ?`,
+      )
+      .run(now, now, handleId, now);
+    if (updated.changes !== 1) throw new PlaybackSessionError("not_found");
   }
 
   #createSession(
