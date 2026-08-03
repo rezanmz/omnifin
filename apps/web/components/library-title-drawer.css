@@ -218,23 +218,77 @@
   border-radius: 20px;
   display: grid;
   gap: 14px;
-  grid-template-columns: 42px minmax(0, 1fr) auto 48px;
-  min-height: 88px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 104px;
   padding: 12px;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
-.library-title__episode-index {
+.library-title__episodes li[data-expanded] {
+  background:
+    radial-gradient(ellipse at 18% 0%, var(--glass-specular), transparent 44%),
+    color-mix(in srgb, var(--glass-strong) 82%, transparent);
+  border-color: var(--accent-line);
+  box-shadow: inset 0 1px 0 var(--glass-rim-bright);
+}
+
+.library-title__episode-summary {
   align-items: center;
-  background: var(--fill-hover);
-  border: 1px solid var(--line-soft);
-  border-radius: 13px;
-  color: var(--paper-1);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 132px minmax(0, 1fr) 20px;
+  min-width: 0;
+  text-align: left;
+}
+
+.library-title__episode-artwork {
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  background:
+    radial-gradient(circle at 72% 18%, var(--glass-specular), transparent 24%),
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 28%, var(--fill-hover)), var(--ink-0));
+  border: 1px solid var(--glass-edge);
+  border-radius: 14px;
   display: flex;
-  font-family: var(--font-display);
-  font-size: 1.3rem;
-  font-variant-numeric: tabular-nums;
-  height: 42px;
   justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.library-title__episode-artwork > svg {
+  color: var(--paper-2);
+  height: 24px;
+  width: 24px;
+}
+
+.library-title__episode-artwork img {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+  z-index: 1;
+}
+
+.library-title__episode-artwork > span {
+  backdrop-filter: blur(12px) saturate(1.2);
+  background: rgb(5 9 11 / 64%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 999px;
+  bottom: 7px;
+  color: #fff;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  left: 7px;
+  padding: 4px 7px;
+  position: absolute;
+  z-index: 2;
 }
 
 .library-title__episode-copy {
@@ -243,31 +297,46 @@
   min-width: 0;
 }
 
-.library-title__episode-copy > div {
+.library-title__episode-copy-heading {
   align-items: baseline;
   display: flex;
   gap: 10px;
+  min-width: 0;
 }
 
-.library-title__episode-copy h4 {
+.library-title__episode-copy-heading > strong {
+  color: var(--paper-0);
   font-size: 0.9rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.library-title__episode-copy span,
-.library-title__episode-copy p {
+.library-title__episode-copy-heading > span,
+.library-title__episode-copy
+  > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
   color: var(--paper-2);
   font-size: 0.7rem;
 }
 
-.library-title__episode-copy p {
+.library-title__episode-copy
+  > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
   display: -webkit-box;
   line-height: 1.45;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.library-title__episode-expand {
+  color: var(--paper-2);
+  height: 18px;
+  transition: transform 180ms ease;
+  width: 18px;
+}
+
+.library-title__episodes li[data-expanded] .library-title__episode-expand {
+  transform: rotate(180deg);
 }
 
 .library-title__episode-progress {
@@ -326,6 +395,170 @@
 .library-title__episode-play svg {
   height: 17px;
   width: 17px;
+}
+
+.library-title__episode-detail {
+  border-top: 1px solid var(--line-soft);
+  display: grid;
+  gap: 18px;
+  grid-column: 1 / -1;
+  margin: 2px -2px -2px;
+  padding: 22px 6px 6px;
+}
+
+.library-title__episode-detail-heading {
+  align-items: end;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.library-title__episode-detail-heading h4 {
+  color: var(--paper-0);
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 480;
+  letter-spacing: -0.045em;
+  line-height: 0.98;
+  margin-top: 4px;
+}
+
+.library-title__episode-detail-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.library-title__episode-detail-facts span {
+  align-items: center;
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--paper-1);
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 9px;
+}
+
+.library-title__episode-detail-facts svg {
+  height: 13px;
+  width: 13px;
+}
+
+.library-title__episode-detail-overview,
+.library-title__episode-detail-quiet {
+  color: var(--paper-1);
+  font-size: 0.84rem;
+  line-height: 1.65;
+  max-width: 72ch;
+}
+
+.library-title__episode-detail-quiet {
+  color: var(--paper-2);
+}
+
+.library-title__episode-credits {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.library-title__episode-credits > section {
+  background: color-mix(in srgb, var(--fill-subtle) 72%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 17px;
+  padding: 14px;
+}
+
+.library-title__episode-credits section > p {
+  align-items: center;
+  color: var(--paper-2);
+  display: flex;
+  font-size: 0.67rem;
+  gap: 6px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.library-title__episode-credits section > p svg {
+  height: 14px;
+  width: 14px;
+}
+
+.library-title__episode-credits ul,
+.library-title__episode-credits dl {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin-top: 11px;
+}
+
+.library-title__episode-credits li,
+.library-title__episode-credits dl > div {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 0;
+  padding: 0;
+}
+
+.library-title__episode-credits strong,
+.library-title__episode-credits dd {
+  color: var(--paper-0);
+  font-size: 0.76rem;
+}
+
+.library-title__episode-credits li > span,
+.library-title__episode-credits dt {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.library-title__episode-detail-note {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  grid-column: 1 / -1;
+}
+
+.library-title__episode-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.library-title__episode-metadata div {
+  display: grid;
+  gap: 3px;
+}
+
+.library-title__episode-metadata dt {
+  color: var(--paper-2);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.library-title__episode-metadata dd {
+  color: var(--paper-0);
+  font-size: 0.76rem;
+}
+
+.library-title__episode-detail-play {
+  justify-self: start;
+}
+
+.library-title__episode-detail-play svg {
+  height: 16px;
+  width: 16px;
 }
 
 .library-title__more {
@@ -485,11 +718,59 @@
   }
 
   .library-title__episodes li {
-    grid-template-columns: 38px minmax(0, 1fr) 46px;
+    grid-template-columns: minmax(0, 1fr) 46px;
   }
 
   .library-title__episode-watched {
     display: none;
+  }
+
+  .library-title__episode-summary {
+    gap: 10px;
+    grid-template-columns: 98px minmax(0, 1fr) 18px;
+  }
+
+  .library-title__episode-detail {
+    padding-top: 18px;
+  }
+
+  .library-title__episode-detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .library-title__episode-detail-facts {
+    justify-content: flex-start;
+  }
+
+  .library-title__episode-credits {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 430px) {
+  .library-title__episode-summary {
+    grid-template-columns: 82px minmax(0, 1fr) 16px;
+  }
+
+  .library-title__episode-copy-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .library-title__episode-copy-heading > strong {
+    display: -webkit-box;
+    line-height: 1.25;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .library-title__episode-copy
+    > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
+    -webkit-line-clamp: 1;
   }
 }
 
@@ -499,5 +780,10 @@
   .library-title__skeleton > span,
   .library-title__episode-skeleton span {
     animation: none;
+  }
+
+  .library-title__episode-expand,
+  .library-title__episodes li {
+    transition: none;
   }
 }
