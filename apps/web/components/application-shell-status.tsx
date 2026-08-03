@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
 import { APPLICATION_SHELL_STATUS_ATTRIBUTE } from "./application-shell";
@@ -9,7 +9,7 @@ import { ConnectionPulse } from "./connection-pulse";
 export function ApplicationShellStatus() {
   const [status, setStatus] = useState<ServiceStatus>("attention");
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const frame = document.querySelector<HTMLElement>(".application-frame");
     if (!frame) return;
 
