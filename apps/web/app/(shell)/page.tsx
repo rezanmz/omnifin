@@ -7,7 +7,6 @@ import type { DashboardStateKind } from "../../components/dashboard-state";
 import { connectedDashboard, demoDashboard, type DashboardModel } from "../../lib/dashboard-data";
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
 import { discoverySpotlightHero, discoverySpotlightItem } from "../../lib/discovery-presentation";
-import "../dashboard-critical.css";
 
 const DEMO_HERO_ARTWORK_PATH = "/demo-hero.svg";
 

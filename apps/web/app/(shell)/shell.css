@@ -1,3 +1,5 @@
+@import "../dashboard-critical.css";
+
 /* Shared application chrome. Keep route content styles in their route-level sheets. */
 .application-frame {
   display: grid;
