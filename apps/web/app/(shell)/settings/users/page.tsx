@@ -5,7 +5,6 @@ import {
 } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 
-import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { UserAccessControlLoader } from "../../../../components/user-access-control-loader";
 import { UserAccessPageShell } from "../../../../components/user-access-page-shell";
 import type { UserAccessAdminLoadOutcome } from "../../../../lib/user-access-admin";
@@ -121,7 +120,6 @@ export default async function UserAccessPage({ searchParams }: UserAccessPagePro
   const initialOutcome = testOutcome(parameters["test-view"]);
   return (
     <>
-      <ApplicationShellEnhancements />
       <UserAccessPageShell displayProfile={displayProfile}>
         <UserAccessControlLoader
           embedded

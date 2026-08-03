@@ -392,9 +392,15 @@ a {
 }
 
 .cinematic-backdrop__noise {
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+  background-image:
+    radial-gradient(circle at 20% 24%, rgb(255 255 255 / 38%) 0 0.45px, transparent 0.7px),
+    radial-gradient(circle at 76% 68%, rgb(0 0 0 / 30%) 0 0.45px, transparent 0.7px);
+  background-position:
+    0 0,
+    2px 2px;
+  background-size: 4px 4px;
   inset: 0;
-  opacity: 0.025;
+  opacity: 0.035;
   position: absolute;
 }
 

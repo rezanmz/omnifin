@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 
 import { AccountSecurityPanel } from "../../../components/account-security-panel";
-import { ApplicationShellEnhancements } from "../../../components/application-shell-enhancements";
 import { ThemeProvider } from "../../../components/theme-provider";
 import { readThemePreference } from "../../../lib/theme-server";
 import "../../globals.css";
@@ -22,7 +21,6 @@ export default async function SettingsPage({ searchParams }: SettingsPagePropert
   const preference = await readThemePreference();
   return (
     <>
-      <ApplicationShellEnhancements initialPreference={preference} />
       <ThemeProvider initialPreference={preference}>
         <AccountSecurityPanel
           displayProfile={displayProfile}

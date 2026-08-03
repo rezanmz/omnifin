@@ -174,20 +174,13 @@ function LibraryShell({
   accent = "#6f8d84",
   children,
   connectionStatus,
-  themePreference = "system",
 }: {
   accent?: string;
   children: React.ReactNode;
   connectionStatus: "attention" | "healthy" | "offline";
-  themePreference?: ThemePreference;
 }) {
   return (
-    <ApplicationShellContent
-      accent={accent}
-      current="library"
-      status={connectionStatus}
-      themePreference={themePreference}
-    >
+    <ApplicationShellContent accent={accent} status={connectionStatus}>
       <main
         className={`${styles.library} dashboard`}
         id="main-content"
@@ -200,9 +193,9 @@ function LibraryShell({
   );
 }
 
-function LoadingLibrary({ themePreference }: { themePreference: ThemePreference }) {
+function LoadingLibrary() {
   return (
-    <LibraryShell connectionStatus="attention" themePreference={themePreference}>
+    <LibraryShell connectionStatus="attention">
       <section aria-busy="true" aria-labelledby="library-loading-title" className={styles.loading}>
         <div className={styles.loadingHero}>
           <span />
@@ -247,17 +240,11 @@ const boundaryCopy = {
   },
 } as const;
 
-function AccessBoundary({
-  kind,
-  themePreference,
-}: {
-  kind: keyof typeof boundaryCopy;
-  themePreference: ThemePreference;
-}) {
+function AccessBoundary({ kind }: { kind: keyof typeof boundaryCopy }) {
   const copy = boundaryCopy[kind];
   const Icon = copy.icon;
   return (
-    <LibraryShell connectionStatus="attention" themePreference={themePreference}>
+    <LibraryShell connectionStatus="attention">
       <section className={styles.boundary} data-liquid-glass role="status">
         <span aria-hidden="true" className={styles.boundaryIcon}>
           <Icon />
@@ -273,15 +260,9 @@ function AccessBoundary({
   );
 }
 
-function UnavailableLibrary({
-  onRetry,
-  themePreference,
-}: {
-  onRetry: () => void;
-  themePreference: ThemePreference;
-}) {
+function UnavailableLibrary({ onRetry }: { onRetry: () => void }) {
   return (
-    <LibraryShell connectionStatus="offline" themePreference={themePreference}>
+    <LibraryShell connectionStatus="offline">
       <section className={styles.boundary} data-liquid-glass role="alert">
         <span aria-hidden="true" className={styles.boundaryIcon}>
           <CloudOff />
@@ -392,8 +373,7 @@ function MediaLibraryContent({
   initialOutcome,
   live,
   playbackClient,
-  themePreference,
-}: Required<Pick<MediaLibraryProperties, "client" | "themePreference">> &
+}: Required<Pick<MediaLibraryProperties, "client">> &
   Pick<MediaLibraryProperties, "initialOutcome" | "live" | "playbackClient">) {
   const [kind, setKind] = useState<LibraryBrowseKind>("all");
   const [sort, setSort] = useState<LibraryBrowseSort>("recent");
@@ -428,31 +408,28 @@ function MediaLibraryContent({
   });
 
   if (!refreshAvailable && initialOutcome) {
-    if (initialOutcome.status === "loading")
-      return <LoadingLibrary themePreference={themePreference} />;
+    if (initialOutcome.status === "loading") return <LoadingLibrary />;
     if (initialOutcome.status === "forbidden" || initialOutcome.status === "signed_out") {
-      return <AccessBoundary kind={initialOutcome.status} themePreference={themePreference} />;
+      return <AccessBoundary kind={initialOutcome.status} />;
     }
     if (initialOutcome.status === "unavailable") {
-      return <UnavailableLibrary onRetry={() => undefined} themePreference={themePreference} />;
+      return <UnavailableLibrary onRetry={() => undefined} />;
     }
   }
-  if (query.isPending) return <LoadingLibrary themePreference={themePreference} />;
+  if (query.isPending) return <LoadingLibrary />;
   if (!query.data) {
     const outcome = mediaLibraryOutcomeFromError(query.error);
     return outcome === "unavailable" ? (
-      <UnavailableLibrary onRetry={() => void query.refetch()} themePreference={themePreference} />
+      <UnavailableLibrary onRetry={() => void query.refetch()} />
     ) : (
-      <AccessBoundary kind={outcome} themePreference={themePreference} />
+      <AccessBoundary kind={outcome} />
     );
   }
 
   const pages = query.data.pages;
   const latestPage = pages.at(-1)!;
   if (latestPage.state === "unavailable") {
-    return (
-      <UnavailableLibrary onRetry={() => void query.refetch()} themePreference={themePreference} />
-    );
+    return <UnavailableLibrary onRetry={() => void query.refetch()} />;
   }
   const loadedItems = uniqueItems(pages);
   const items = refreshAvailable
@@ -493,11 +470,7 @@ function MediaLibraryContent({
   }
 
   return (
-    <LibraryShell
-      accent={accent}
-      connectionStatus={query.isError ? "attention" : "healthy"}
-      themePreference={themePreference}
-    >
+    <LibraryShell accent={accent} connectionStatus={query.isError ? "attention" : "healthy"}>
       <header className={styles.hero}>
         <div className={styles.heroCopy}>
           <span className={styles.heroGlyph} data-liquid-glass>
@@ -719,7 +692,6 @@ export function MediaLibrary({
   initialOutcome,
   live,
   playbackClient,
-  themePreference = "system",
 }: MediaLibraryProperties) {
   const resolvedClient =
     client ??
@@ -739,7 +711,6 @@ export function MediaLibrary({
         {...(initialOutcome === undefined ? {} : { initialOutcome })}
         {...(live === undefined ? {} : { live })}
         {...(playbackClient === undefined ? {} : { playbackClient })}
-        themePreference={themePreference}
       />
     </QueryClientProvider>
   );

@@ -2,7 +2,6 @@ import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
-import type { ThemePreference } from "../lib/theme";
 import { CalendarStrip } from "./calendar-strip";
 import { ApplicationShellContent } from "./application-shell";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
@@ -28,7 +27,6 @@ export function DashboardScreen({
   displayProfile = "standard",
   liveContinueWatching = false,
   liveDiscovery = false,
-  themePreference = "system",
 }: {
   data: DashboardModel;
   discoveryInitialFeed?: DiscoveryFeedResponse;
@@ -37,15 +35,12 @@ export function DashboardScreen({
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
   liveDiscovery?: boolean;
-  themePreference?: ThemePreference;
 }) {
   return (
     <ApplicationShellContent
       accent={data.hero.accent}
-      current="discover"
       displayProfile={displayProfile}
       status={aggregateStatus(data.services)}
-      themePreference={themePreference}
     >
       <main
         className="dashboard"
@@ -80,20 +75,13 @@ export function DashboardScreen({
 export function DashboardStateScreen({
   displayProfile = "standard",
   kind,
-  themePreference = "system",
 }: {
   displayProfile?: DisplayProfile;
   kind: DashboardStateKind;
-  themePreference?: ThemePreference;
 }) {
   const connectionStatus: ServiceStatus = kind === "offline" ? "offline" : "attention";
   return (
-    <ApplicationShellContent
-      current="discover"
-      displayProfile={displayProfile}
-      status={connectionStatus}
-      themePreference={themePreference}
-    >
+    <ApplicationShellContent displayProfile={displayProfile} status={connectionStatus}>
       <main className="dashboard" id="main-content" tabIndex={-1}>
         <DashboardState kind={kind} />
       </main>

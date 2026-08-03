@@ -1,35 +1,14 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect } from "react";
 
 import {
   applicationDestinationForPath,
   type ApplicationDestination,
 } from "../lib/application-shell-route";
 import { handleDirectionalFocus, type DirectionalAxis } from "../lib/directional-focus";
-import type { ThemePreference } from "../lib/theme";
-import { ApplicationShellStatus } from "./application-shell-status";
-import { GlobalSearchLoader } from "./global-search-loader";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
-import { ProfileMenuLoader } from "./profile-menu-loader";
-
-const SHELL_MOUNTS = ["search", "status", "profile"] as const;
-const PLACEHOLDER_CLASSES = {
-  profile: "profile-menu",
-  search: "global-search",
-  status: "connection-pulse",
-} as const satisfies Record<(typeof SHELL_MOUNTS)[number], string>;
-
-function mountedShellSlots() {
-  return Object.fromEntries(
-    SHELL_MOUNTS.map((slot) => [
-      slot,
-      document.querySelector<HTMLElement>(`[data-shell-mount="${slot}"]`),
-    ]),
-  ) as Record<(typeof SHELL_MOUNTS)[number], HTMLElement | null>;
-}
 
 function setCurrentDestination(current: ApplicationDestination | null) {
   for (const link of document.querySelectorAll<HTMLElement>("[data-destination]")) {
@@ -40,47 +19,13 @@ function setCurrentDestination(current: ApplicationDestination | null) {
   }
 }
 
-function shellThemePreference(fallback: ThemePreference): ThemePreference {
-  const preference = document.documentElement.dataset.themePreference;
-  return preference === "dark" || preference === "light" || preference === "system"
-    ? preference
-    : fallback;
-}
-
 export function ApplicationShellEnhancements({
   initialCurrent = null,
-  initialPreference = "system",
 }: {
   initialCurrent?: ApplicationDestination | null;
-  initialPreference?: ThemePreference;
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
-  const slots = mounted ? mountedShellSlots() : null;
-
-  useEffect(() => {
-    const restorations: (() => void)[] = [];
-    for (const slot of SHELL_MOUNTS) {
-      const placeholder = document.querySelector<HTMLElement>(`[data-shell-placeholder="${slot}"]`);
-      if (!placeholder) continue;
-      placeholder.setAttribute("hidden", "");
-      const className = PLACEHOLDER_CLASSES[slot];
-      const styledPlaceholder = placeholder.classList.contains(className)
-        ? placeholder
-        : placeholder.querySelector<HTMLElement>(`.${className}`);
-      styledPlaceholder?.classList.remove(className);
-      restorations.push(() => {
-        styledPlaceholder?.classList.add(className);
-        placeholder.removeAttribute("hidden");
-      });
-    }
-    const animationFrame = window.requestAnimationFrame(() => setMounted(true));
-    return () => {
-      window.cancelAnimationFrame(animationFrame);
-      restorations.forEach((restore) => restore());
-    };
-  }, []);
 
   useEffect(() => {
     setCurrentDestination(pathname ? applicationDestinationForPath(pathname) : initialCurrent);
@@ -132,17 +77,5 @@ export function ApplicationShellEnhancements({
     return () => cleanups.forEach((cleanup) => cleanup());
   }, []);
 
-  const preference =
-    typeof document === "undefined" ? initialPreference : shellThemePreference(initialPreference);
-
-  return (
-    <>
-      <LiquidGlassEnvironment />
-      {slots?.search ? createPortal(<GlobalSearchLoader />, slots.search) : null}
-      {slots?.status ? createPortal(<ApplicationShellStatus />, slots.status) : null}
-      {slots?.profile
-        ? createPortal(<ProfileMenuLoader initialPreference={preference} />, slots.profile)
-        : null}
-    </>
-  );
+  return <LiquidGlassEnvironment />;
 }

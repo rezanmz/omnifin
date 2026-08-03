@@ -28,21 +28,21 @@ describe("ApplicationShellFrame", () => {
     push.mockClear();
   });
 
-  it("keeps non-interactive command placeholders out of the accessibility tree", () => {
+  it("owns interactive command controls independently of route content", async () => {
     const { container } = render(shell(<main>Loading</main>));
 
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open profile menu" })).not.toBeInTheDocument();
-    for (const placeholder of container.querySelectorAll("[data-shell-placeholder]")) {
-      expect(placeholder).toHaveAttribute("inert");
-    }
+    expect(
+      await screen.findByRole("combobox", { name: "Search media and commands" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open profile menu" })).toBeVisible();
+    expect(container.querySelectorAll("[data-shell-placeholder]")).toHaveLength(0);
   });
 
   it("keeps primary navigation and command controls around operational routes", async () => {
     pathname = "/operations/health";
     render(
       shell(
-        <ApplicationShellContent current="operations" status="healthy">
+        <ApplicationShellContent status="healthy">
           <main>System health</main>
         </ApplicationShellContent>,
       ),
@@ -70,7 +70,7 @@ describe("ApplicationShellFrame", () => {
     const user = userEvent.setup();
     render(
       shell(
-        <ApplicationShellContent current="discover" status="healthy">
+        <ApplicationShellContent status="healthy">
           <main>Discover</main>
         </ApplicationShellContent>,
       ),
@@ -85,7 +85,7 @@ describe("ApplicationShellFrame", () => {
     pathname = "/settings/connectors";
     render(
       shell(
-        <ApplicationShellContent current="settings" status="healthy">
+        <ApplicationShellContent status="healthy">
           <main>Connectors</main>
         </ApplicationShellContent>,
       ),
@@ -99,12 +99,7 @@ describe("ApplicationShellFrame", () => {
   it("updates shell chrome without restyling the page content ancestor", async () => {
     render(
       <ApplicationShellFrame themePreference="system">
-        <ApplicationShellContent
-          accent="#d8ff70"
-          current="discover"
-          displayProfile="ten-foot"
-          status="healthy"
-        >
+        <ApplicationShellContent accent="#d8ff70" displayProfile="ten-foot" status="healthy">
           <main>Discover</main>
         </ApplicationShellContent>
       </ApplicationShellFrame>,
