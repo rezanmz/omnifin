@@ -1022,6 +1022,11 @@ a {
 }
 @media (max-width: 760px) {
   .user-avatar {
+    display: flex;
+  }
+}
+@media (max-width: 520px) {
+  .top-command-bar__actions .connection-pulse {
     display: none;
   }
 }
