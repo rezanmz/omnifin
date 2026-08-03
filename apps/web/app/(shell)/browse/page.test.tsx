@@ -2,12 +2,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { demoBrowseResponse } from "../../lib/discovery-browse-demo";
+import { demoBrowseResponse } from "../../../lib/discovery-browse-demo";
 import BrowsePage from "./page";
 
-vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: () => undefined }),
-}));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
@@ -29,10 +26,6 @@ describe("BrowsePage", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "View details for The Far Meridian" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Request The Far Meridian" })).toBeVisible();
-    expect(screen.getAllByRole("link", { name: "Browse" })).toHaveLength(2);
-    for (const destination of screen.getAllByRole("link", { name: "Browse" })) {
-      expect(destination).toHaveAttribute("aria-current", "page");
-    }
   });
 
   it("keeps ready browser fixtures live for filter-transition coverage", async () => {

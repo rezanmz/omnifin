@@ -41,13 +41,9 @@ import {
 } from "../lib/discovery-browse";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
-import type { ThemePreference } from "../lib/theme";
-import { CinematicBackdrop } from "./cinematic-backdrop";
-import { LiquidGlassEnvironment } from "./liquid-glass-environment";
+import { ApplicationShellContent } from "./application-shell";
 import type { DetailMedia } from "./media-detail-drawer";
-import { MobileNavigation, NavigationRail } from "./navigation-rail";
 import type { RequestableMedia } from "./request-composer";
-import { TopCommandBar } from "./top-command-bar";
 import styles from "./discovery-browser.module.css";
 
 const MediaDetailDrawer = dynamic(
@@ -88,7 +84,6 @@ const languageOptions = [
 ] as const;
 const accentColors = ["#83e7d0", "#9acbff", "#d8ff70", "#f0a77b", "#c6a8ff"] as const;
 
-type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 type CardStyle = CSSProperties & { "--browse-accent": string };
 
 export interface DiscoveryBrowserProperties {
@@ -99,7 +94,6 @@ export interface DiscoveryBrowserProperties {
   invalidCriteria?: boolean;
   live?: boolean;
   requestClient?: MediaRequestClient;
-  themePreference?: ThemePreference;
 }
 
 function titleCase(value: string) {
@@ -354,7 +348,6 @@ function BrowserContent({
   invalidCriteria = false,
   live = true,
   requestClient,
-  themePreference = "system",
 }: Required<Pick<DiscoveryBrowserProperties, "client" | "initialCriteria">> &
   Omit<DiscoveryBrowserProperties, "client" | "initialCriteria">) {
   const router = useRouter();
@@ -488,256 +481,240 @@ function BrowserContent({
   }[errorKind];
 
   return (
-    <div className="application-frame" style={{ "--ambient-accent": "#83e7d0" } as AmbientStyle}>
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail current="browse" />
-      <div className="application-shell">
-        <TopCommandBar
-          connectionStatus={query.isError ? "attention" : "healthy"}
-          themePreference={themePreference}
-        />
-        <main className={`${styles.browser} dashboard`} id="main-content" tabIndex={-1}>
-          <header className={styles.hero}>
-            <div>
-              <p className={styles.kicker}>Intentional discovery</p>
-              <h1>Browse without the guesswork.</h1>
-              <p>
-                Every result follows the criteria you can see. Open details or request a title
-                without losing this view.
+    <ApplicationShellContent accent="#83e7d0" status={query.isError ? "attention" : "healthy"}>
+      <main className={`${styles.browser} dashboard`} id="main-content" tabIndex={-1}>
+        <header className={styles.hero}>
+          <div>
+            <p className={styles.kicker}>Intentional discovery</p>
+            <h1>Browse without the guesswork.</h1>
+            <p>
+              Every result follows the criteria you can see. Open details or request a title without
+              losing this view.
+            </p>
+          </div>
+          <div aria-label="Media type" className={styles.kindSwitch} role="group">
+            <button
+              aria-pressed={criteria.kind === "movie"}
+              onClick={() => changeCriteria({ kind: "movie" })}
+              type="button"
+            >
+              <Film aria-hidden="true" /> Movies
+            </button>
+            <button
+              aria-pressed={criteria.kind === "series"}
+              onClick={() => changeCriteria({ kind: "series" })}
+              type="button"
+            >
+              <Tv aria-hidden="true" /> Series
+            </button>
+          </div>
+        </header>
+
+        {invalidCriteria ? (
+          <p className={styles.notice} role="status">
+            Some shared filters were invalid and have been safely reset.
+          </p>
+        ) : null}
+
+        <div className={styles.searchBar} data-liquid-glass>
+          <Search aria-hidden="true" />
+          <label className="sr-only" htmlFor="browse-search">
+            Search within Browse
+          </label>
+          <input
+            autoComplete="off"
+            id="browse-search"
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder={`Search ${criteria.kind === "movie" ? "movies" : "series"} by title`}
+            value={searchText}
+          />
+          {searchText ? (
+            <button aria-label="Clear title search" onClick={() => setSearchText("")} type="button">
+              <X aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+
+        <details className={styles.mobileFilters}>
+          <summary>
+            <SlidersHorizontal aria-hidden="true" /> Filters
+            {activeFilters.length > 0 ? <span>{activeFilters.length}</span> : null}
+          </summary>
+          <FilterPanel criteria={criteria} idPrefix="mobile" onChange={changeCriteria} />
+        </details>
+
+        {activeFilters.length > 0 ? (
+          <div aria-label="Active filters" className={styles.activeFilters}>
+            {activeFilters.map((filter) => (
+              <button
+                key={filter.key}
+                onClick={() => changeCriteria({ [filter.key]: undefined })}
+                type="button"
+              >
+                {filter.label} <X aria-hidden="true" />
+              </button>
+            ))}
+            <button
+              className={styles.clearFilters}
+              onClick={() =>
+                navigate({
+                  availability: "any",
+                  kind: criteria.kind,
+                  locale: criteria.locale,
+                  page: 1,
+                  sort: "popularity",
+                })
+              }
+              type="button"
+            >
+              Clear all
+            </button>
+          </div>
+        ) : null}
+
+        <div className={styles.workspace}>
+          <aside aria-label="Browse filters" className={styles.filterRail} data-liquid-glass>
+            <div className={styles.filterHeading}>
+              <div>
+                <p>Refine</p>
+                <h2>Your criteria</h2>
+              </div>
+              <SlidersHorizontal aria-hidden="true" />
+            </div>
+            <FilterPanel criteria={criteria} idPrefix="desktop" onChange={changeCriteria} />
+          </aside>
+
+          <section
+            aria-busy={query.isFetching}
+            aria-labelledby="browse-results-title"
+            className={styles.results}
+          >
+            <div className={styles.resultsHeading}>
+              <div>
+                <p className={styles.kicker}>Catalogue signal</p>
+                <h2 id="browse-results-title">{criteria.kind === "movie" ? "Movies" : "Series"}</h2>
+              </div>
+              <p aria-live="polite">
+                {query.isFetching || isNavigating ? (
+                  <>
+                    <LoaderCircle aria-hidden="true" /> Updating
+                  </>
+                ) : data ? (
+                  `${data.totalResults.toLocaleString()} candidates · page ${data.page}`
+                ) : (
+                  "Catalogue unavailable"
+                )}
               </p>
             </div>
-            <div aria-label="Media type" className={styles.kindSwitch} role="group">
-              <button
-                aria-pressed={criteria.kind === "movie"}
-                onClick={() => changeCriteria({ kind: "movie" })}
-                type="button"
-              >
-                <Film aria-hidden="true" /> Movies
-              </button>
-              <button
-                aria-pressed={criteria.kind === "series"}
-                onClick={() => changeCriteria({ kind: "series" })}
-                type="button"
-              >
-                <Tv aria-hidden="true" /> Series
-              </button>
-            </div>
-          </header>
 
-          {invalidCriteria ? (
-            <p className={styles.notice} role="status">
-              Some shared filters were invalid and have been safely reset.
-            </p>
-          ) : null}
-
-          <div className={styles.searchBar} data-liquid-glass>
-            <Search aria-hidden="true" />
-            <label className="sr-only" htmlFor="browse-search">
-              Search within Browse
-            </label>
-            <input
-              autoComplete="off"
-              id="browse-search"
-              onChange={(event) => setSearchText(event.target.value)}
-              placeholder={`Search ${criteria.kind === "movie" ? "movies" : "series"} by title`}
-              value={searchText}
-            />
-            {searchText ? (
-              <button
-                aria-label="Clear title search"
-                onClick={() => setSearchText("")}
-                type="button"
-              >
-                <X aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-
-          <details className={styles.mobileFilters}>
-            <summary>
-              <SlidersHorizontal aria-hidden="true" /> Filters
-              {activeFilters.length > 0 ? <span>{activeFilters.length}</span> : null}
-            </summary>
-            <FilterPanel criteria={criteria} idPrefix="mobile" onChange={changeCriteria} />
-          </details>
-
-          {activeFilters.length > 0 ? (
-            <div aria-label="Active filters" className={styles.activeFilters}>
-              {activeFilters.map((filter) => (
-                <button
-                  key={filter.key}
-                  onClick={() => changeCriteria({ [filter.key]: undefined })}
-                  type="button"
-                >
-                  {filter.label} <X aria-hidden="true" />
-                </button>
-              ))}
-              <button
-                className={styles.clearFilters}
-                onClick={() =>
-                  navigate({
-                    availability: "any",
-                    kind: criteria.kind,
-                    locale: criteria.locale,
-                    page: 1,
-                    sort: "popularity",
-                  })
-                }
-                type="button"
-              >
-                Clear all
-              </button>
-            </div>
-          ) : null}
-
-          <div className={styles.workspace}>
-            <aside aria-label="Browse filters" className={styles.filterRail} data-liquid-glass>
-              <div className={styles.filterHeading}>
-                <div>
-                  <p>Refine</p>
-                  <h2>Your criteria</h2>
-                </div>
-                <SlidersHorizontal aria-hidden="true" />
+            {query.isPending ? (
+              <div aria-label="Loading browse results" className={styles.grid} role="status">
+                {Array.from({ length: 10 }, (_, index) => (
+                  <article className={styles.skeleton} key={index}>
+                    <span /> <i /> <i />
+                  </article>
+                ))}
               </div>
-              <FilterPanel criteria={criteria} idPrefix="desktop" onChange={changeCriteria} />
-            </aside>
-
-            <section
-              aria-busy={query.isFetching}
-              aria-labelledby="browse-results-title"
-              className={styles.results}
-            >
-              <div className={styles.resultsHeading}>
+            ) : !data ? (
+              <div className={styles.boundary} data-liquid-glass>
+                <CloudOff aria-hidden="true" />
                 <div>
-                  <p className={styles.kicker}>Catalogue signal</p>
-                  <h2 id="browse-results-title">
-                    {criteria.kind === "movie" ? "Movies" : "Series"}
-                  </h2>
+                  <h3>{boundaryCopy[0]}</h3>
+                  <p>{boundaryCopy[1]}</p>
                 </div>
-                <p aria-live="polite">
-                  {query.isFetching || isNavigating ? (
-                    <>
-                      <LoaderCircle aria-hidden="true" /> Updating
-                    </>
-                  ) : data ? (
-                    `${data.totalResults.toLocaleString()} candidates · page ${data.page}`
-                  ) : (
-                    "Catalogue unavailable"
-                  )}
+                <button onClick={() => void query.refetch()} type="button">
+                  <RefreshCw aria-hidden="true" /> Try again
+                </button>
+              </div>
+            ) : data.items.length === 0 ? (
+              <div className={styles.empty} data-liquid-glass>
+                <Sparkles aria-hidden="true" />
+                <h3>No titles match this page.</h3>
+                <p>
+                  Loosen one visible filter
+                  {data.page < data.totalPages ? " or inspect the next catalogue page" : ""}.
                 </p>
               </div>
-
-              {query.isPending ? (
-                <div aria-label="Loading browse results" className={styles.grid} role="status">
-                  {Array.from({ length: 10 }, (_, index) => (
-                    <article className={styles.skeleton} key={index}>
-                      <span /> <i /> <i />
-                    </article>
-                  ))}
-                </div>
-              ) : !data ? (
-                <div className={styles.boundary} data-liquid-glass>
-                  <CloudOff aria-hidden="true" />
-                  <div>
-                    <h3>{boundaryCopy[0]}</h3>
-                    <p>{boundaryCopy[1]}</p>
-                  </div>
-                  <button onClick={() => void query.refetch()} type="button">
-                    <RefreshCw aria-hidden="true" /> Try again
-                  </button>
-                </div>
-              ) : data.items.length === 0 ? (
-                <div className={styles.empty} data-liquid-glass>
-                  <Sparkles aria-hidden="true" />
-                  <h3>No titles match this page.</h3>
-                  <p>
-                    Loosen one visible filter
-                    {data.page < data.totalPages ? " or inspect the next catalogue page" : ""}.
-                  </p>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {data.items.map((item) => {
-                    const requested = requestedIds.has(item.id);
-                    const artwork = item.artwork.posterPath;
-                    const accent = accentColors[item.tmdbId % accentColors.length]!;
-                    return (
-                      <article
-                        className={styles.card}
-                        key={item.id}
-                        style={{ "--browse-accent": accent } as CardStyle}
+            ) : (
+              <div className={styles.grid}>
+                {data.items.map((item) => {
+                  const requested = requestedIds.has(item.id);
+                  const artwork = item.artwork.posterPath;
+                  const accent = accentColors[item.tmdbId % accentColors.length]!;
+                  return (
+                    <article
+                      className={styles.card}
+                      key={item.id}
+                      style={{ "--browse-accent": accent } as CardStyle}
+                    >
+                      <button
+                        aria-label={`View details for ${item.title}`}
+                        className={styles.cardPrimary}
+                        onClick={() => openDetails(item)}
+                        type="button"
                       >
+                        <span className={styles.poster}>
+                          {artwork ? (
+                            // Same-origin opaque artwork reference; native lazy loading protects LCP.
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img alt="" decoding="async" loading="lazy" src={artwork} />
+                          ) : null}
+                          <span className={styles.posterGlow} />
+                        </span>
+                        <span className={styles.cardCopy}>
+                          <strong>{item.title}</strong>
+                          <span>
+                            {item.year ?? "Year unknown"}
+                            {item.voteAverage === null ? null : (
+                              <>
+                                {" "}
+                                · <Star aria-hidden="true" /> {item.voteAverage.toFixed(1)}
+                              </>
+                            )}
+                          </span>
+                          <small>{requested ? "Requested" : availabilityLabel(item)}</small>
+                        </span>
+                      </button>
+                      {isRequestable(item) && !requested ? (
                         <button
-                          aria-label={`View details for ${item.title}`}
-                          className={styles.cardPrimary}
-                          onClick={() => openDetails(item)}
+                          aria-label={`Request ${item.title}`}
+                          className={styles.requestButton}
+                          onClick={() => openRequest(item)}
                           type="button"
                         >
-                          <span className={styles.poster}>
-                            {artwork ? (
-                              // Same-origin opaque artwork reference; native lazy loading protects LCP.
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img alt="" decoding="async" loading="lazy" src={artwork} />
-                            ) : null}
-                            <span className={styles.posterGlow} />
-                          </span>
-                          <span className={styles.cardCopy}>
-                            <strong>{item.title}</strong>
-                            <span>
-                              {item.year ?? "Year unknown"}
-                              {item.voteAverage === null ? null : (
-                                <>
-                                  {" "}
-                                  · <Star aria-hidden="true" /> {item.voteAverage.toFixed(1)}
-                                </>
-                              )}
-                            </span>
-                            <small>{requested ? "Requested" : availabilityLabel(item)}</small>
-                          </span>
+                          <Sparkles aria-hidden="true" /> Request
                         </button>
-                        {isRequestable(item) && !requested ? (
-                          <button
-                            aria-label={`Request ${item.title}`}
-                            className={styles.requestButton}
-                            onClick={() => openRequest(item)}
-                            type="button"
-                          >
-                            <Sparkles aria-hidden="true" /> Request
-                          </button>
-                        ) : null}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
 
-              {data && data.totalPages > 1 ? (
-                <nav aria-label="Browse pages" className={styles.pagination}>
-                  <button
-                    disabled={criteria.page <= 1}
-                    onClick={() => navigate({ ...criteria, page: criteria.page - 1 })}
-                    type="button"
-                  >
-                    <ChevronLeft aria-hidden="true" /> Previous
-                  </button>
-                  <span>
-                    Page {data.page} of {data.totalPages}
-                  </span>
-                  <button
-                    disabled={criteria.page >= data.totalPages}
-                    onClick={() => navigate({ ...criteria, page: criteria.page + 1 })}
-                    type="button"
-                  >
-                    Next <ChevronRight aria-hidden="true" />
-                  </button>
-                </nav>
-              ) : null}
-            </section>
-          </div>
-        </main>
-      </div>
-      <MobileNavigation current="browse" />
+            {data && data.totalPages > 1 ? (
+              <nav aria-label="Browse pages" className={styles.pagination}>
+                <button
+                  disabled={criteria.page <= 1}
+                  onClick={() => navigate({ ...criteria, page: criteria.page - 1 })}
+                  type="button"
+                >
+                  <ChevronLeft aria-hidden="true" /> Previous
+                </button>
+                <span>
+                  Page {data.page} of {data.totalPages}
+                </span>
+                <button
+                  disabled={criteria.page >= data.totalPages}
+                  onClick={() => navigate({ ...criteria, page: criteria.page + 1 })}
+                  type="button"
+                >
+                  Next <ChevronRight aria-hidden="true" />
+                </button>
+              </nav>
+            ) : null}
+          </section>
+        </div>
+      </main>
 
       {detailMedia ? (
         <MediaDetailDrawer
@@ -778,7 +755,7 @@ function BrowserContent({
           open={composerOpen}
         />
       ) : null}
-    </div>
+    </ApplicationShellContent>
   );
 }
 

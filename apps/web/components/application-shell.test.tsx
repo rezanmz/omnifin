@@ -15,11 +15,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 function shell(children: ReactNode) {
-  return (
-    <ApplicationShellFrame themePreference="system">
-      {children}
-    </ApplicationShellFrame>
-  );
+  return <ApplicationShellFrame themePreference="system">{children}</ApplicationShellFrame>;
 }
 
 describe("ApplicationShellFrame", () => {
@@ -53,6 +49,22 @@ describe("ApplicationShellFrame", () => {
     }
     expect(screen.getByRole("combobox", { name: "Search media and commands" })).toBeVisible();
     expect(screen.getByRole("main")).toHaveTextContent("System health");
+  });
+
+  it("marks Browse as the current destination inside the persistent shell", async () => {
+    pathname = "/browse";
+    render(
+      shell(
+        <ApplicationShellContent status="healthy">
+          <main>Browse</main>
+        </ApplicationShellContent>,
+      ),
+    );
+
+    for (const browseLink of screen.getAllByRole("link", { name: "Browse" })) {
+      await waitFor(() => expect(browseLink).toHaveAttribute("aria-current", "page"));
+    }
+    expect(screen.getByRole("main")).toHaveTextContent("Browse");
   });
 
   it("preserves the desktop rail while authenticated route content changes", () => {

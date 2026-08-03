@@ -2,11 +2,10 @@ import type { Metadata } from "next";
 
 import { discoveryBrowseQuerySchema } from "@omnifin/contracts/discovery";
 
-import { DiscoveryBrowser } from "../../components/discovery-browser";
-import { demoBrowseResponse, emptyBrowseResponse } from "../../lib/discovery-browse-demo";
-import { readThemePreference } from "../../lib/theme-server";
-import "../dashboard.css";
-import "../globals.css";
+import { DiscoveryBrowser } from "../../../components/discovery-browser";
+import { demoBrowseResponse, emptyBrowseResponse } from "../../../lib/discovery-browse-demo";
+import "../../dashboard.css";
+import "../../globals.css";
 
 export const metadata: Metadata = { title: "Browse" };
 export const dynamic = "force-dynamic";
@@ -46,14 +45,12 @@ export default async function BrowsePage({ searchParams }: BrowsePageProperties)
       : undefined;
   const initialResponse = testResponse ?? demoResponse;
   const freezeFixture = testView === "loading" || demoResponse !== undefined;
-  const preference = await readThemePreference();
   return (
     <DiscoveryBrowser
       initialCriteria={initialResponse?.criteria ?? initialCriteria}
       {...(initialResponse === undefined ? {} : { initialResponse })}
       invalidCriteria={!parsed.success}
       {...(freezeFixture ? { live: false } : {})}
-      themePreference={preference}
     />
   );
 }
