@@ -710,6 +710,7 @@ function SelectedTheater({
         title: selection.media.title,
       }}
       onClose={onClose}
+      startWhenReady
     />
   );
 }

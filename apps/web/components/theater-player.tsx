@@ -58,6 +58,7 @@ export interface TheaterPlayerProperties {
   client?: PlaybackClient;
   media: TheaterMedia;
   onClose: () => void;
+  startWhenReady?: boolean;
   subtitleClient?: SubtitleClient;
 }
 
@@ -84,7 +85,7 @@ interface PlaybackPreferences {
 
 const QUALITY_PRESETS = {
   auto: { bitrate: 80_000_000, label: "Auto", mode: "auto" },
-  original: { bitrate: 200_000_000, label: "Original", mode: "direct" },
+  original: { bitrate: 200_000_000, label: "Original quality", mode: "auto" },
   high: { bitrate: 20_000_000, label: "High · 20 Mbps", mode: "transcode" },
   balanced: { bitrate: 10_000_000, label: "Balanced · 10 Mbps", mode: "transcode" },
   "data-saver": { bitrate: 4_000_000, label: "Data saver · 4 Mbps", mode: "transcode" },
@@ -189,6 +190,7 @@ export function TheaterPlayer({
   client = playbackClient,
   media,
   onClose,
+  startWhenReady = false,
   subtitleClient,
 }: TheaterPlayerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
@@ -196,19 +198,33 @@ export function TheaterPlayer({
   const hlsReference = useRef<HlsType | null>(null);
   const reportQueueReference = useRef(Promise.resolve());
   const reportedStateReference = useRef<ReportedState>("negotiated");
+  const preparedReference = useRef<PreparedPlayback | null>(null);
+  const preferencesReference = useRef<PlaybackPreferences>({
+    audioStreamIndex: null,
+    quality: "original",
+    subtitleStreamIndex: null,
+  });
+  const replacementControllerReference = useRef<AbortController | null>(null);
+  const replacementGenerationReference = useRef(0);
+  const replacementReference = useRef<{
+    generation: number;
+    previous: PreparedPlayback;
+    previousPreferences: PlaybackPreferences;
+    resume: boolean;
+  } | null>(null);
+  const startWhenReadyReference = useRef(startWhenReady);
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resumeAfterPreparationReference = useRef(false);
+  const requestedPositionReference = useRef(media.positionSeconds);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
-  const [requestedPosition, setRequestedPosition] = useState(media.positionSeconds);
   const [preferences, setPreferences] = useState<PlaybackPreferences>({
     audioStreamIndex: null,
-    quality: "auto",
+    quality: "original",
     subtitleStreamIndex: null,
   });
   const [prepared, setPrepared] = useState<PreparedPlayback | null>(null);
@@ -231,12 +247,61 @@ export function TheaterPlayer({
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [syncInterrupted, setSyncInterrupted] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [transitionMessage, setTransitionMessage] = useState("");
 
   const close = useCallback(() => {
     const dialog = dialogReference.current;
     if (dialog?.open && typeof dialog.close === "function") dialog.close();
     else onClose();
   }, [onClose]);
+
+  useEffect(() => {
+    preparedReference.current = prepared;
+  }, [prepared]);
+
+  useEffect(() => {
+    preferencesReference.current = preferences;
+  }, [preferences]);
+
+  const stopSession = useCallback(
+    (target: PreparedPlayback, positionSeconds: number, keepalive = false) => {
+      void client
+        .report(
+          target.session.sessionId,
+          { event: "stopped", positionSeconds: Math.max(0, Math.floor(positionSeconds)) },
+          target.csrfToken,
+          { keepalive },
+        )
+        .catch(() => setSyncInterrupted(true));
+    },
+    [client],
+  );
+
+  const rollbackReplacement = useCallback(
+    (reason: string) => {
+      const replacement = replacementReference.current;
+      if (!replacement) return false;
+      const failed = preparedReference.current;
+      replacementReference.current = null;
+      if (failed && failed.session.sessionId !== replacement.previous.session.sessionId) {
+        stopSession(failed, failed.session.positionSeconds);
+      }
+      preferencesReference.current = replacement.previousPreferences;
+      preparedReference.current = replacement.previous;
+      setPreferences(replacement.previousPreferences);
+      setPrepared(replacement.previous);
+      reportedStateReference.current = replacement.resume ? "paused" : "negotiated";
+      startWhenReadyReference.current = replacement.resume;
+      setSwitching(false);
+      setBuffering(false);
+      setStatus("preparing");
+      setMessage("Restoring the previous stream…");
+      setTransitionMessage(reason);
+      return true;
+    },
+    [stopSession],
+  );
 
   const queueReport = useCallback(
     (
@@ -316,9 +381,15 @@ export function TheaterPlayer({
     const controller = new AbortController();
     reportedStateReference.current = "negotiated";
     void client
-      .prepare(media.id, requestedPosition, controller.signal, preparationOptions(preferences))
+      .prepare(
+        media.id,
+        requestedPositionReference.current,
+        controller.signal,
+        preparationOptions(preferencesReference.current),
+      )
       .then((result) => {
         if (controller.signal.aborted) return;
+        preparedReference.current = result;
         setPrepared(result);
         setDuration(result.session.media.durationSeconds);
         setCurrentTime(result.session.positionSeconds);
@@ -330,13 +401,23 @@ export function TheaterPlayer({
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id, preferences, requestedPosition]);
+  }, [attempt, client, media.id]);
 
   useEffect(() => {
     if (!prepared) return;
     const video = videoReference.current;
     if (!video) return;
     let cancelled = false;
+    const replacementGeneration = replacementReference.current?.generation;
+    const readinessTimeout =
+      replacementGeneration === undefined
+        ? null
+        : setTimeout(() => {
+            if (replacementReference.current?.generation !== replacementGeneration) return;
+            rollbackReplacement(
+              "The new stream took too long to become ready. The previous stream was restored.",
+            );
+          }, 15_000);
     const source = browserPlaybackPath(prepared.session.streamPath);
     const attach = async () => {
       if (prepared.session.delivery === "direct") {
@@ -375,8 +456,14 @@ export function TheaterPlayer({
             return;
           }
           recordHlsFailure(data, "stopped");
-          setStatus("error");
-          setMessage("The stream stopped responding. Your saved progress is safe.");
+          if (
+            !rollbackReplacement(
+              "That playback change could not be applied. The previous stream was restored.",
+            )
+          ) {
+            setStatus("error");
+            setMessage("The stream stopped responding. Your saved progress is safe.");
+          }
         });
         hls.loadSource(source);
         hls.attachMedia(video);
@@ -390,23 +477,35 @@ export function TheaterPlayer({
         setMessage("Ready to resume");
         return;
       }
-      setStatus("unsupported");
-      setMessage("This browser cannot play the negotiated HLS stream.");
+      if (
+        !rollbackReplacement(
+          "That playback change is not supported here. The previous stream was restored.",
+        )
+      ) {
+        setStatus("unsupported");
+        setMessage("This browser cannot play the negotiated HLS stream.");
+      }
     };
     void attach().catch(() => {
-      if (!cancelled) {
+      if (
+        !cancelled &&
+        !rollbackReplacement(
+          "The new stream could not be attached. The previous stream was restored.",
+        )
+      ) {
         setStatus("error");
         setMessage("The playback engine could not be loaded.");
       }
     });
     return () => {
       cancelled = true;
+      if (readinessTimeout) clearTimeout(readinessTimeout);
       hlsReference.current?.destroy();
       hlsReference.current = null;
       video.removeAttribute("src");
       video.load();
     };
-  }, [prepared]);
+  }, [prepared, rollbackReplacement]);
 
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -421,39 +520,84 @@ export function TheaterPlayer({
 
   useEffect(
     () => () => {
-      queueReport("stopped", absolutePositionReference.current(), true);
+      replacementControllerReference.current?.abort();
+      const active = preparedReference.current;
+      if (active) stopSession(active, absolutePositionReference.current(), true);
+      const replacement = replacementReference.current;
+      if (replacement && replacement.previous.session.sessionId !== active?.session.sessionId) {
+        stopSession(replacement.previous, absolutePositionReference.current(), true);
+      }
     },
-    [queueReport],
+    [stopSession],
   );
 
   async function togglePlayback() {
     const video = videoReference.current;
     if (!video || status !== "ready") return;
     if (video.paused) {
+      startWhenReadyReference.current = false;
       await video.play().catch(() => undefined);
     } else {
       video.pause();
     }
   }
 
-  function replacePlayback(
+  async function replacePlayback(
     nextPreferences: PlaybackPreferences,
     nextPosition: number,
     nextMessage: string,
   ) {
+    const active = preparedReference.current;
+    if (!active) return;
     const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
-    resumeAfterPreparationReference.current = playing;
-    queueReport("stopped", absolutePosition(), false);
-    setPlaying(false);
-    setBuffering(false);
-    setPrepared(null);
-    setPreferences(nextPreferences);
-    setRequestedPosition(safePosition);
-    setCurrentTime(safePosition);
-    setSeekPreview(null);
+    const generation = replacementGenerationReference.current + 1;
+    replacementGenerationReference.current = generation;
+    replacementControllerReference.current?.abort();
+    const controller = new AbortController();
+    replacementControllerReference.current = controller;
+    setSwitching(true);
+    setTransitionMessage(nextMessage);
     setSettingsOpen(false);
-    setStatus("preparing");
-    setMessage(nextMessage);
+    try {
+      const result = await client.prepare(
+        media.id,
+        safePosition,
+        controller.signal,
+        preparationOptions(nextPreferences),
+      );
+      if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
+        stopSession(result, safePosition);
+        return;
+      }
+      replacementReference.current = {
+        generation,
+        previous: active,
+        previousPreferences: preferencesReference.current,
+        resume: playing,
+      };
+      preferencesReference.current = nextPreferences;
+      preparedReference.current = result;
+      reportedStateReference.current = "negotiated";
+      startWhenReadyReference.current = playing;
+      setPreferences(nextPreferences);
+      setPrepared(result);
+      setPlaying(false);
+      setBuffering(false);
+      setCurrentTime(safePosition);
+      setSeekPreview(null);
+      setStatus("preparing");
+      setMessage(nextMessage);
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        generation !== replacementGenerationReference.current ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        return;
+      }
+      setSwitching(false);
+      setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
+    }
   }
 
   function seekWithinSession(next: number) {
@@ -462,7 +606,7 @@ export function TheaterPlayer({
     const minimum = prepared.session.delivery === "hls" ? prepared.session.positionSeconds : 0;
     const safe = Math.min(duration, Math.max(0, next));
     if (prepared.session.delivery === "hls" && safe < minimum) {
-      replacePlayback(preferences, safe, "Rebuilding the stream from that moment…");
+      void replacePlayback(preferences, safe, "Rebuilding the stream from that moment…");
       return;
     }
     video.currentTime = prepared.session.delivery === "hls" ? safe - minimum : safe;
@@ -590,9 +734,19 @@ export function TheaterPlayer({
           aria-label={`${media.title} video`}
           className={styles.video}
           onCanPlay={(event) => {
-            if (!resumeAfterPreparationReference.current) return;
-            resumeAfterPreparationReference.current = false;
-            void event.currentTarget.play().catch(() => undefined);
+            const replacement = replacementReference.current;
+            if (replacement) {
+              replacementReference.current = null;
+              stopSession(replacement.previous, absolutePositionReference.current());
+              setSwitching(false);
+              setTransitionMessage("Playback changed without losing your place.");
+            }
+            setStatus("ready");
+            if (!startWhenReadyReference.current) return;
+            startWhenReadyReference.current = false;
+            void event.currentTarget.play().catch(() => {
+              setTransitionMessage("Ready to play — your browser needs one more tap to start.");
+            });
           }}
           onDurationChange={(event) => {
             if (Number.isFinite(event.currentTarget.duration)) {
@@ -613,6 +767,7 @@ export function TheaterPlayer({
           onPlay={() => {
             setPlaying(true);
             setBuffering(false);
+            setTransitionMessage("");
             queueReport("started", absolutePosition());
           }}
           onPlaying={() => setBuffering(false)}
@@ -638,8 +793,13 @@ export function TheaterPlayer({
             <h2 id={titleId}>{media.title}</h2>
           </div>
           <div className={styles.topActions}>
-            <span className={styles.syncState} data-warning={syncInterrupted || undefined}>
-              {syncInterrupted ? "Progress sync interrupted" : "Private Jellyfin session"}
+            <span
+              className={styles.syncState}
+              data-warning={syncInterrupted || transitionMessage || undefined}
+              role={transitionMessage ? "status" : undefined}
+            >
+              {transitionMessage ||
+                (syncInterrupted ? "Progress sync interrupted" : "Private Jellyfin session")}
             </span>
             <button
               aria-label="Close player"
@@ -679,7 +839,19 @@ export function TheaterPlayer({
               <button
                 className={styles.retryButton}
                 onClick={() => {
+                  const active = preparedReference.current;
+                  const position = absolutePositionReference.current();
+                  replacementControllerReference.current?.abort();
+                  replacementReference.current = null;
+                  if (active) stopSession(active, position);
+                  requestedPositionReference.current = position;
+                  preparedReference.current = null;
+                  reportedStateReference.current = "negotiated";
+                  startWhenReadyReference.current = playing;
                   setPrepared(null);
+                  setPlaying(false);
+                  setSwitching(false);
+                  setTransitionMessage("");
                   setStatus("preparing");
                   setMessage("Opening a private playback session…");
                   setAttempt((value) => value + 1);
@@ -692,7 +864,7 @@ export function TheaterPlayer({
           </div>
         )}
 
-        {status === "ready" && !playing && !buffering && (
+        {status === "ready" && !playing && !buffering && !switching && (
           <button
             aria-label={`Resume ${media.title}`}
             className={styles.primaryPlay}
@@ -821,7 +993,7 @@ export function TheaterPlayer({
                 </span>
                 <select
                   aria-label="Audio track"
-                  disabled={prepared.session.audioTracks.length === 0}
+                  disabled={switching || prepared.session.audioTracks.length === 0}
                   onChange={(event) => {
                     const nextIndex = Number(event.currentTarget.value);
                     const defaultIndex =
@@ -833,7 +1005,11 @@ export function TheaterPlayer({
                       audioStreamIndex: nextIndex === defaultIndex ? null : nextIndex,
                       quality: preferences.quality === "original" ? "auto" : preferences.quality,
                     } satisfies PlaybackPreferences;
-                    replacePlayback(nextPreferences, absolutePosition(), "Switching audio track…");
+                    void replacePlayback(
+                      nextPreferences,
+                      absolutePosition(),
+                      "Switching audio track…",
+                    );
                   }}
                   value={selectedAudioIndex ?? ""}
                 >
@@ -851,6 +1027,7 @@ export function TheaterPlayer({
                 </span>
                 <select
                   aria-label="Subtitle track"
+                  disabled={switching}
                   onChange={(event) => {
                     const nextIndex =
                       event.currentTarget.value === "off"
@@ -864,7 +1041,7 @@ export function TheaterPlayer({
                           : preferences.quality,
                       subtitleStreamIndex: nextIndex,
                     } satisfies PlaybackPreferences;
-                    replacePlayback(
+                    void replacePlayback(
                       nextPreferences,
                       absolutePosition(),
                       nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
@@ -907,9 +1084,10 @@ export function TheaterPlayer({
                 </span>
                 <select
                   aria-label="Playback quality"
+                  disabled={switching}
                   onChange={(event) => {
                     const quality = event.currentTarget.value as QualityPreset;
-                    replacePlayback(
+                    void replacePlayback(
                       { ...preferences, quality },
                       absolutePosition(),
                       "Applying playback quality…",
