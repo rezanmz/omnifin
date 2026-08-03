@@ -1,5 +1,6 @@
 import { networkInterfaces } from "node:os";
 
+import { COMPATIBILITY_CHECKS } from "../compatibility-checks.mjs";
 import { applyCompatibilityTargetOverride } from "../compatibility-targets.mjs";
 
 const oidcProviderTarget = applyCompatibilityTargetOverride({
@@ -10,18 +11,7 @@ const oidcProviderTarget = applyCompatibilityTargetOverride({
   },
 }).oidc;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
-const CHECKS = Object.freeze([
-  "authorization_code_pkce",
-  "state_nonce_validation",
-  "strict_issuer_and_standard_claims",
-  "immutable_issuer_subject",
-  "jit_viewer_pending_jellyfin_link",
-  "explicit_group_role_mapping",
-  "guarded_role_mapping_update",
-  "optional_logout_capability_negotiation",
-  "local_logout_fallback",
-  "secret_leak_inspection",
-]);
+const CHECKS = COMPATIBILITY_CHECKS.oidc;
 
 export function isPrivateIpv4(address) {
   return (

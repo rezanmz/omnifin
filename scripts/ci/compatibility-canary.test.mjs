@@ -120,6 +120,23 @@ function passingFixtureReport(target) {
   };
 }
 
+test("keeps fixture producer and report check contracts in one immutable registry", () => {
+  assert.equal(Object.isFrozen(COMPATIBILITY_CHECKS), true);
+  for (const service of COMPATIBILITY_SERVICES) {
+    assert.equal(Object.isFrozen(COMPATIBILITY_CHECKS[service]), true);
+    assert.ok(COMPATIBILITY_CHECKS[service].length > 0);
+  }
+  assert.deepEqual(
+    COMPATIBILITY_CHECKS.radarr.filter((name) => name.startsWith("queue")),
+    ["queueMutationGuard", "queueRead"],
+  );
+  assert.deepEqual(
+    COMPATIBILITY_CHECKS.sonarr.filter((name) => name.startsWith("queue")),
+    ["queueMutationGuard", "queueRead"],
+  );
+  assert.ok(COMPATIBILITY_CHECKS.seerr.includes("multiWordSearch"));
+});
+
 test("defines exactly the public latest-stable upstream repositories", () => {
   assert.deepEqual(COMPATIBILITY_SERVICES, [
     "authentik",
