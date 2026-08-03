@@ -122,10 +122,51 @@ describe("Seerr discovery", () => {
     expect(requests[0]?.url.searchParams.get("mediaType")).toBe("all");
     expect(requests[0]?.url.searchParams.get("timeWindow")).toBe("day");
     expect(requests[1]?.url.searchParams.get("sortBy")).toBe("popularity.desc");
+    expect(requests[0]?.url.searchParams.get("language")).toBe("en-CA");
+    expect(requests[1]?.url.searchParams.has("language")).toBe(false);
+    expect(requests[2]?.url.searchParams.has("language")).toBe(false);
+    expect(requests[3]?.url.searchParams.get("language")).toBe("en-CA");
+    expect(requests[4]?.url.searchParams.get("language")).toBe("en-CA");
+    expect(requests[1]?.init.headers.get("accept-language")).toBe("en-CA");
+    expect(requests[2]?.init.headers.get("accept-language")).toBe("en-CA");
     expect(requests.every(({ init }) => init.headers.get("x-api-key") === "fixture-api-key")).toBe(
       true,
     );
   });
+
+  it.each(["en", "en-CA", "en-US", "fr-CA"])(
+    "keeps %s as a display locale without applying an original-language filter to popular rails",
+    async (language) => {
+      const moviePage = {
+        page: 1,
+        results: [searchResponse.results[0]],
+        totalPages: 1,
+        totalResults: 1,
+      };
+      const seriesPage = {
+        page: 1,
+        results: [searchResponse.results[1]],
+        totalPages: 1,
+        totalResults: 1,
+      };
+      const { adapter, requests } = adapterWithResponses([
+        jsonResponse(moviePage),
+        jsonResponse(seriesPage),
+      ]);
+
+      await expect(adapter.discover("popular_movies", { language })).resolves.toMatchObject({
+        totalResults: 1,
+      });
+      await expect(adapter.discover("popular_series", { language })).resolves.toMatchObject({
+        totalResults: 1,
+      });
+
+      for (const request of requests) {
+        expect(request.url.searchParams.has("language")).toBe(false);
+        expect(request.init.headers.get("accept-language")).toBe(language);
+      }
+    },
+  );
 
   it("deduplicates discovery media without copying person or collection results", async () => {
     const { adapter } = adapterWithResponses([
