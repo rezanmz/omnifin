@@ -341,10 +341,16 @@ describe("Continue Watching routes", () => {
     readLibrarySeasonEpisodes.mockResolvedValueOnce({
       items: [
         {
+          airDate: "2026-03-12",
           artwork: series.artwork,
+          communityRating: 8.2,
           contentRating: "TV-14",
+          credits: [{ name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" }],
+          creditsTruncated: false,
+          criticRating: null,
           episodeNumber: 3,
           externalId: "route-private-episode",
+          genres: ["Drama"],
           kind: "episode",
           overview: "The observatory resolves the signal.",
           played: false,
@@ -352,6 +358,7 @@ describe("Continue Watching routes", () => {
           runtimeSeconds: 2_700,
           seasonNumber: 2,
           subtitle: "S02E03",
+          studios: ["Northlight Pictures"],
           title: "The Long Meridian",
           year: 2026,
         },

@@ -389,18 +389,33 @@ describe("JellyfinUserMediaClient", () => {
 
   it("reads normalized series seasons and paged episodes without leaking scope", async () => {
     const episode = {
+      CommunityRating: 8.4,
+      CriticRating: 91,
+      Genres: ["Drama", "Science fiction", "Drama"],
       Id: "episode-upstream-1",
-      ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
+      ImageBlurHashes: { Primary: { "episode-still": "005?}k" } },
+      ImageTags: { Primary: "episode-still" },
       IndexNumber: 3,
       Name: "The Long Meridian",
       ParentBackdropImageTags: ["series-backdrop"],
       ParentBackdropItemId: "series-upstream-1",
       ParentIndexNumber: 2,
+      People: [
+        { Name: "Mara Voss", Role: "Dr. Elian Vale", Type: "Actor" },
+        { Name: "Ari Chen", Type: "Writer" },
+        ...Array.from({ length: 24 }, (_, index) => ({
+          Name: `Guest ${index + 1}`,
+          Role: `Guest role ${index + 1}`,
+          Type: "GuestStar",
+        })),
+      ],
+      PremiereDate: "2025-02-14T00:00:00.0000000Z",
       ProductionYear: 2025,
       RunTimeTicks: 2_700_000_000,
       SeriesId: "series-upstream-1",
       SeriesName: "Northern Lights",
       SeriesPrimaryImageTag: "series-poster",
+      Studios: [{ Name: "Northlight Pictures" }, { Name: "Northlight Pictures" }],
       Type: "Episode",
       UserData: { Played: false, PlaybackPositionTicks: 900_000_000 },
     };
@@ -419,7 +434,22 @@ describe("JellyfinUserMediaClient", () => {
           },
         ],
       }),
-      jsonResponse({ Items: [episode, { ...episode, Id: "episode-upstream-2", IndexNumber: 4 }] }),
+      jsonResponse({
+        Items: [
+          episode,
+          {
+            ...episode,
+            CommunityRating: 11,
+            CriticRating: -1,
+            Genres: ["", "Drama"],
+            Id: "episode-upstream-2",
+            IndexNumber: 4,
+            People: [{ Name: "", Role: "", Type: "Actor" }],
+            Studios: [{ Name: "" }],
+          },
+          { ...episode, Id: "episode-upstream-3", IndexNumber: 5 },
+        ],
+      }),
     ]);
 
     await expect(
@@ -429,27 +459,40 @@ describe("JellyfinUserMediaClient", () => {
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
     });
-    await expect(
-      client.readLibrarySeasonEpisodes({
-        limit: 1,
-        seasonNumber: 2,
-        seriesId: "series-upstream-1",
-        startIndex: 0,
-        userId: "paired-user-id",
-      }),
-    ).resolves.toMatchObject({
-      items: [
-        {
-          externalId: "episode-upstream-1",
-          kind: "episode",
-          positionSeconds: 90,
-          seasonNumber: 2,
-          title: "The Long Meridian",
-        },
-      ],
-      nextStartIndex: 1,
-      truncated: true,
+    const episodes = await client.readLibrarySeasonEpisodes({
+      limit: 2,
+      seasonNumber: 2,
+      seriesId: "series-upstream-1",
+      startIndex: 0,
+      userId: "paired-user-id",
     });
+    expect(episodes.items[0]).toMatchObject({
+      airDate: "2025-02-14",
+      artwork: { poster: { itemId: "episode-upstream-1", type: "Primary" } },
+      communityRating: 8.4,
+      creditsTruncated: true,
+      criticRating: 91,
+      externalId: "episode-upstream-1",
+      genres: ["Drama", "Science fiction"],
+      kind: "episode",
+      positionSeconds: 90,
+      seasonNumber: 2,
+      studios: ["Northlight Pictures"],
+      title: "The Long Meridian",
+    });
+    expect(episodes.items[0]?.credits).toHaveLength(24);
+    expect(episodes.items[0]?.credits.slice(0, 2)).toEqual([
+      { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
+      { name: "Ari Chen", role: null, type: "writer" },
+    ]);
+    expect(episodes.items[1]).toMatchObject({
+      communityRating: null,
+      credits: [],
+      criticRating: null,
+      genres: ["Drama"],
+      studios: [],
+    });
+    expect(episodes).toMatchObject({ nextStartIndex: 2, truncated: true });
     expect(requests.map(({ url }) => url.pathname)).toEqual([
       "/base/Items/series-upstream-1",
       "/base/Shows/series-upstream-1/Seasons",
@@ -462,8 +505,9 @@ describe("JellyfinUserMediaClient", () => {
       UserId: "paired-user-id",
     });
     expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
+      Fields: expect.stringContaining("People"),
       IsMissing: "false",
-      Limit: "2",
+      Limit: "3",
       Season: "2",
       StartIndex: "0",
       UserId: "paired-user-id",
