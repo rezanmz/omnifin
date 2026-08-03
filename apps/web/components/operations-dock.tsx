@@ -2,7 +2,7 @@
 
 import { Activity, Check, ChevronDown, Gauge, HardDrive, Network } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 
@@ -17,6 +17,7 @@ const ManualReleaseWorkbench = dynamic(
 );
 
 const OPERATIONS_EXPANDED_KEY = "omnifin:operations-expanded";
+const OPERATIONS_ACTIVATION_GUARD_MS = 350;
 
 function storedExpandedState() {
   try {
@@ -37,6 +38,7 @@ function storeExpandedState(expanded: boolean) {
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
   const [hydrated, setHydrated] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const lastActivation = useRef(Number.NEGATIVE_INFINITY);
   const average =
     operations.length > 0
       ? operations.reduce((total, operation) => total + operation.progress, 0) / operations.length
@@ -91,6 +93,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         data-directional-item
         disabled={!hydrated}
         onClick={() => {
+          const now = window.performance.now();
+          if (now - lastActivation.current < OPERATIONS_ACTIVATION_GUARD_MS) {
+            return;
+          }
+          lastActivation.current = now;
           const nextExpanded = !expanded;
           storeExpandedState(nextExpanded);
           setExpanded(nextExpanded);
