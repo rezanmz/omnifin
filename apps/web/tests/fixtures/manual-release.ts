@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { expandOperationsDock } from "./operations";
 
 export const manualReleaseCsrfToken =
   "manual_release_fixture_csrf_0123456789abcdefghijklmnopqrstuvwxyz";
@@ -165,7 +166,7 @@ export async function mockManualReleaseGrab(page: Page) {
 
 export async function openManualReleaseWorkbench(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
