@@ -155,7 +155,7 @@ describe("ContinueWatchingRail", () => {
       expect.any(AbortSignal),
       {
         audioStreamIndex: null,
-        maxStreamingBitrate: 80_000_000,
+        maxStreamingBitrate: 200_000_000,
         mode: "auto",
         subtitleStreamIndex: null,
       },

@@ -82,11 +82,11 @@ describe("directional navigation", () => {
     const user = userEvent.setup();
     render(<CalendarStrip items={demoDashboard.calendar} />);
 
-    const first = screen.getByRole("button", { name: /Signal \/ 1×07/i });
+    const first = screen.getByRole("link", { name: /Signal \/ 1×07/i });
     first.focus();
     await user.keyboard("{ArrowRight}");
 
-    expect(screen.getByRole("button", { name: /The Long Meridian/i })).toHaveFocus();
+    expect(screen.getByRole("link", { name: /The Long Meridian/i })).toHaveFocus();
   });
 
   it("moves from the expanded operations summary into its first row", async () => {
