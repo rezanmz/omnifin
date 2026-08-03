@@ -753,6 +753,21 @@
     grid-template-columns: 82px minmax(0, 1fr) 16px;
   }
 
+  .library-title__episode-copy-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .library-title__episode-copy-heading > strong {
+    display: -webkit-box;
+    line-height: 1.25;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
   .library-title__episode-copy
     > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
     -webkit-line-clamp: 1;
