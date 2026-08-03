@@ -18,6 +18,7 @@ import {
   mockManualReleaseSession,
   openManualReleaseWorkbench,
 } from "../fixtures/manual-release";
+import { expandOperationsDock } from "../fixtures/operations";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
@@ -1380,8 +1381,7 @@ test("expanded operations visual baseline", async ({ page }, testInfo) => {
   );
   await page.goto("/");
   const operations = page.getByRole("button", { name: /2 acquisitions moving/i });
-  await operations.click();
-  await expect(page.locator("#operations-details")).toBeVisible();
+  await expandOperationsDock(page);
   await page.evaluate(() => {
     document.documentElement.style.scrollBehavior = "auto";
     window.scrollTo(0, 0);
@@ -1406,7 +1406,7 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
     "Acquisition provenance covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1424,7 +1424,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
     "Acquisition recovery covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1439,7 +1439,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
 
 async function openQueueRecoveryTimeline(page: Page) {
   await page.goto("/?test-view=queue-recovery");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1519,7 +1519,7 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
     "Acquisition monitoring covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();

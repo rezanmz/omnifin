@@ -17,6 +17,7 @@ const ManualReleaseWorkbench = dynamic(
 );
 
 const OPERATIONS_EXPANDED_KEY = "omnifin:operations-expanded";
+const OPERATIONS_ACTIVATED_AT_KEY = "omnifin:operations-activated-at";
 const OPERATIONS_ACTIVATION_GUARD_MS = 350;
 
 function storedExpandedState() {
@@ -32,6 +33,23 @@ function storeExpandedState(expanded: boolean) {
     window.sessionStorage.setItem(OPERATIONS_EXPANDED_KEY, String(expanded));
   } catch {
     // The disclosure remains usable when tab-scoped storage is unavailable.
+  }
+}
+
+function storedActivationTime() {
+  try {
+    const value = Number(window.sessionStorage.getItem(OPERATIONS_ACTIVATED_AT_KEY));
+    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+}
+
+function storeActivationTime(activatedAt: number) {
+  try {
+    window.sessionStorage.setItem(OPERATIONS_ACTIVATED_AT_KEY, String(activatedAt));
+  } catch {
+    // The in-memory guard still coalesces repeated activation in the mounted dock.
   }
 }
 
@@ -56,6 +74,19 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  function toggleExpanded() {
+    const now = Date.now();
+    const previousActivation = Math.max(lastActivation.current, storedActivationTime());
+    if (now - previousActivation < OPERATIONS_ACTIVATION_GUARD_MS) {
+      return;
+    }
+    lastActivation.current = now;
+    storeActivationTime(now);
+    const nextExpanded = !expanded;
+    storeExpandedState(nextExpanded);
+    setExpanded(nextExpanded);
+  }
 
   if (operations.length === 0) {
     return (
@@ -92,15 +123,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         className="operations-dock__summary"
         data-directional-item
         disabled={!hydrated}
-        onClick={() => {
-          const now = window.performance.now();
-          if (now - lastActivation.current < OPERATIONS_ACTIVATION_GUARD_MS) {
-            return;
-          }
-          lastActivation.current = now;
-          const nextExpanded = !expanded;
-          storeExpandedState(nextExpanded);
-          setExpanded(nextExpanded);
+        onClick={(event) => {
+          if (event.detail === 0) toggleExpanded();
+        }}
+        onPointerUp={(event) => {
+          if (event.isPrimary && event.button === 0) toggleExpanded();
         }}
         type="button"
       >
