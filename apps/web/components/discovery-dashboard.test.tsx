@@ -73,7 +73,7 @@ describe("DiscoveryDashboard", () => {
       "remote",
     );
     const spotlightArtwork = container.querySelector(".hero-spotlight__art-image");
-    expect(spotlightArtwork).toHaveAttribute("decoding", "async");
+    expect(spotlightArtwork).toHaveAttribute("decoding", "sync");
     expect(spotlightArtwork).toHaveAttribute("fetchpriority", "high");
 
     await user.click(

@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useLayoutEffect } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
 
@@ -18,7 +18,7 @@ export function ApplicationShellContent({
   displayProfile?: "standard" | "ten-foot";
   status: ServiceStatus;
 }) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const frame = document.querySelector<HTMLElement>(".application-frame");
     if (!frame) return;
 
