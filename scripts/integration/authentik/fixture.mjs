@@ -1,6 +1,7 @@
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 
+import { COMPATIBILITY_CHECKS } from "../compatibility-checks.mjs";
 import { applyCompatibilityTargetOverride } from "../compatibility-targets.mjs";
 
 const authentikTarget = applyCompatibilityTargetOverride({
@@ -14,16 +15,7 @@ export const PROVIDER_VALIDATION_MAX_ATTEMPTS = 10;
 export const PROVIDER_VALIDATION_MAX_WAIT_MS = 300_000;
 const PROVIDER_VALIDATION_JITTER_SECONDS = 6;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
-const CHECKS = Object.freeze([
-  "authorization_code_pkce",
-  "immutable_issuer_subject",
-  "jit_pending_jellyfin_link",
-  "privileged_group_role_mapping",
-  "guarded_role_mapping_update",
-  "provider_initiated_backchannel_logout",
-  "rp_initiated_logout",
-  "secret_leak_inspection",
-]);
+const CHECKS = COMPATIBILITY_CHECKS.authentik;
 
 export function isPrivateIpv4(address) {
   return (

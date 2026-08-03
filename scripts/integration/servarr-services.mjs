@@ -35,6 +35,7 @@ import {
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
 import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
+import { COMPATIBILITY_CHECKS } from "./compatibility-checks.mjs";
 import { FIXTURE_MOVIE_TMDB_ID, FIXTURE_SERIES_TVDB_ID } from "./servarr-fixture-server.mjs";
 
 export const SERVARR_FIXTURE_SERVER_IMAGE =
@@ -76,57 +77,11 @@ export const SERVARR_SERVICE_VERSIONS = Object.freeze(
 );
 
 const SERVICE_PORTS = Object.freeze({ bazarr: 6767, prowlarr: 9696, radarr: 7878, sonarr: 8989 });
-const SERVICE_CHECKS = Object.freeze({
-  bazarr: [
-    "authentication",
-    "credentialRejection",
-    "emptyLibraryRead",
-    "fixtureMediaProvisioning",
-    "subtitleArtifact",
-    "subtitleDownload",
-    "subtitleSearch",
-    "versionDiscovery",
-  ],
-  prowlarr: [
-    "applicationRead",
-    "authentication",
-    "credentialRejection",
-    "failureRead",
-    "fixtureIndexerProvisioning",
-    "indexerRead",
-    "indexerSafeTest",
-    "systemHealthRead",
-    "versionDiscovery",
-  ],
-  radarr: [
-    "authentication",
-    "calendarRead",
-    "credentialRejection",
-    "fixtureTitleProvisioning",
-    "monitoringRead",
-    "monitoringRestore",
-    "monitoringUpdate",
-    "queueMutationGuard",
-    "queueRead",
-    "storageRead",
-    "systemHealthRead",
-    "versionDiscovery",
-  ],
-  sonarr: [
-    "authentication",
-    "calendarRead",
-    "credentialRejection",
-    "fixtureTitleProvisioning",
-    "monitoringRead",
-    "monitoringRestore",
-    "monitoringUpdate",
-    "queueMutationGuard",
-    "queueRead",
-    "storageRead",
-    "systemHealthRead",
-    "versionDiscovery",
-  ],
-});
+const SERVICE_CHECKS = Object.freeze(
+  Object.fromEntries(
+    Object.keys(servarrTargets).map((service) => [service, COMPATIBILITY_CHECKS[service]]),
+  ),
+);
 const SERVICES = Object.freeze(Object.keys(SERVARR_SERVICE_IMAGES));
 const SAFE_CONNECTOR_FAILURE_CODES = new Set([
   "configuration_invalid",

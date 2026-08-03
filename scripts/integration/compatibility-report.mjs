@@ -7,12 +7,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { COMPATIBILITY_CHECKS } from "./compatibility-checks.mjs";
 import {
   COMPATIBILITY_SERVICES,
   COMPATIBILITY_TARGET_DEFINITIONS,
   validateCompatibilityTarget,
   validateCompatibilityTargets,
 } from "./compatibility-targets.mjs";
+export { COMPATIBILITY_CHECKS } from "./compatibility-checks.mjs";
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const ERROR_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,95}$/u;
@@ -26,120 +28,6 @@ export class CompatibilityReportError extends Error {
     this.code = code;
   }
 }
-
-export const COMPATIBILITY_CHECKS = Object.freeze({
-  authentik: Object.freeze([
-    "authorization_code_pkce",
-    "immutable_issuer_subject",
-    "jit_pending_jellyfin_link",
-    "privileged_group_role_mapping",
-    "guarded_role_mapping_update",
-    "provider_initiated_backchannel_logout",
-    "rp_initiated_logout",
-    "secret_leak_inspection",
-  ]),
-  bazarr: Object.freeze([
-    "authentication",
-    "credentialRejection",
-    "emptyLibraryRead",
-    "fixtureMediaProvisioning",
-    "subtitleArtifact",
-    "subtitleDownload",
-    "subtitleSearch",
-    "versionDiscovery",
-  ]),
-  jellyfin: Object.freeze([
-    "direct_range",
-    "hls_transcode",
-    "identity_invalid_password",
-    "identity_mismatched_quick_connect_secret",
-    "identity_password",
-    "identity_public_info",
-    "identity_quick_connect",
-    "library_catalog",
-    "progress_persistence",
-    "restart_reconnect",
-    "track_audio",
-    "track_subtitle",
-  ]),
-  oidc: Object.freeze([
-    "authorization_code_pkce",
-    "state_nonce_validation",
-    "strict_issuer_and_standard_claims",
-    "immutable_issuer_subject",
-    "jit_viewer_pending_jellyfin_link",
-    "explicit_group_role_mapping",
-    "guarded_role_mapping_update",
-    "optional_logout_capability_negotiation",
-    "local_logout_fallback",
-    "secret_leak_inspection",
-  ]),
-  prowlarr: Object.freeze([
-    "applicationRead",
-    "authentication",
-    "credentialRejection",
-    "failureRead",
-    "fixtureIndexerProvisioning",
-    "indexerRead",
-    "indexerSafeTest",
-    "systemHealthRead",
-    "versionDiscovery",
-  ]),
-  qbittorrent: Object.freeze([
-    "authentication",
-    "coordinatedPauseResume",
-    "credentialRejection",
-    "exactPause",
-    "exactPromotion",
-    "exactResume",
-    "preserveFilesRemoval",
-    "queueRead",
-  ]),
-  radarr: Object.freeze([
-    "authentication",
-    "calendarRead",
-    "credentialRejection",
-    "fixtureTitleProvisioning",
-    "monitoringRead",
-    "monitoringRestore",
-    "monitoringUpdate",
-    "storageRead",
-    "systemHealthRead",
-    "versionDiscovery",
-  ]),
-  sabnzbd: Object.freeze([
-    "authentication",
-    "coordinatedPauseResume",
-    "credentialRejection",
-    "exactPause",
-    "exactPromotion",
-    "exactResume",
-    "preserveFilesRemoval",
-    "queueRead",
-  ]),
-  seerr: Object.freeze([
-    "authentication",
-    "credentialRejection",
-    "delegatedIdentity",
-    "duplicateRejection",
-    "pendingRequestCreation",
-    "requestDecline",
-    "requestReview",
-    "versionDiscovery",
-  ]),
-  sonarr: Object.freeze([
-    "authentication",
-    "calendarRead",
-    "credentialRejection",
-    "fixtureTitleProvisioning",
-    "monitoringRead",
-    "monitoringRestore",
-    "monitoringUpdate",
-    "storageRead",
-    "systemHealthRead",
-    "versionDiscovery",
-  ]),
-});
 
 function sortedKeys(value) {
   return Object.keys(value).sort().join(",");
