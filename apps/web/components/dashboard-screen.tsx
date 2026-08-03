@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
+import type { AcquisitionCalendarClient } from "../lib/acquisition-calendar";
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
 import { ApplicationShellContent } from "./application-shell";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
@@ -18,6 +19,7 @@ function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
 type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 
 export function DashboardScreen({
+  calendarClient,
   data,
   discoveryInitialFeed,
   discoveryRefresh = true,
@@ -26,8 +28,10 @@ export function DashboardScreen({
   displayProfile = "standard",
   heroArtworkPath,
   liveContinueWatching = false,
+  liveCalendar = false,
   liveDiscovery = false,
 }: {
+  calendarClient?: AcquisitionCalendarClient;
   data: DashboardModel;
   discoveryInitialFeed?: DiscoveryFeedResponse;
   discoveryRefresh?: boolean;
@@ -36,6 +40,7 @@ export function DashboardScreen({
   displayProfile?: DisplayProfile;
   heroArtworkPath?: string;
   liveContinueWatching?: boolean;
+  liveCalendar?: boolean;
   liveDiscovery?: boolean;
 }) {
   return (
@@ -67,8 +72,10 @@ export function DashboardScreen({
         ) : (
           <DeferredDashboardSections
             calendar={data.calendar}
+            {...(calendarClient === undefined ? {} : { calendarClient })}
             continueWatching={data.continueWatching}
             discovery={data.discovery}
+            liveCalendar={liveCalendar}
             liveContinueWatching={liveContinueWatching}
             operations={data.operations}
             showMedia={!liveDiscovery}
