@@ -2,12 +2,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { demoDashboard } from "../lib/dashboard-data";
-import { useInterfaceStore } from "../stores/interface-store";
 import { OperationsDock } from "./operations-dock";
 
 describe("OperationsDock", () => {
   it("reveals operation detail on demand", async () => {
-    useInterfaceStore.setState({ operationsExpanded: false });
     const user = userEvent.setup();
     render(<OperationsDock operations={demoDashboard.operations} />);
 
@@ -33,7 +31,6 @@ describe("OperationsDock", () => {
   });
 
   it("exposes acquisition progress with numeric semantics", () => {
-    useInterfaceStore.setState({ operationsExpanded: false });
     render(<OperationsDock operations={demoDashboard.operations} />);
 
     expect(
