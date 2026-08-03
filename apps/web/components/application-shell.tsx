@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect } from "react";
+import { createContext, type ReactNode, useContext, useEffect } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
 import type { ApplicationDestination } from "../lib/application-shell-route";
@@ -8,7 +8,22 @@ import type { ThemePreference } from "../lib/theme";
 import { ApplicationShellEnhancements } from "./application-shell-enhancements";
 
 const DEFAULT_ACCENT = "#8de9d5";
+const ApplicationShellEnhancementContext = createContext(true);
 export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
+
+export function ApplicationShellEnhancementBoundary({
+  children,
+  enabled,
+}: {
+  children: ReactNode;
+  enabled: boolean;
+}) {
+  return (
+    <ApplicationShellEnhancementContext.Provider value={enabled}>
+      {children}
+    </ApplicationShellEnhancementContext.Provider>
+  );
+}
 
 export function ApplicationShellContent({
   accent = DEFAULT_ACCENT,
@@ -25,6 +40,8 @@ export function ApplicationShellContent({
   status: ServiceStatus;
   themePreference?: ThemePreference;
 }) {
+  const enhancementEnabled = useContext(ApplicationShellEnhancementContext);
+
   useEffect(() => {
     const frame = document.querySelector<HTMLElement>(".application-frame");
     if (!frame) return;
@@ -44,7 +61,12 @@ export function ApplicationShellContent({
 
   return (
     <>
-      <ApplicationShellEnhancements initialCurrent={current} initialPreference={themePreference} />
+      {enhancementEnabled ? (
+        <ApplicationShellEnhancements
+          initialCurrent={current}
+          initialPreference={themePreference}
+        />
+      ) : null}
       {children}
     </>
   );

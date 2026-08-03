@@ -5,6 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { ServiceStatus } from "../lib/dashboard-data";
 import type { ApplicationDestination } from "../lib/application-shell-route";
 import type { ThemePreference } from "../lib/theme";
+import { ApplicationShellEnhancementBoundary } from "./application-shell";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { MobileNavigation, NavigationRail } from "./navigation-rail";
@@ -28,19 +29,21 @@ export default function StandaloneApplicationShell({
   themePreference: ThemePreference;
 }) {
   return (
-    <div
-      className="application-frame"
-      data-display-profile={displayProfile}
-      style={{ "--ambient-accent": accent } as ShellStyle}
-    >
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail current={current} />
-      <div className="application-shell">
-        <TopCommandBar connectionStatus={status} themePreference={themePreference} />
-        {children}
+    <ApplicationShellEnhancementBoundary enabled={false}>
+      <div
+        className="application-frame"
+        data-display-profile={displayProfile}
+        style={{ "--ambient-accent": accent } as ShellStyle}
+      >
+        <LiquidGlassEnvironment />
+        <CinematicBackdrop />
+        <NavigationRail current={current} />
+        <div className="application-shell">
+          <TopCommandBar connectionStatus={status} themePreference={themePreference} />
+          {children}
+        </div>
+        <MobileNavigation current={current} />
       </div>
-      <MobileNavigation current={current} />
-    </div>
+    </ApplicationShellEnhancementBoundary>
   );
 }
