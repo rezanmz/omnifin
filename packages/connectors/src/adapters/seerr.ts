@@ -1021,8 +1021,8 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         upstreamMovieFeedPageSchema,
         {
           ...options,
+          headers: { ...options.headers, "Accept-Language": query.language },
           query: new URLSearchParams({
-            language: query.language,
             page: "1",
             sortBy: "popularity.desc",
           }),
@@ -1040,8 +1040,8 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         upstreamSeriesFeedPageSchema,
         {
           ...options,
+          headers: { ...options.headers, "Accept-Language": query.language },
           query: new URLSearchParams({
-            language: query.language,
             page: "1",
             sortBy: "popularity.desc",
           }),
