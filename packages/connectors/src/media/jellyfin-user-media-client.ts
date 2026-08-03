@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  LIBRARY_EPISODE_MAX_CREDITS,
+  LIBRARY_EPISODE_MAX_GENRES,
+  LIBRARY_EPISODE_MAX_STUDIOS,
+  type LibraryEpisodeCredit,
+} from "@omnifin/contracts/library";
 
 import {
   jellyfinAuthorization,
@@ -105,6 +111,9 @@ const jellyfinLibrarySeasonsResponseSchema = z.object({
 
 const jellyfinLibraryEpisodeSchema = z.object({
   BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  CommunityRating: z.number().finite().nullish(),
+  CriticRating: z.number().finite().nullish(),
+  Genres: z.array(z.string().max(100)).max(128).nullish(),
   Id: z.string().trim().min(1).max(256),
   ImageBlurHashes: z.unknown().optional(),
   ImageTags: imageTagsSchema.nullish(),
@@ -115,11 +124,26 @@ const jellyfinLibraryEpisodeSchema = z.object({
   ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   ParentBackdropItemId: z.string().trim().min(1).max(256).nullish(),
   ParentIndexNumber: z.int().nonnegative().max(100_000).nullish(),
+  People: z
+    .array(
+      z.object({
+        Name: z.string().max(160).nullish(),
+        Role: z.string().max(200).nullish(),
+        Type: z.string().max(64).nullish(),
+      }),
+    )
+    .max(256)
+    .nullish(),
+  PremiereDate: z.string().trim().min(1).max(64).nullish(),
   ProductionYear: z.int().min(0).max(9_999).nullish(),
   RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
   SeriesId: z.string().trim().min(1).max(256),
   SeriesName: z.string().trim().min(1).max(300).nullish(),
   SeriesPrimaryImageTag: z.string().min(1).max(256).nullish(),
+  Studios: z
+    .array(z.object({ Name: z.string().max(160).nullish() }))
+    .max(128)
+    .nullish(),
   Type: z.literal("Episode"),
   UserData: z
     .object({
@@ -283,8 +307,15 @@ export interface JellyfinLibraryEpisode extends Omit<
   JellyfinContinueWatchingItem,
   "lastPlayedAt" | "kind"
 > {
+  airDate: string | null;
+  communityRating: number | null;
+  credits: LibraryEpisodeCredit[];
+  creditsTruncated: boolean;
+  criticRating: number | null;
+  genres: string[];
   kind: "episode";
   played: boolean;
+  studios: string[];
 }
 
 export interface JellyfinImageResult {
@@ -304,6 +335,67 @@ function compactText(value: string | null | undefined, maxLength: number) {
   const compacted = value.replace(/\s+/gu, " ").trim();
   if (!compacted) return null;
   return compacted.length <= maxLength ? compacted : compacted.slice(0, maxLength).trimEnd();
+}
+
+function dateOnly(value: string | null | undefined) {
+  const candidate = value?.match(/^(\d{4}-\d{2}-\d{2})/u)?.[1];
+  if (!candidate) return null;
+  const parsed = new Date(`${candidate}T00:00:00.000Z`);
+  return Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== candidate
+    ? null
+    : candidate;
+}
+
+function boundedRating(value: number | null | undefined, maximum: number) {
+  return value !== null && value !== undefined && value >= 0 && value <= maximum ? value : null;
+}
+
+function uniqueText(
+  values: readonly string[] | null | undefined,
+  limit: number,
+  maxLength: number,
+) {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const text = compactText(value, maxLength);
+    const key = text?.toLocaleLowerCase("en-US");
+    if (!text || !key || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(text);
+    if (normalized.length === limit) break;
+  }
+  return normalized;
+}
+
+function episodeCredits(
+  people: z.infer<typeof jellyfinLibraryEpisodeSchema>["People"],
+): Pick<JellyfinLibraryEpisode, "credits" | "creditsTruncated"> {
+  const normalized: LibraryEpisodeCredit[] = [];
+  const seen = new Set<string>();
+  for (const person of people ?? []) {
+    const upstreamType = person.Type?.toLocaleLowerCase("en-US").replace(/[\s_-]+/gu, "");
+    const type =
+      upstreamType === "actor" || upstreamType === "gueststar"
+        ? ("cast" as const)
+        : upstreamType === "director"
+          ? ("director" as const)
+          : upstreamType === "writer"
+            ? ("writer" as const)
+            : null;
+    if (!type) continue;
+    const name = compactText(person.Name, 160);
+    if (!name) continue;
+    const role = compactText(person.Role, 200);
+    const key = `${type}:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({ name, role, type });
+  }
+  return {
+    credits: normalized.slice(0, LIBRARY_EPISODE_MAX_CREDITS),
+    creditsTruncated: normalized.length > LIBRARY_EPISODE_MAX_CREDITS,
+  };
 }
 
 function secondsFromTicks(ticks: number) {
@@ -522,10 +614,10 @@ function normalizeLibraryEpisode(
 ): JellyfinLibraryEpisode | null {
   const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
   if (runtimeSeconds < 1) return null;
-  const posterTag = item.SeriesPrimaryImageTag ?? item.ImageTags?.Primary ?? undefined;
+  const posterTag = item.ImageTags?.Primary ?? item.SeriesPrimaryImageTag ?? undefined;
   const poster = posterTag
     ? {
-        itemId: item.SeriesPrimaryImageTag ? item.SeriesId : item.Id,
+        itemId: item.ImageTags?.Primary ? item.Id : item.SeriesId,
         type: "Primary" as const,
       }
     : null;
@@ -536,15 +628,20 @@ function normalizeLibraryEpisode(
       ? item.Id
       : undefined;
   return {
+    airDate: dateOnly(item.PremiereDate),
     artwork: {
       ...artworkPalette(item, posterTag, backdropTag),
       backdrop: backdropItemId ? { itemId: backdropItemId, type: "Backdrop" } : null,
       poster,
     },
     contentRating: compactText(item.OfficialRating, 32),
+    communityRating: boundedRating(item.CommunityRating, 10),
+    criticRating: boundedRating(item.CriticRating, 100),
+    ...episodeCredits(item.People),
     episodeNumber: item.IndexNumber ?? null,
     externalId: item.Id,
     kind: "episode",
+    genres: uniqueText(item.Genres, LIBRARY_EPISODE_MAX_GENRES, 100),
     overview: compactText(item.Overview, 2_000),
     played: item.UserData?.Played ?? false,
     positionSeconds: Math.min(
@@ -555,6 +652,11 @@ function normalizeLibraryEpisode(
     seasonNumber: item.ParentIndexNumber ?? null,
     subtitle: episodeLabel(item),
     title: item.Name,
+    studios: uniqueText(
+      item.Studios?.flatMap(({ Name }) => (Name === null || Name === undefined ? [] : [Name])),
+      LIBRARY_EPISODE_MAX_STUDIOS,
+      160,
+    ),
     year:
       item.ProductionYear !== null &&
       item.ProductionYear !== undefined &&
@@ -836,7 +938,8 @@ export class JellyfinUserMediaClient {
         query: {
           EnableImageTypes: "Primary,Backdrop",
           EnableUserData: "true",
-          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+          Fields:
+            "Overview,ProductionYear,OfficialRating,CommunityRating,CriticRating,PremiereDate,Genres,Studios,People,ImageBlurHashes",
           ImageTypeLimit: "1",
           IsMissing: "false",
           Limit: String(input.limit + 1),

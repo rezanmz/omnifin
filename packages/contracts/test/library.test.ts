@@ -241,6 +241,15 @@ describe("library operation contracts", () => {
       generatedAt: catalogue.generatedAt,
       items: [
         {
+          airDate: "2025-02-14",
+          communityRating: 8.4,
+          credits: [
+            { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" as const },
+            { name: "Ari Chen", role: null, type: "writer" as const },
+          ],
+          creditsTruncated: false,
+          criticRating: 91,
+          genres: ["Drama", "Science fiction"],
           media: {
             ...catalogue.items[0]!.media,
             artwork: {
@@ -254,6 +263,7 @@ describe("library operation contracts", () => {
             title: "The Long Meridian",
           },
           playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+          studios: ["Northlight Pictures"],
         },
       ],
       nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",

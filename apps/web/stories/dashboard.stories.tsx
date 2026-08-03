@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { DashboardScreen } from "../components/dashboard-screen";
 import { OnboardingDashboard } from "../components/onboarding-dashboard";
+import StandaloneApplicationShell from "../components/standalone-application-shell";
 import { demoDashboard } from "../lib/dashboard-data";
 import { setupReadinessDemo } from "../lib/setup-readiness-demo";
 
@@ -13,9 +14,33 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Configured: Story = { args: { data: demoDashboard } };
+export const Configured: Story = {
+  args: { data: demoDashboard },
+  render: (properties) => (
+    <StandaloneApplicationShell
+      accent={properties.data.hero.accent}
+      current="discover"
+      displayProfile="standard"
+      status="attention"
+      themePreference="system"
+    >
+      <DashboardScreen {...properties} />
+    </StandaloneApplicationShell>
+  ),
+};
 export const ConfiguredTenFoot: Story = {
   args: { data: demoDashboard, displayProfile: "ten-foot" },
+  render: (properties) => (
+    <StandaloneApplicationShell
+      accent={properties.data.hero.accent}
+      current="discover"
+      displayProfile="ten-foot"
+      status="attention"
+      themePreference="system"
+    >
+      <DashboardScreen {...properties} />
+    </StandaloneApplicationShell>
+  ),
 };
 export const FirstRun: Story = {
   args: { data: demoDashboard },

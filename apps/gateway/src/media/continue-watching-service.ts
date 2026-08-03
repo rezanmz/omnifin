@@ -484,12 +484,19 @@ export class ContinueWatchingService {
         })),
       );
       const items = result.items.map((item, index) => ({
+        airDate: item.airDate,
+        communityRating: item.communityRating,
+        credits: item.credits,
+        creditsTruncated: item.creditsTruncated,
+        criticRating: item.criticRating,
+        genres: item.genres,
         media: this.#episodeMedia(item, referenceIds[index]!),
         playback: {
           durationSeconds: item.runtimeSeconds,
           played: item.played,
           positionSeconds: item.positionSeconds,
         },
+        studios: item.studios,
       }));
       return librarySeasonEpisodesResponseSchema.parse({
         generatedAt: occurredAt.toISOString(),

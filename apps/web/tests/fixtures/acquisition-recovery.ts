@@ -5,7 +5,7 @@ export const acquisitionRecoveryCsrfToken =
 export const acquisitionQueueRecoveryReference = `aqr_v2.${"A".repeat(100)}`;
 
 export const acquisitionRecoveryPrincipal = {
-  absoluteExpiresAt: "2026-07-28T12:00:00.000Z",
+  absoluteExpiresAt: "2099-07-28T12:00:00.000Z",
   accountState: "active",
   authenticationMethod: { kind: "oidc", providerId: "authentik" },
   displayName: "Ari",
@@ -15,7 +15,7 @@ export const acquisitionRecoveryPrincipal = {
     providerId: "authentik",
     subject: "ari-subject",
   },
-  inactivityExpiresAt: "2026-07-27T14:00:00.000Z",
+  inactivityExpiresAt: "2099-07-27T14:00:00.000Z",
   issuedAt: "2026-07-27T12:00:00.000Z",
   linkedServices: [
     {

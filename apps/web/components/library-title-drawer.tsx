@@ -11,15 +11,20 @@ import type {
   LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
 import {
+  CalendarDays,
   Check,
+  ChevronDown,
   ChevronRight,
+  Clapperboard,
   Clock3,
   Film,
   Layers3,
   LoaderCircle,
   Play,
   RotateCcw,
+  Star,
   Tv,
+  UsersRound,
   WifiOff,
   X,
 } from "lucide-react";
@@ -73,6 +78,16 @@ function formatRuntime(minutes: number | null) {
   const remainder = minutes % 60;
   if (hours === 0) return `${remainder}m`;
   return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
+}
+
+function formatAirDate(value: string | null) {
+  if (!value) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(new Date(`${value}T00:00:00.000Z`));
 }
 
 function titleFacts(detail: LibraryTitleDetailResponse) {
@@ -130,6 +145,149 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
   );
 }
 
+function EpisodeArtwork({ episode }: { episode: LibrarySeasonEpisode }) {
+  const source = sameOriginMediaPath(episode.media.artwork.posterPath);
+  return (
+    <span className="library-title__episode-artwork">
+      <Film aria-hidden="true" />
+      {source ? (
+        // Artwork stays on Omnifin's authenticated, opaque media route.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          alt=""
+          decoding="async"
+          loading="lazy"
+          onError={(event) => {
+            event.currentTarget.hidden = true;
+          }}
+          src={source}
+        />
+      ) : null}
+      <span>{episode.media.subtitle ?? "Episode"}</span>
+    </span>
+  );
+}
+
+function EpisodeDetail({ episode, onPlay }: { episode: LibrarySeasonEpisode; onPlay: () => void }) {
+  const airDate = formatAirDate(episode.airDate);
+  const cast = episode.credits.filter(({ type }) => type === "cast");
+  const crew = episode.credits.filter(({ type }) => type !== "cast");
+  const hasEnrichment =
+    airDate !== null ||
+    episode.communityRating !== null ||
+    episode.criticRating !== null ||
+    episode.genres.length > 0 ||
+    episode.studios.length > 0 ||
+    episode.credits.length > 0;
+  return (
+    <section
+      aria-label={`${episode.media.title} episode details`}
+      className="library-title__episode-detail"
+      id={`library-title-episode-${episode.media.id}`}
+    >
+      <div className="library-title__episode-detail-heading">
+        <div>
+          <p className="eyebrow">Episode brief</p>
+          <h4>{episode.media.title}</h4>
+        </div>
+        <div aria-label="Episode facts" className="library-title__episode-detail-facts">
+          {airDate ? (
+            <span>
+              <CalendarDays aria-hidden="true" /> {airDate}
+            </span>
+          ) : null}
+          {episode.communityRating !== null ? (
+            <span>
+              <Star aria-hidden="true" fill="currentColor" /> {episode.communityRating.toFixed(1)}
+              /10
+            </span>
+          ) : null}
+          {episode.criticRating !== null ? <span>{episode.criticRating}% critics</span> : null}
+        </div>
+      </div>
+
+      {episode.media.overview ? (
+        <p className="library-title__episode-detail-overview">{episode.media.overview}</p>
+      ) : (
+        <p className="library-title__episode-detail-quiet">
+          Jellyfin has no episode synopsis for this title yet.
+        </p>
+      )}
+
+      {cast.length > 0 || crew.length > 0 ? (
+        <div className="library-title__episode-credits">
+          {cast.length > 0 ? (
+            <section>
+              <p>
+                <UsersRound aria-hidden="true" /> On screen
+              </p>
+              <ul>
+                {cast.map((credit) => (
+                  <li key={`${credit.name}:${credit.role ?? "cast"}`}>
+                    <strong>{credit.name}</strong>
+                    <span>{credit.role ?? "Cast"}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {crew.length > 0 ? (
+            <section>
+              <p>
+                <Clapperboard aria-hidden="true" /> Behind the episode
+              </p>
+              <dl>
+                {crew.map((credit) => (
+                  <div key={`${credit.name}:${credit.type}:${credit.role ?? ""}`}>
+                    <dt>{credit.type === "director" ? "Director" : "Writer"}</dt>
+                    <dd>{credit.name}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ) : null}
+          {episode.creditsTruncated ? (
+            <p className="library-title__episode-detail-note">Showing the first 24 credits.</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {episode.genres.length > 0 || episode.studios.length > 0 ? (
+        <dl className="library-title__episode-metadata">
+          {episode.genres.length > 0 ? (
+            <div>
+              <dt>Genres</dt>
+              <dd>{episode.genres.join(" · ")}</dd>
+            </div>
+          ) : null}
+          {episode.studios.length > 0 ? (
+            <div>
+              <dt>Studio</dt>
+              <dd>{episode.studios.join(" · ")}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      {!hasEnrichment ? (
+        <p className="library-title__episode-detail-quiet" role="status">
+          No additional episode metadata is available, but playback is ready.
+        </p>
+      ) : null}
+
+      <button
+        className="button button--primary library-title__episode-detail-play"
+        data-directional-item
+        onClick={onPlay}
+        type="button"
+      >
+        <Play aria-hidden="true" fill="currentColor" />
+        {episode.playback.positionSeconds > 0 ? "Resume episode" : "Play episode"}
+      </button>
+    </section>
+  );
+}
+
 function EpisodeList({
   onLoadMore,
   onPlay,
@@ -139,6 +297,7 @@ function EpisodeList({
   onPlay: (episode: LibrarySeasonEpisode) => void;
   state: Extract<EpisodeState, { kind: "ready" }>;
 }) {
+  const [expandedEpisodeId, setExpandedEpisodeId] = useState<string | null>(null);
   if (state.items.length === 0) {
     return (
       <div className="library-title__episodes-empty" role="status">
@@ -154,27 +313,41 @@ function EpisodeList({
           const progress = Math.round(
             (episode.playback.positionSeconds / episode.playback.durationSeconds) * 100,
           );
+          const expanded = expandedEpisodeId === episode.media.id;
+          const detailId = `library-title-episode-${episode.media.id}`;
           return (
-            <li key={episode.media.id}>
-              <div className="library-title__episode-index" aria-hidden="true">
-                {episode.media.subtitle?.match(/E(\d+)/u)?.[1] ?? "•"}
-              </div>
-              <div className="library-title__episode-copy">
-                <div>
-                  <h4>{episode.media.title}</h4>
-                  <span>
-                    {episode.media.runtimeMinutes
-                      ? `${episode.media.runtimeMinutes} min`
-                      : "Episode"}
+            <li data-expanded={expanded || undefined} key={episode.media.id}>
+              <button
+                aria-controls={detailId}
+                aria-expanded={expanded}
+                aria-label={`${expanded ? "Hide" : "View"} details for ${episode.media.title}`}
+                className="library-title__episode-summary"
+                data-directional-item
+                onClick={() => setExpandedEpisodeId(expanded ? null : episode.media.id)}
+                type="button"
+              >
+                <EpisodeArtwork episode={episode} />
+                <span className="library-title__episode-copy">
+                  <span className="library-title__episode-copy-heading">
+                    <strong>{episode.media.title}</strong>
+                    <span>
+                      {episode.media.runtimeMinutes
+                        ? `${episode.media.runtimeMinutes} min`
+                        : "Episode"}
+                      {episode.communityRating !== null
+                        ? ` · ${episode.communityRating.toFixed(1)} ★`
+                        : ""}
+                    </span>
                   </span>
-                </div>
-                {episode.media.overview ? <p>{episode.media.overview}</p> : null}
-                {progress > 0 && !episode.playback.played ? (
-                  <span className="library-title__episode-progress">
-                    <i style={{ width: `${progress}%` }} />
-                  </span>
-                ) : null}
-              </div>
+                  {episode.media.overview ? <span>{episode.media.overview}</span> : null}
+                  {progress > 0 && !episode.playback.played ? (
+                    <span className="library-title__episode-progress">
+                      <i style={{ width: `${progress}%` }} />
+                    </span>
+                  ) : null}
+                </span>
+                <ChevronDown aria-hidden="true" className="library-title__episode-expand" />
+              </button>
               {episode.playback.played ? (
                 <span className="library-title__episode-watched">
                   <Check aria-hidden="true" /> Watched
@@ -189,6 +362,7 @@ function EpisodeList({
               >
                 <Play aria-hidden="true" fill="currentColor" />
               </button>
+              {expanded ? <EpisodeDetail episode={episode} onPlay={() => onPlay(episode)} /> : null}
             </li>
           );
         })}

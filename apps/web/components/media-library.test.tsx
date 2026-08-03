@@ -1,6 +1,7 @@
 import type { LibraryBrowseResponse } from "@omnifin/contracts/library";
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ import {
   unavailableMediaLibraryOutcome,
 } from "../lib/media-library-demo";
 import { MediaLibrary } from "./media-library";
+import StandaloneApplicationShell from "./standalone-application-shell";
 
 const playbackSessionId = `playback_${"p".repeat(22)}`;
 const playbackSession: PlaybackNegotiationResponse = {
@@ -33,6 +35,20 @@ const playbackSession: PlaybackNegotiationResponse = {
   subtitleTracks: [],
 };
 
+function libraryScreen(content: ReactElement) {
+  return (
+    <StandaloneApplicationShell
+      accent="#6f8d84"
+      current="library"
+      displayProfile="standard"
+      status="attention"
+      themePreference="system"
+    >
+      {content}
+    </StandaloneApplicationShell>
+  );
+}
+
 describe("MediaLibrary", () => {
   beforeEach(() => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
@@ -40,7 +56,7 @@ describe("MediaLibrary", () => {
 
   it("renders a user-scoped collection without upstream identity details", () => {
     const { container } = render(
-      <MediaLibrary initialOutcome={readyMediaLibraryOutcome} live={false} />,
+      libraryScreen(<MediaLibrary initialOutcome={readyMediaLibraryOutcome} live={false} />),
     );
 
     expect(screen.getByRole("heading", { name: "Every story, in its place." })).toBeVisible();
@@ -60,7 +76,9 @@ describe("MediaLibrary", () => {
     const user = userEvent.setup();
     const load = vi.fn();
     render(
-      <MediaLibrary client={{ load }} initialOutcome={readyMediaLibraryOutcome} live={false} />,
+      libraryScreen(
+        <MediaLibrary client={{ load }} initialOutcome={readyMediaLibraryOutcome} live={false} />,
+      ),
     );
 
     await user.click(screen.getByRole("radio", { name: "Series" }));
@@ -86,7 +104,7 @@ describe("MediaLibrary", () => {
   });
 
   it("uses final poster geometry while the catalogue is loading", () => {
-    render(<MediaLibrary initialOutcome={{ status: "loading" }} live={false} />);
+    render(libraryScreen(<MediaLibrary initialOutcome={{ status: "loading" }} live={false} />));
 
     expect(screen.getByRole("heading", { name: "Gathering your library…" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Gathering your library…" })).toHaveAttribute(
@@ -98,26 +116,32 @@ describe("MediaLibrary", () => {
 
   it("renders deliberate empty, unavailable, signed-out, and permission boundaries", () => {
     const { rerender } = render(
-      <MediaLibrary initialOutcome={emptyMediaLibraryOutcome} live={false} />,
+      libraryScreen(<MediaLibrary initialOutcome={emptyMediaLibraryOutcome} live={false} />),
     );
     expect(screen.getByRole("heading", { name: "Your paired library is empty." })).toBeVisible();
 
     rerender(
-      <MediaLibrary
-        key="unavailable"
-        initialOutcome={unavailableMediaLibraryOutcome}
-        live={false}
-      />,
+      libraryScreen(
+        <MediaLibrary
+          key="unavailable"
+          initialOutcome={unavailableMediaLibraryOutcome}
+          live={false}
+        />,
+      ),
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Your library is still safely at home");
 
     rerender(
-      <MediaLibrary key="signed-out" initialOutcome={{ status: "signed_out" }} live={false} />,
+      libraryScreen(
+        <MediaLibrary key="signed-out" initialOutcome={{ status: "signed_out" }} live={false} />,
+      ),
     );
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
 
     rerender(
-      <MediaLibrary key="forbidden" initialOutcome={{ status: "forbidden" }} live={false} />,
+      libraryScreen(
+        <MediaLibrary key="forbidden" initialOutcome={{ status: "forbidden" }} live={false} />,
+      ),
     );
     expect(screen.getByRole("status")).toHaveTextContent("not available to your account");
   });
@@ -138,7 +162,7 @@ describe("MediaLibrary", () => {
     const load = vi.fn(async ({ cursor: requestedCursor }: { cursor?: string }) =>
       requestedCursor ? second : first,
     );
-    render(<MediaLibrary client={{ load }} />);
+    render(libraryScreen(<MediaLibrary client={{ load }} />));
 
     expect(
       await screen.findByRole("button", { name: /View details for Ember Coast/u }),
@@ -177,11 +201,13 @@ describe("MediaLibrary", () => {
       })),
     };
     render(
-      <MediaLibrary
-        initialOutcome={readyMediaLibraryOutcome}
-        live={false}
-        playbackClient={playbackClient}
-      />,
+      libraryScreen(
+        <MediaLibrary
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+          playbackClient={playbackClient}
+        />,
+      ),
     );
 
     const trigger = screen.getByRole("button", { name: /View details for Ember Coast/u });
@@ -227,11 +253,13 @@ describe("MediaLibrary", () => {
       })),
     };
     render(
-      <MediaLibrary
-        initialOutcome={readyMediaLibraryOutcome}
-        live={false}
-        playbackClient={playbackClient}
-      />,
+      libraryScreen(
+        <MediaLibrary
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+          playbackClient={playbackClient}
+        />,
+      ),
     );
 
     await user.click(screen.getByRole("button", { name: /View details for Northern Lights/u }));
@@ -251,6 +279,18 @@ describe("MediaLibrary", () => {
     expect(
       await within(detail).findByRole("button", { name: "Resume The Long Meridian" }),
     ).toBeVisible();
+    await user.click(
+      within(detail).getByRole("button", { name: "View details for The Long Meridian" }),
+    );
+    const episodeDetail = within(detail).getByRole("region", {
+      name: "The Long Meridian episode details",
+    });
+    expect(episodeDetail).toHaveTextContent("Apr 3, 2026");
+    expect(episodeDetail).toHaveTextContent("7.5/10");
+    expect(episodeDetail).toHaveTextContent("Mara Voss");
+    expect(episodeDetail).toHaveTextContent("Ari Chen");
+    expect(within(episodeDetail).getByRole("button", { name: "Resume episode" })).toBeVisible();
+    seasonTwo.focus();
     await user.keyboard("{ArrowLeft}");
     expect(seasonOne).toHaveFocus();
     expect(seasonOne).toHaveAttribute("aria-selected", "true");

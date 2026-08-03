@@ -1,6 +1,7 @@
 import type { Preview } from "@storybook/nextjs-vite";
 
 import "../app/foundation.css";
+import "../app/(shell)/shell.css";
 import "../app/globals.css";
 import "../app/onboarding/onboarding.css";
 import { ThemeProvider } from "../components/theme-provider";
