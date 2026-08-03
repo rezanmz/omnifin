@@ -4,21 +4,24 @@ import dynamic from "next/dynamic";
 
 import { useIdleRender } from "../lib/use-idle-render";
 import type { AcquisitionCalendarProperties } from "./acquisition-calendar";
-import styles from "./acquisition-calendar.module.css";
+import styles from "./acquisition-calendar-loader.module.css";
 
-function AcquisitionCalendarSkeleton() {
+function AcquisitionCalendarSkeleton({ hideHero = false }: { hideHero?: boolean }) {
   return (
     <div
       aria-busy="true"
       aria-label="Loading acquisition calendar"
       className={styles.loading}
+      data-hide-hero={hideHero || undefined}
       role="status"
     >
-      <div className={styles.loadingHero}>
-        <i />
-        <b />
-        <span />
-      </div>
+      {hideHero ? null : (
+        <div className={styles.loadingHero}>
+          <i />
+          <b />
+          <span />
+        </div>
+      )}
       <div className={styles.loadingCommand} />
       <div className={styles.loadingMetrics}>
         {Array.from({ length: 4 }, (_, index) => (
@@ -37,16 +40,14 @@ function AcquisitionCalendarSkeleton() {
 
 const LazyAcquisitionCalendar = dynamic(
   () => import("./acquisition-calendar").then((module_) => module_.AcquisitionCalendar),
-  { loading: AcquisitionCalendarSkeleton },
+  { loading: () => <AcquisitionCalendarSkeleton /> },
 );
 
 export function AcquisitionCalendarLoader(properties: AcquisitionCalendarProperties) {
   const ready = useIdleRender(800);
-  const hasStableInitialOutcome =
-    properties.initialOutcome !== undefined && properties.live === false;
-  return ready || hasStableInitialOutcome ? (
+  return ready ? (
     <LazyAcquisitionCalendar {...properties} />
   ) : (
-    <AcquisitionCalendarSkeleton />
+    <AcquisitionCalendarSkeleton hideHero={properties.hideHero === true} />
   );
 }

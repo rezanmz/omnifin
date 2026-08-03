@@ -1,0 +1,235 @@
+.layout {
+  min-height: 100dvh;
+  padding: clamp(18px, 3vw, 44px);
+}
+
+.shell {
+  margin: 0 auto;
+  max-width: 1560px;
+  position: relative;
+  width: 100%;
+}
+
+.hero {
+  align-items: flex-end;
+  display: flex;
+  gap: clamp(28px, 6vw, 90px);
+  justify-content: space-between;
+  padding: clamp(74px, 9vw, 136px) 2px 42px;
+}
+
+.hero > div:first-child {
+  max-width: 940px;
+}
+
+.hero :global(.eyebrow) {
+  color: var(--acid);
+  font-size: 0.72rem;
+  font-weight: 740;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: clamp(4rem, 9vw, 8.8rem);
+  font-weight: 500;
+  letter-spacing: -0.065em;
+  line-height: 0.88;
+  margin: 16px 0 26px;
+  max-width: 9.5ch;
+}
+
+.hero > div:first-child > p:last-child {
+  color: var(--paper-1);
+  font-size: clamp(0.85rem, 1vw, 0.96rem);
+  line-height: 1.75;
+  max-width: 67ch;
+  text-wrap: pretty;
+}
+
+.heroLens {
+  --glass-pointer-x: 22%;
+  --glass-pointer-y: 0%;
+  -webkit-backdrop-filter: none;
+  align-items: center;
+  backdrop-filter: none;
+  background:
+    radial-gradient(
+      circle 132px at var(--glass-pointer-x) var(--glass-pointer-y),
+      var(--glass-specular),
+      transparent 72%
+    ),
+    linear-gradient(145deg, var(--glass-highlight), transparent 31% 70%, var(--glass-rim-mid)),
+    var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-radius: 23px;
+  box-shadow:
+    inset 0 1px 0 var(--glass-specular),
+    inset 0 -1px 0 var(--glass-rim-shadow),
+    inset 0 0 18px color-mix(in srgb, var(--glass-caustic) 44%, transparent),
+    0 22px 58px color-mix(in srgb, var(--glass-cast-shadow) 76%, transparent),
+    0 4px 12px color-mix(in srgb, var(--glass-cast-shadow) 48%, transparent);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+  isolation: isolate;
+  min-width: 294px;
+  overflow: hidden;
+  padding: 15px;
+  position: relative;
+}
+
+:global(:root[data-liquid-glass-ready]) .heroLens {
+  -webkit-backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
+  backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
+}
+
+.heroLens::before {
+  background:
+    radial-gradient(
+      circle 106px at var(--glass-pointer-x) var(--glass-pointer-y),
+      var(--glass-rim-bright),
+      transparent 76%
+    ),
+    linear-gradient(
+      145deg,
+      var(--glass-rim-bright),
+      var(--glass-rim-mid) 28%,
+      transparent 48%,
+      var(--glass-rim-shadow) 76%,
+      var(--glass-rim-bright)
+    );
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  padding: 1px;
+  pointer-events: none;
+  position: absolute;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  z-index: 3;
+}
+
+.heroLens::after {
+  background:
+    radial-gradient(
+      circle 132px at var(--glass-pointer-x) var(--glass-pointer-y),
+      var(--glass-caustic),
+      transparent 74%
+    ),
+    radial-gradient(ellipse 104% 32% at 50% -8%, var(--glass-caustic), transparent 70%),
+    linear-gradient(104deg, transparent 13%, var(--glass-rim-mid) 38%, transparent 56%);
+  border-radius: inherit;
+  content: "";
+  inset: 2px;
+  opacity: 0.6;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity 180ms ease-out;
+  z-index: 0;
+}
+
+.heroLens[data-glass-active]::after {
+  opacity: 0.96;
+}
+
+.heroLens > * {
+  position: relative;
+  z-index: 4;
+}
+
+.heroLens[data-attention] {
+  background:
+    radial-gradient(
+      circle at 12% 0%,
+      color-mix(in srgb, var(--warning) 18%, transparent),
+      transparent 50%
+    ),
+    var(--glass);
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--glass-edge));
+}
+
+.heroLens > span {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 13px;
+  color: var(--acid);
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.heroLens[data-attention] > span {
+  color: var(--warning);
+}
+
+.heroLens strong,
+.heroLens small {
+  display: block;
+}
+
+.heroLens strong {
+  font-size: 0.77rem;
+  font-weight: 720;
+}
+
+.heroLens small {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  margin-top: 3px;
+}
+
+@media (max-width: 1240px) {
+  .hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .heroLens {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .layout {
+    padding: 10px 10px 26px;
+  }
+
+  .hero {
+    gap: 23px;
+    padding: 72px 4px 30px;
+  }
+
+  .hero h1 {
+    font-size: clamp(3.7rem, 19vw, 5.5rem);
+    margin: 12px 0 20px;
+  }
+
+  .heroLens {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .heroLens {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--surface-card-solid);
+  }
+}
+
+@media (forced-colors: active) {
+  .heroLens {
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+}

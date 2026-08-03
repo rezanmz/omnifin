@@ -580,6 +580,7 @@ test("global search preserves the document position while focusing and typing", 
   expect(initialScrollPosition).toBeGreaterThan(200);
 
   const search = page.getByRole("combobox", { name: "Search media and commands" });
+  await expect(search).toBeEnabled();
   const bounds = await search.boundingBox();
   expect(bounds).not.toBeNull();
   await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);

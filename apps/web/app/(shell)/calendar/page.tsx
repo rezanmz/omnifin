@@ -13,7 +13,6 @@ import {
   unconfiguredAcquisitionCalendar,
 } from "../../../lib/acquisition-calendar-demo";
 import type { AcquisitionCalendarLoadOutcome } from "../../../lib/acquisition-calendar";
-import { readThemePreference } from "../../../lib/theme-server";
 import "../../control-room.css";
 
 export const metadata: Metadata = { title: "Acquisition calendar" };
@@ -49,7 +48,6 @@ export default async function AcquisitionCalendarPage({
   searchParams,
 }: AcquisitionCalendarPageProperties) {
   const parameters = await searchParams;
-  const preference = await readThemePreference();
   const test = testOutcome(parameters["test-view"]);
   const demo =
     test === undefined && process.env.OMNIFIN_DEMO_MODE === "true"
@@ -60,7 +58,7 @@ export default async function AcquisitionCalendarPage({
 
   return (
     <>
-      <AcquisitionCalendarFrame embedded initialPreference={preference}>
+      <AcquisitionCalendarFrame>
         {outcome?.status === "ready" ? (
           <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
         ) : null}
