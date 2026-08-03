@@ -1,9 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
+import type * as NextNavigation from "next/navigation";
 import { afterEach, vi } from "vitest";
 
 vi.mock("next/navigation", async (importOriginal) => {
-  const navigation = await importOriginal<typeof import("next/navigation")>();
+  const navigation = await importOriginal<typeof NextNavigation>();
   return {
     ...navigation,
     useRouter: () => ({ push: vi.fn() }),
