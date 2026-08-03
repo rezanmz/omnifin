@@ -164,6 +164,9 @@ application boundary; operators must still patch and isolate the host.
   removed when playback stops or the owning session is deleted. Expired-session cleanup cascades to
   its handles; unlinking the Jellyfin identity invalidates the session through its exact link and
   revision binding.
+- One manifest allocates its handles atomically from a single bounded count snapshot. Rejected
+  manifests leave no partial handles behind, and long VOD manifests do not require one SQLite
+  transaction or full-table count per segment.
 - Rolling upgrades continue accepting the former bounded `asset_v2` encrypted URL until its
   already-created playback session stops or expires. A player may safely renegotiate if an
   intermediary or operator invalidates that legacy session during deployment.

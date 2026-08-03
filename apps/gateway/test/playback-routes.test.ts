@@ -137,7 +137,11 @@ async function harness(
     },
     playbackDependencies: {
       clock: () => now,
-      createAssetToken: () => Buffer.alloc(16, ++playbackAssetToken).toString("base64url"),
+      createAssetToken: () => {
+        const token = Buffer.alloc(16);
+        token.writeUInt32BE(++playbackAssetToken, 12);
+        return token.toString("base64url");
+      },
       createClient: () => ({
         negotiate,
         readPlaybackTarget,
@@ -732,6 +736,90 @@ describe("playback routes", () => {
           )
           .get(playback.sessionId),
       ).toEqual({ count: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("allocates a long VOD manifest with bounded unique handles", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const segments = Array.from(
+        { length: 1_200 },
+        (_, index) => `#EXTINF:6.000,\nhls1/main/${index}.m4s?segment=${index}`,
+      );
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(`#EXTM3U\n${segments.join("\n")}\n`),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+
+      expect(manifest.statusCode, manifest.body).toBe(200);
+      const handles = manifest.body
+        .split("\n")
+        .filter((line) => line.startsWith("hls/"))
+        .map((line) => line.slice("hls/".length));
+      expect(handles).toHaveLength(1_200);
+      expect(new Set(handles).size).toBe(1_200);
+      expect(handles.every((handle) => /^asset_h1\.[A-Za-z0-9_-]{22}$/u.test(handle))).toBe(true);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1_200 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rolls back partial handle allocation when a manifest is rejected", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(
+          "#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n#EXT-X-MAP:URI=unquoted\n",
+        ),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+
+      expect(manifest.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(manifest.json()).error.code).toBe("playback_unavailable");
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
     } finally {
       await app.close();
     }
