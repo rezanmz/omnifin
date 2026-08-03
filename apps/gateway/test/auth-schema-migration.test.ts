@@ -1079,6 +1079,7 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.mediaReferences).toBeDefined();
     expect(authenticationSchema.externalIssueReferences).toBeDefined();
     expect(authenticationSchema.mediaIssueOperations).toBeDefined();
+    expect(authenticationSchema.playbackAssetHandles).toBeDefined();
     expect(authenticationSchema.playbackSessions).toBeDefined();
     expect(authenticationSchema.libraryArtworkSearches).toBeDefined();
     expect(authenticationSchema.libraryMutationOperations).toBeDefined();
@@ -1104,6 +1105,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("media_references");
       expect(names).toContain("external_issue_references");
       expect(names).toContain("media_issue_operations");
+      expect(names).toContain("playback_asset_handles");
       expect(names).toContain("playback_sessions");
       expect(names).toContain("library_artwork_searches");
       expect(names).toContain("library_mutation_operations");
@@ -1116,7 +1118,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 22 });
+      ).toEqual({ count: 23 });
       expect(
         database.sqlite
           .prepare(

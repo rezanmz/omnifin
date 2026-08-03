@@ -152,6 +152,29 @@ application boundary; operators must still patch and isolate the host.
   Images are privately cacheable with a gateway ETag and `nosniff`; normalized feed responses are
   private, short-lived, and vary on the session cookie.
 
+## Playback-proxy controls
+
+- Playback negotiation and every manifest, segment, range, and progress request require
+  `media.view` and the same active user-to-Jellyfin identity link revision that created the
+  playback session. A stopped or expired session fails before connector credentials are decrypted.
+- The browser receives only a random 31-character HLS asset handle. The resolved Jellyfin path and
+  query are validated by the connector, encrypted in SQLite, integrity-bound to the playback
+  session, and never placed in a URL, public response, log, or diagnostic.
+- Handles are deduplicated within one playback session, capped per session and deployment, and
+  removed when playback stops or the owning session is deleted. Expired-session cleanup cascades to
+  its handles; unlinking the Jellyfin identity invalidates the session through its exact link and
+  revision binding.
+- One manifest allocates its handles atomically from a single bounded count snapshot. Rejected
+  manifests leave no partial handles behind, and long VOD manifests do not require one SQLite
+  transaction or full-table count per segment.
+- Rolling upgrades continue accepting the former bounded `asset_v2` encrypted URL until its
+  already-created playback session stops or expires. A player may safely renegotiate if an
+  intermediary or operator invalidates that legacy session during deployment.
+- Upstream targets remain constrained to Jellyfin playback paths without credential-bearing query
+  fields. Redirects, oversized manifests, excessive line counts, unsafe content types, malformed
+  ranges, and response-size overruns fail closed. Media responses are private, non-cacheable, and
+  vary on the authenticated session cookie.
+
 ## Media-request mutation controls
 
 - Request creation requires `request.create` at both the session route and service boundary,
@@ -505,9 +528,9 @@ Clock rollback cannot make the current recovery point an expiry target. Generate
 than delete one another's result. systemd single-instance execution or an external cron `flock` remains
 the normal first line of overlap prevention.
 
-When media proxying is implemented, responses must enforce an approved upstream
-origin, safe content types, byte-range limits, authorization on every request, and
-cache rules that do not expose one user's protected content to another.
+Media proxy responses enforce an approved upstream origin, safe content types, byte-range limits,
+authorization on every request, and cache rules that do not expose one user's protected content to
+another.
 
 ## Operational controls
 

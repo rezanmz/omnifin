@@ -103,6 +103,8 @@ describe("gateway proxy transport", () => {
   it("keeps negotiated HLS masters, nested manifests, and segments on the public API path", async () => {
     const sessionId = `playback_${"p".repeat(22)}`;
     const mediaReferenceId = `media_${"m".repeat(22)}`;
+    const levelHandle = `asset_h1.${"a".repeat(22)}`;
+    const segmentHandle = `asset_h1.${"b".repeat(22)}`;
     const upstreamPaths: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -116,16 +118,16 @@ describe("gateway proxy transport", () => {
           );
         }
         if (pathname === `/v1/playback/${sessionId}/master.m3u8`) {
-          return new Response("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls/asset_v2.level\n", {
+          return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls/${levelHandle}\n`, {
             headers: { "content-type": "application/vnd.apple.mpegurl" },
           });
         }
-        if (pathname === `/v1/playback/${sessionId}/hls/asset_v2.level`) {
-          return new Response("#EXTM3U\n#EXTINF:4.000,\n./asset_v2.segment\n", {
+        if (pathname === `/v1/playback/${sessionId}/hls/${levelHandle}`) {
+          return new Response(`#EXTM3U\n#EXTINF:4.000,\n./${segmentHandle}\n`, {
             headers: { "content-type": "application/vnd.apple.mpegurl" },
           });
         }
-        if (pathname === `/v1/playback/${sessionId}/hls/asset_v2.segment`) {
+        if (pathname === `/v1/playback/${sessionId}/hls/${segmentHandle}`) {
           return new Response(new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]), {
             headers: { "content-type": "video/mp4" },
           });
@@ -166,8 +168,8 @@ describe("gateway proxy transport", () => {
     expect(upstreamPaths).toEqual([
       `/v1/media/${mediaReferenceId}/playback`,
       `/v1/playback/${sessionId}/master.m3u8`,
-      `/v1/playback/${sessionId}/hls/asset_v2.level`,
-      `/v1/playback/${sessionId}/hls/asset_v2.segment`,
+      `/v1/playback/${sessionId}/hls/${levelHandle}`,
+      `/v1/playback/${sessionId}/hls/${segmentHandle}`,
     ]);
   });
 

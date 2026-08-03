@@ -271,7 +271,7 @@ describe("TheaterPlayer", () => {
       reason: "private upstream response",
       response: { code: 404, text: "private response body" },
       type: "networkError",
-      url: `/v1/playback/${sessionId}/hls/asset_v2.private`,
+      url: `/v1/playback/${sessionId}/hls/asset_h1.${"a".repeat(22)}`,
     };
     onError?.("error", privateFailure);
     onError?.("error", privateFailure);
@@ -293,7 +293,7 @@ describe("TheaterPlayer", () => {
     );
     const diagnostics = warning.mock.calls.flat().join("\n");
     expect(diagnostics).not.toMatch(
-      new RegExp(`${sessionId}|asset_v2|private response|private upstream|/v1/playback`, "u"),
+      new RegExp(`${sessionId}|asset_h1|private response|private upstream|/v1/playback`, "u"),
     );
   });
 

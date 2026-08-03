@@ -570,6 +570,50 @@ export const playbackSessions = sqliteTable(
   ],
 );
 
+export const playbackAssetHandles = sqliteTable(
+  "playback_asset_handles",
+  {
+    id: text("id").primaryKey(),
+    playbackSessionId: text("playback_session_id")
+      .notNull()
+      .references(() => playbackSessions.id, { onDelete: "cascade" }),
+    targetDigest: text("target_digest").notNull(),
+    encryptedTarget: text("encrypted_target").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("playback_asset_handles_session_target_idx").on(
+      table.playbackSessionId,
+      table.targetDigest,
+    ),
+    index("playback_asset_handles_expiry_idx").on(table.expiresAt),
+    check(
+      "playback_asset_handles_id_check",
+      sql`length(${table.id}) = 31
+        and substr(${table.id}, 1, 9) = 'asset_h1.'
+        and substr(${table.id}, 10) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "playback_asset_handles_target_digest_check",
+      sql`length(${table.targetDigest}) = 22
+        and ${table.targetDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "playback_asset_handles_target_check",
+      sql`length(${table.encryptedTarget}) between 1 and 65536`,
+    ),
+    check(
+      "playback_asset_handles_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
 export const mediaIssues = sqliteTable(
   "media_issues",
   {
