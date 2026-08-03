@@ -5,10 +5,14 @@ import { demoDashboard } from "../lib/dashboard-data";
 import { DeferredDashboardSections } from "./deferred-dashboard-sections";
 
 describe("DeferredDashboardSections", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("keeps below-fold controls dormant until the user scrolls", () => {
     vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     render(
       <>
         <input aria-label="Search fixture" />

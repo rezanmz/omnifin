@@ -11,6 +11,7 @@ describe("useIdleRender", () => {
   });
 
   it("mounts deferred work in the browser's idle window", () => {
+    const frames: FrameRequestCallback[] = [];
     let scheduled: IdleRequestCallback | undefined;
     const requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
       scheduled = callback;
@@ -19,10 +20,18 @@ describe("useIdleRender", () => {
     const cancelIdleCallback = vi.fn();
     vi.stubGlobal("requestIdleCallback", requestIdleCallback);
     vi.stubGlobal("cancelIdleCallback", cancelIdleCallback);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
 
     const { result, unmount } = renderHook(() => useIdleRender());
 
     expect(result.current).toBe(false);
+    expect(requestIdleCallback).not.toHaveBeenCalled();
+    act(() => frames[0]?.(0));
+    expect(requestIdleCallback).not.toHaveBeenCalled();
+    act(() => frames[1]?.(16));
     expect(requestIdleCallback).toHaveBeenCalledWith(expect.any(Function), { timeout: 1_200 });
     act(() => scheduled?.({ didTimeout: false, timeRemaining: () => 12 }));
     expect(result.current).toBe(true);
@@ -61,8 +70,17 @@ describe("useIdleRender", () => {
     const requestIdleCallback = vi.fn(() => 23);
     vi.stubGlobal("requestIdleCallback", requestIdleCallback);
     vi.stubGlobal("cancelIdleCallback", vi.fn());
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
 
     renderHook(() => useIdleRender(800));
+    expect(requestIdleCallback).not.toHaveBeenCalled();
+
+    act(() => frames[0]?.(0));
+    act(() => frames[1]?.(16));
     expect(requestIdleCallback).not.toHaveBeenCalled();
 
     act(() => vi.advanceTimersByTime(799));
