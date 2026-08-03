@@ -13,7 +13,12 @@ function PersistentTopCommandBar() {
   return (
     <header className="top-command-bar" data-shell-directional-axis="horizontal">
       <div className="shell-search-slot">
-        <div className="global-search" data-liquid-glass data-shell-placeholder="search">
+        <div
+          aria-hidden="true"
+          className="global-search"
+          data-liquid-glass
+          data-shell-placeholder="search"
+        >
           <ShellIcon
             aria-hidden="true"
             className="global-search__icon"
@@ -45,11 +50,11 @@ function PersistentTopCommandBar() {
         <div className="shell-search-slot__mount" data-shell-mount="search" />
       </div>
       <div className="top-command-bar__actions" data-liquid-glass>
-        <div data-shell-placeholder="status">
+        <div aria-hidden="true" data-shell-placeholder="status">
           <ConnectionPulse status="attention" />
         </div>
         <div data-shell-mount="status" />
-        <div className="profile-menu" data-shell-placeholder="profile">
+        <div aria-hidden="true" className="profile-menu" data-shell-placeholder="profile">
           <button
             aria-expanded="false"
             aria-haspopup="dialog"
