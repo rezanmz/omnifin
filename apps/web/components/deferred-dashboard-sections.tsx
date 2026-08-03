@@ -10,7 +10,10 @@ import type { DashboardSectionsProperties } from "./dashboard-sections";
 let sectionsPromise: Promise<ComponentType<DashboardSectionsProperties>> | undefined;
 
 function loadSections() {
-  sectionsPromise ??= import("./dashboard-sections").then((module) => module.DashboardSections);
+  sectionsPromise ??= Promise.all([
+    import("../app/dashboard.css"),
+    import("./dashboard-sections"),
+  ]).then(([, module]) => module.DashboardSections);
   return sectionsPromise;
 }
 

@@ -10,9 +10,10 @@ import { DashboardSectionsSkeleton } from "./deferred-dashboard-sections";
 let demoSectionsPromise: Promise<ComponentType> | undefined;
 
 function loadDemoSections() {
-  demoSectionsPromise ??= import("./demo-dashboard-sections").then(
-    (module) => module.DemoDashboardSections,
-  );
+  demoSectionsPromise ??= Promise.all([
+    import("../app/dashboard.css"),
+    import("./demo-dashboard-sections"),
+  ]).then(([, module]) => module.DemoDashboardSections);
   return demoSectionsPromise;
 }
 

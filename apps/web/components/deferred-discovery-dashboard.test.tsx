@@ -23,6 +23,22 @@ describe("DeferredDiscoveryDashboard", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("reserves spotlight geometry when connected discovery owns the hero", () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    render(
+      <DeferredDiscoveryDashboard
+        initialFeed={demoDiscoveryFeed}
+        live
+        showContinueWatching
+        suppressHero={false}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Loading connected discovery" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Preparing connected discovery" })).toBeVisible();
+  });
+
   it("reserves rail geometry and loads interactive discovery on user intent", async () => {
     render(<DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />);
 
