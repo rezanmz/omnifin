@@ -15,6 +15,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./playback-limits.js";
 import {
   PlaybackSessionError,
   PlaybackSessionService,
@@ -27,7 +28,7 @@ const assetParamsSchema = progressParamsSchema.extend({
   assetToken: z
     .string()
     .min(64)
-    .max(8_192)
+    .max(MAX_PLAYBACK_ASSET_TOKEN_LENGTH)
     .regex(/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u),
 });
 
@@ -53,7 +54,7 @@ const assetParamsJsonSchema = {
     assetToken: {
       type: "string",
       minLength: 64,
-      maxLength: 8_192,
+      maxLength: MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
       pattern: "^asset_v2\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
     },
     sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" },
