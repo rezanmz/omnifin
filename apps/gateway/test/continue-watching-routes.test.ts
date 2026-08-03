@@ -376,6 +376,16 @@ describe("Continue Watching routes", () => {
       expect(personPath).toMatch(new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`));
       expect(detailResponse.body).not.toMatch(/route-private-person|viewer-external/iu);
 
+      const anonymousImage = await app.inject({
+        method: "GET",
+        url: personPath!,
+      });
+      expect(anonymousImage.statusCode, anonymousImage.body).toBe(401);
+      expect(apiErrorSchema.parse(anonymousImage.json()).error.code).toBe(
+        "authentication_required",
+      );
+      expect(readImage).not.toHaveBeenCalled();
+
       const imageResponse = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
