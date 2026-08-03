@@ -1,7 +1,6 @@
 import type { PartialFailure } from "@omnifin/contracts/connectors";
 import type { Metadata } from "next";
 
-import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { SystemStatus } from "../../../../components/system-status";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import type { SystemStatusLoadOutcome } from "../../../../lib/system-status";
@@ -107,7 +106,6 @@ export default async function SystemHealthPage({ searchParams }: SystemStatusPag
 
   return (
     <>
-      <ApplicationShellEnhancements initialPreference={preference} />
       <ThemeProvider initialPreference={preference}>
         <SystemStatus
           {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}

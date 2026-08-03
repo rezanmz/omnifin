@@ -174,20 +174,24 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
           </div>
         </div>
       </div>
-      <AcquisitionTimeline
-        onManualSearch={() => {
-          setTimelineOpen(false);
-          setWorkbenchOpen(true);
-        }}
-        onOpenChange={setTimelineOpen}
-        open={timelineOpen}
-        operation={selectedOperation}
-      />
-      <ManualReleaseWorkbench
-        onOpenChange={setWorkbenchOpen}
-        open={workbenchOpen}
-        operation={selectedOperation}
-      />
+      {timelineOpen ? (
+        <AcquisitionTimeline
+          onManualSearch={() => {
+            setTimelineOpen(false);
+            setWorkbenchOpen(true);
+          }}
+          onOpenChange={setTimelineOpen}
+          open
+          operation={selectedOperation}
+        />
+      ) : null}
+      {workbenchOpen ? (
+        <ManualReleaseWorkbench
+          onOpenChange={setWorkbenchOpen}
+          open
+          operation={selectedOperation}
+        />
+      ) : null}
     </section>
   );
 }

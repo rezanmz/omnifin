@@ -6,7 +6,6 @@ import {
 } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 
-import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { IdentityProviderConsoleLoader } from "../../../../components/identity-provider-console-loader";
 import { IdentityProviderPageShell } from "../../../../components/identity-provider-page-shell";
 import type { IdentityProviderAdminLoadOutcome } from "../../../../lib/identity-provider-admin";
@@ -102,7 +101,6 @@ export default async function IdentityProvidersPage({
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   return (
     <>
-      <ApplicationShellEnhancements />
       <IdentityProviderPageShell displayProfile={displayProfile}>
         <IdentityProviderConsoleLoader
           embedded

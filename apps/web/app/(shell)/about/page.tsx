@@ -2,7 +2,6 @@ import type { RuntimeIdentity } from "@omnifin/contracts/runtime";
 import type { Metadata } from "next";
 
 import { AboutScreen } from "../../../components/about-screen";
-import { ApplicationShellEnhancements } from "../../../components/application-shell-enhancements";
 import { ThemeProvider } from "../../../components/theme-provider";
 import {
   loadRuntimeIdentity,
@@ -66,7 +65,6 @@ export default async function AboutPage({ searchParams }: AboutPageProperties) {
 
   return (
     <>
-      <ApplicationShellEnhancements initialPreference={preference} />
       <ThemeProvider initialPreference={preference}>
         <AboutScreen displayProfile={displayProfile} embedded outcome={outcome} />
       </ThemeProvider>

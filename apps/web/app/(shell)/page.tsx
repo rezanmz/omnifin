@@ -7,7 +7,6 @@ import type { DashboardStateKind } from "../../components/dashboard-state";
 import { connectedDashboard, demoDashboard, type DashboardModel } from "../../lib/dashboard-data";
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
 import { discoverySpotlightHero, discoverySpotlightItem } from "../../lib/discovery-presentation";
-import { readThemePreference } from "../../lib/theme-server";
 import "../dashboard.css";
 
 export const dynamic = "force-dynamic";
@@ -79,18 +78,15 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
   }
 
   if (requestedTestView && dashboardStateKinds.has(requestedTestView as DashboardStateKind)) {
-    const preference = await readThemePreference();
     return (
       <DashboardStateScreen
         displayProfile={displayProfile}
         kind={requestedTestView as DashboardStateKind}
-        themePreference={preference}
       />
     );
   }
 
   if (requestedTestView === "quiet") {
-    const preference = await readThemePreference();
     return (
       <DashboardScreen
         data={{
@@ -101,22 +97,15 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
           operations: [],
         }}
         displayProfile={displayProfile}
-        themePreference={preference}
       />
     );
   }
 
-  const preference = await readThemePreference();
   if (showDiscoveryPerformanceProfile) {
     const spotlight = discoverySpotlightItem(demoDiscoveryFeed);
     if (spotlight) {
       return (
-        <ApplicationShellContent
-          accent={discoverySpotlightHero(spotlight).accent}
-          current="discover"
-          status="healthy"
-          themePreference={preference}
-        >
+        <ApplicationShellContent accent={discoverySpotlightHero(spotlight).accent} status="healthy">
           <main className="dashboard" id="main-content">
             <HeroSpotlight
               actionRegion={<DiscoveryHeroActions item={spotlight} />}
@@ -149,7 +138,6 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
         showLiveDashboard || (!showDemoDashboard && !showQueueRecoveryDashboard)
       }
       liveDiscovery={!showDemoDashboard && !showQueueRecoveryDashboard}
-      themePreference={preference}
     />
   );
 }
