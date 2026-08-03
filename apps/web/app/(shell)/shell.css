@@ -471,7 +471,7 @@
     inset 0 0 16px color-mix(in srgb, var(--glass-caustic) 42%, transparent),
     0 20px 48px var(--glass-cast-shadow);
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   inset: auto;
   padding: 8px 4px;
   position: relative;
@@ -573,7 +573,7 @@
       0 20px 48px var(--glass-cast-shadow),
       0 3px 10px color-mix(in srgb, var(--glass-cast-shadow) 52%, transparent);
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     isolation: isolate;
     left: 12px;
     padding: 7px 4px;
