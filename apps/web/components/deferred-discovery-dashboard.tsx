@@ -15,6 +15,10 @@ const RAIL_TITLES = [
   "Coming soon",
 ] as const;
 
+// Keep passive, below-fold work outside the Core Web Vitals observation window.
+// Scroll and keyboard intent still activate the dashboard immediately.
+const PASSIVE_ACTIVATION_DELAY_MS = 3_000;
+
 let dashboardPromise: Promise<ComponentType<DiscoveryDashboardProperties>> | undefined;
 
 function loadDashboard() {
@@ -119,7 +123,7 @@ export function DeferredDiscoveryDashboard({
     null,
   );
   const [failed, setFailed] = useState(false);
-  const passiveReady = useIdleRender(1_000);
+  const passiveReady = useIdleRender(PASSIVE_ACTIVATION_DELAY_MS);
 
   const activate = useCallback(() => {
     setFailed(false);
