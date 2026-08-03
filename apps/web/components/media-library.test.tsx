@@ -279,6 +279,18 @@ describe("MediaLibrary", () => {
     expect(
       await within(detail).findByRole("button", { name: "Resume The Long Meridian" }),
     ).toBeVisible();
+    await user.click(
+      within(detail).getByRole("button", { name: "View details for The Long Meridian" }),
+    );
+    const episodeDetail = within(detail).getByRole("region", {
+      name: "The Long Meridian episode details",
+    });
+    expect(episodeDetail).toHaveTextContent("Apr 3, 2026");
+    expect(episodeDetail).toHaveTextContent("7.5/10");
+    expect(episodeDetail).toHaveTextContent("Mara Voss");
+    expect(episodeDetail).toHaveTextContent("Ari Chen");
+    expect(within(episodeDetail).getByRole("button", { name: "Resume episode" })).toBeVisible();
+    seasonTwo.focus();
     await user.keyboard("{ArrowLeft}");
     expect(seasonOne).toHaveFocus();
     expect(seasonOne).toHaveAttribute("aria-selected", "true");

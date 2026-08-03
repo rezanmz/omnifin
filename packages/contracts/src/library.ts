@@ -7,6 +7,9 @@ import { idempotencyKeySchema } from "./requests.js";
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
 export const LIBRARY_ARTWORK_MAX_RESULTS = 40;
 export const LIBRARY_BROWSE_MAX_ITEMS = 50;
+export const LIBRARY_EPISODE_MAX_CREDITS = 24;
+export const LIBRARY_EPISODE_MAX_GENRES = 20;
+export const LIBRARY_EPISODE_MAX_STUDIOS = 12;
 export const LIBRARY_SEASON_EPISODES_MAX_ITEMS = 50;
 export const LIBRARY_TITLE_MAX_SEASONS = 100;
 
@@ -183,10 +186,24 @@ export const librarySeasonEpisodesQuerySchema = z.strictObject({
 });
 export type LibrarySeasonEpisodesQuery = z.infer<typeof librarySeasonEpisodesQuerySchema>;
 
+export const libraryEpisodeCreditSchema = z.strictObject({
+  name: safeTextSchema.max(160),
+  role: safeTextSchema.max(200).nullable(),
+  type: z.enum(["cast", "director", "writer"]),
+});
+export type LibraryEpisodeCredit = z.infer<typeof libraryEpisodeCreditSchema>;
+
 export const librarySeasonEpisodeSchema = z
   .strictObject({
+    airDate: z.iso.date().nullable(),
+    communityRating: z.number().finite().min(0).max(10).nullable(),
+    credits: z.array(libraryEpisodeCreditSchema).max(LIBRARY_EPISODE_MAX_CREDITS),
+    creditsTruncated: z.boolean(),
+    criticRating: z.number().finite().min(0).max(100).nullable(),
+    genres: z.array(safeTextSchema.max(100)).max(LIBRARY_EPISODE_MAX_GENRES),
     media: mediaSummarySchema,
     playback: libraryPlaybackStateSchema,
+    studios: z.array(safeTextSchema.max(160)).max(LIBRARY_EPISODE_MAX_STUDIOS),
   })
   .superRefine((episode, context) => {
     if (!mediaReferenceIdSchema.safeParse(episode.media.id).success) {
