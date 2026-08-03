@@ -246,7 +246,7 @@ test("dashboard visual baseline", async ({ page }, testInfo) => {
     "Visual baselines use representative Chromium viewports",
   );
   await page.goto(routeForProject("/", testInfo.project.name));
-  await page.locator("main").waitFor();
+  await page.getByRole("heading", { name: "Made for tonight" }).waitFor();
   await expect(page).toHaveScreenshot("dashboard.png", { fullPage: true });
 });
 
@@ -333,6 +333,7 @@ test("light dashboard visual baseline", async ({ page }, testInfo) => {
   await useLightTheme(page);
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("heading", { name: "Made for tonight" }).waitFor();
   await expect(page).toHaveScreenshot("dashboard-light.png", { fullPage: true });
 });
 
@@ -1596,6 +1597,7 @@ test("focus-visible visual baseline", async ({ page }, testInfo) => {
     "Focus treatment covers representative desktop and phone geometry",
   );
   await page.goto("/");
+  await page.getByRole("heading", { name: "Made for tonight" }).waitFor();
   await page.getByRole("link", { name: "Browse library" }).focus();
   await expect(page.getByRole("link", { name: "Browse library" })).toBeFocused();
   await expect(page).toHaveScreenshot("dashboard-focus-visible.png", { fullPage: true });
