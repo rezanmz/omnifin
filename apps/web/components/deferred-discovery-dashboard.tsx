@@ -18,60 +18,102 @@ const RAIL_TITLES = [
 let dashboardPromise: Promise<ComponentType<DiscoveryDashboardProperties>> | undefined;
 
 function loadDashboard() {
-  dashboardPromise ??= import("./discovery-dashboard").then((module) => module.DiscoveryDashboard);
+  dashboardPromise ??= Promise.all([
+    import("../app/dashboard.css"),
+    import("./discovery-dashboard"),
+  ]).then(([, module]) => module.DiscoveryDashboard);
   return dashboardPromise;
 }
 
-function DiscoveryRailsFallback({ failed, onRetry }: { failed: boolean; onRetry: () => void }) {
+function DiscoveryHeroSkeleton() {
   return (
-    <div
-      aria-label={failed ? "Connected discovery failed to load" : "Preparing connected discovery"}
-      className="deferred-discovery-rails"
-      role="region"
+    <section
+      aria-busy="true"
+      aria-label="Loading discovery spotlight"
+      className="hero-spotlight discovery-hero-skeleton"
     >
-      {RAIL_TITLES.map((title) => (
-        <section
-          aria-busy="true"
-          aria-label={`Loading ${title}`}
-          className="media-rail"
-          key={title}
-        >
-          <div className="section-heading">
-            <h2>{title}</h2>
-          </div>
-          <div aria-hidden="true" className="media-rail__scroller media-rail__scroller--loading">
-            {Array.from({ length: 5 }, (_, index) => (
-              <article className="media-card media-card--loading" key={index}>
-                <span className="media-card__loading-art" />
-                <span className="media-card__loading-line" />
-                <span className="media-card__loading-line media-card__loading-line--short" />
-              </article>
-            ))}
-          </div>
-        </section>
-      ))}
-      {failed ? (
-        <>
+      <h1 className="sr-only">Loading connected discovery</h1>
+      <div aria-hidden="true" className="discovery-hero-skeleton__lens" />
+      <div aria-hidden="true" className="discovery-hero-skeleton__copy">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <span className="sr-only" role="status">
+        Loading discovery spotlight…
+      </span>
+    </section>
+  );
+}
+
+function DiscoveryRailsFallback({
+  failed,
+  onRetry,
+  suppressHero,
+}: {
+  failed: boolean;
+  onRetry: () => void;
+  suppressHero: boolean;
+}) {
+  return (
+    <>
+      {suppressHero ? null : <DiscoveryHeroSkeleton />}
+      <div
+        aria-label={failed ? "Connected discovery failed to load" : "Preparing connected discovery"}
+        className="deferred-discovery-rails"
+        role="region"
+      >
+        {RAIL_TITLES.map((title) => (
+          <section
+            aria-busy="true"
+            aria-label={`Loading ${title}`}
+            className="media-rail"
+            key={title}
+          >
+            <div className="section-heading">
+              <h2>{title}</h2>
+            </div>
+            <div aria-hidden="true" className="media-rail__scroller media-rail__scroller--loading">
+              {Array.from({ length: 5 }, (_, index) => (
+                <article className="media-card media-card--loading" key={index}>
+                  <span className="media-card__loading-art" />
+                  <span className="media-card__loading-line" />
+                  <span className="media-card__loading-line media-card__loading-line--short" />
+                </article>
+              ))}
+            </div>
+          </section>
+        ))}
+        {failed ? (
+          <>
+            <span className="sr-only" role="status">
+              Connected discovery controls failed to load.
+            </span>
+            <button className="button button--glass" onClick={onRetry} type="button">
+              Retry discovery controls
+            </button>
+          </>
+        ) : (
           <span className="sr-only" role="status">
-            Connected discovery controls failed to load.
+            Connected discovery controls are loading.
           </span>
-          <button className="button button--glass" onClick={onRetry} type="button">
-            Retry discovery controls
-          </button>
-        </>
-      ) : (
-        <span className="sr-only" role="status">
-          Connected discovery controls are loading.
-        </span>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   );
 }
 
 export function DeferredDiscoveryDashboard({
   initialFeed,
+  live = false,
+  showContinueWatching = false,
+  suppressHero = true,
 }: {
-  initialFeed: DiscoveryFeedResponse;
+  initialFeed?: DiscoveryFeedResponse;
+  live?: boolean;
+  showContinueWatching?: boolean;
+  suppressHero?: boolean;
 }) {
   const [Dashboard, setDashboard] = useState<ComponentType<DiscoveryDashboardProperties> | null>(
     null,
@@ -108,9 +150,18 @@ export function DeferredDiscoveryDashboard({
     };
   }, [activate]);
 
-  if (!Dashboard) return <DiscoveryRailsFallback failed={failed} onRetry={activate} />;
+  if (!Dashboard) {
+    return (
+      <DiscoveryRailsFallback failed={failed} onRetry={activate} suppressHero={suppressHero} />
+    );
+  }
 
   return (
-    <Dashboard initialFeed={initialFeed} live={false} showContinueWatching={false} suppressHero />
+    <Dashboard
+      {...(initialFeed === undefined ? {} : { initialFeed })}
+      live={live}
+      showContinueWatching={showContinueWatching}
+      suppressHero={suppressHero}
+    />
   );
 }

@@ -7,7 +7,7 @@ import { ApplicationShellContent } from "./application-shell";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
 import { DeferredDashboardSections } from "./deferred-dashboard-sections";
 import { DeferredDemoDashboardSections } from "./deferred-demo-dashboard-sections";
-import { DiscoveryDashboard } from "./discovery-dashboard";
+import { DeferredDiscoveryDashboard } from "./deferred-discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
 
 function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
@@ -56,10 +56,11 @@ export function DashboardScreen({
         tabIndex={-1}
       >
         {liveDiscovery ? (
-          <DiscoveryDashboard
+          <DeferredDiscoveryDashboard
             {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
             live={discoveryRefresh}
             showContinueWatching={discoveryShowContinueWatching}
+            suppressHero={false}
           />
         ) : (
           <HeroSpotlight
