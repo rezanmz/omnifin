@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DashboardSectionsProperties } from "./dashboard-sections";
+import { isDeferredContentNavigation } from "../lib/deferred-content-activation";
 
 let sectionsPromise: Promise<ComponentType<DashboardSectionsProperties>> | undefined;
 
@@ -93,12 +94,15 @@ export function DeferredDashboardSections(properties: DashboardSectionsPropertie
   }, []);
 
   useEffect(() => {
-    const timeout = window.setTimeout(activate, 600);
     const activateFromIntent = () => activate();
+    const activateFromKeyboard = (event: KeyboardEvent) => {
+      if (isDeferredContentNavigation(event)) activate();
+    };
     window.addEventListener("scroll", activateFromIntent, { once: true, passive: true });
+    window.addEventListener("keydown", activateFromKeyboard);
     return () => {
-      window.clearTimeout(timeout);
       window.removeEventListener("scroll", activateFromIntent);
+      window.removeEventListener("keydown", activateFromKeyboard);
     };
   }, [activate]);
 

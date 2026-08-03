@@ -1,10 +1,24 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoDiscoveryFeed } from "../lib/discovery-feed-demo";
 import { DeferredDiscoveryDashboard } from "./deferred-discovery-dashboard";
 
 describe("DeferredDiscoveryDashboard", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps below-fold discovery dormant until the user scrolls", () => {
+    vi.useFakeTimers();
+    render(<DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />);
+
+    vi.advanceTimersByTime(10_000);
+
+    expect(screen.getByRole("region", { name: "Preparing connected discovery" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Request The Far Meridian" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("reserves rail geometry and loads interactive discovery on user intent", async () => {
     render(<DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />);
 

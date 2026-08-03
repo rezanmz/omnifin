@@ -1,4 +1,4 @@
-import { isValidElement, type ComponentProps } from "react";
+import { Children, isValidElement, type ComponentProps, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardScreen } from "../../components/dashboard-screen";
@@ -31,5 +31,22 @@ describe("DashboardPage", () => {
       },
       state: "warning",
     });
+  });
+
+  it("emits the demo hero preload before the dashboard", async () => {
+    vi.stubEnv("OMNIFIN_DEMO_MODE", "true");
+
+    const result = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(isValidElement(result)).toBe(true);
+    if (!isValidElement<{ children: ReactNode }>(result)) {
+      throw new Error("Expected demo mode to render a preload and dashboard fragment.");
+    }
+    const [preload, dashboard] = Children.toArray(result.props.children);
+    expect(preload).toMatchObject({
+      props: { as: "image", fetchPriority: "high", href: "/demo-hero.svg", rel: "preload" },
+      type: "link",
+    });
+    expect(isValidElement(dashboard) && dashboard.type).toBe(DashboardScreen);
   });
 });

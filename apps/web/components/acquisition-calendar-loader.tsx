@@ -37,10 +37,16 @@ function AcquisitionCalendarSkeleton() {
 
 const LazyAcquisitionCalendar = dynamic(
   () => import("./acquisition-calendar").then((module_) => module_.AcquisitionCalendar),
-  { loading: AcquisitionCalendarSkeleton, ssr: false },
+  { loading: AcquisitionCalendarSkeleton },
 );
 
 export function AcquisitionCalendarLoader(properties: AcquisitionCalendarProperties) {
   const ready = useIdleRender(800);
-  return ready ? <LazyAcquisitionCalendar {...properties} /> : <AcquisitionCalendarSkeleton />;
+  const hasStableInitialOutcome =
+    properties.initialOutcome !== undefined && properties.live === false;
+  return ready || hasStableInitialOutcome ? (
+    <LazyAcquisitionCalendar {...properties} />
+  ) : (
+    <AcquisitionCalendarSkeleton />
+  );
 }

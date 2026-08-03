@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DiscoveryDashboardProperties } from "./discovery-dashboard";
+import { isDeferredContentNavigation } from "../lib/deferred-content-activation";
 
 const RAIL_TITLES = [
   "Popular movies",
@@ -87,12 +88,15 @@ export function DeferredDiscoveryDashboard({
   }, []);
 
   useEffect(() => {
-    const timeout = window.setTimeout(activate, 1_000);
     const activateFromIntent = () => activate();
+    const activateFromKeyboard = (event: KeyboardEvent) => {
+      if (isDeferredContentNavigation(event)) activate();
+    };
     window.addEventListener("scroll", activateFromIntent, { once: true, passive: true });
+    window.addEventListener("keydown", activateFromKeyboard);
     return () => {
-      window.clearTimeout(timeout);
       window.removeEventListener("scroll", activateFromIntent);
+      window.removeEventListener("keydown", activateFromKeyboard);
     };
   }, [activate]);
 

@@ -128,7 +128,7 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
     : showDemoDashboard
       ? demoDashboard
       : connectedDashboard;
-  return (
+  const dashboard = (
     <DashboardScreen
       data={dashboardData}
       {...(showDiscoveryPerformanceProfile
@@ -146,5 +146,13 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       }
       liveDiscovery={!showDemoDashboard && !showQueueRecoveryDashboard}
     />
+  );
+  return showDemoDashboard ? (
+    <>
+      <link as="image" fetchPriority="high" href={DEMO_HERO_ARTWORK_PATH} rel="preload" />
+      {dashboard}
+    </>
+  ) : (
+    dashboard
   );
 }
