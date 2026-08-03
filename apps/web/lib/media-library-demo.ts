@@ -172,9 +172,85 @@ export const unavailableMediaLibraryOutcome = {
 } as const;
 
 function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
+  const movie =
+    item.media.kind === "movie"
+      ? {
+          cast: [
+            {
+              imagePath: `/v1/media/${item.media.id}/images/people/${"p".repeat(64)}`,
+              name: "Mara Voss",
+              role: "Iris Vale",
+              type: "cast" as const,
+            },
+            {
+              imagePath: `/v1/media/${item.media.id}/images/people/${"q".repeat(64)}`,
+              name: "Inez Laurent",
+              role: "Captain Sol",
+              type: "cast" as const,
+            },
+            {
+              imagePath: null,
+              name: "Theo Amari",
+              role: "Jonas",
+              type: "cast" as const,
+            },
+          ],
+          castTruncated: false,
+          communityRating: 8.4,
+          crew: [
+            { imagePath: null, name: "Jon Bell", role: null, type: "director" as const },
+            { imagePath: null, name: "Ari Chen", role: null, type: "writer" as const },
+          ],
+          crewTruncated: false,
+          criticRating: 91,
+          genres: ["Drama", "Science fiction"],
+          mediaSources: [
+            {
+              audio: [
+                {
+                  bitrateKbps: 640,
+                  channels: 6,
+                  codec: "E-AC-3",
+                  language: "English",
+                  title: "English 5.1",
+                },
+              ],
+              audioTruncated: false,
+              bitrateKbps: 9_250,
+              container: "MKV",
+              label: "4K · HEVC · MKV",
+              sizeBytes: 6_979_321_856,
+              subtitles: [
+                {
+                  codec: "SUBRIP",
+                  default: true,
+                  forced: false,
+                  language: "English",
+                  title: null,
+                },
+              ],
+              subtitlesTruncated: false,
+              video: {
+                bitrateKbps: 8_700,
+                bitDepth: 10,
+                codec: "HEVC",
+                hdrFormat: "HDR10",
+                height: 1_606,
+                profile: "Main 10",
+                width: 3_840,
+              },
+            },
+          ],
+          mediaSourcesTruncated: false,
+          premiereDate: "2026-04-18",
+          studios: ["Northlight Pictures"],
+          tagline: "The horizon remembers.",
+        }
+      : null;
   return {
     generatedAt,
     media: item.media,
+    movie,
     playback: item.playback,
     seasons:
       item.media.kind === "series"

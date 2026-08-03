@@ -34,6 +34,15 @@ const artworkParamsSchema = z.strictObject({
   referenceId: mediaReferenceIdSchema,
 });
 
+const personArtworkParamsSchema = z.strictObject({
+  referenceId: mediaReferenceIdSchema,
+  token: z
+    .string()
+    .min(64)
+    .max(768)
+    .regex(/^[A-Za-z0-9_.-]+$/u),
+});
+
 const libraryTitleParamsSchema = z.strictObject({
   referenceId: mediaReferenceIdSchema,
 });
@@ -67,6 +76,16 @@ const artworkParamsJsonSchema = {
   properties: {
     kind: { enum: ["backdrop", "poster"] },
     referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+  },
+} as const;
+
+const personArtworkParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["referenceId", "token"],
+  properties: {
+    referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+    token: { type: "string", minLength: 64, maxLength: 768, pattern: "^[A-Za-z0-9_.-]+$" },
   },
 } as const;
 
@@ -294,6 +313,74 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
                 ? "The library series is no longer available."
                 : "The Jellyfin library is temporarily unavailable.",
             statusCode: cursorInvalid ? 400 : notFound ? 404 : 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/:referenceId/images/people/:token",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      schema: { params: personArtworkParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const params = personArtworkParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const artwork = await service.readPersonArtwork(
+          { principal },
+          params.referenceId,
+          params.token,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
+        reply.header("content-disposition", "inline");
+        reply.header("etag", artwork.etag);
+        reply.header("vary", "Cookie, Accept");
+        if (request.headers["if-none-match"] === artwork.etag) {
+          return reply.status(304).send();
+        }
+        return reply.type(artwork.contentType).send(Buffer.from(artwork.body));
+      } catch (error) {
+        if (error instanceof MediaArtworkError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "media_person_artwork_not_found"
+                : "media_person_artwork_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "The requested person artwork is not available."
+                : "Person artwork is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        if (error instanceof ContinueWatchingError) {
+          throw new SafeHttpError({
+            cause: error,
+            code: "media_person_artwork_unavailable",
+            message: "Person artwork is temporarily unavailable.",
+            statusCode: 503,
           });
         }
         throw error;

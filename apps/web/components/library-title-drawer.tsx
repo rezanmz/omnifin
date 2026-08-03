@@ -5,19 +5,25 @@ import "./library-title-drawer.css";
 
 import type {
   LibraryBrowseItem,
+  LibraryMovieDetail,
+  LibraryMovieMediaSource,
   LibraryPlaybackState,
   LibrarySeasonEpisode,
   LibrarySeasonEpisodesResponse,
   LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
 import {
+  AudioLines,
   CalendarDays,
+  Captions,
   Check,
   ChevronDown,
   ChevronRight,
   Clapperboard,
   Clock3,
   Film,
+  Gauge,
+  HardDrive,
   Layers3,
   LoaderCircle,
   Play,
@@ -90,11 +96,39 @@ function formatAirDate(value: string | null) {
   }).format(new Date(`${value}T00:00:00.000Z`));
 }
 
+function formatBytes(value: number | null) {
+  if (value === null) return null;
+  if (value === 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1_024)), units.length - 1);
+  const amount = value / 1_024 ** exponent;
+  return `${amount >= 10 || exponent === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[exponent]}`;
+}
+
+function formatBitrate(value: number | null) {
+  if (value === null) return null;
+  return value >= 1_000
+    ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)} Mbps`
+    : `${value} Kbps`;
+}
+
+function playbackLabel(playback: LibraryPlaybackState | null) {
+  if (!playback) return null;
+  if (playback.played) return "Watched";
+  if (playback.positionSeconds < 1) return "Unwatched";
+  const remainingMinutes = Math.max(
+    1,
+    Math.ceil((playback.durationSeconds - playback.positionSeconds) / 60),
+  );
+  return `${remainingMinutes} min left`;
+}
+
 function titleFacts(detail: LibraryTitleDetailResponse) {
   return [
     detail.media.year,
     detail.media.contentRating,
     formatRuntime(detail.media.runtimeMinutes),
+    playbackLabel(detail.playback),
     detail.media.kind === "series"
       ? `${detail.seasons.length}${detail.seasonsTruncated ? "+" : ""} season${detail.seasons.length === 1 ? "" : "s"}`
       : null,
@@ -142,6 +176,254 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
         <RotateCcw aria-hidden="true" size={17} /> Try again
       </button>
     </section>
+  );
+}
+
+function PersonPortrait({ credit }: { credit: LibraryMovieDetail["cast"][number] }) {
+  const source = sameOriginMediaPath(credit.imagePath);
+  return (
+    <span
+      className="library-title__person-portrait"
+      data-artwork-source={source ? "remote" : "generated"}
+    >
+      <UsersRound aria-hidden="true" />
+      {source ? (
+        // Person artwork remains on Omnifin's authenticated origin.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          alt=""
+          decoding="async"
+          loading="lazy"
+          onError={(event) => {
+            event.currentTarget.hidden = true;
+          }}
+          src={source}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
+  const size = formatBytes(source.sizeBytes);
+  const bitrate = formatBitrate(source.bitrateKbps);
+  const video = source.video;
+  const resolution =
+    video?.width && video.height ? `${video.width} × ${video.height}` : (video?.height ?? null);
+  return (
+    <article className="library-title__source-card">
+      <header>
+        <div>
+          <span className="library-title__source-icon" aria-hidden="true">
+            <HardDrive />
+          </span>
+          <div>
+            <h4>{source.label}</h4>
+            <p>{[size, bitrate].filter(Boolean).join(" · ") || "Technical details unavailable"}</p>
+          </div>
+        </div>
+        {source.container ? <span>{source.container}</span> : null}
+      </header>
+
+      {video ? (
+        <dl className="library-title__technical-grid" aria-label="Video information">
+          {resolution ? (
+            <div>
+              <dt>Picture</dt>
+              <dd>{typeof resolution === "number" ? `${resolution}p` : resolution}</dd>
+            </div>
+          ) : null}
+          {video.codec ? (
+            <div>
+              <dt>Video</dt>
+              <dd>{[video.codec, video.profile].filter(Boolean).join(" · ")}</dd>
+            </div>
+          ) : null}
+          {video.bitDepth ? (
+            <div>
+              <dt>Depth</dt>
+              <dd>{video.bitDepth}-bit</dd>
+            </div>
+          ) : null}
+          {video.hdrFormat ? (
+            <div>
+              <dt>Range</dt>
+              <dd>{video.hdrFormat}</dd>
+            </div>
+          ) : null}
+          {video.bitrateKbps ? (
+            <div>
+              <dt>Video rate</dt>
+              <dd>{formatBitrate(video.bitrateKbps)}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      {source.audio.length > 0 || source.subtitles.length > 0 ? (
+        <div className="library-title__track-groups">
+          {source.audio.length > 0 ? (
+            <section aria-label="Audio tracks">
+              <p>
+                <AudioLines aria-hidden="true" /> Audio
+              </p>
+              <ul>
+                {source.audio.map((track, index) => (
+                  <li key={`${track.language ?? "audio"}:${track.codec ?? "unknown"}:${index}`}>
+                    <strong>{track.title ?? track.language ?? `Track ${index + 1}`}</strong>
+                    <span>
+                      {[
+                        track.codec,
+                        track.channels ? `${track.channels} ch` : null,
+                        formatBitrate(track.bitrateKbps),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "Audio"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {source.audioTruncated ? <small>Additional audio tracks are available.</small> : null}
+            </section>
+          ) : null}
+          {source.subtitles.length > 0 ? (
+            <section aria-label="Subtitle tracks">
+              <p>
+                <Captions aria-hidden="true" /> Subtitles
+              </p>
+              <ul>
+                {source.subtitles.map((track, index) => (
+                  <li key={`${track.language ?? "subtitle"}:${track.codec ?? "unknown"}:${index}`}>
+                    <strong>{track.title ?? track.language ?? `Track ${index + 1}`}</strong>
+                    <span>
+                      {[
+                        track.codec,
+                        track.default ? "Default" : null,
+                        track.forced ? "Forced" : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "Subtitle"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {source.subtitlesTruncated ? (
+                <small>Additional subtitle tracks are available.</small>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
+  const premiereDate = formatAirDate(movie.premiereDate);
+  const hasEditorialFacts =
+    movie.communityRating !== null ||
+    movie.criticRating !== null ||
+    premiereDate !== null ||
+    movie.genres.length > 0 ||
+    movie.studios.length > 0;
+  return (
+    <div className="library-title__movie-information">
+      {hasEditorialFacts ? (
+        <section className="library-title__editorial-facts" aria-label="Movie information">
+          {movie.communityRating !== null ? (
+            <span>
+              <Star aria-hidden="true" fill="currentColor" /> {movie.communityRating.toFixed(1)}
+              <small>/10 community</small>
+            </span>
+          ) : null}
+          {movie.criticRating !== null ? (
+            <span>
+              <Gauge aria-hidden="true" /> {movie.criticRating}%<small>critics</small>
+            </span>
+          ) : null}
+          {premiereDate ? (
+            <span>
+              <CalendarDays aria-hidden="true" /> {premiereDate}
+              <small>premiered</small>
+            </span>
+          ) : null}
+          {movie.genres.length > 0 ? (
+            <span>
+              <Film aria-hidden="true" /> {movie.genres.join(" · ")}
+              <small>genres</small>
+            </span>
+          ) : null}
+          {movie.studios.length > 0 ? (
+            <span>
+              <Clapperboard aria-hidden="true" /> {movie.studios.join(" · ")}
+              <small>studio</small>
+            </span>
+          ) : null}
+        </section>
+      ) : null}
+
+      {movie.cast.length > 0 ? (
+        <section className="library-title__people" aria-labelledby="library-title-cast-heading">
+          <div className="library-title__section-heading library-title__section-heading--compact">
+            <div>
+              <p className="eyebrow">Principal cast</p>
+              <h3 id="library-title-cast-heading">On screen</h3>
+            </div>
+            {movie.castTruncated ? <span>Showing the first 24 credits</span> : null}
+          </div>
+          <ul aria-label="Cast">
+            {movie.cast.map((credit, index) => (
+              <li key={`${credit.name}:${credit.role ?? "cast"}:${index}`}>
+                <PersonPortrait credit={credit} />
+                <strong>{credit.name}</strong>
+                <span>{credit.role ?? "Cast"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {movie.crew.length > 0 ? (
+        <section className="library-title__crew" aria-label="Key crew">
+          <p className="eyebrow">Behind the film</p>
+          <dl>
+            {movie.crew.map((credit, index) => (
+              <div key={`${credit.name}:${credit.type}:${index}`}>
+                <dt>{credit.type[0]!.toLocaleUpperCase("en-US") + credit.type.slice(1)}</dt>
+                <dd>{credit.name}</dd>
+              </div>
+            ))}
+          </dl>
+          {movie.crewTruncated ? <small>Showing the first 16 key crew credits.</small> : null}
+        </section>
+      ) : null}
+
+      <details className="library-title__media-information">
+        <summary data-directional-item>
+          <span aria-hidden="true">
+            <HardDrive />
+          </span>
+          <span>
+            <strong>Media information</strong>
+            <small>
+              {movie.mediaSources.length > 0
+                ? `${movie.mediaSources.length}${movie.mediaSourcesTruncated ? "+" : ""} owned version${movie.mediaSources.length === 1 ? "" : "s"}`
+                : "Jellyfin has not reported technical details"}
+            </small>
+          </span>
+          <ChevronDown aria-hidden="true" />
+        </summary>
+        <div className="library-title__media-information-body">
+          {movie.mediaSources.length > 0 ? (
+            movie.mediaSources.map((source, index) => (
+              <MediaSourceCard key={`${source.label}:${index}`} source={source} />
+            ))
+          ) : (
+            <p>Playback is available, but this Jellyfin item has no reviewed media-source facts.</p>
+          )}
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -623,6 +905,11 @@ export function LibraryTitleDrawer({
                       <span key={fact}>{fact}</span>
                     ))}
                   </div>
+                  {detail!.movie?.tagline ? (
+                    <blockquote className="library-title__tagline">
+                      {detail!.movie.tagline}
+                    </blockquote>
+                  ) : null}
                   {detail!.media.overview ? <p>{detail!.media.overview}</p> : null}
                   {detail!.playback ? (
                     <button
@@ -637,6 +924,8 @@ export function LibraryTitleDrawer({
                   ) : null}
                 </div>
               </section>
+
+              {detail!.movie ? <MovieInformation movie={detail!.movie} /> : null}
 
               {detail!.media.kind === "series" ? (
                 <section className="library-title__hierarchy">

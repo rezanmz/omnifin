@@ -3,7 +3,19 @@ import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
   LIBRARY_EPISODE_MAX_STUDIOS,
+  LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
+  LIBRARY_MOVIE_MAX_CAST,
+  LIBRARY_MOVIE_MAX_CREW,
+  LIBRARY_MOVIE_MAX_GENRES,
+  LIBRARY_MOVIE_MAX_MEDIA_SOURCES,
+  LIBRARY_MOVIE_MAX_STUDIOS,
+  LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS,
   type LibraryEpisodeCredit,
+  type LibraryMovieAudioTrack,
+  type LibraryMovieCredit,
+  type LibraryMovieMediaSource,
+  type LibraryMovieSubtitleTrack,
+  type LibraryMovieVideo,
 } from "@omnifin/contracts/library";
 
 import {
@@ -62,6 +74,9 @@ const jellyfinResumeResponseSchema = z.object({
 
 const jellyfinLibraryItemSchema = z.object({
   BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  CommunityRating: z.number().finite().nullish().catch(null),
+  CriticRating: z.number().finite().nullish().catch(null),
+  Genres: z.array(z.string().max(100)).max(128).nullish().catch(null),
   Id: z.string().trim().min(1).max(256),
   ImageBlurHashes: z.unknown().optional(),
   ImageTags: imageTagsSchema.nullish(),
@@ -72,11 +87,31 @@ const jellyfinLibraryItemSchema = z.object({
   ParentBackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   ParentBackdropItemId: z.string().trim().min(1).max(256).nullish(),
   ParentIndexNumber: z.int().nonnegative().max(100_000).nullish(),
+  People: z
+    .array(
+      z.object({
+        Id: z.string().trim().min(1).max(256).nullish(),
+        Name: z.string().max(160).nullish(),
+        PrimaryImageTag: z.string().min(1).max(256).nullish(),
+        Role: z.string().max(200).nullish(),
+        Type: z.string().max(64).nullish(),
+      }),
+    )
+    .max(512)
+    .nullish()
+    .catch(null),
+  PremiereDate: z.string().trim().min(1).max(64).nullish().catch(null),
   ProductionYear: z.int().min(0).max(9_999).nullish(),
   RunTimeTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
   SeriesId: z.string().trim().min(1).max(256).nullish(),
   SeriesName: z.string().trim().min(1).max(300).nullish(),
   SeriesPrimaryImageTag: z.string().min(1).max(256).nullish(),
+  Studios: z
+    .array(z.object({ Name: z.string().max(160).nullish() }))
+    .max(128)
+    .nullish()
+    .catch(null),
+  Taglines: z.array(z.string().max(500)).max(32).nullish().catch(null),
   Type: z.enum(["Movie", "Series"]),
   UserData: z
     .object({
@@ -84,6 +119,38 @@ const jellyfinLibraryItemSchema = z.object({
       PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
     })
     .nullish(),
+  MediaSources: z
+    .array(
+      z.object({
+        Bitrate: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+        Container: z.string().max(64).nullish(),
+        MediaStreams: z
+          .array(
+            z.object({
+              BitDepth: z.int().positive().max(64).nullish(),
+              BitRate: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+              Channels: z.int().positive().max(64).nullish(),
+              Codec: z.string().max(64).nullish(),
+              Height: z.int().positive().max(100_000).nullish(),
+              IsDefault: z.boolean().nullish(),
+              IsForced: z.boolean().nullish(),
+              Language: z.string().max(80).nullish(),
+              Profile: z.string().max(80).nullish(),
+              Title: z.string().max(160).nullish(),
+              Type: z.string().max(64),
+              VideoRange: z.string().max(80).nullish(),
+              VideoRangeType: z.string().max(80).nullish(),
+              Width: z.int().positive().max(100_000).nullish(),
+            }),
+          )
+          .max(256)
+          .nullish(),
+        Size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+      }),
+    )
+    .max(64)
+    .nullish()
+    .catch(null),
 });
 
 const jellyfinLibraryResponseSchema = z.object({
@@ -285,8 +352,29 @@ export interface JellyfinLibrarySeason {
 
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
+  movie: JellyfinLibraryMovieDetail | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
+}
+
+export interface JellyfinLibraryMovieCredit extends LibraryMovieCredit {
+  image: JellyfinArtworkSource | null;
+  imagePath: null;
+}
+
+export interface JellyfinLibraryMovieDetail {
+  cast: JellyfinLibraryMovieCredit[];
+  castTruncated: boolean;
+  communityRating: number | null;
+  crew: JellyfinLibraryMovieCredit[];
+  crewTruncated: boolean;
+  criticRating: number | null;
+  genres: string[];
+  mediaSources: LibraryMovieMediaSource[];
+  mediaSourcesTruncated: boolean;
+  premiereDate: string | null;
+  studios: string[];
+  tagline: string | null;
 }
 
 export interface JellyfinLibrarySeasonEpisodesInput {
@@ -395,6 +483,186 @@ function episodeCredits(
   return {
     credits: normalized.slice(0, LIBRARY_EPISODE_MAX_CREDITS),
     creditsTruncated: normalized.length > LIBRARY_EPISODE_MAX_CREDITS,
+  };
+}
+
+function bitrateKbps(value: number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  return Math.min(10_000_000, Math.round(value / 1_000));
+}
+
+function codecLabel(value: string | null | undefined) {
+  const codec = compactText(value, 64)?.toLocaleLowerCase("en-US");
+  if (!codec) return null;
+  return (
+    {
+      ac3: "AC-3",
+      av1: "AV1",
+      eac3: "E-AC-3",
+      h264: "H.264",
+      hevc: "HEVC",
+      mjpeg: "MJPEG",
+      truehd: "TrueHD",
+      vp9: "VP9",
+    }[codec] ?? codec.toLocaleUpperCase("en-US")
+  );
+}
+
+function movieCredits(
+  people: z.infer<typeof jellyfinLibraryItemSchema>["People"],
+): Pick<JellyfinLibraryMovieDetail, "cast" | "castTruncated" | "crew" | "crewTruncated"> {
+  const cast: JellyfinLibraryMovieCredit[] = [];
+  const crew: JellyfinLibraryMovieCredit[] = [];
+  const seen = new Set<string>();
+  for (const person of people ?? []) {
+    const upstreamType = person.Type?.toLocaleLowerCase("en-US").replace(/[\s_-]+/gu, "");
+    const type =
+      upstreamType === "actor" || upstreamType === "gueststar"
+        ? ("cast" as const)
+        : upstreamType === "director"
+          ? ("director" as const)
+          : upstreamType === "writer"
+            ? ("writer" as const)
+            : upstreamType === "producer"
+              ? ("producer" as const)
+              : null;
+    if (!type) continue;
+    const name = compactText(person.Name, 160);
+    if (!name) continue;
+    const role = compactText(person.Role, 200);
+    const key = `${type}:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const image =
+      person.Id && person.PrimaryImageTag ? { itemId: person.Id, type: "Primary" as const } : null;
+    const credit = {
+      image,
+      imagePath: null,
+      name,
+      role,
+      type,
+    } satisfies JellyfinLibraryMovieCredit;
+    if (type === "cast") cast.push(credit);
+    else crew.push(credit);
+  }
+  return {
+    cast: cast.slice(0, LIBRARY_MOVIE_MAX_CAST),
+    castTruncated: cast.length > LIBRARY_MOVIE_MAX_CAST,
+    crew: crew.slice(0, LIBRARY_MOVIE_MAX_CREW),
+    crewTruncated: crew.length > LIBRARY_MOVIE_MAX_CREW,
+  };
+}
+
+type JellyfinLibraryMediaSource = NonNullable<
+  z.infer<typeof jellyfinLibraryItemSchema>["MediaSources"]
+>[number];
+type JellyfinLibraryMediaStream = NonNullable<JellyfinLibraryMediaSource["MediaStreams"]>[number];
+
+function normalizeAudioTrack(stream: JellyfinLibraryMediaStream): LibraryMovieAudioTrack {
+  return {
+    bitrateKbps: bitrateKbps(stream.BitRate),
+    channels: stream.Channels ?? null,
+    codec: codecLabel(stream.Codec),
+    language: compactText(stream.Language, 80),
+    title: compactText(stream.Title, 160),
+  };
+}
+
+function normalizeSubtitleTrack(stream: JellyfinLibraryMediaStream): LibraryMovieSubtitleTrack {
+  return {
+    codec: codecLabel(stream.Codec),
+    default: stream.IsDefault ?? false,
+    forced: stream.IsForced ?? false,
+    language: compactText(stream.Language, 80),
+    title: compactText(stream.Title, 160),
+  };
+}
+
+function hdrFormat(stream: JellyfinLibraryMediaStream) {
+  for (const candidate of [stream.VideoRangeType, stream.VideoRange]) {
+    const value = compactText(candidate, 80);
+    if (value && value.toLocaleLowerCase("en-US") !== "sdr") return value;
+  }
+  return null;
+}
+
+function normalizeVideo(stream: JellyfinLibraryMediaStream | undefined): LibraryMovieVideo | null {
+  if (!stream) return null;
+  return {
+    bitrateKbps: bitrateKbps(stream.BitRate),
+    bitDepth: stream.BitDepth ?? null,
+    codec: codecLabel(stream.Codec),
+    hdrFormat: hdrFormat(stream),
+    height: stream.Height ?? null,
+    profile: compactText(stream.Profile, 80),
+    width: stream.Width ?? null,
+  };
+}
+
+function resolutionLabel(video: LibraryMovieVideo | null) {
+  const width = video?.width;
+  const height = video?.height;
+  if (width !== null && width !== undefined) {
+    if (width >= 3_400) return "4K";
+    if (width >= 2_400) return "QHD";
+    if (width >= 1_700) return "1080p";
+    if (width >= 1_100) return "720p";
+  }
+  return height ? `${height}p` : null;
+}
+
+function normalizeMovieMediaSource(
+  source: JellyfinLibraryMediaSource,
+  index: number,
+  sourceCount: number,
+): LibraryMovieMediaSource {
+  const streams = source.MediaStreams ?? [];
+  const video = normalizeVideo(
+    streams.find((stream) => stream.Type.toLocaleLowerCase("en-US") === "video"),
+  );
+  const audio = streams
+    .filter((stream) => stream.Type.toLocaleLowerCase("en-US") === "audio")
+    .map(normalizeAudioTrack);
+  const subtitles = streams
+    .filter((stream) => stream.Type.toLocaleLowerCase("en-US") === "subtitle")
+    .map(normalizeSubtitleTrack);
+  const container = codecLabel(source.Container);
+  const baseLabel =
+    [resolutionLabel(video), video?.codec, container].filter(Boolean).join(" · ") ||
+    "Media version";
+  return {
+    audio: audio.slice(0, LIBRARY_MOVIE_MAX_AUDIO_TRACKS),
+    audioTruncated: audio.length > LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
+    bitrateKbps: bitrateKbps(source.Bitrate),
+    container,
+    label: sourceCount > 1 ? `${baseLabel} · Version ${index + 1}` : baseLabel,
+    sizeBytes: source.Size ?? null,
+    subtitles: subtitles.slice(0, LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
+    subtitlesTruncated: subtitles.length > LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS,
+    video,
+  };
+}
+
+function normalizeMovieDetail(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+): JellyfinLibraryMovieDetail {
+  const mediaSources = item.MediaSources ?? [];
+  return {
+    ...movieCredits(item.People),
+    communityRating: boundedRating(item.CommunityRating, 10),
+    criticRating: boundedRating(item.CriticRating, 100),
+    genres: uniqueText(item.Genres, LIBRARY_MOVIE_MAX_GENRES, 100),
+    mediaSources: mediaSources
+      .slice(0, LIBRARY_MOVIE_MAX_MEDIA_SOURCES)
+      .map((source, index) => normalizeMovieMediaSource(source, index, mediaSources.length)),
+    mediaSourcesTruncated: mediaSources.length > LIBRARY_MOVIE_MAX_MEDIA_SOURCES,
+    premiereDate: dateOnly(item.PremiereDate),
+    studios: uniqueText(
+      item.Studios?.flatMap(({ Name }) => (Name === null || Name === undefined ? [] : [Name])),
+      LIBRARY_MOVIE_MAX_STUDIOS,
+      160,
+    ),
+    tagline: uniqueText(item.Taglines, 1, 500)[0] ?? null,
   };
 }
 
@@ -814,14 +1082,25 @@ export class JellyfinUserMediaClient {
       {
         headers: { authorization: this.#authorization },
         operation: "media.library",
-        query: { UserId: input.userId },
+        query: {
+          Fields:
+            "Overview,ProductionYear,OfficialRating,CommunityRating,CriticRating,PremiereDate,Genres,Studios,Taglines,People,MediaSources,ImageBlurHashes",
+          UserId: input.userId,
+        },
         ...(signal === undefined ? {} : { signal }),
       },
     );
     const item = normalizeLibraryItem(itemResponse);
     if (!item || item.externalId !== input.itemId)
       throw this.#client.invalidResponse("media.library");
-    if (item.kind === "movie") return { item, seasons: [], seasonsTruncated: false };
+    if (item.kind === "movie") {
+      return {
+        item,
+        movie: normalizeMovieDetail(itemResponse),
+        seasons: [],
+        seasonsTruncated: false,
+      };
+    }
 
     const seasonsResponse = await this.#client.requestJson(
       `Shows/${input.itemId}/Seasons`,
@@ -874,6 +1153,7 @@ export class JellyfinUserMediaClient {
     }
     return {
       item,
+      movie: null,
       seasons: seasonItems.map((season) =>
         normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
       ),

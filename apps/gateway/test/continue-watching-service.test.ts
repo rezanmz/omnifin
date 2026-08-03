@@ -206,6 +206,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
   const readLibrary = vi.fn(async () => libraryResult());
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: libraryResult().items[0]!,
+    movie: null,
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
   }));
@@ -494,8 +495,14 @@ describe("ContinueWatchingService", () => {
   });
 
   it("returns explicit movie playback state and rejects episode browsing through a movie reference", async () => {
-    const { database, readLibrary, readLibrarySeasonEpisodes, readLibraryTitle, service } =
-      harness();
+    const {
+      database,
+      readImage,
+      readLibrary,
+      readLibrarySeasonEpisodes,
+      readLibraryTitle,
+      service,
+    } = harness();
     const movie = {
       ...libraryResult().items[0]!,
       artwork: { accentColor: "#775544", backdrop: null, blurHash: null, poster: null },
@@ -509,6 +516,56 @@ describe("ContinueWatchingService", () => {
     readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
     readLibraryTitle.mockResolvedValueOnce({
       item: movie,
+      movie: {
+        cast: [
+          {
+            image: { itemId: "private-person-1", type: "Primary" },
+            imagePath: null,
+            name: "Mara Voss",
+            role: "Iris Vale",
+            type: "cast",
+          },
+        ],
+        castTruncated: false,
+        communityRating: 8.4,
+        crew: [
+          {
+            image: null,
+            imagePath: null,
+            name: "Jon Bell",
+            role: null,
+            type: "director",
+          },
+        ],
+        crewTruncated: false,
+        criticRating: 91,
+        genres: ["Drama"],
+        mediaSources: [
+          {
+            audio: [],
+            audioTruncated: false,
+            bitrateKbps: 9_250,
+            container: "MKV",
+            label: "4K · HEVC · MKV",
+            sizeBytes: 6_979_321_856,
+            subtitles: [],
+            subtitlesTruncated: false,
+            video: {
+              bitrateKbps: 8_700,
+              bitDepth: 10,
+              codec: "HEVC",
+              hdrFormat: "HDR10",
+              height: 1_606,
+              profile: "Main 10",
+              width: 3_840,
+            },
+          },
+        ],
+        mediaSourcesTruncated: false,
+        premiereDate: "2026-04-18",
+        studios: ["Northlight Pictures"],
+        tagline: "The horizon remembers.",
+      },
       seasons: [],
       seasonsTruncated: false,
     });
@@ -520,18 +577,49 @@ describe("ContinueWatchingService", () => {
       );
       const referenceId = catalogue.items[0]!.media.id;
 
-      await expect(
-        service.readLibraryTitle(referenceId, { principal: principal() }),
-      ).resolves.toMatchObject({
+      const detail = await service.readLibraryTitle(referenceId, { principal: principal() });
+      expect(detail).toMatchObject({
         media: {
           artwork: { backdropPath: null, posterPath: null },
           id: referenceId,
           kind: "movie",
           title: "The Far Meridian",
         },
+        movie: {
+          cast: [
+            {
+              imagePath: expect.stringMatching(
+                new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`),
+              ),
+              name: "Mara Voss",
+            },
+          ],
+          communityRating: 8.4,
+          genres: ["Drama"],
+          mediaSources: [{ label: "4K · HEVC · MKV", sizeBytes: 6_979_321_856 }],
+          premiereDate: "2026-04-18",
+        },
         playback: { durationSeconds: 7_080, played: false, positionSeconds: 1_200 },
         seasons: [],
       });
+      expect(JSON.stringify(detail)).not.toMatch(/private-person|private-upstream/u);
+      const personPath = detail.movie?.cast[0]?.imagePath;
+      expect(personPath).toBeTruthy();
+      const token = personPath!.split("/").at(-1)!;
+      await expect(
+        service.readPersonArtwork({ principal: principal() }, referenceId, token),
+      ).resolves.toMatchObject({
+        contentType: "image/jpeg",
+        etag: expect.stringMatching(/^"person_/u),
+      });
+      expect(readImage).toHaveBeenLastCalledWith({
+        itemId: "private-person-1",
+        maxWidth: 480,
+        type: "Primary",
+      });
+      await expect(
+        service.readPersonArtwork({ principal: principal() }, referenceId, `${token}tampered`),
+      ).rejects.toMatchObject({ reason: "not_found" });
       await expect(
         service.readLibrarySeasonEpisodes(
           referenceId,

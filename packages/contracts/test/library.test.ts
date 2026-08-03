@@ -231,6 +231,7 @@ describe("library operation contracts", () => {
     const detail = {
       generatedAt: catalogue.generatedAt,
       media: seriesMedia,
+      movie: null,
       playback: null,
       seasons: [season],
       seasonsTruncated: false,
@@ -275,6 +276,90 @@ describe("library operation contracts", () => {
     expect(JSON.stringify({ detail, episodes })).not.toMatch(
       /external|jellyfin\.example|upstream/iu,
     );
+  });
+
+  it("models rich owned-movie facts without accepting cross-reference person artwork", () => {
+    const media = catalogue.items[0]!.media;
+    const detail = {
+      generatedAt: catalogue.generatedAt,
+      media,
+      movie: {
+        cast: [
+          {
+            imagePath: `/v1/media/${media.id}/images/people/${"p".repeat(64)}`,
+            name: "Mara Voss",
+            role: "Iris Vale",
+            type: "cast" as const,
+          },
+        ],
+        castTruncated: false,
+        communityRating: 8.4,
+        crew: [{ imagePath: null, name: "Jon Bell", role: null, type: "director" as const }],
+        crewTruncated: false,
+        criticRating: 91,
+        genres: ["Drama", "Science fiction"],
+        mediaSources: [
+          {
+            audio: [
+              {
+                bitrateKbps: 640,
+                channels: 6,
+                codec: "E-AC-3",
+                language: "English",
+                title: "English 5.1",
+              },
+            ],
+            audioTruncated: false,
+            bitrateKbps: 9_250,
+            container: "MKV",
+            label: "4K · HEVC · MKV",
+            sizeBytes: 6_979_321_856,
+            subtitles: [
+              {
+                codec: "SUBRIP",
+                default: true,
+                forced: false,
+                language: "English",
+                title: null,
+              },
+            ],
+            subtitlesTruncated: false,
+            video: {
+              bitrateKbps: 8_700,
+              bitDepth: 10,
+              codec: "HEVC",
+              hdrFormat: "HDR10",
+              height: 1_606,
+              profile: "Main 10",
+              width: 3_840,
+            },
+          },
+        ],
+        mediaSourcesTruncated: false,
+        premiereDate: "2026-04-18",
+        studios: ["Northlight Pictures"],
+        tagline: "The horizon remembers.",
+      },
+      playback: catalogue.items[0]!.playback,
+      seasons: [],
+      seasonsTruncated: false,
+    };
+    expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+    expect(JSON.stringify(detail)).not.toMatch(/jellyfin|upstream|\/private\//iu);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        movie: {
+          ...detail.movie,
+          cast: [
+            {
+              ...detail.movie.cast[0],
+              imagePath: `/v1/media/media_${"x".repeat(22)}/images/people/private`,
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("requires a bounded editable metadata field", () => {
