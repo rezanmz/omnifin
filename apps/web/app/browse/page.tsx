@@ -45,13 +45,14 @@ export default async function BrowsePage({ searchParams }: BrowsePageProperties)
       ? demoBrowseResponse
       : undefined;
   const initialResponse = testResponse ?? demoResponse;
+  const freezeFixture = testView === "loading" || demoResponse !== undefined;
   const preference = await readThemePreference();
   return (
     <DiscoveryBrowser
       initialCriteria={initialResponse?.criteria ?? initialCriteria}
       {...(initialResponse === undefined ? {} : { initialResponse })}
       invalidCriteria={!parsed.success}
-      {...(initialResponse !== undefined || testView === "loading" ? { live: false } : {})}
+      {...(freezeFixture ? { live: false } : {})}
       themePreference={preference}
     />
   );
