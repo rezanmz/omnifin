@@ -305,11 +305,7 @@ function HistoryEntryCard({
     (entry.playback.positionSeconds / entry.playback.durationSeconds) * 100,
   );
   return (
-    <article
-      className={styles.entry}
-      role="listitem"
-      style={{ "--history-accent": accent } as EntryStyle}
-    >
+    <li className={styles.entry} style={{ "--history-accent": accent } as EntryStyle}>
       <span className={styles.poster} data-artwork-source={artwork ? "remote" : "generated"}>
         {artwork ? (
           // Artwork remains on Omnifin's authenticated, opaque media route.
@@ -376,7 +372,7 @@ function HistoryEntryCard({
           ) : null}
         </div>
       </div>
-    </article>
+    </li>
   );
 }
 
@@ -622,10 +618,9 @@ function ViewingHistoryContent({
                 key={label}
               >
                 <h3 id={`history-day-${label.replaceAll(/[^a-z0-9]/giu, "-")}`}>{label}</h3>
-                <div
+                <ul
                   className={styles.list}
                   onKeyDown={(event) => handleDirectionalFocus(event, { axis: "vertical" })}
-                  role="list"
                 >
                   {group.map((entry) => (
                     <HistoryEntryCard
@@ -636,7 +631,7 @@ function ViewingHistoryContent({
                       }
                     />
                   ))}
-                </div>
+                </ul>
               </section>
             ))}
           </div>

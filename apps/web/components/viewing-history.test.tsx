@@ -42,6 +42,13 @@ describe("ViewingHistory", () => {
     expect(screen.getByRole("heading", { name: "Today" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Yesterday" })).toBeVisible();
     expect(screen.getByText("Only you")).toBeVisible();
+    const historyLists = container.querySelectorAll(
+      'section[aria-labelledby^="history-day-"] > ul',
+    );
+    expect(historyLists).toHaveLength(3);
+    for (const list of historyLists) {
+      expect(Array.from(list.children).every((entry) => entry.tagName === "LI")).toBe(true);
+    }
     expect(screen.getByRole("link", { name: "Back to library" })).toHaveAttribute(
       "href",
       "/library",
