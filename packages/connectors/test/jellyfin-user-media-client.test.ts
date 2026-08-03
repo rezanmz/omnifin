@@ -471,6 +471,60 @@ describe("JellyfinUserMediaClient", () => {
     expect(requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
   });
 
+  it("derives season progress when Jellyfin omits aggregate episode counts", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse(series),
+      jsonResponse({
+        Items: [
+          {
+            Id: "season-upstream-1",
+            IndexNumber: 1,
+            Name: "Season 1",
+            Type: "Season",
+            UserData: { Played: true, UnplayedItemCount: 0 },
+          },
+          {
+            Id: "season-upstream-2",
+            IndexNumber: 2,
+            Name: "Season 2",
+            Type: "Season",
+            UserData: { Played: false, UnplayedItemCount: 2 },
+          },
+        ],
+      }),
+      jsonResponse({
+        Items: [{ Id: "episode-upstream-1", Type: "Episode", UserData: { Played: true } }],
+        TotalRecordCount: 10,
+      }),
+      jsonResponse({
+        Items: [{ Id: "episode-upstream-11", Type: "Episode", UserData: { Played: true } }],
+        TotalRecordCount: 10,
+      }),
+    ]);
+
+    await expect(
+      client.readLibraryTitle({ itemId: "series-upstream-1", userId: "paired-user-id" }),
+    ).resolves.toMatchObject({
+      seasons: [
+        { episodeCount: 10, playedEpisodeCount: 10, seasonNumber: 1 },
+        { episodeCount: 10, playedEpisodeCount: 8, seasonNumber: 2 },
+      ],
+    });
+    expect(requests).toHaveLength(4);
+    for (const [index, season] of ["1", "2"].entries()) {
+      expect(requests[index + 2]?.url.pathname).toBe("/base/Shows/series-upstream-1/Episodes");
+      expect(Object.fromEntries(requests[index + 2]!.url.searchParams)).toMatchObject({
+        EnableImages: "false",
+        EnableUserData: "true",
+        IsMissing: "false",
+        Limit: "51",
+        Season: season,
+        StartIndex: "0",
+        UserId: "paired-user-id",
+      });
+    }
+  });
+
   it("fails closed on malformed resume data and unsafe tokens", async () => {
     const malformed = clientWithResponses([
       jsonResponse({ Items: [{ ...movie, RunTimeTicks: "7200000000" }] }),
