@@ -43,6 +43,18 @@ describe("OperationsDock", () => {
     expect(screen.getByRole("button", { name: /The Far Meridian/i })).toBeVisible();
   });
 
+  it("coalesces a rapid duplicate activation into one disclosure change", async () => {
+    const user = userEvent.setup();
+    render(<OperationsDock operations={demoDashboard.operations} />);
+
+    const toggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.dblClick(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /The Far Meridian/i })).toBeVisible();
+  });
+
   it("renders an honest quiet state without invalid progress when the queue is empty", () => {
     render(<OperationsDock operations={[]} />);
 
