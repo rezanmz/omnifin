@@ -6,7 +6,7 @@ import { AcquisitionCalendarFrame } from "./acquisition-calendar-frame";
 describe("AcquisitionCalendarFrame", () => {
   it("uses the persistent application chrome when embedded in an authenticated route", () => {
     const { container } = render(
-      <AcquisitionCalendarFrame embedded initialPreference="system">
+      <AcquisitionCalendarFrame>
         <p>Calendar content</p>
       </AcquisitionCalendarFrame>,
     );
