@@ -147,6 +147,18 @@ describe("global search", () => {
     }
   });
 
+  it("retains focus when pointer activation suppresses the placeholder click", async () => {
+    render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const placeholder = screen.getByRole("combobox");
+
+    fireEvent.pointerDown(placeholder);
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+    );
+    expect(screen.getByRole("combobox")).toHaveFocus();
+  });
+
   it("opens normalized title details without keeping the search console behind the dialog", async () => {
     const user = userEvent.setup();
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
