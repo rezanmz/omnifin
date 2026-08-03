@@ -36,11 +36,13 @@ export function HeroSpotlight({
   } as AccentStyle;
   const hasLiveActions = onDetails !== undefined;
   const hasFallbackActions = !hasLiveActions && hero.actions !== "none";
+  const titleScale = hero.title.length > 42 ? "long" : "standard";
 
   return (
     <section
       className="hero-spotlight"
       data-artwork-source={safeArtworkPath ? "remote" : "generated"}
+      data-title-scale={titleScale}
       style={style}
       aria-labelledby="hero-title"
     >
