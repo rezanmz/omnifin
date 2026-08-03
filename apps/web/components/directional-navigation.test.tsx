@@ -7,7 +7,6 @@ import { HeroSpotlight } from "./hero-spotlight";
 import { NavigationRail } from "./navigation-rail";
 import { OperationsDock } from "./operations-dock";
 import { TopCommandBar } from "./top-command-bar";
-import { useInterfaceStore } from "../stores/interface-store";
 
 describe("directional navigation", () => {
   it("moves through primary navigation vertically", async () => {
@@ -76,7 +75,6 @@ describe("directional navigation", () => {
   });
 
   it("moves from the expanded operations summary into its first row", async () => {
-    useInterfaceStore.setState({ operationsExpanded: false });
     const user = userEvent.setup();
     render(<OperationsDock operations={demoDashboard.operations} />);
 

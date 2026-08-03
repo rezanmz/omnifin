@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
-import { useInterfaceStore } from "../stores/interface-store";
 
 const AcquisitionTimeline = dynamic(
   () => import("./acquisition-timeline").then((module) => module.AcquisitionTimeline),
@@ -19,8 +18,7 @@ const ManualReleaseWorkbench = dynamic(
 
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
   const [hydrated, setHydrated] = useState(false);
-  const expanded = useInterfaceStore((state) => state.operationsExpanded);
-  const toggleExpanded = useInterfaceStore((state) => state.toggleOperationsExpanded);
+  const [expanded, setExpanded] = useState(false);
   const average =
     operations.length > 0
       ? operations.reduce((total, operation) => total + operation.progress, 0) / operations.length
@@ -70,7 +68,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         className="operations-dock__summary"
         data-directional-item
         disabled={!hydrated}
-        onClick={toggleExpanded}
+        onClick={() => setExpanded((current) => !current)}
         type="button"
       >
         <span className="operations-dock__beacon" aria-hidden="true">
