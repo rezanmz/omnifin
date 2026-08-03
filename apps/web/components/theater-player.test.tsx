@@ -161,6 +161,55 @@ describe("TheaterPlayer", () => {
     expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
   });
 
+  it("uses source-quality compatibility negotiation by default", async () => {
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    expect(client.prepare).toHaveBeenCalledWith(media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: null,
+      maxStreamingBitrate: 200_000_000,
+      mode: "auto",
+      subtitleStreamIndex: null,
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("original");
+    expect(screen.getByRole("option", { name: "Original quality" })).toBeVisible();
+  });
+
+  it("carries a deliberate Play action through preparation with an autoplay fallback", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+    const client = readyClient();
+    const { unmount } = render(
+      <TheaterPlayer client={client} media={media} onClose={() => undefined} startWhenReady />,
+    );
+
+    const video = await screen.findByLabelText<HTMLVideoElement>(`${media.title} video`);
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.canPlay(video);
+    expect(play).toHaveBeenCalledOnce();
+
+    unmount();
+    play.mockRejectedValueOnce(new DOMException("blocked", "NotAllowedError"));
+    render(
+      <TheaterPlayer
+        client={readyClient()}
+        media={media}
+        onClose={() => undefined}
+        startWhenReady
+      />,
+    );
+    const blockedVideo = await screen.findByLabelText<HTMLVideoElement>(`${media.title} video`);
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.canPlay(blockedVideo);
+    expect(await screen.findByText(/browser needs one more tap/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: media.title })).toHaveAttribute(
+      "data-status",
+      "ready",
+    );
+  });
+
   it("controls a direct stream and reports durable playback transitions", async () => {
     const user = userEvent.setup();
     const client = readyClient();
@@ -351,6 +400,7 @@ describe("TheaterPlayer", () => {
       mode: "transcode",
       subtitleStreamIndex: null,
     });
+    fireEvent.canPlay(video);
 
     await screen.findByRole("button", { name: "Playback settings" });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
@@ -366,6 +416,7 @@ describe("TheaterPlayer", () => {
         subtitleStreamIndex: 7,
       }),
     );
+    fireEvent.canPlay(video);
 
     await screen.findByRole("button", { name: "Playback settings" });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
@@ -379,6 +430,159 @@ describe("TheaterPlayer", () => {
       1_333,
       expect.any(AbortSignal),
       expect.objectContaining({ maxStreamingBitrate: 10_000_000, mode: "transcode" }),
+    );
+    fireEvent.canPlay(video);
+  });
+
+  it("keeps the active stream alive when replacement negotiation fails", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    const resume = await screen.findByRole("button", { name: `Resume ${media.title}` });
+    client.prepare.mockRejectedValueOnce(new Error("incompatible replacement"));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`);
+    await user.click(resume);
+    fireEvent.play(video);
+    video.currentTime = 1_333;
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+
+    expect(await screen.findByText(/current stream is unchanged/u)).toBeVisible();
+    expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+  });
+
+  it("commits a viable replacement before stopping the previous session", async () => {
+    const user = userEvent.setup();
+    const replacementSessionId = `playback_${"q".repeat(22)}`;
+    const replacementSession: PlaybackNegotiationResponse = {
+      ...session,
+      positionSeconds: 1_333,
+      sessionId: replacementSessionId,
+      streamPath: `/v1/playback/${replacementSessionId}/stream`,
+    };
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    video.currentTime = 1_333;
+    client.prepare.mockResolvedValueOnce({
+      canManageLibrary: false,
+      csrfToken,
+      session: replacementSession,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(video).toHaveAttribute("src", `/api/playback/${replacementSessionId}/stream`);
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        { event: "stopped", positionSeconds: 1_333 },
+        csrfToken,
+        { keepalive: false },
+      ),
+    );
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("balanced");
+    client.prepare.mockResolvedValueOnce({
+      canManageLibrary: false,
+      csrfToken,
+      session: {
+        ...session,
+        positionSeconds: 1_333,
+        sessionId: `playback_${"r".repeat(22)}`,
+        streamPath: `/v1/playback/playback_${"r".repeat(22)}/stream`,
+      },
+    });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "original",
+    );
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      1_333,
+      expect.any(AbortSignal),
+      expect.objectContaining({ maxStreamingBitrate: 200_000_000, mode: "auto" }),
+    );
+  });
+
+  it("restores the active stream and position when replacement readiness fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    const replacementSessionId = `playback_${"s".repeat(22)}`;
+    const replacementSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      positionSeconds: 1_333,
+      sessionId: replacementSessionId,
+      streamPath: `/v1/playback/${replacementSessionId}/master.m3u8`,
+    };
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    video.currentTime = 1_333;
+    client.prepare.mockResolvedValueOnce({
+      canManageLibrary: false,
+      csrfToken,
+      session: replacementSession,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const onError = hlsHarness.instances[0]?.handlers.get("error");
+    const failure = { details: "levelLoadError", fatal: true, type: "networkError" };
+    onError?.("error", failure);
+    onError?.("error", failure);
+    onError?.("error", failure);
+
+    expect(await screen.findByText(/previous stream was restored/u)).toBeVisible();
+    await waitFor(() => expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`));
+    fireEvent.loadedMetadata(video);
+    fireEvent.canPlay(video);
+    expect(video.currentTime).toBe(1_333);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
     );
   });
 

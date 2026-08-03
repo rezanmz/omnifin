@@ -208,6 +208,7 @@ function ContinueWatchingRailContent({
               trigger?.focus();
             });
           }}
+          startWhenReady
         />
       )}
     </>
