@@ -45,7 +45,7 @@ function queueRecoveryTestDashboard(): DashboardModel {
               id: "acquisition_ABCDEFGHIJKLMNOPQRSTUV",
               kind: "stalled",
               recovery: {
-                expiresAt: "2026-07-27T19:05:00.000Z",
+                expiresAt: "2099-07-27T19:05:00.000Z",
                 reference: `aqr_v2.${"A".repeat(100)}`,
               },
               state: "warning",

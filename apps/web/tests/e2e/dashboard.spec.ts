@@ -1142,6 +1142,7 @@ test("reduced motion removes nonessential transition travel", async ({ page }, t
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
+  await page.locator(".media-card__action").first().waitFor();
 
   const motion = await page.evaluate(() => {
     const card = document.querySelector<HTMLElement>(".media-card__action")!;
