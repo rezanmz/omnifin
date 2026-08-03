@@ -387,6 +387,168 @@ describe("JellyfinUserMediaClient", () => {
     ).rejects.toBeDefined();
   });
 
+  it("normalizes bounded movie metadata and owned media without exposing filenames or paths", async () => {
+    const people = [
+      {
+        Id: "person-upstream-1",
+        Name: "Mara Voss",
+        PrimaryImageTag: "person-image-tag",
+        Role: "Elian Vale",
+        Type: "Actor",
+      },
+      { Name: "Jon Bell", Type: "Director" },
+      { Name: "Ari Chen", Type: "Writer" },
+      { Name: "Nia Rao", Type: "Producer" },
+      ...Array.from({ length: 24 }, (_, index) => ({
+        Name: `Guest ${index + 1}`,
+        Role: `Guest role ${index + 1}`,
+        Type: "Actor",
+      })),
+    ];
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CommunityRating: 8.4,
+        CriticRating: 91,
+        Genres: ["Drama", "Science fiction", "Drama"],
+        MediaSources: [
+          {
+            Bitrate: 9_250_000,
+            Container: "mkv",
+            MediaStreams: [
+              {
+                BitDepth: 10,
+                BitRate: 8_700_000,
+                Codec: "hevc",
+                Height: 1_606,
+                Profile: "Main 10",
+                Type: "Video",
+                VideoRangeType: "HDR10",
+                Width: 3_840,
+              },
+              {
+                BitRate: 640_000,
+                Channels: 6,
+                Codec: "eac3",
+                Language: "eng",
+                Title: "English 5.1",
+                Type: "Audio",
+              },
+              {
+                Codec: "subrip",
+                IsDefault: true,
+                IsForced: false,
+                Language: "eng",
+                Type: "Subtitle",
+              },
+              { Codec: "mjpeg", Type: "EmbeddedImage" },
+            ],
+            Name: "/private/library/The Far Meridian.mkv",
+            Path: "/private/library/The Far Meridian.mkv",
+            Size: 6_979_321_856,
+          },
+        ],
+        People: people,
+        PremiereDate: "2026-04-18T00:00:00.0000000Z",
+        Studios: [{ Name: "Northlight Pictures" }, { Name: "Northlight Pictures" }],
+        Taglines: ["The horizon remembers."],
+      }),
+    ]);
+
+    const detail = await client.readLibraryTitle({
+      itemId: "movie-upstream-1",
+      userId: "paired-user-id",
+    });
+
+    expect(detail.item).toMatchObject({ externalId: "movie-upstream-1", kind: "movie" });
+    expect(detail.movie).toMatchObject({
+      castTruncated: true,
+      communityRating: 8.4,
+      crew: [
+        expect.objectContaining({ name: "Jon Bell", type: "director" }),
+        expect.objectContaining({ name: "Ari Chen", type: "writer" }),
+        expect.objectContaining({ name: "Nia Rao", type: "producer" }),
+      ],
+      criticRating: 91,
+      genres: ["Drama", "Science fiction"],
+      mediaSources: [
+        {
+          audio: [
+            {
+              bitrateKbps: 640,
+              channels: 6,
+              codec: "E-AC-3",
+              language: "eng",
+              title: "English 5.1",
+            },
+          ],
+          audioTruncated: false,
+          bitrateKbps: 9_250,
+          container: "MKV",
+          label: "4K · HEVC · MKV",
+          sizeBytes: 6_979_321_856,
+          subtitles: [
+            { codec: "SUBRIP", default: true, forced: false, language: "eng", title: null },
+          ],
+          subtitlesTruncated: false,
+          video: {
+            bitrateKbps: 8_700,
+            bitDepth: 10,
+            codec: "HEVC",
+            hdrFormat: "HDR10",
+            height: 1_606,
+            profile: "Main 10",
+            width: 3_840,
+          },
+        },
+      ],
+      premiereDate: "2026-04-18",
+      studios: ["Northlight Pictures"],
+      tagline: "The horizon remembers.",
+    });
+    expect(detail.movie?.cast).toHaveLength(24);
+    expect(detail.movie?.cast[0]).toMatchObject({
+      image: { itemId: "person-upstream-1", type: "Primary" },
+      imagePath: null,
+      name: "Mara Voss",
+      role: "Elian Vale",
+      type: "cast",
+    });
+    expect(JSON.stringify(detail)).not.toMatch(/private\/library|The Far Meridian\.mkv/u);
+    expect(requests[0]?.url.searchParams.get("Fields")).toContain("MediaSources");
+    expect(requests[0]?.url.searchParams.get("UserId")).toBe("paired-user-id");
+  });
+
+  it("keeps movie playback available when optional rich metadata is malformed", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CommunityRating: "unknown",
+        Genres: [{ unsafe: true }],
+        MediaSources: [{ MediaStreams: "invalid" }],
+        People: 42,
+        PremiereDate: { invalid: true },
+        Studios: ["invalid"],
+        Taglines: "invalid",
+      }),
+    ]);
+
+    await expect(
+      client.readLibraryTitle({ itemId: "movie-upstream-1", userId: "paired-user-id" }),
+    ).resolves.toMatchObject({
+      item: { externalId: "movie-upstream-1", kind: "movie", runtimeSeconds: 720 },
+      movie: {
+        cast: [],
+        communityRating: null,
+        genres: [],
+        mediaSources: [],
+        premiereDate: null,
+        studios: [],
+        tagline: null,
+      },
+    });
+  });
+
   it("reads normalized series seasons and paged episodes without leaking scope", async () => {
     const episode = {
       CommunityRating: 8.4,

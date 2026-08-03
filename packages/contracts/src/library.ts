@@ -10,6 +10,13 @@ export const LIBRARY_BROWSE_MAX_ITEMS = 50;
 export const LIBRARY_EPISODE_MAX_CREDITS = 24;
 export const LIBRARY_EPISODE_MAX_GENRES = 20;
 export const LIBRARY_EPISODE_MAX_STUDIOS = 12;
+export const LIBRARY_MOVIE_MAX_AUDIO_TRACKS = 32;
+export const LIBRARY_MOVIE_MAX_CAST = 24;
+export const LIBRARY_MOVIE_MAX_CREW = 16;
+export const LIBRARY_MOVIE_MAX_GENRES = 20;
+export const LIBRARY_MOVIE_MAX_MEDIA_SOURCES = 8;
+export const LIBRARY_MOVIE_MAX_STUDIOS = 12;
+export const LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS = 64;
 export const LIBRARY_SEASON_EPISODES_MAX_ITEMS = 50;
 export const LIBRARY_TITLE_MAX_SEASONS = 100;
 
@@ -124,10 +131,85 @@ export const librarySeasonSummarySchema = z
   });
 export type LibrarySeasonSummary = z.infer<typeof librarySeasonSummarySchema>;
 
+export const libraryMovieCreditSchema = z.strictObject({
+  imagePath: z
+    .string()
+    .max(840)
+    .regex(/^\/v1\/media\/media_[A-Za-z0-9_-]{22}\/images\/people\/[A-Za-z0-9_.-]{64,768}$/u)
+    .nullable(),
+  name: safeTextSchema.max(160),
+  role: safeTextSchema.max(200).nullable(),
+  type: z.enum(["cast", "director", "writer", "producer"]),
+});
+export type LibraryMovieCredit = z.infer<typeof libraryMovieCreditSchema>;
+
+const libraryMovieTrackSchema = z.strictObject({
+  bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
+  codec: safeTextSchema.max(64).nullable(),
+  language: safeTextSchema.max(80).nullable(),
+  title: safeTextSchema.max(160).nullable(),
+});
+
+export const libraryMovieAudioTrackSchema = libraryMovieTrackSchema.extend({
+  channels: z.int().positive().max(64).nullable(),
+});
+export type LibraryMovieAudioTrack = z.infer<typeof libraryMovieAudioTrackSchema>;
+
+export const libraryMovieSubtitleTrackSchema = libraryMovieTrackSchema
+  .omit({
+    bitrateKbps: true,
+  })
+  .extend({
+    default: z.boolean(),
+    forced: z.boolean(),
+  });
+export type LibraryMovieSubtitleTrack = z.infer<typeof libraryMovieSubtitleTrackSchema>;
+
+export const libraryMovieVideoSchema = z.strictObject({
+  bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
+  bitDepth: z.int().positive().max(64).nullable(),
+  codec: safeTextSchema.max(64).nullable(),
+  hdrFormat: safeTextSchema.max(80).nullable(),
+  height: z.int().positive().max(100_000).nullable(),
+  profile: safeTextSchema.max(80).nullable(),
+  width: z.int().positive().max(100_000).nullable(),
+});
+export type LibraryMovieVideo = z.infer<typeof libraryMovieVideoSchema>;
+
+export const libraryMovieMediaSourceSchema = z.strictObject({
+  audio: z.array(libraryMovieAudioTrackSchema).max(LIBRARY_MOVIE_MAX_AUDIO_TRACKS),
+  audioTruncated: z.boolean(),
+  bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
+  container: safeTextSchema.max(64).nullable(),
+  label: safeTextSchema.max(160),
+  sizeBytes: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  subtitles: z.array(libraryMovieSubtitleTrackSchema).max(LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
+  subtitlesTruncated: z.boolean(),
+  video: libraryMovieVideoSchema.nullable(),
+});
+export type LibraryMovieMediaSource = z.infer<typeof libraryMovieMediaSourceSchema>;
+
+export const libraryMovieDetailSchema = z.strictObject({
+  cast: z.array(libraryMovieCreditSchema).max(LIBRARY_MOVIE_MAX_CAST),
+  castTruncated: z.boolean(),
+  communityRating: z.number().finite().min(0).max(10).nullable(),
+  crew: z.array(libraryMovieCreditSchema).max(LIBRARY_MOVIE_MAX_CREW),
+  crewTruncated: z.boolean(),
+  criticRating: z.number().finite().min(0).max(100).nullable(),
+  genres: z.array(safeTextSchema.max(100)).max(LIBRARY_MOVIE_MAX_GENRES),
+  mediaSources: z.array(libraryMovieMediaSourceSchema).max(LIBRARY_MOVIE_MAX_MEDIA_SOURCES),
+  mediaSourcesTruncated: z.boolean(),
+  premiereDate: z.iso.date().nullable(),
+  studios: z.array(safeTextSchema.max(160)).max(LIBRARY_MOVIE_MAX_STUDIOS),
+  tagline: safeTextSchema.max(500).nullable(),
+});
+export type LibraryMovieDetail = z.infer<typeof libraryMovieDetailSchema>;
+
 export const libraryTitleDetailResponseSchema = z
   .strictObject({
     generatedAt: timestampSchema,
     media: mediaSummarySchema,
+    movie: libraryMovieDetailSchema.nullable(),
     playback: libraryPlaybackStateSchema.nullable(),
     seasons: z.array(librarySeasonSummarySchema).max(LIBRARY_TITLE_MAX_SEASONS),
     seasonsTruncated: z.boolean(),
@@ -156,10 +238,12 @@ export const libraryTitleDetailResponseSchema = z
     }
     const movieShape =
       detail.media.kind === "movie" &&
+      detail.movie !== null &&
       detail.playback !== null &&
       detail.seasons.length === 0 &&
       !detail.seasonsTruncated;
-    const seriesShape = detail.media.kind === "series" && detail.playback === null;
+    const seriesShape =
+      detail.media.kind === "series" && detail.movie === null && detail.playback === null;
     if (!movieShape && !seriesShape) {
       context.addIssue({
         code: "custom",
@@ -175,6 +259,18 @@ export const libraryTitleDetailResponseSchema = z
         message: "Library seasons must have unique numbers.",
         path: ["seasons"],
       });
+    }
+    for (const collection of ["cast", "crew"] as const) {
+      for (const [index, credit] of (detail.movie?.[collection] ?? []).entries()) {
+        const expectedPrefix = `/v1/media/${detail.media.id}/images/people/`;
+        if (credit.imagePath !== null && !credit.imagePath.startsWith(expectedPrefix)) {
+          context.addIssue({
+            code: "custom",
+            message: "Library person artwork must belong to the same opaque media reference.",
+            path: ["movie", collection, index, "imagePath"],
+          });
+        }
+      }
     }
     validateLibraryMediaArtwork(detail.media, context);
   });

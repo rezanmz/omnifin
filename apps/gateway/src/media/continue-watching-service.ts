@@ -38,6 +38,11 @@ import {
 } from "./media-reference-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const UPSTREAM_MEDIA_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const libraryPersonImagePayloadSchema = z.strictObject({
+  itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
+  version: z.literal(1),
+});
 const libraryCursorPayloadSchema = z.strictObject({
   kind: libraryBrowseKindSchema,
   limit: z.int().positive().max(50),
@@ -415,6 +420,22 @@ export class ContinueWatchingService {
       return libraryTitleDetailResponseSchema.parse({
         generatedAt: occurredAt.toISOString(),
         media: this.#libraryMedia(result.item, referenceId),
+        movie:
+          result.movie === null
+            ? null
+            : {
+                ...result.movie,
+                cast: result.movie.cast.map(({ image, imagePath: _imagePath, ...credit }) => ({
+                  ...credit,
+                  imagePath:
+                    image === null ? null : this.#personImagePath(referenceId, image.itemId),
+                })),
+                crew: result.movie.crew.map(({ image, imagePath: _imagePath, ...credit }) => ({
+                  ...credit,
+                  imagePath:
+                    image === null ? null : this.#personImagePath(referenceId, image.itemId),
+                })),
+              },
         playback:
           result.item.kind === "movie" && result.item.runtimeSeconds !== null
             ? {
@@ -555,6 +576,43 @@ export class ContinueWatchingService {
         body: image.body,
         contentType: image.contentType,
         etag: `"artwork_${digest}"`,
+      });
+    } catch (error) {
+      throw new MediaArtworkError("unavailable", { cause: error });
+    }
+  }
+
+  public async readPersonArtwork(
+    context: ContinueWatchingContext,
+    referenceId: string,
+    token: string,
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "media.view");
+    const row = this.#source(principal);
+    let itemId: string;
+    try {
+      const reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+      if (reference.kind !== "movie") throw new MediaReferenceError();
+      itemId = libraryPersonImagePayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(token, this.#personImageContext(referenceId))),
+      ).itemId;
+    } catch (error) {
+      throw new MediaArtworkError("not_found", { cause: error });
+    }
+
+    try {
+      const image = await this.#client(row, 4 * 1_024 * 1_024).readImage({
+        itemId,
+        maxWidth: 480,
+        ...(signal === undefined ? {} : { signal }),
+        type: "Primary",
+      });
+      const digest = createHash("sha256").update(image.body).digest("base64url").slice(0, 22);
+      return Object.freeze({
+        body: image.body,
+        contentType: image.contentType,
+        etag: `"person_${digest}"`,
       });
     } catch (error) {
       throw new MediaArtworkError("unavailable", { cause: error });
@@ -771,6 +829,18 @@ export class ContinueWatchingService {
       title: item.title,
       year: item.year,
     };
+  }
+
+  #personImageContext(referenceId: string) {
+    return `media_person_image:${referenceId}`;
+  }
+
+  #personImagePath(referenceId: string, itemId: string) {
+    const token = this.#cipher.encrypt(
+      JSON.stringify(libraryPersonImagePayloadSchema.parse({ itemId, version: 1 })),
+      this.#personImageContext(referenceId),
+    );
+    return `/v1/media/${referenceId}/images/people/${token}`;
   }
 
   #referenceContext(row: ContinueWatchingSourceRow) {
