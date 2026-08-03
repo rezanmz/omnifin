@@ -290,7 +290,7 @@ test("long remote discovery titles stay inside the hero at every narrow width", 
   await mockQuietContinueWatching(page);
 
   for (const width of [320, 360, 393, 430]) {
-    await page.setViewportSize({ height: 852, width });
+    await page.setViewportSize({ height: 667, width });
     await page.goto("/?test-view=continue-watching-live");
     await page.evaluate(() => document.fonts.ready);
     await expect(
@@ -320,6 +320,12 @@ test("long remote discovery titles stay inside the hero at every narrow width", 
           heroTop: heroBox.top,
         };
       });
+    const actionBounds = await page
+      .getByRole("button", { exact: true, name: "View details" })
+      .boundingBox();
+    const navigationBounds = await page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .boundingBox();
 
     expect(bounds.contentTop, `${width}px content top`).toBeGreaterThanOrEqual(bounds.heroTop);
     expect(bounds.contentBottom, `${width}px content bottom`).toBeLessThanOrEqual(
@@ -327,6 +333,12 @@ test("long remote discovery titles stay inside the hero at every narrow width", 
     );
     expect(bounds.contentLeft, `${width}px content left`).toBeGreaterThanOrEqual(bounds.heroLeft);
     expect(bounds.contentRight, `${width}px content right`).toBeLessThanOrEqual(bounds.heroRight);
+    expect(actionBounds, `${width}px action bounds`).not.toBeNull();
+    expect(navigationBounds, `${width}px navigation bounds`).not.toBeNull();
+    expect(
+      actionBounds!.y + actionBounds!.height,
+      `${width}px actions clear navigation`,
+    ).toBeLessThanOrEqual(navigationBounds!.y);
   }
 });
 
