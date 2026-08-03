@@ -104,6 +104,7 @@ const mediaSourceSchema = z.object({
   RequiredHttpHeaders: z.record(z.string(), z.string().nullable()).nullish(),
   RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
   SupportsDirectPlay: z.boolean().optional(),
+  SupportsDirectStream: z.boolean().optional(),
   SupportsTranscoding: z.boolean().optional(),
   TranscodingContainer: z.string().trim().min(1).max(64).nullish(),
   TranscodingSubProtocol: z.string().trim().min(1).max(32).nullish(),
@@ -135,7 +136,7 @@ const reportingSessionSchema = z.strictObject({
   audioStreamIndex: z.int().nonnegative().max(MAX_STREAM_INDEX).nullable(),
   itemId: identifierSchema,
   mediaSourceId: identifierSchema,
-  playMethod: z.enum(["DirectPlay", "Transcode"]),
+  playMethod: z.enum(["DirectPlay", "DirectStream", "Transcode"]),
   playSessionId: identifierSchema,
   subtitleStreamIndex: z.int().nonnegative().max(MAX_STREAM_INDEX).nullable(),
 });
@@ -227,7 +228,7 @@ export interface JellyfinPlaybackResult {
     width: number | null;
   };
   mediaSourceId: string;
-  playMethod: "DirectPlay" | "Transcode";
+  playMethod: "DirectPlay" | "DirectStream" | "Transcode";
   playSessionId: string;
   positionSeconds: number;
   subtitleTracks: Array<
@@ -246,7 +247,7 @@ export interface JellyfinPlaybackReportingSession {
   audioStreamIndex: number | null;
   itemId: string;
   mediaSourceId: string;
-  playMethod: "DirectPlay" | "Transcode";
+  playMethod: "DirectPlay" | "DirectStream" | "Transcode";
   playSessionId: string;
   subtitleStreamIndex: number | null;
 }
@@ -410,7 +411,7 @@ export class JellyfinPlaybackClient {
       AudioStreamIndex: input.audioStreamIndex,
       DeviceProfile: browserDeviceProfile,
       EnableDirectPlay: input.mode !== "transcode",
-      EnableDirectStream: false,
+      EnableDirectStream: input.mode !== "transcode",
       EnableTranscoding: input.mode !== "direct",
       MaxAudioChannels: 2,
       MaxStreamingBitrate: input.maxStreamingBitrate,
@@ -439,22 +440,26 @@ export class JellyfinPlaybackClient {
       (source) => !requiresUnsupportedHeaders(source),
     );
     const direct = candidates.find((source) => source.SupportsDirectPlay === true);
+    const directStream = candidates.find((source) => source.SupportsDirectStream === true);
     const hls = candidates.find(
       (source) =>
         source.SupportsTranscoding === true &&
         source.TranscodingSubProtocol?.toLowerCase() === "hls" &&
         source.TranscodingUrl,
     );
-    const delivery =
+    const selection =
       input.mode === "direct"
-        ? "direct"
+        ? direct
         : input.mode === "transcode"
-          ? "hls"
+          ? hls
           : direct
-            ? "direct"
-            : "hls";
-    const source = delivery === "direct" ? direct : hls;
+            ? direct
+            : (directStream ?? hls);
+    const source = selection;
     if (!source) throw new JellyfinPlaybackUnavailableError();
+    const playMethod =
+      source === direct ? "DirectPlay" : source === directStream ? "DirectStream" : "Transcode";
+    const delivery = playMethod === "Transcode" ? "hls" : "direct";
 
     const audio = audioTracks(source, input.audioStreamIndex);
     const subtitles = subtitleTracks(source, input.subtitleStreamIndex);
@@ -491,7 +496,7 @@ export class JellyfinPlaybackClient {
         width: video?.Width ?? null,
       },
       mediaSourceId: source.Id,
-      playMethod: delivery === "direct" ? "DirectPlay" : "Transcode",
+      playMethod,
       playSessionId: response.PlaySessionId,
       positionSeconds: Math.min(input.positionSeconds, durationSeconds),
       subtitleTracks: subtitles,
