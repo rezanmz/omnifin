@@ -15,6 +15,7 @@ import {
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
 import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
+import { COMPATIBILITY_CHECKS } from "./compatibility-checks.mjs";
 import { SEERR_FIXTURE_TITLE, SEERR_FIXTURE_TMDB_ID } from "./seerr-fixture-server.mjs";
 
 const seerrTargets = applyCompatibilityTargetOverride({
@@ -28,17 +29,7 @@ export const SEERR_SERVICE_IMAGE = seerrTargets.seerr.image;
 export const SEERR_FIXTURE_SERVER_IMAGE =
   "docker.io/library/node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573";
 export const SEERR_SERVICE_VERSION = seerrTargets.seerr.version;
-export const SEERR_CHECK_NAMES = Object.freeze([
-  "authentication",
-  "credentialRejection",
-  "delegatedIdentity",
-  "duplicateRejection",
-  "multiWordSearch",
-  "pendingRequestCreation",
-  "requestDecline",
-  "requestReview",
-  "versionDiscovery",
-]);
+export const SEERR_CHECK_NAMES = COMPATIBILITY_CHECKS.seerr;
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
