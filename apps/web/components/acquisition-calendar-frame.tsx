@@ -12,19 +12,23 @@ import styles from "./acquisition-calendar.module.css";
 
 export function AcquisitionCalendarFrame({
   children,
+  embedded = false,
   initialPreference,
 }: {
   children: ReactNode;
+  embedded?: boolean;
   initialPreference: ThemePreference;
 }) {
   return (
     <div className={styles.layout}>
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
+      {embedded ? null : <LiquidGlassEnvironment />}
+      {embedded ? null : <CinematicBackdrop />}
       <main className={styles.shell} id="main-content" tabIndex={-1}>
-        <ThemeProvider initialPreference={initialPreference}>
-          <AcquisitionCalendarTopbar />
-        </ThemeProvider>
+        {embedded ? null : (
+          <ThemeProvider initialPreference={initialPreference}>
+            <AcquisitionCalendarTopbar />
+          </ThemeProvider>
+        )}
         {children}
       </main>
     </div>

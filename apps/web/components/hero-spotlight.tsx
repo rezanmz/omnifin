@@ -1,8 +1,6 @@
-"use client";
-
-import { CalendarDays, Info, Library, Sparkles } from "lucide-react";
+import { CalendarDays, Library } from "lucide-react";
 import Link from "next/link";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { preload } from "react-dom";
 import type { DashboardModel } from "../lib/dashboard-data";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
@@ -12,18 +10,12 @@ type AccentStyle = CSSProperties & {
 };
 
 export interface HeroSpotlightProperties {
+  actionRegion?: ReactNode;
   artworkPath?: string | null;
   hero: DashboardModel["hero"];
-  onDetails?: () => void;
-  onRequest?: () => void;
 }
 
-export function HeroSpotlight({
-  artworkPath,
-  hero,
-  onDetails,
-  onRequest,
-}: HeroSpotlightProperties) {
+export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlightProperties) {
   const safeArtworkPath =
     artworkPath && /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath)
       ? artworkPath
@@ -34,8 +26,7 @@ export function HeroSpotlight({
   const style = {
     "--hero-accent": hero.accent,
   } as AccentStyle;
-  const hasLiveActions = onDetails !== undefined;
-  const hasFallbackActions = !hasLiveActions && hero.actions !== "none";
+  const hasFallbackActions = actionRegion === undefined && hero.actions !== "none";
 
   return (
     <section
@@ -52,7 +43,7 @@ export function HeroSpotlight({
           <img
             alt=""
             className="hero-spotlight__art-image"
-            decoding="sync"
+            decoding="async"
             fetchPriority="high"
             height={338}
             loading="eager"
@@ -74,32 +65,9 @@ export function HeroSpotlight({
           ))}
         </ul>
         <p className="hero-spotlight__description">{hero.description}</p>
-        {(hasLiveActions || hasFallbackActions) && (
-          <DirectionalNavigationGroup className="hero-spotlight__actions">
-            {hasLiveActions ? (
-              <>
-                <button
-                  className="button button--primary"
-                  data-directional-item
-                  onClick={onDetails}
-                  type="button"
-                >
-                  <Info aria-hidden="true" size={18} />
-                  View details
-                </button>
-                {onRequest ? (
-                  <button
-                    className="button button--glass"
-                    data-directional-item
-                    onClick={onRequest}
-                    type="button"
-                  >
-                    <Sparkles aria-hidden="true" size={17} />
-                    Request title
-                  </button>
-                ) : null}
-              </>
-            ) : (
+        {actionRegion ??
+          (hasFallbackActions ? (
+            <DirectionalNavigationGroup className="hero-spotlight__actions">
               <>
                 <Link className="button button--primary" data-directional-item href="/library">
                   <Library aria-hidden="true" size={17} />
@@ -110,9 +78,8 @@ export function HeroSpotlight({
                   Open calendar
                 </Link>
               </>
-            )}
-          </DirectionalNavigationGroup>
-        )}
+            </DirectionalNavigationGroup>
+          ) : null)}
       </div>
     </section>
   );

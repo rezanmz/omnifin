@@ -29,10 +29,13 @@ describe("ApplicationShellFrame", () => {
   });
 
   it("keeps non-interactive command placeholders out of the accessibility tree", () => {
-    render(shell(<main>Loading</main>));
+    const { container } = render(shell(<main>Loading</main>));
 
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open profile menu" })).not.toBeInTheDocument();
+    for (const placeholder of container.querySelectorAll("[data-shell-placeholder]")) {
+      expect(placeholder).toHaveAttribute("inert");
+    }
   });
 
   it("keeps primary navigation and command controls around operational routes", async () => {

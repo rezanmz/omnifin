@@ -62,7 +62,7 @@ export default async function AcquisitionCalendarPage({
   return (
     <>
       <ApplicationShellEnhancements initialPreference={preference} />
-      <AcquisitionCalendarFrame initialPreference={preference}>
+      <AcquisitionCalendarFrame embedded initialPreference={preference}>
         {outcome?.status === "ready" ? (
           <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
         ) : null}

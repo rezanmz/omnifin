@@ -1,7 +1,12 @@
+import { ApplicationShellContent } from "../../components/application-shell";
 import { DashboardScreen, DashboardStateScreen } from "../../components/dashboard-screen";
+import { DeferredDiscoveryDashboard } from "../../components/deferred-discovery-dashboard";
+import { DiscoveryHeroActions } from "../../components/discovery-hero-actions";
+import { HeroSpotlight } from "../../components/hero-spotlight";
 import type { DashboardStateKind } from "../../components/dashboard-state";
 import { connectedDashboard, demoDashboard, type DashboardModel } from "../../lib/dashboard-data";
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
+import { discoverySpotlightHero, discoverySpotlightItem } from "../../lib/discovery-presentation";
 import { readThemePreference } from "../../lib/theme-server";
 import "../dashboard.css";
 
@@ -102,6 +107,28 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
   }
 
   const preference = await readThemePreference();
+  if (showDiscoveryPerformanceProfile) {
+    const spotlight = discoverySpotlightItem(demoDiscoveryFeed);
+    if (spotlight) {
+      return (
+        <ApplicationShellContent
+          accent={discoverySpotlightHero(spotlight).accent}
+          current="discover"
+          status="healthy"
+          themePreference={preference}
+        >
+          <main className="dashboard" id="main-content">
+            <HeroSpotlight
+              actionRegion={<DiscoveryHeroActions item={spotlight} />}
+              artworkPath={spotlight.artwork.backdropPath ?? spotlight.artwork.posterPath}
+              hero={discoverySpotlightHero(spotlight)}
+            />
+            <DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />
+          </main>
+        </ApplicationShellContent>
+      );
+    }
+  }
   const dashboardData = showQueueRecoveryDashboard
     ? queueRecoveryTestDashboard()
     : showDemoDashboard

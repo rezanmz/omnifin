@@ -41,6 +41,6 @@ const LazyAcquisitionCalendar = dynamic(
 );
 
 export function AcquisitionCalendarLoader(properties: AcquisitionCalendarProperties) {
-  const ready = useIdleRender();
+  const ready = useIdleRender(800);
   return ready ? <LazyAcquisitionCalendar {...properties} /> : <AcquisitionCalendarSkeleton />;
 }
