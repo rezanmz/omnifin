@@ -1413,7 +1413,11 @@ for (const state of ["loading", "empty", "offline", "terminal-error", "quiet"] a
       "State baselines cover representative desktop and phone geometry",
     );
     await page.goto(`/?test-view=${state}`);
-    await page.locator("main").waitFor();
+    if (state === "quiet") {
+      await stabilizeDashboardForFullPageCapture(page);
+    } else {
+      await page.locator("main").waitFor();
+    }
     await expect(page).toHaveScreenshot(`dashboard-${state}.png`, { fullPage: true });
   });
 }
