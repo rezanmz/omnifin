@@ -2,7 +2,7 @@
 
 import { Activity, Check, ChevronDown, Gauge, HardDrive, Network } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 
@@ -17,8 +17,6 @@ const ManualReleaseWorkbench = dynamic(
 );
 
 const OPERATIONS_EXPANDED_KEY = "omnifin:operations-expanded";
-const OPERATIONS_ACTIVATED_AT_KEY = "omnifin:operations-activated-at";
-const OPERATIONS_ACTIVATION_GUARD_MS = 350;
 
 function storedExpandedState() {
   try {
@@ -36,27 +34,9 @@ function storeExpandedState(expanded: boolean) {
   }
 }
 
-function storedActivationTime() {
-  try {
-    const value = Number(window.sessionStorage.getItem(OPERATIONS_ACTIVATED_AT_KEY));
-    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
-  } catch {
-    return Number.NEGATIVE_INFINITY;
-  }
-}
-
-function storeActivationTime(activatedAt: number) {
-  try {
-    window.sessionStorage.setItem(OPERATIONS_ACTIVATED_AT_KEY, String(activatedAt));
-  } catch {
-    // The in-memory guard still coalesces repeated activation in the mounted dock.
-  }
-}
-
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
   const [hydrated, setHydrated] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const lastActivation = useRef(Number.NEGATIVE_INFINITY);
   const average =
     operations.length > 0
       ? operations.reduce((total, operation) => total + operation.progress, 0) / operations.length
@@ -76,16 +56,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
   }, []);
 
   function toggleExpanded() {
-    const now = Date.now();
-    const previousActivation = Math.max(lastActivation.current, storedActivationTime());
-    if (now - previousActivation < OPERATIONS_ACTIVATION_GUARD_MS) {
-      return;
-    }
-    lastActivation.current = now;
-    storeActivationTime(now);
-    const nextExpanded = !expanded;
-    storeExpandedState(nextExpanded);
-    setExpanded(nextExpanded);
+    setExpanded((current) => {
+      const nextExpanded = !current;
+      storeExpandedState(nextExpanded);
+      return nextExpanded;
+    });
   }
 
   if (operations.length === 0) {
@@ -123,12 +98,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         className="operations-dock__summary"
         data-directional-item
         disabled={!hydrated}
-        onClick={(event) => {
-          if (event.detail === 0) toggleExpanded();
-        }}
-        onPointerUp={(event) => {
-          if (event.isPrimary && event.button === 0) toggleExpanded();
-        }}
+        onClick={toggleExpanded}
         type="button"
       >
         <span className="operations-dock__beacon" aria-hidden="true">

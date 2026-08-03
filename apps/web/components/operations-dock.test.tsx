@@ -43,34 +43,6 @@ describe("OperationsDock", () => {
     expect(screen.getByRole("button", { name: /The Far Meridian/i })).toBeVisible();
   });
 
-  it("coalesces a rapid duplicate activation into one disclosure change", async () => {
-    const user = userEvent.setup();
-    render(<OperationsDock operations={demoDashboard.operations} />);
-
-    const toggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
-    await waitFor(() => expect(toggle).toBeEnabled());
-    await user.dblClick(toggle);
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /The Far Meridian/i })).toBeVisible();
-  });
-
-  it("coalesces a replayed activation after the dashboard remounts", async () => {
-    const user = userEvent.setup();
-    const firstRender = render(<OperationsDock operations={demoDashboard.operations} />);
-    const firstToggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
-    await waitFor(() => expect(firstToggle).toBeEnabled());
-    await user.click(firstToggle);
-
-    firstRender.unmount();
-    render(<OperationsDock operations={demoDashboard.operations} />);
-    const remountedToggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
-    await waitFor(() => expect(remountedToggle).toHaveAttribute("aria-expanded", "true"));
-    await user.click(remountedToggle);
-
-    expect(remountedToggle).toHaveAttribute("aria-expanded", "true");
-  });
-
   it("retains native keyboard activation semantics", async () => {
     const user = userEvent.setup();
     render(<OperationsDock operations={demoDashboard.operations} />);
