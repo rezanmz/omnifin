@@ -65,7 +65,9 @@ describe("DeferredDiscoveryDashboard", () => {
     render(<DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />);
 
     expect(screen.getByRole("region", { name: "Preparing connected discovery" })).toBeVisible();
-    expect(screen.getAllByRole("article", { hidden: true })).toHaveLength(20);
+    const reservedCards = screen.getAllByRole("article", { hidden: true });
+    expect(reservedCards).toHaveLength(20);
+    expect(reservedCards.every((card) => card.childElementCount === 0)).toBe(true);
 
     fireEvent.scroll(window);
 

@@ -1085,6 +1085,39 @@
   animation: skeleton-shimmer 1.6s ease-in-out infinite;
 }
 
+.media-card--loading-compact {
+  aspect-ratio: 2 / 3;
+  overflow: visible;
+  padding-bottom: 39px;
+}
+
+.media-card--loading-compact::before {
+  background:
+    linear-gradient(
+        color-mix(in srgb, var(--paper-2) 12%, transparent),
+        color-mix(in srgb, var(--paper-2) 12%, transparent)
+      )
+      2px calc(100% - 25px) / 72% 10px no-repeat,
+    linear-gradient(
+        color-mix(in srgb, var(--paper-2) 12%, transparent),
+        color-mix(in srgb, var(--paper-2) 12%, transparent)
+      )
+      2px calc(100% - 10px) / 44% 8px no-repeat,
+    radial-gradient(ellipse at 22% 0%, var(--glass-specular), transparent 45%) 0 0 / 100%
+      calc(100% - 39px) no-repeat,
+    color-mix(in srgb, var(--glass-strong) 74%, transparent) 0 0 / 100% calc(100% - 39px) no-repeat;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--glass-specular);
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.media-card--loading-compact::after {
+  border-radius: var(--radius-md);
+  bottom: 39px;
+}
+
 .media-card__loading-art {
   aspect-ratio: 2 / 3;
   background:

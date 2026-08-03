@@ -80,11 +80,10 @@ function DiscoveryRailsFallback({
             </div>
             <div aria-hidden="true" className="media-rail__scroller media-rail__scroller--loading">
               {Array.from({ length: 5 }, (_, index) => (
-                <article className="media-card media-card--loading" key={index}>
-                  <span className="media-card__loading-art" />
-                  <span className="media-card__loading-line" />
-                  <span className="media-card__loading-line media-card__loading-line--short" />
-                </article>
+                <article
+                  className="media-card media-card--loading media-card--loading-compact"
+                  key={index}
+                />
               ))}
             </div>
           </section>
