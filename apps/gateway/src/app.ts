@@ -85,6 +85,7 @@ import {
   issueWorkbenchRoutes,
   type IssueWorkbenchRoutesOptions,
 } from "./media/issue-workbench-routes.js";
+import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./media/playback-limits.js";
 import { playbackRoutes, type PlaybackRoutesOptions } from "./media/playback-routes.js";
 import {
   mediaRequestRoutes,
@@ -285,7 +286,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       genReqId: (request) => requestId(request.headers["x-request-id"] as string | undefined),
       logger: createLoggerOptions(config),
       requestIdHeader: false,
-      routerOptions: { maxParamLength: 512 },
+      routerOptions: { maxParamLength: MAX_PLAYBACK_ASSET_TOKEN_LENGTH },
       trustProxy: config.trustProxyHops,
     });
 
