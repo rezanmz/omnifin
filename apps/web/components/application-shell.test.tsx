@@ -28,6 +28,13 @@ describe("ApplicationShellFrame", () => {
     push.mockClear();
   });
 
+  it("keeps non-interactive command placeholders out of the accessibility tree", () => {
+    render(shell(<main>Loading</main>));
+
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open profile menu" })).not.toBeInTheDocument();
+  });
+
   it("keeps primary navigation and command controls around operational routes", async () => {
     pathname = "/operations/health";
     render(
