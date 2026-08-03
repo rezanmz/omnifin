@@ -4,6 +4,16 @@ import { describe, expect, it } from "vitest";
 import { DeferredDemoDashboardSections } from "./deferred-demo-dashboard-sections";
 
 describe("DeferredDemoDashboardSections", () => {
+  it("does not load unrelated dashboard controls from search input intent", async () => {
+    render(<DeferredDemoDashboardSections />);
+
+    fireEvent.pointerDown(window);
+    fireEvent.keyDown(window, { key: "s" });
+
+    expect(screen.getByRole("region", { name: "Preparing dashboard controls" })).toBeVisible();
+    expect(screen.queryByText("Ember Coast")).not.toBeInTheDocument();
+  });
+
   it("keeps demo fixture data in the intent-loaded dashboard chunk", async () => {
     render(<DeferredDemoDashboardSections />);
 

@@ -85,6 +85,10 @@
   display: flex;
   flex-direction: column;
   gap: clamp(38px, 5vw, 68px);
+  /* Deferred rails replace geometry below the viewport. Keeping the dashboard
+     out of the browser's anchor selection prevents that async handoff from
+     moving an active command/search context. */
+  overflow-anchor: none;
   padding: 2px var(--content-gutter) 48px;
 }
 

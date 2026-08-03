@@ -95,13 +95,9 @@ export function DeferredDashboardSections(properties: DashboardSectionsPropertie
   useEffect(() => {
     const timeout = window.setTimeout(activate, 600);
     const activateFromIntent = () => activate();
-    window.addEventListener("keydown", activateFromIntent, { once: true });
-    window.addEventListener("pointerdown", activateFromIntent, { once: true, passive: true });
     window.addEventListener("scroll", activateFromIntent, { once: true, passive: true });
     return () => {
       window.clearTimeout(timeout);
-      window.removeEventListener("keydown", activateFromIntent);
-      window.removeEventListener("pointerdown", activateFromIntent);
       window.removeEventListener("scroll", activateFromIntent);
     };
   }, [activate]);
