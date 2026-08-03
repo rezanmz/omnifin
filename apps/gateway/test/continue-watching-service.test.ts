@@ -214,8 +214,18 @@ function harness(options: { withIdentity?: boolean } = {}) {
       items: [
         {
           ...resumeResult().items[0]!,
+          airDate: "2025-02-14",
+          communityRating: 8.4,
+          credits: [
+            { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
+            { name: "Ari Chen", role: null, type: "writer" },
+          ],
+          creditsTruncated: false,
+          criticRating: 91,
+          genres: ["Drama", "Science fiction"],
           kind: "episode",
           played: false,
+          studios: ["Northlight Pictures"],
           title: "The Long Meridian",
         },
       ],
@@ -422,12 +432,21 @@ describe("ContinueWatchingService", () => {
       expect(episodes).toMatchObject({
         items: [
           {
+            airDate: "2025-02-14",
+            communityRating: 8.4,
+            credits: [
+              { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
+              { name: "Ari Chen", role: null, type: "writer" },
+            ],
+            criticRating: 91,
+            genres: ["Drama", "Science fiction"],
             media: {
               id: `media_${"e".repeat(22)}`,
               kind: "episode",
               title: "The Long Meridian",
             },
             playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+            studios: ["Northlight Pictures"],
           },
         ],
         seasonNumber: 2,
