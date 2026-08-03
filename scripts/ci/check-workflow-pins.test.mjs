@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { checkWorkflowPins, parseUses } from "./check-workflow-pins.mjs";
+import { checkWorkflowPins, parseUses, resolvePublicTag } from "./check-workflow-pins.mjs";
 
 async function withRepository(files, callback) {
   const root = await mkdtemp(join(tmpdir(), "omnifin-action-pins-"));
@@ -55,6 +55,24 @@ test("recognizes local reusable workflows", () => {
     local: true,
     reference: "./.github/workflows/publish.yml",
   });
+});
+
+test("retries transient tag lookups and peels annotated action tags", () => {
+  let calls = 0;
+  const resolved = resolvePublicTag("example/action", "v1.2.3", {
+    execute() {
+      calls += 1;
+      if (calls < 3) throw new Error("temporary remote failure");
+      return [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.2.3",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v1.2.3^{}",
+        "",
+      ].join("\n");
+    },
+  });
+
+  assert.equal(resolved, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(calls, 3);
 });
 
 test("rejects unpinned actions hidden behind quoted or flow-map keys", async () => {
