@@ -60,6 +60,30 @@ describe("MediaRail", () => {
     expect(container.innerHTML).not.toContain("unexpected.example");
   });
 
+  it("renders protected artwork in a browser-native lazy image", () => {
+    const artworkPath = "/api/media/media_bbbbbbbbbbbbbbbbbbbbbb/images/poster";
+    const { container } = render(
+      <MediaRail
+        items={[
+          {
+            accent: "#51675b",
+            artworkPath,
+            eyebrow: "Continue watching",
+            id: "protected-artwork",
+            title: "Northern Lights",
+          },
+        ]}
+        title="Continue watching"
+      />,
+    );
+
+    expect(container.querySelector("img.media-card__artwork-image")).toHaveAttribute(
+      "src",
+      artworkPath,
+    );
+    expect(container.innerHTML).not.toContain("data-artwork-src");
+  });
+
   it("moves focus between posters with directional keys", async () => {
     const scrollTo = vi.fn();
     HTMLElement.prototype.scrollTo = scrollTo;
@@ -79,6 +103,22 @@ describe("MediaRail", () => {
 
     expect(second).toHaveFocus();
     expect(scrollTo).toHaveBeenCalledOnce();
+  });
+
+  it("keeps quick request separate from opening title details", async () => {
+    const user = userEvent.setup();
+    const onRequest = vi.fn();
+    const onSelect = vi.fn();
+    const item = { ...demoDashboard.discovery[0]!, requestable: true };
+    render(
+      <MediaRail items={[item]} onRequest={onRequest} onSelect={onSelect} title="Trending now" />,
+    );
+
+    await user.click(screen.getByRole("button", { name: `Request ${item.title}` }));
+
+    expect(onRequest).toHaveBeenCalledWith(item);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: `View details for ${item.title}` })).toBeVisible();
   });
 
   it("renders useful guidance for an empty rail", () => {

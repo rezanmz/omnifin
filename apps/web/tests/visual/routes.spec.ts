@@ -18,6 +18,7 @@ import {
   mockManualReleaseSession,
   openManualReleaseWorkbench,
 } from "../fixtures/manual-release";
+import { expandOperationsDock } from "../fixtures/operations";
 
 const visualProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const stateVisualProjects = new Set(["chromium", "mobile"]);
@@ -192,6 +193,11 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
     .locator("img.media-card__artwork-image")
     .first();
   await expect(artwork).toHaveAttribute("src", /\/api\/discovery\/artwork\/discovery_art_/u);
+  const initialScroll = await page.evaluate(() => window.scrollY);
+  await artwork.evaluate((image) => {
+    if (image instanceof HTMLImageElement) image.loading = "eager";
+  });
+  await artwork.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
       artwork.evaluate(
@@ -199,6 +205,8 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
       ),
     )
     .toBe(true);
+  await page.evaluate((scrollY) => window.scrollTo(0, scrollY), initialScroll);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(initialScroll);
 }
 
 test("light signed-out dashboard visual baseline", async ({ page }, testInfo) => {
@@ -1373,8 +1381,7 @@ test("expanded operations visual baseline", async ({ page }, testInfo) => {
   );
   await page.goto("/");
   const operations = page.getByRole("button", { name: /2 acquisitions moving/i });
-  await operations.click();
-  await expect(page.locator("#operations-details")).toBeVisible();
+  await expandOperationsDock(page);
   await page.evaluate(() => {
     document.documentElement.style.scrollBehavior = "auto";
     window.scrollTo(0, 0);
@@ -1399,7 +1406,7 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
     "Acquisition provenance covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1417,7 +1424,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
     "Acquisition recovery covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1432,7 +1439,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
 
 async function openQueueRecoveryTimeline(page: Page) {
   await page.goto("/?test-view=queue-recovery");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -1465,7 +1472,25 @@ test("failed queue recovery success visual baseline", async ({ page }, testInfo)
   await timeline.getByRole("button", { name: "Recover stalled download" }).click();
   await timeline.getByLabel("Type REMOVE to confirm").fill("REMOVE");
   await timeline.getByRole("button", { name: "Remove and blocklist" }).click();
-  await expect(timeline.getByText("Removed and blocklisted")).toBeVisible();
+  const success = timeline.locator('.acquisition-event__recovery-status[data-state="success"]');
+  await expect(success).toBeFocused();
+  await success.evaluate((status) => {
+    const scroller = status.closest(".acquisition-timeline__body");
+    const dialog = status.closest(".acquisition-timeline");
+    if (!(scroller instanceof HTMLElement)) {
+      throw new Error("The acquisition recovery status lost its timeline scroll container.");
+    }
+    if (!(dialog instanceof HTMLElement)) {
+      throw new Error("The acquisition recovery status lost its timeline dialog.");
+    }
+
+    const statusBounds = status.getBoundingClientRect();
+    const scrollerBounds = scroller.getBoundingClientRect();
+    dialog.scrollTop = 0;
+    scroller.style.scrollBehavior = "auto";
+    scroller.scrollTop +=
+      statusBounds.top - scrollerBounds.top - (scroller.clientHeight - statusBounds.height) / 2;
+  });
   await page.evaluate(() => document.fonts.ready);
   await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-queue-recovery-success.png");
@@ -1494,7 +1519,7 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
     "Acquisition monitoring covers representative desktop and phone geometry",
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();

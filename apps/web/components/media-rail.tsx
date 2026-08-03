@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Clapperboard, PanelRightOpen, Play } from "lucide-react";
+import { ArrowRight, Clapperboard, PanelRightOpen, Play, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useRef } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
@@ -12,6 +12,7 @@ export function MediaRail({
   emptyCopy,
   emptyTitle = "Nothing queued here yet",
   items,
+  onRequest,
   onSelect,
   onViewAll,
   statusMessage,
@@ -20,6 +21,7 @@ export function MediaRail({
   emptyCopy?: string;
   emptyTitle?: string;
   items: MediaCardModel[];
+  onRequest?: (item: MediaCardModel) => void;
   onSelect?: (item: MediaCardModel) => void;
   onViewAll?: () => void;
   statusMessage?: string;
@@ -36,29 +38,13 @@ export function MediaRail({
   useEffect(() => {
     const scroller = scrollerReference.current;
     if (!scroller) return;
-    const images = Array.from(scroller.querySelectorAll<HTMLImageElement>("img[data-artwork-src]"));
-    const reveal = (image: HTMLImageElement) => {
+    for (const image of scroller.querySelectorAll<HTMLImageElement>("img[data-artwork-src]")) {
       const source = image.dataset.artworkSrc;
       if (source) image.src = source;
       image.removeAttribute("data-artwork-src");
-    };
-    if (!("IntersectionObserver" in window)) {
-      images.forEach(reveal);
-      return;
     }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting || !(entry.target instanceof HTMLImageElement)) continue;
-          observer.unobserve(entry.target);
-          reveal(entry.target);
-        }
-      },
-      { root: scroller },
-    );
-    images.forEach((image) => observer.observe(image));
-    return () => observer.disconnect();
   }, [items]);
+
   return (
     <section className="media-rail" aria-labelledby={headingId}>
       <div className="section-heading">
@@ -189,6 +175,18 @@ export function MediaRail({
                     {cardContent}
                   </div>
                 )}
+                {item.requestable && onRequest ? (
+                  <button
+                    aria-label={`Request ${item.title}`}
+                    className="button button--glass media-card__request"
+                    data-directional-item
+                    onClick={() => onRequest(item)}
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" />
+                    <span className="media-card__request-label">Request</span>
+                  </button>
+                ) : null}
                 <div className="media-card__copy">
                   <h3>{item.title}</h3>
                   <p>{item.eyebrow}</p>

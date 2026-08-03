@@ -12,6 +12,7 @@ import {
   mockManualReleaseSession,
   openManualReleaseWorkbench,
 } from "../fixtures/manual-release";
+import { expandOperationsDock } from "../fixtures/operations";
 
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
@@ -408,7 +409,7 @@ test("acquisition timeline has no automatically detectable accessibility violati
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
@@ -429,7 +430,7 @@ test("acquisition monitoring confirmation has no automatically detectable access
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
-  await page.getByRole("button", { name: /2 acquisitions moving/i }).click();
+  await expandOperationsDock(page);
   await page
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
