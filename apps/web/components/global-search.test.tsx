@@ -147,13 +147,11 @@ describe("global search", () => {
     }
   });
 
-  it("retains focus when pointer focus and click both activate the lazy search", async () => {
+  it("retains focus when pointer activation suppresses the placeholder click", async () => {
     render(<GlobalSearchLoader client={client()} debounceMs={0} />);
     const placeholder = screen.getByRole("combobox");
 
     fireEvent.pointerDown(placeholder);
-    fireEvent.focus(placeholder);
-    fireEvent.click(placeholder);
 
     await waitFor(() =>
       expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),

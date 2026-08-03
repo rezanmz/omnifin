@@ -28,7 +28,7 @@ function GlobalSearchPlaceholder({
   query,
   setQuery,
 }: {
-  activate?: () => void;
+  activate?: (focusRequested?: boolean) => void;
   busy?: boolean;
   inputReference?: RefObject<HTMLInputElement | null>;
   interactive?: boolean;
@@ -56,12 +56,12 @@ function GlobalSearchPlaceholder({
         data-directional-item
         disabled={!interactive}
         id="global-search-placeholder"
-        onClick={activate}
+        onClick={() => activate?.(true)}
         onChange={(event) => {
           setQuery?.(event.currentTarget.value);
           restoreDocumentScrollPosition(editScrollReference.current);
           editScrollReference.current = null;
-          activate?.();
+          activate?.(true);
         }}
         onBeforeInput={() => {
           editScrollReference.current = captureDocumentScrollPosition();
@@ -69,7 +69,7 @@ function GlobalSearchPlaceholder({
         onFocus={() => {
           restoreDocumentScrollPosition(pointerScrollReference.current);
           pointerScrollReference.current = null;
-          activate?.();
+          activate?.(true);
         }}
         onKeyDown={(event) => {
           if (
@@ -80,11 +80,12 @@ function GlobalSearchPlaceholder({
           ) {
             editScrollReference.current = captureDocumentScrollPosition();
           }
-          if (event.key === "ArrowDown" || event.key === "Enter") activate?.();
+          if (event.key === "ArrowDown" || event.key === "Enter") activate?.(true);
         }}
         onPointerEnter={preload}
         onPointerDown={(event) => {
           pointerScrollReference.current = captureDocumentScrollPosition();
+          activate?.(true);
           if (document.activeElement !== event.currentTarget) {
             event.preventDefault();
             focusWithoutDocumentScroll(event.currentTarget);
@@ -116,19 +117,19 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
   const [pendingQuery, setPendingQuery] = useState(properties.initialQuery ?? "");
   const [restoreFocus, setRestoreFocus] = useState(false);
-  const [shortcutRequested, setShortcutRequested] = useState(false);
+  const [openRequested, setOpenRequested] = useState(false);
   const activationScrollReference = useRef<DocumentScrollPosition | null>(null);
   const placeholderReference = useRef<HTMLInputElement>(null);
 
-  const activate = useCallback((shortcut = false) => {
+  const activate = useCallback((focusRequested = false) => {
     activationScrollReference.current ??= captureDocumentScrollPosition();
-    if (shortcut) setShortcutRequested(true);
+    if (focusRequested) setOpenRequested(true);
     setLoading(true);
     void loadGlobalSearch()
       .then((Component) => {
         setRestoreFocus(
           (requested) =>
-            requested || shortcut || document.activeElement === placeholderReference.current,
+            requested || focusRequested || document.activeElement === placeholderReference.current,
         );
         setSearchComponent(() => Component);
       })
@@ -155,7 +156,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   if (!SearchComponent) {
     return (
       <GlobalSearchPlaceholder
-        activate={() => activate()}
+        activate={(focusRequested) => activate(focusRequested)}
         busy={loading}
         inputReference={placeholderReference}
         interactive={hydrated}
@@ -170,7 +171,7 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
     <SearchComponent
       {...properties}
       initialFocus={restoreFocus}
-      initialOpen={properties.initialOpen || shortcutRequested || pendingQuery.trim().length > 0}
+      initialOpen={properties.initialOpen || openRequested || pendingQuery.trim().length > 0}
       initialQuery={pendingQuery}
     />
   );
