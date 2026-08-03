@@ -1,92 +1,99 @@
-import { CalendarDays, ClipboardCheck, Compass, Gauge, Library, Settings2 } from "lucide-react";
-import Link from "next/link";
+/* eslint-disable @next/next/no-html-link-for-pages -- Shell anchors provide a no-JavaScript fallback and are progressively enhanced by ApplicationShellEnhancements. */
+import type { ApplicationDestination } from "../lib/application-shell-route";
 import { BrandMark } from "./brand-mark";
-import { DirectionalNavigationRegion } from "./directional-navigation-group";
+import { ShellIcon, type ShellIconName } from "./shell-icon";
 
 const destinations = [
-  { href: "/", icon: Compass, id: "discover", label: "Discover" },
-  { href: "/library", icon: Library, id: "library", label: "Library" },
-  { href: "/calendar", icon: CalendarDays, id: "calendar", label: "Calendar" },
-  { href: "/operations/health", icon: Gauge, id: "operations", label: "Operations" },
-  { href: "/operations/requests", icon: ClipboardCheck, id: "requests", label: "Requests" },
-] as const;
+  { href: "/", icon: "compass", id: "discover", label: "Discover" },
+  { href: "/library", icon: "library", id: "library", label: "Library" },
+  { href: "/calendar", icon: "calendar", id: "calendar", label: "Calendar" },
+  { href: "/operations/health", icon: "gauge", id: "operations", label: "Operations" },
+  { href: "/operations/requests", icon: "clipboard", id: "requests", label: "Requests" },
+] as const satisfies readonly {
+  href: string;
+  icon: ShellIconName;
+  id: ApplicationDestination;
+  label: string;
+}[];
 
-type PrimaryDestination = (typeof destinations)[number]["id"];
-
-export function NavigationRail({ current = "discover" }: { current?: PrimaryDestination }) {
+export function NavigationRail({
+  current = "discover",
+}: {
+  current?: ApplicationDestination | null;
+}) {
   return (
-    <DirectionalNavigationRegion
-      ariaLabel="Primary navigation"
-      as="aside"
-      axis="vertical"
-      className="navigation-rail"
-      liquidGlass
-    >
-      <Link className="navigation-rail__brand" href="/" aria-label="Omnifin home" prefetch={false}>
+    <aside aria-label="Primary navigation" className="navigation-rail" data-liquid-glass>
+      <a className="navigation-rail__brand" data-shell-link href="/" aria-label="Omnifin home">
         <BrandMark compact />
-      </Link>
+      </a>
       <nav className="navigation-rail__nav">
-        {destinations.map(({ href, icon: Icon, id, label }) => (
-          <Link
+        {destinations.map(({ href, icon, id, label }) => (
+          <a
             aria-current={current === id ? "page" : undefined}
             className="navigation-rail__item"
             data-current={current === id || undefined}
+            data-destination={id}
             data-directional-item
+            data-shell-link
             href={href}
             key={href}
-            prefetch={false}
           >
-            <Icon aria-hidden="true" size={21} strokeWidth={1.55} />
+            <ShellIcon aria-hidden="true" name={icon} size={21} strokeWidth={1.55} />
             <span className="navigation-rail__tooltip">{label}</span>
-          </Link>
+          </a>
         ))}
       </nav>
-      <Link
+      <a
+        aria-current={current === "settings" ? "page" : undefined}
         className="navigation-rail__item navigation-rail__settings"
+        data-current={current === "settings" || undefined}
         href="/settings"
         aria-label="Settings"
         data-directional-item
-        prefetch={false}
+        data-destination="settings"
+        data-shell-link
       >
-        <Settings2 aria-hidden="true" size={21} strokeWidth={1.55} />
+        <ShellIcon aria-hidden="true" name="settings" size={21} strokeWidth={1.55} />
         <span className="navigation-rail__tooltip">Settings</span>
-      </Link>
-    </DirectionalNavigationRegion>
+      </a>
+    </aside>
   );
 }
 
-export function MobileNavigation({ current = "discover" }: { current?: PrimaryDestination }) {
+export function MobileNavigation({
+  current = "discover",
+}: {
+  current?: ApplicationDestination | null;
+}) {
   return (
-    <DirectionalNavigationRegion
-      ariaLabel="Primary navigation"
-      as="nav"
-      axis="horizontal"
-      className="mobile-navigation"
-      liquidGlass
-    >
-      {destinations.map(({ href, icon: Icon, id, label }) => (
-        <Link
+    <nav aria-label="Primary navigation" className="mobile-navigation" data-liquid-glass>
+      {destinations.map(({ href, icon, id, label }) => (
+        <a
           aria-current={current === id ? "page" : undefined}
           className="mobile-navigation__item"
           data-current={current === id || undefined}
+          data-destination={id}
           data-directional-item
+          data-shell-link
           href={href}
           key={href}
-          prefetch={false}
         >
-          <Icon aria-hidden="true" size={20} strokeWidth={1.65} />
+          <ShellIcon aria-hidden="true" name={icon} size={20} strokeWidth={1.65} />
           <span>{label}</span>
-        </Link>
+        </a>
       ))}
-      <Link
+      <a
+        aria-current={current === "settings" ? "page" : undefined}
         className="mobile-navigation__item"
+        data-current={current === "settings" || undefined}
+        data-destination="settings"
         data-directional-item
+        data-shell-link
         href="/settings"
-        prefetch={false}
       >
-        <Settings2 aria-hidden="true" size={20} strokeWidth={1.65} />
+        <ShellIcon aria-hidden="true" name="settings" size={20} strokeWidth={1.65} />
         <span>Settings</span>
-      </Link>
-    </DirectionalNavigationRegion>
+      </a>
+    </nav>
   );
 }

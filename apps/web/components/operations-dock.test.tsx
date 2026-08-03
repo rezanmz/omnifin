@@ -17,6 +17,7 @@ describe("OperationsDock", () => {
     const toggle = screen.getByRole("button", { name: /2 acquisitions moving/i });
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const acquisition = screen.getByRole("button", {
