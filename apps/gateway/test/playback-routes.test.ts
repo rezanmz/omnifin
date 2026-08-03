@@ -16,6 +16,7 @@ import {
   serviceIdentityLinks,
   users,
 } from "../src/db/schema.js";
+import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "../src/media/playback-limits.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:30:00.000Z");
@@ -253,6 +254,42 @@ function publicPlaybackPath(parentPath: string, reference: string) {
 function gatewayPlaybackPath(publicPath: string) {
   if (!publicPath.startsWith("/api/playback/")) throw new Error("Unsafe public playback path.");
   return publicPath.replace(/^\/api\//u, "/v1/");
+}
+
+function realisticJellyfinTranscodeQuery() {
+  return new URLSearchParams({
+    AudioBitrate: "384000",
+    AudioCodec: "aac",
+    AudioStreamIndex: "1",
+    BreakOnNonKeyFrames: "False",
+    CopyTimestamps: "true",
+    DeviceId: "omnifin-route-fixture-device",
+    EnableAudioVbrEncoding: "true",
+    EnableAutoStreamCopy: "true",
+    MaxAudioChannels: "8",
+    MaxFramerate: "60",
+    MaxHeight: "2160",
+    MaxWidth: "3840",
+    MediaSourceId: "route-private-playback-media-source",
+    MinSegments: "2",
+    PlaySessionId: "route-private-upstream-play-session",
+    RequireAvc: "false",
+    SegmentContainer: "mp4",
+    StartTimeTicks: "12000000000",
+    SubtitleStreamIndex: "2",
+    TranscodingMaxAudioChannels: "2",
+    VideoBitrate: "120000000",
+    VideoCodec: "h264,hevc,av1",
+    VideoStreamIndex: "0",
+    "h264-level": "51",
+    "h264-profile": "high,main,baseline,constrainedbaseline",
+  }).toString();
+}
+
+function encryptedAssetTokenWithLength(length: number) {
+  const prefix = "asset_v2.";
+  const suffix = ".a.a";
+  return `${prefix}${"a".repeat(length - prefix.length - suffix.length)}${suffix}`;
 }
 
 describe("playback routes", () => {
@@ -571,6 +608,89 @@ describe("playback routes", () => {
           },
         }),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("routes realistic encrypted HLS asset tokens longer than 512 characters", async () => {
+    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const query = realisticJellyfinTranscodeQuery();
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(`#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s?${query}\n`),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(manifest.statusCode, manifest.body).toBe(200);
+      const assetReference = manifest.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetReference).toBeDefined();
+      const assetToken = assetReference!.split("/").at(-1)!;
+      expect(assetToken.length).toBeGreaterThan(512);
+
+      const bytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
+      streamPlaybackTarget.mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      });
+      const asset = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/${assetReference}`,
+      });
+
+      expect(asset.statusCode, asset.body).toBe(200);
+      expect(asset.rawPayload).toEqual(Buffer.from(bytes));
+      expect(streamPlaybackTarget).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: {
+            path: `videos/${privateItemId}/hls1/main/0.m4s`,
+            query,
+          },
+        }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps the playback asset router bounded at the encrypted token limit", async () => {
+    const { app, headers } = await harness();
+    const sessionId = `playback_${"p".repeat(22)}`;
+    try {
+      const maximum = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${sessionId}/hls/${encryptedAssetTokenWithLength(MAX_PLAYBACK_ASSET_TOKEN_LENGTH)}`,
+      });
+      expect(maximum.statusCode, maximum.body).toBe(404);
+      expect(apiErrorSchema.parse(maximum.json()).error.code).toBe("playback_session_not_found");
+
+      const oversized = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${sessionId}/hls/${encryptedAssetTokenWithLength(MAX_PLAYBACK_ASSET_TOKEN_LENGTH + 1)}`,
+      });
+      expect(oversized.statusCode).toBe(414);
     } finally {
       await app.close();
     }
