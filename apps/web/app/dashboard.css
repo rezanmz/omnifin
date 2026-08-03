@@ -187,6 +187,15 @@
   opacity: 0.5;
 }
 
+@media (max-width: 720px) {
+  .dashboard-sections__operations-skeleton {
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) minmax(64px, 0.42fr) 40px;
+    overflow: hidden;
+    padding-inline: 20px;
+  }
+}
+
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art {
   background: #101914;
 }
