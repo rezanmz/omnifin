@@ -1,12 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import { headers } from "next/headers";
 import type { ReactNode } from "react";
 
-import { ApplicationShellFrame } from "../components/application-shell-frame";
-import {
-  APPLICATION_PATHNAME_HEADER,
-  routeUsesApplicationShell,
-} from "../lib/application-shell-route";
 import { readThemePreference } from "../lib/theme-server";
 import "./foundation.css";
 
@@ -31,12 +25,6 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   const preference = await readThemePreference();
   const explicitTheme = preference === "system" ? undefined : preference;
-  const pathname = (await headers()).get(APPLICATION_PATHNAME_HEADER) ?? "/";
-  const content = routeUsesApplicationShell(pathname) ? (
-    <ApplicationShellFrame themePreference={preference}>{children}</ApplicationShellFrame>
-  ) : (
-    children
-  );
 
   return (
     <html
@@ -61,7 +49,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <a className="skip-link" href="#main-content">
           Skip to main content
         </a>
-        {content}
+        {children}
       </body>
     </html>
   );

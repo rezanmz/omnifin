@@ -2,10 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { routeUsesApplicationShell } from "../lib/application-shell-route";
-import { ApplicationShellBoundary, ApplicationShellContent } from "./application-shell";
-import { ApplicationShellNavigation } from "./application-shell-navigation";
-import { ApplicationShellStatus } from "./application-shell-status";
+import { ApplicationShellContent } from "./application-shell";
+import { ApplicationShellFrame } from "./application-shell-frame";
 
 let pathname = "/";
 
@@ -15,19 +13,13 @@ vi.mock("next/navigation", () => ({
 
 function shell(children: ReactNode) {
   return (
-    <ApplicationShellBoundary
-      backdrop={<div className="cinematic-backdrop" data-testid="backdrop" />}
-      environment={null}
-      mobileNavigation={<ApplicationShellNavigation mobile />}
-      navigation={<ApplicationShellNavigation />}
-      topCommandBar={<div data-testid="command-bar">Command bar</div>}
-    >
+    <ApplicationShellFrame themePreference="system">
       {children}
-    </ApplicationShellBoundary>
+    </ApplicationShellFrame>
   );
 }
 
-describe("ApplicationShellBoundary", () => {
+describe("ApplicationShellFrame", () => {
   beforeEach(() => {
     pathname = "/";
   });
@@ -39,7 +31,7 @@ describe("ApplicationShellBoundary", () => {
     for (const operationsLink of screen.getAllByRole("link", { name: "Operations" })) {
       expect(operationsLink).toHaveAttribute("aria-current", "page");
     }
-    expect(screen.getByTestId("command-bar")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Search media and commands" })).toBeVisible();
     expect(screen.getByRole("main")).toHaveTextContent("System health");
   });
 
@@ -65,13 +57,7 @@ describe("ApplicationShellBoundary", () => {
 
   it("updates shell chrome without restyling the page content ancestor", async () => {
     render(
-      <ApplicationShellBoundary
-        backdrop={<div className="cinematic-backdrop" data-testid="backdrop" />}
-        environment={null}
-        mobileNavigation={<ApplicationShellNavigation mobile />}
-        navigation={<ApplicationShellNavigation />}
-        topCommandBar={<ApplicationShellStatus />}
-      >
+      <ApplicationShellFrame themePreference="system">
         <ApplicationShellContent
           accent="#d8ff70"
           current="discover"
@@ -80,37 +66,15 @@ describe("ApplicationShellBoundary", () => {
         >
           <main>Discover</main>
         </ApplicationShellContent>
-      </ApplicationShellBoundary>,
+      </ApplicationShellFrame>,
     );
 
     const frame = screen.getByRole("main").closest(".application-frame");
     await waitFor(() => expect(frame).toHaveAttribute("data-connection-status", "healthy"));
     expect(frame).toHaveAttribute("data-display-profile", "ten-foot");
-    expect(screen.getByTestId("backdrop")).toHaveStyle({ "--ambient-accent": "#d8ff70" });
+    expect(document.querySelector(".cinematic-backdrop")).toHaveStyle({
+      "--ambient-accent": "#d8ff70",
+    });
     expect(screen.getByRole("link", { name: "All connected services are healthy" })).toBeVisible();
-  });
-
-  it("removes the persistent shell when navigation crosses into authentication", () => {
-    pathname = "/login";
-    render(shell(<main>Sign in</main>));
-
-    expect(screen.queryByRole("complementary", { name: "Primary navigation" })).toBeNull();
-    expect(screen.queryByTestId("command-bar")).toBeNull();
-    expect(screen.getByRole("main")).toHaveTextContent("Sign in");
-  });
-
-  it("leaves authentication, pairing, recovery, and onboarding routes unshelled", () => {
-    for (const publicPath of [
-      "/login",
-      "/login/jellyfin",
-      "/link/jellyfin",
-      "/recovery",
-      "/onboarding",
-    ]) {
-      expect(routeUsesApplicationShell(publicPath)).toBe(false);
-    }
-    expect(routeUsesApplicationShell("/library")).toBe(true);
-    expect(routeUsesApplicationShell("/about")).toBe(true);
-    expect(routeUsesApplicationShell("/unknown-route")).toBe(false);
   });
 });

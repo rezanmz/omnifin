@@ -1,56 +1,13 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { type CSSProperties, type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
-import {
-  routeUsesApplicationShell,
-  type ApplicationDestination,
-} from "../lib/application-shell-route";
+import type { ApplicationDestination } from "../lib/application-shell-route";
 import type { ThemePreference } from "../lib/theme";
 
 const DEFAULT_ACCENT = "#8de9d5";
-type ShellStyle = CSSProperties & { "--ambient-accent": string };
 export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
-
-export function ApplicationShellBoundary({
-  backdrop,
-  children,
-  environment,
-  mobileNavigation,
-  navigation,
-  topCommandBar,
-}: {
-  backdrop: ReactNode;
-  children: ReactNode;
-  environment: ReactNode;
-  mobileNavigation: ReactNode;
-  navigation: ReactNode;
-  topCommandBar: ReactNode;
-}) {
-  const pathname = usePathname();
-
-  if (!routeUsesApplicationShell(pathname)) return children;
-
-  return (
-    <div
-      className="application-frame"
-      data-connection-status="attention"
-      data-display-profile="standard"
-      style={{ "--ambient-accent": DEFAULT_ACCENT } as ShellStyle}
-    >
-      {environment}
-      {backdrop}
-      {navigation}
-      <div className="application-shell">
-        {topCommandBar}
-        {children}
-      </div>
-      {mobileNavigation}
-    </div>
-  );
-}
 
 export function ApplicationShellContent({
   accent = DEFAULT_ACCENT,
