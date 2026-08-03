@@ -3,8 +3,9 @@
 import type { ComponentType } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { DashboardSectionsProperties } from "./dashboard-sections";
 import { isDeferredContentNavigation } from "../lib/deferred-content-activation";
+import { useIdleRender } from "../lib/use-idle-render";
+import type { DashboardSectionsProperties } from "./dashboard-sections";
 
 let sectionsPromise: Promise<ComponentType<DashboardSectionsProperties>> | undefined;
 
@@ -82,6 +83,7 @@ export function DashboardSectionsSkeleton({ showMedia }: { showMedia: boolean })
 export function DeferredDashboardSections(properties: DashboardSectionsProperties) {
   const [Sections, setSections] = useState<ComponentType<DashboardSectionsProperties> | null>(null);
   const [failed, setFailed] = useState(false);
+  const passiveReady = useIdleRender(600);
 
   const activate = useCallback(() => {
     setFailed(false);
@@ -92,6 +94,12 @@ export function DeferredDashboardSections(properties: DashboardSectionsPropertie
         setFailed(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (!passiveReady) return;
+    const task = window.setTimeout(activate, 0);
+    return () => window.clearTimeout(task);
+  }, [activate, passiveReady]);
 
   useEffect(() => {
     const activateFromIntent = () => activate();

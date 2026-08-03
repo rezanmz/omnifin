@@ -5,10 +5,14 @@ import { demoDiscoveryFeed } from "../lib/discovery-feed-demo";
 import { DeferredDiscoveryDashboard } from "./deferred-discovery-dashboard";
 
 describe("DeferredDiscoveryDashboard", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("keeps below-fold discovery dormant until the user scrolls", () => {
     vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     render(<DeferredDiscoveryDashboard initialFeed={demoDiscoveryFeed} />);
 
     vi.advanceTimersByTime(10_000);

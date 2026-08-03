@@ -4,10 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeferredDemoDashboardSections } from "./deferred-demo-dashboard-sections";
 
 describe("DeferredDemoDashboardSections", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("does not load unrelated dashboard controls from search input intent", async () => {
     vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     render(<DeferredDemoDashboardSections />);
 
     fireEvent.pointerDown(window);

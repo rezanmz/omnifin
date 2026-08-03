@@ -4,8 +4,9 @@ import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 import type { ComponentType } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { DiscoveryDashboardProperties } from "./discovery-dashboard";
 import { isDeferredContentNavigation } from "../lib/deferred-content-activation";
+import { useIdleRender } from "../lib/use-idle-render";
+import type { DiscoveryDashboardProperties } from "./discovery-dashboard";
 
 const RAIL_TITLES = [
   "Popular movies",
@@ -76,6 +77,7 @@ export function DeferredDiscoveryDashboard({
     null,
   );
   const [failed, setFailed] = useState(false);
+  const passiveReady = useIdleRender(1_000);
 
   const activate = useCallback(() => {
     setFailed(false);
@@ -86,6 +88,12 @@ export function DeferredDiscoveryDashboard({
         setFailed(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (!passiveReady) return;
+    const task = window.setTimeout(activate, 0);
+    return () => window.clearTimeout(task);
+  }, [activate, passiveReady]);
 
   useEffect(() => {
     const activateFromIntent = () => activate();
