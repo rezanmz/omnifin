@@ -71,7 +71,10 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
   const showQueueRecoveryDashboard = requestedTestView === "queue-recovery";
   const showDiscoveryPerformanceProfile = requestedTestView === "discovery-performance";
   const showDemoDashboard =
-    requestedTestView === "onboarding" || showLiveDashboard || showDiscoveryPerformanceProfile
+    requestedTestView === "onboarding" ||
+    showLiveDashboard ||
+    showQueueRecoveryDashboard ||
+    showDiscoveryPerformanceProfile
       ? false
       : process.env.OMNIFIN_DEMO_MODE === "true";
 
