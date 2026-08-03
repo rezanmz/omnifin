@@ -37,3 +37,22 @@ test("browse test data remains isolated from arbitrary public query parameters",
   ).toBeVisible();
   await expect(page.getByText("private-upstream")).toHaveCount(0);
 });
+
+test("mobile Browse content clears the persistent liquid-glass navigation", async ({ page }) => {
+  await page.setViewportSize({ height: 852, width: 393 });
+  await mockDiscoveryBrowse(page);
+  await page.goto("/browse?test-view=ready");
+
+  const browser = page.locator("main");
+  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+  const resultsHeading = page.getByRole("heading", { name: "Movies" });
+
+  await expect(browser).toHaveCSS("gap", "16px");
+  await expect(browser).toHaveCSS("padding-bottom", "104px");
+
+  const navigationBox = await navigation.boundingBox();
+  const headingBox = await resultsHeading.boundingBox();
+  expect(navigationBox).not.toBeNull();
+  expect(headingBox).not.toBeNull();
+  expect(headingBox!.y + headingBox!.height).toBeLessThanOrEqual(navigationBox!.y - 4);
+});

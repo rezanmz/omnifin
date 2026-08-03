@@ -1,4 +1,4 @@
-.browser {
+main.browser {
   display: grid;
   gap: clamp(20px, 3vw, 34px);
   min-width: 0;
@@ -671,8 +671,8 @@
 }
 
 @media (max-width: 760px) {
-  .browser {
-    gap: 18px;
+  main.browser {
+    gap: 16px;
     padding-bottom: 104px;
   }
   .hero {
