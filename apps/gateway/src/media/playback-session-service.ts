@@ -78,7 +78,7 @@ const storedPlaybackSchema = z
     itemId: identifierSchema,
     liveStreamId: identifierSchema.nullable(),
     mediaSourceId: identifierSchema,
-    playMethod: z.enum(["DirectPlay", "Transcode"]),
+    playMethod: z.enum(["DirectPlay", "DirectStream", "Transcode"]),
     playSessionId: identifierSchema,
     schemaVersion: z.literal(1),
     subtitleStreamIndex: z.int().nonnegative().max(4_095).nullable(),
@@ -562,7 +562,10 @@ export class PlaybackSessionService {
     signal?: AbortSignal,
   ) {
     const { client, payload } = this.#stream(context, sessionId, DIRECT_RANGE_BYTES);
-    if (payload.playMethod !== "DirectPlay" || payload.upstreamTarget.path.endsWith(".m3u8")) {
+    if (
+      !["DirectPlay", "DirectStream"].includes(payload.playMethod) ||
+      payload.upstreamTarget.path.endsWith(".m3u8")
+    ) {
       throw new PlaybackSessionError("not_found");
     }
     let response: JellyfinPlaybackBytesResult;

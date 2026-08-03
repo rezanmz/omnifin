@@ -187,7 +187,7 @@ describe("JellyfinPlaybackClient", () => {
       AllowVideoStreamCopy: true,
       AudioStreamIndex: 2,
       EnableDirectPlay: true,
-      EnableDirectStream: false,
+      EnableDirectStream: true,
       EnableTranscoding: true,
       MaxAudioChannels: 2,
       MaxStreamingBitrate: 20_000_000,
@@ -339,6 +339,48 @@ describe("JellyfinPlaybackClient", () => {
     });
   });
 
+  it("normalizes a Jellyfin direct-stream remux as a same-origin byte stream", async () => {
+    const remuxSource = {
+      ...directSource,
+      Container: "mp4",
+      SupportsDirectPlay: false,
+      SupportsDirectStream: true,
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse({ MediaSources: [remuxSource], PlaySessionId: "play-session-upstream-1" }),
+    ]);
+
+    await expect(
+      client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 200_000_000,
+        mode: "auto",
+        positionSeconds: 42,
+        subtitleStreamIndex: null,
+      }),
+    ).resolves.toMatchObject({
+      delivery: "direct",
+      playMethod: "DirectStream",
+      positionSeconds: 42,
+      upstreamTarget: {
+        path: "Videos/movie-upstream-1/stream",
+        query:
+          "static=true&mediaSourceId=media-source-1&playSessionId=play-session-upstream-1&deviceId=installation-1",
+      },
+    });
+    const body = JSON.parse(Buffer.from(requests[0]?.init.body ?? []).toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toMatchObject({
+      EnableDirectPlay: true,
+      EnableDirectStream: true,
+      EnableTranscoding: true,
+      MaxStreamingBitrate: 200_000_000,
+    });
+  });
+
   it("fails closed when an explicit delivery mode is unavailable or a selection is invalid", async () => {
     const { client } = clientWithResponses([
       jsonResponse({
@@ -431,7 +473,7 @@ describe("JellyfinPlaybackClient", () => {
       audioStreamIndex: 2,
       itemId: "movie-upstream-1",
       mediaSourceId: "media-source-1",
-      playMethod: "DirectPlay" as const,
+      playMethod: "DirectStream" as const,
       playSessionId: "play-session-upstream-1",
       subtitleStreamIndex: 3,
     };
@@ -455,7 +497,7 @@ describe("JellyfinPlaybackClient", () => {
       IsPaused: true,
       ItemId: "movie-upstream-1",
       MediaSourceId: "media-source-1",
-      PlayMethod: "DirectPlay",
+      PlayMethod: "DirectStream",
       PlaySessionId: "play-session-upstream-1",
       PositionTicks: 2_400_000_000,
       SubtitleStreamIndex: 3,
