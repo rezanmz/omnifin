@@ -188,7 +188,7 @@ function EpisodeDetail({ episode, onPlay }: { episode: LibrarySeasonEpisode; onP
       <div className="library-title__episode-detail-heading">
         <div>
           <p className="eyebrow">Episode brief</p>
-          <h5>{episode.media.title}</h5>
+          <h4>{episode.media.title}</h4>
         </div>
         <div aria-label="Episode facts" className="library-title__episode-detail-facts">
           {airDate ? (
