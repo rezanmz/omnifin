@@ -2,10 +2,11 @@ import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
+import type { AcquisitionCalendarClient } from "../lib/acquisition-calendar";
 import type { ThemePreference } from "../lib/theme";
-import { CalendarStrip } from "./calendar-strip";
 import { CinematicBackdrop } from "./cinematic-backdrop";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
+import { DashboardCalendarStrip } from "./dashboard-calendar-strip";
 import { DiscoveryDashboard } from "./discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
@@ -24,21 +25,25 @@ function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
 type AmbientStyle = CSSProperties & { "--ambient-accent": string };
 
 export function DashboardScreen({
+  calendarClient,
   data,
   discoveryInitialFeed,
   discoveryRefresh = true,
   discoveryShowContinueWatching = true,
   displayProfile = "standard",
   liveContinueWatching = false,
+  liveCalendar = false,
   liveDiscovery = false,
   themePreference = "system",
 }: {
+  calendarClient?: AcquisitionCalendarClient;
   data: DashboardModel;
   discoveryInitialFeed?: DiscoveryFeedResponse;
   discoveryRefresh?: boolean;
   discoveryShowContinueWatching?: boolean;
   displayProfile?: DisplayProfile;
   liveContinueWatching?: boolean;
+  liveCalendar?: boolean;
   liveDiscovery?: boolean;
   themePreference?: ThemePreference;
 }) {
@@ -74,7 +79,11 @@ export function DashboardScreen({
               <MediaRail items={data.discovery} title="Made for tonight" />
             </>
           )}
-          <CalendarStrip items={data.calendar} />
+          <DashboardCalendarStrip
+            {...(calendarClient === undefined ? {} : { client: calendarClient })}
+            fallbackItems={data.calendar}
+            live={liveCalendar}
+          />
           <OperationsDock operations={data.operations} />
         </main>
       </div>

@@ -1776,9 +1776,75 @@
   min-height: 88px;
   padding: 14px 18px;
   text-align: left;
+  text-decoration: none;
   transition:
     background-color 160ms ease-out,
     transform 120ms ease-out;
+}
+
+.calendar-item--loading {
+  cursor: default;
+  overflow: hidden;
+  position: relative;
+}
+
+.calendar-item--loading::after {
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, var(--glass-highlight), transparent);
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+.calendar-item__loading-day,
+.calendar-item__loading-marker,
+.calendar-item__loading-copy span {
+  background: color-mix(in srgb, var(--glass-strong) 78%, transparent);
+  border-radius: 99px;
+  display: block;
+}
+
+.calendar-item__loading-day {
+  height: 34px;
+  width: 9px;
+}
+
+.calendar-item__loading-marker {
+  height: 37px;
+  width: 3px;
+}
+
+.calendar-item__loading-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.calendar-item__loading-copy span {
+  height: 9px;
+  width: min(100%, 120px);
+}
+
+.calendar-item__loading-copy span:last-child {
+  opacity: 0.65;
+  width: min(58%, 70px);
+}
+
+.calendar-strip__notice {
+  align-items: center;
+  color: var(--paper-2);
+  display: flex;
+  font-size: 0.7rem;
+  gap: 7px;
+  margin: 14px 0 0;
+}
+
+.quiet-state__action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-decoration: none;
 }
 
 .calendar-item:first-child {

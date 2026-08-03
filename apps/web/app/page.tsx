@@ -121,6 +121,9 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
       liveContinueWatching={
         showLiveDashboard || (!showDemoDashboard && !showQueueRecoveryDashboard)
       }
+      liveCalendar={
+        !showDemoDashboard && !showQueueRecoveryDashboard && !showDiscoveryPerformanceProfile
+      }
       liveDiscovery={!showDemoDashboard && !showQueueRecoveryDashboard}
       themePreference={preference}
     />
