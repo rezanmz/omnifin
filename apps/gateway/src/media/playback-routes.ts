@@ -27,9 +27,11 @@ const progressParamsSchema = z.strictObject({ sessionId: playbackSessionIdSchema
 const assetParamsSchema = progressParamsSchema.extend({
   assetToken: z
     .string()
-    .min(64)
+    .min(31)
     .max(MAX_PLAYBACK_ASSET_TOKEN_LENGTH)
-    .regex(/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u),
+    .regex(
+      /^(?:asset_h1\.[A-Za-z0-9_-]{22}|asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/u,
+    ),
 });
 
 const negotiationParamsJsonSchema = {
@@ -53,9 +55,10 @@ const assetParamsJsonSchema = {
   properties: {
     assetToken: {
       type: "string",
-      minLength: 64,
+      minLength: 31,
       maxLength: MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
-      pattern: "^asset_v2\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      pattern:
+        "^(?:asset_h1\\.[A-Za-z0-9_-]{22}|asset_v2\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)$",
     },
     sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" },
   },
