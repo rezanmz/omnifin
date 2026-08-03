@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.2](https://github.com/rezanmz/omnifin/compare/v0.7.1...v0.7.2) (2026-08-03)
+
+
+### Fixes
+
+* **discovery:** retain resilient detail artwork ([#215](https://github.com/rezanmz/omnifin/issues/215)) ([af4cf94](https://github.com/rezanmz/omnifin/commit/af4cf94c54f743539cf5cb2225cd8f26a68b083b)), closes [#204](https://github.com/rezanmz/omnifin/issues/204)
+* **gateway:** route long HLS asset tokens ([#222](https://github.com/rezanmz/omnifin/issues/222)) ([1771e0f](https://github.com/rezanmz/omnifin/commit/1771e0f5b19d9741d2eea016096304c1f200b716))
+
+
+### Documentation
+
+* **docs:** avoid stale release pins ([#219](https://github.com/rezanmz/omnifin/issues/219)) ([5088ea6](https://github.com/rezanmz/omnifin/commit/5088ea6a5fdf4cc5a33593b85a4d05a67848cc4c))
+
 ## [0.7.1](https://github.com/rezanmz/omnifin/compare/v0.7.0...v0.7.1) (2026-08-02)
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Clapperboard, PanelRightOpen, Play } from "lucide-react";
+import { ArrowRight, Clapperboard, PanelRightOpen, Play, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
@@ -11,6 +11,7 @@ export function MediaRail({
   emptyCopy,
   emptyTitle = "Nothing queued here yet",
   items,
+  onRequest,
   onSelect,
   onViewAll,
   statusMessage,
@@ -19,6 +20,7 @@ export function MediaRail({
   emptyCopy?: string;
   emptyTitle?: string;
   items: MediaCardModel[];
+  onRequest?: (item: MediaCardModel) => void;
   onSelect?: (item: MediaCardModel) => void;
   onViewAll?: () => void;
   statusMessage?: string;
@@ -159,6 +161,18 @@ export function MediaRail({
                     {cardContent}
                   </div>
                 )}
+                {item.requestable && onRequest ? (
+                  <button
+                    aria-label={`Request ${item.title}`}
+                    className="button button--glass media-card__request"
+                    data-directional-item
+                    onClick={() => onRequest(item)}
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" />
+                    <span className="media-card__request-label">Request</span>
+                  </button>
+                ) : null}
                 <div className="media-card__copy">
                   <h3>{item.title}</h3>
                   <p>{item.eyebrow}</p>

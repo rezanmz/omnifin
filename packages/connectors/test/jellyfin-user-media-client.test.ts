@@ -44,6 +44,7 @@ const series = {
   Id: "series-upstream-1",
   ImageBlurHashes: { Primary: { "series-poster": "005?}k" } },
   ImageTags: { Primary: "series-poster" },
+  MediaType: "Unknown",
   Name: "Northern Lights",
   OfficialRating: "TV-14",
   Overview: "An observatory decodes a signal hidden in the aurora.",
@@ -293,7 +294,6 @@ describe("JellyfinUserMediaClient", () => {
       IsMissing: "false",
       IsVirtualItem: "false",
       Limit: "3",
-      MediaTypes: "Video",
       Recursive: "true",
       SearchTerm: "Meridian",
       SortBy: "DateCreated",
@@ -301,9 +301,30 @@ describe("JellyfinUserMediaClient", () => {
       StartIndex: "30",
     });
     expect(requests[0]?.url.searchParams.has("api_key")).toBe(false);
+    expect(requests[0]?.url.searchParams.has("MediaTypes")).toBe(false);
     expect(requests[0]?.init.headers.get("authorization")).toContain(
       'Token="private-access-token"',
     );
+  });
+
+  it("keeps Jellyfin series catalogue items whose media type is Unknown", async () => {
+    const { client, requests } = clientWithResponses([jsonResponse({ Items: [series] })]);
+
+    await expect(
+      client.readLibrary({
+        kind: "series",
+        limit: 30,
+        sort: "title",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      items: [{ externalId: "series-upstream-1", kind: "series", title: "Northern Lights" }],
+      nextStartIndex: null,
+      truncated: false,
+    });
+    expect(requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Series");
+    expect(requests[0]?.url.searchParams.has("MediaTypes")).toBe(false);
   });
 
   it("uses exact library type and sorting allowlists and fails closed on version drift", async () => {
@@ -339,6 +360,7 @@ describe("JellyfinUserMediaClient", () => {
       truncated: false,
     });
     expect(movieClient.requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Movie");
+    expect(movieClient.requests[0]?.url.searchParams.has("MediaTypes")).toBe(false);
     expect(movieClient.requests[0]?.url.searchParams.get("SortBy")).toBe("SortName");
     expect(movieClient.requests[0]?.url.searchParams.get("SortOrder")).toBe("Ascending");
 

@@ -523,7 +523,43 @@
 
 .media-card {
   min-width: 0;
+  position: relative;
   scroll-snap-align: start;
+}
+
+.media-card__request {
+  border-radius: 15px;
+  font-size: 0.68rem;
+  font-weight: 680;
+  gap: 7px;
+  height: 44px;
+  letter-spacing: 0.025em;
+  min-height: 44px;
+  min-width: 44px;
+  padding-inline: 13px;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 7;
+}
+
+.media-card__request:hover,
+.media-card__request:focus-visible {
+  transform: translateY(-2px) scale(1.04);
+}
+
+.media-card__request:active {
+  transform: scale(0.96);
+}
+
+.media-card__request svg {
+  height: 17px;
+  stroke-width: 1.9;
+  width: 17px;
+}
+
+.media-card__request-label {
+  line-height: 1;
 }
 
 .media-card__action {
@@ -1167,7 +1203,6 @@
   height: 14px;
   width: 14px;
 }
-
 @media (max-width: 720px) {
   .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__content {
     border-radius: 26px;

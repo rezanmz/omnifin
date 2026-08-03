@@ -123,6 +123,7 @@ test("dashboard supports keyboard-first operational disclosure", async ({ page }
   await expect(page.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
 
   const operations = page.getByRole("button", { name: /2 acquisitions moving/i });
+  await expect(operations).toBeEnabled();
   await operations.focus();
   await page.keyboard.press("Enter");
   await expect(operations).toHaveAttribute("aria-expanded", "true");

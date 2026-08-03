@@ -33,6 +33,7 @@ import {
   MediaReferenceService,
   type MediaReferenceDependencies,
 } from "./media-reference-service.js";
+import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./playback-limits.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const PLAYBACK_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
@@ -43,7 +44,6 @@ const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
 const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
-const MAX_ASSET_TOKEN_LENGTH = 8_192;
 type PlaybackAssetPathPrefix = "./" | "hls/";
 const SENSITIVE_QUERY_NAMES = new Set([
   "access_token",
@@ -565,7 +565,7 @@ export class PlaybackSessionService {
   ) {
     if (
       token.length < 64 ||
-      token.length > MAX_ASSET_TOKEN_LENGTH ||
+      token.length > MAX_PLAYBACK_ASSET_TOKEN_LENGTH ||
       !/^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token)
     ) {
       throw new PlaybackSessionError("not_found");
@@ -723,7 +723,9 @@ export class PlaybackSessionService {
       JSON.stringify(storedPlaybackAssetSchema.parse({ schemaVersion: 1, target })),
       playbackAssetContext(sessionId),
     )}`;
-    if (token.length > MAX_ASSET_TOKEN_LENGTH) throw new PlaybackSessionError("unavailable");
+    if (token.length > MAX_PLAYBACK_ASSET_TOKEN_LENGTH) {
+      throw new PlaybackSessionError("unavailable");
+    }
     return `${assetPathPrefix}${token}`;
   }
 

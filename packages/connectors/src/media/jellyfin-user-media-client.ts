@@ -654,7 +654,6 @@ export class JellyfinUserMediaClient {
           IsMissing: "false",
           IsVirtualItem: "false",
           Limit: String(input.limit + 1),
-          MediaTypes: "Video",
           Recursive: "true",
           ...(input.query === undefined ? {} : { SearchTerm: input.query }),
           ...librarySort(input.sort),

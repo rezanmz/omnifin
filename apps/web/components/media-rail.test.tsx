@@ -105,6 +105,22 @@ describe("MediaRail", () => {
     expect(scrollTo).toHaveBeenCalledOnce();
   });
 
+  it("keeps quick request separate from opening title details", async () => {
+    const user = userEvent.setup();
+    const onRequest = vi.fn();
+    const onSelect = vi.fn();
+    const item = { ...demoDashboard.discovery[0]!, requestable: true };
+    render(
+      <MediaRail items={[item]} onRequest={onRequest} onSelect={onSelect} title="Trending now" />,
+    );
+
+    await user.click(screen.getByRole("button", { name: `Request ${item.title}` }));
+
+    expect(onRequest).toHaveBeenCalledWith(item);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: `View details for ${item.title}` })).toBeVisible();
+  });
+
   it("renders useful guidance for an empty rail", () => {
     render(<MediaRail items={[]} title="Continue watching" />);
 

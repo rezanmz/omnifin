@@ -2,10 +2,9 @@
 
 import { Activity, Check, ChevronDown, Gauge, HardDrive, Network } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
-import { useInterfaceStore } from "../stores/interface-store";
 
 const AcquisitionTimeline = dynamic(
   () => import("./acquisition-timeline").then((module) => module.AcquisitionTimeline),
@@ -17,9 +16,27 @@ const ManualReleaseWorkbench = dynamic(
   { ssr: false },
 );
 
+const OPERATIONS_EXPANDED_KEY = "omnifin:operations-expanded";
+
+function storedExpandedState() {
+  try {
+    return window.sessionStorage.getItem(OPERATIONS_EXPANDED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function storeExpandedState(expanded: boolean) {
+  try {
+    window.sessionStorage.setItem(OPERATIONS_EXPANDED_KEY, String(expanded));
+  } catch {
+    // The disclosure remains usable when tab-scoped storage is unavailable.
+  }
+}
+
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
-  const expanded = useInterfaceStore((state) => state.operationsExpanded);
-  const setExpanded = useInterfaceStore((state) => state.setOperationsExpanded);
+  const [hydrated, setHydrated] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const average =
     operations.length > 0
       ? operations.reduce((total, operation) => total + operation.progress, 0) / operations.length
@@ -28,6 +45,23 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
   const [selectedOperation, setSelectedOperation] = useState<OperationModel | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
+
+  useEffect(() => {
+    const expandedFromStorage = storedExpandedState();
+    const frame = window.requestAnimationFrame(() => {
+      setExpanded(expandedFromStorage);
+      setHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  function toggleExpanded() {
+    setExpanded((current) => {
+      const nextExpanded = !current;
+      storeExpandedState(nextExpanded);
+      return nextExpanded;
+    });
+  }
 
   if (operations.length === 0) {
     return (
@@ -63,7 +97,8 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         aria-expanded={expanded}
         className="operations-dock__summary"
         data-directional-item
-        onClick={() => setExpanded(!expanded)}
+        disabled={!hydrated}
+        onClick={toggleExpanded}
         type="button"
       >
         <span className="operations-dock__beacon" aria-hidden="true">
