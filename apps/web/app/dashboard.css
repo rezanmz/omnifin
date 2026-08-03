@@ -394,8 +394,6 @@
 
 .media-rail {
   background: transparent;
-  contain-intrinsic-block-size: auto clamp(410px, 39vw, 520px);
-  content-visibility: auto;
   min-width: 0;
   overflow: visible;
 }
@@ -1208,8 +1206,6 @@
   background: rgb(239 247 240 / 3%);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
-  contain-intrinsic-block-size: auto 210px;
-  content-visibility: auto;
   padding: clamp(21px, 3vw, 34px);
 }
 
