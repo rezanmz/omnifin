@@ -16,6 +16,24 @@ const ManualReleaseWorkbench = dynamic(
   { ssr: false },
 );
 
+const OPERATIONS_EXPANDED_KEY = "omnifin:operations-expanded";
+
+function storedExpandedState() {
+  try {
+    return window.sessionStorage.getItem(OPERATIONS_EXPANDED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function storeExpandedState(expanded: boolean) {
+  try {
+    window.sessionStorage.setItem(OPERATIONS_EXPANDED_KEY, String(expanded));
+  } catch {
+    // The disclosure remains usable when tab-scoped storage is unavailable.
+  }
+}
+
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
   const [hydrated, setHydrated] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -29,7 +47,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setHydrated(true));
+    const expandedFromStorage = storedExpandedState();
+    const frame = window.requestAnimationFrame(() => {
+      setExpanded(expandedFromStorage);
+      setHydrated(true);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
@@ -68,7 +90,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         className="operations-dock__summary"
         data-directional-item
         disabled={!hydrated}
-        onClick={() => setExpanded((current) => !current)}
+        onClick={() => {
+          const nextExpanded = !expanded;
+          storeExpandedState(nextExpanded);
+          setExpanded(nextExpanded);
+        }}
         type="button"
       >
         <span className="operations-dock__beacon" aria-hidden="true">
