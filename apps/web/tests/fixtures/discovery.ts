@@ -1,3 +1,4 @@
+import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 import type { Page } from "@playwright/test";
 
 import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
@@ -21,6 +22,23 @@ export const discoveryFeedFixture = {
           null,
       },
     })),
+  })),
+};
+
+export const longTitleDiscoveryFeedFixture: DiscoveryFeedResponse = {
+  ...discoveryFeedFixture,
+  rails: discoveryFeedFixture.rails.map((rail) => ({
+    ...rail,
+    items: rail.items.map((item, index) =>
+      rail.kind === "trending" && index === 0
+        ? {
+            ...item,
+            overview:
+              "A patient expedition maps distant worlds while a signal redraws every route home.",
+            title: "The Extraordinary Cartography of Distant Forgotten Worlds",
+          }
+        : item,
+    ),
   })),
 };
 
@@ -269,10 +287,13 @@ function discoveryArtwork(url: string) {
     </svg>`;
 }
 
-export async function mockDiscoveryFeed(page: Page) {
+export async function mockDiscoveryFeed(
+  page: Page,
+  feed: DiscoveryFeedResponse = discoveryFeedFixture,
+) {
   await page.route("**/api/discovery/feed?**", async (route) => {
     await route.fulfill({
-      body: JSON.stringify(discoveryFeedFixture),
+      body: JSON.stringify(feed),
       contentType: "application/json",
       status: 200,
     });

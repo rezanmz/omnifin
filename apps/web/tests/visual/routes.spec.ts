@@ -8,6 +8,7 @@ import {
   mockAcquisitionRecoverySession,
 } from "../fixtures/acquisition-recovery";
 import {
+  longTitleDiscoveryFeedFixture,
   mockDiscoveryDetails,
   mockDiscoveryFeed,
   mockDiscoverySearch,
@@ -258,6 +259,23 @@ test("connected discovery dashboard visual baseline", async ({ page }, testInfo)
   await waitForVisibleDiscoveryArtwork(page);
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("dashboard-live-discovery.png", { fullPage: true });
+});
+
+test("long discovery hero title visual baseline", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "Long-title containment targets phone geometry.");
+  await mockDiscoveryFeed(page, longTitleDiscoveryFeedFixture);
+  await mockQuietContinueWatching(page);
+  await page.goto("/?test-view=continue-watching-live");
+  await page
+    .getByRole("heading", {
+      level: 1,
+      name: "The Extraordinary Cartography of Distant Forgotten Worlds",
+    })
+    .waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator('.hero-spotlight[data-artwork-source="remote"]')).toHaveScreenshot(
+    "dashboard-long-discovery-title.png",
+  );
 });
 
 for (const itemCount of [1, 2, 7] as const) {
