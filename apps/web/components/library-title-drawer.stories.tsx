@@ -26,8 +26,12 @@ export const SeriesEpisodeGuide: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const dialog = await canvas.findByRole("dialog", { name: "Northern Lights details" });
-    await expect(within(dialog).getByRole("tab", { name: /Season 1/u })).toBeVisible();
-    await expect(await within(dialog).findByRole("list", { name: "Episodes" })).toBeVisible();
+    const seasonTab = within(dialog).getByRole("tab", { name: /Season 1/u });
+    seasonTab.scrollIntoView({ block: "center" });
+    await expect(seasonTab).toBeVisible();
+    const episodeList = await within(dialog).findByRole("list", { name: "Episodes" });
+    episodeList.scrollIntoView({ block: "center" });
+    await expect(episodeList).toBeVisible();
   },
 };
 
@@ -38,9 +42,11 @@ export const EpisodeDetailsOpen: Story = {
     await userEvent.click(
       await within(dialog).findByRole("button", { name: "View details for The Long Meridian" }),
     );
-    await expect(
-      within(dialog).getByRole("region", { name: "The Long Meridian episode details" }),
-    ).toBeVisible();
+    const episodeDetail = within(dialog).getByRole("region", {
+      name: "The Long Meridian episode details",
+    });
+    episodeDetail.scrollIntoView({ block: "center" });
+    await expect(episodeDetail).toBeVisible();
     await expect(within(dialog).getByText("Mara Voss")).toBeVisible();
   },
 };
