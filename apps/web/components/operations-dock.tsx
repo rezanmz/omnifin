@@ -2,7 +2,7 @@
 
 import { Activity, Check, ChevronDown, Gauge, HardDrive, Network } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 import { useInterfaceStore } from "../stores/interface-store";
@@ -17,14 +17,10 @@ const ManualReleaseWorkbench = dynamic(
   { ssr: false },
 );
 
-const subscribeToHydration = () => () => undefined;
-const clientHydrated = () => true;
-const serverHydrated = () => false;
-
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
-  const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
+  const [hydrated, setHydrated] = useState(false);
   const expanded = useInterfaceStore((state) => state.operationsExpanded);
-  const setExpanded = useInterfaceStore((state) => state.setOperationsExpanded);
+  const toggleExpanded = useInterfaceStore((state) => state.toggleOperationsExpanded);
   const average =
     operations.length > 0
       ? operations.reduce((total, operation) => total + operation.progress, 0) / operations.length
@@ -33,6 +29,11 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
   const [selectedOperation, setSelectedOperation] = useState<OperationModel | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setHydrated(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   if (operations.length === 0) {
     return (
@@ -69,7 +70,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         className="operations-dock__summary"
         data-directional-item
         disabled={!hydrated}
-        onClick={() => setExpanded(!expanded)}
+        onClick={toggleExpanded}
         type="button"
       >
         <span className="operations-dock__beacon" aria-hidden="true">
