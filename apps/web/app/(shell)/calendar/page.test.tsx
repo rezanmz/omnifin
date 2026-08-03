@@ -25,8 +25,13 @@ describe("AcquisitionCalendarPage", () => {
       "aria-busy",
       "true",
     );
-    expect(screen.getByRole("link", { name: "Discover" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("radiogroup", { name: "Color theme" })).toBeVisible();
+    expect(screen.getByRole("main")).toContainElement(
+      screen.getByLabelText("Loading acquisition calendar"),
+    );
+    expect(
+      screen.queryByRole("navigation", { name: "Calendar navigation" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Color theme" })).not.toBeInTheDocument();
   });
 
   it("exposes deterministic normalized arrivals only in explicit test mode", async () => {
