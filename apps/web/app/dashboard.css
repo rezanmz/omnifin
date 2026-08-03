@@ -2575,6 +2575,18 @@
     padding: 20px 15px;
   }
 
+  .quiet-state--calendar {
+    align-items: start;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .quiet-state--calendar .quiet-state__action {
+    grid-column: 2;
+    justify-self: start;
+    margin-left: 0;
+  }
+
   .calendar-strip__grid,
   .dashboard-skeleton__calendar-grid {
     grid-template-columns: 1fr;
