@@ -5,6 +5,7 @@ import { type ReactNode, useEffect } from "react";
 import type { ServiceStatus } from "../lib/dashboard-data";
 import type { ApplicationDestination } from "../lib/application-shell-route";
 import type { ThemePreference } from "../lib/theme";
+import { ApplicationShellEnhancements } from "./application-shell-enhancements";
 
 const DEFAULT_ACCENT = "#8de9d5";
 export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
@@ -12,8 +13,10 @@ export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
 export function ApplicationShellContent({
   accent = DEFAULT_ACCENT,
   children,
+  current,
   displayProfile = "standard",
   status,
+  themePreference = "system",
 }: {
   accent?: string;
   children: ReactNode;
@@ -39,5 +42,10 @@ export function ApplicationShellContent({
     }
   }, [accent, displayProfile, status]);
 
-  return children;
+  return (
+    <>
+      <ApplicationShellEnhancements initialCurrent={current} initialPreference={themePreference} />
+      {children}
+    </>
+  );
 }

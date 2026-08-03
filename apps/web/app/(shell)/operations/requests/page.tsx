@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { RequestReview } from "../../../../components/request-review";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import {
@@ -40,8 +41,11 @@ export default async function RequestReviewPage({ searchParams }: RequestReviewP
   const preference = await readThemePreference();
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <RequestReview {...(initialOutcome === undefined ? {} : { initialOutcome })} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <RequestReview {...(initialOutcome === undefined ? {} : { initialOutcome })} />
+      </ThemeProvider>
+    </>
   );
 }

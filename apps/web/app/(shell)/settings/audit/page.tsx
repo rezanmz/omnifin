@@ -1,6 +1,7 @@
 import type { AuditEventListResponse } from "@omnifin/contracts/audit";
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { AuditTrailLoader } from "../../../../components/audit-trail-loader";
 import { AuditTrailPageShell } from "../../../../components/audit-trail-page-shell";
 import type { AuditTrailLoadOutcome } from "../../../../lib/audit-trail";
@@ -88,8 +89,11 @@ export default async function AuditTrailPage({ searchParams }: AuditTrailPagePro
       : "standard";
   const initialOutcome = testOutcome(parameters["test-view"]);
   return (
-    <AuditTrailPageShell displayProfile={displayProfile}>
-      <AuditTrailLoader embedded {...(initialOutcome ? { initialOutcome } : {})} />
-    </AuditTrailPageShell>
+    <>
+      <ApplicationShellEnhancements />
+      <AuditTrailPageShell displayProfile={displayProfile}>
+        <AuditTrailLoader embedded {...(initialOutcome ? { initialOutcome } : {})} />
+      </AuditTrailPageShell>
+    </>
   );
 }

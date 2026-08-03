@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { MediaIssueWorkbench } from "../../../../components/media-issue-workbench";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import {
@@ -42,8 +43,11 @@ export default async function MediaIssuePage({ searchParams }: MediaIssuePagePro
   const preference = await readThemePreference();
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <MediaIssueWorkbench {...(initialOutcome === undefined ? {} : { initialOutcome })} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <MediaIssueWorkbench {...(initialOutcome === undefined ? {} : { initialOutcome })} />
+      </ThemeProvider>
+    </>
   );
 }

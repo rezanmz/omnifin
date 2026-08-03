@@ -2,6 +2,7 @@ import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth
 import type { ConnectorAdmin } from "@omnifin/contracts/connectors";
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { ConnectorControlRoomLoader } from "../../../../components/connector-control-room-loader";
 import { ConnectorPageShell } from "../../../../components/connector-page-shell";
 import type { ConnectorAdminLoadOutcome } from "../../../../lib/connector-admin";
@@ -155,8 +156,14 @@ export default async function ConnectorsPage({ searchParams }: ConnectorsPagePro
   const displayProfile =
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   return (
-    <ConnectorPageShell displayProfile={displayProfile}>
-      <ConnectorControlRoomLoader embedded initialOutcome={testOutcome(parameters["test-view"])} />
-    </ConnectorPageShell>
+    <>
+      <ApplicationShellEnhancements />
+      <ConnectorPageShell displayProfile={displayProfile}>
+        <ConnectorControlRoomLoader
+          embedded
+          initialOutcome={testOutcome(parameters["test-view"])}
+        />
+      </ConnectorPageShell>
+    </>
   );
 }
