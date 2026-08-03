@@ -112,6 +112,20 @@ async function harness() {
   }));
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: (await readLibrary()).items[0]!,
+    movie: {
+      cast: [],
+      castTruncated: false,
+      communityRating: null,
+      crew: [],
+      crewTruncated: false,
+      criticRating: null,
+      genres: [],
+      mediaSources: [],
+      mediaSourcesTruncated: false,
+      premiereDate: null,
+      studios: [],
+      tagline: null,
+    },
     seasons: [],
     seasonsTruncated: false,
   }));
@@ -312,6 +326,92 @@ describe("Continue Watching routes", () => {
     }
   });
 
+  it("serves rich movie details and cast artwork through an opaque same-origin grant", async () => {
+    const { app, readImage, readLibrary, readLibraryTitle, viewer } = await harness();
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const catalogue = libraryBrowseResponseSchema.parse(catalogueResponse.json());
+      const referenceId = catalogue.items[0]!.media.id;
+      const rawItem = (await readLibrary.mock.results[0]!.value).items[0]!;
+      readLibraryTitle.mockResolvedValueOnce({
+        item: rawItem,
+        movie: {
+          cast: [
+            {
+              image: { itemId: "route-private-person", type: "Primary" },
+              imagePath: null,
+              name: "Mara Voss",
+              role: "Iris Vale",
+              type: "cast",
+            },
+          ],
+          castTruncated: false,
+          communityRating: 8.4,
+          crew: [],
+          crewTruncated: false,
+          criticRating: 91,
+          genres: ["Drama"],
+          mediaSources: [],
+          mediaSourcesTruncated: false,
+          premiereDate: "2026-04-18",
+          studios: ["Northlight Pictures"],
+          tagline: "The horizon remembers.",
+        },
+        seasons: [],
+        seasonsTruncated: false,
+      });
+
+      const detailResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}`,
+      });
+      expect(detailResponse.statusCode, detailResponse.body).toBe(200);
+      const detail = libraryTitleDetailResponseSchema.parse(detailResponse.json());
+      const personPath = detail.movie?.cast[0]?.imagePath;
+      expect(personPath).toMatch(new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`));
+      expect(detailResponse.body).not.toMatch(/route-private-person|viewer-external/iu);
+
+      const anonymousImage = await app.inject({
+        method: "GET",
+        url: personPath!,
+      });
+      expect(anonymousImage.statusCode, anonymousImage.body).toBe(401);
+      expect(apiErrorSchema.parse(anonymousImage.json()).error.code).toBe(
+        "authentication_required",
+      );
+      expect(readImage).not.toHaveBeenCalled();
+
+      const imageResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: personPath!,
+      });
+      expect(imageResponse.statusCode, imageResponse.body).toBe(200);
+      expect(imageResponse.headers["content-type"]).toContain("image/png");
+      expect(imageResponse.headers["cache-control"]).toContain("private");
+      expect(readImage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ itemId: "route-private-person", maxWidth: 480, type: "Primary" }),
+      );
+
+      const tampered = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `${personPath}tampered`,
+      });
+      expect(tampered.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(tampered.json()).error.code).toBe(
+        "media_person_artwork_not_found",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("opens series details before serving an explicitly selected season", async () => {
     const { app, readLibrary, readLibrarySeasonEpisodes, readLibraryTitle, viewer } =
       await harness();
@@ -335,6 +435,7 @@ describe("Continue Watching routes", () => {
     readLibrary.mockResolvedValueOnce({ items: [series], nextStartIndex: null, truncated: false });
     readLibraryTitle.mockResolvedValueOnce({
       item: series,
+      movie: null,
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
     });

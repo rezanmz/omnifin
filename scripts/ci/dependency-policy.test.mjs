@@ -40,16 +40,17 @@ test("the security audit covers production and development dependencies", () => 
 
 test("known vulnerable transitive tools resolve to reviewed patched versions", () => {
   const workspace = parse(repositoryFile("pnpm-workspace.yaml"));
-  assert.equal(workspace.overrides["brace-expansion"], "5.0.8");
+  assert.equal(workspace.overrides["brace-expansion"], "5.0.9");
   assert.equal(workspace.overrides.esbuild, "0.28.1");
+  assert.equal(workspace.overrides.postcss, "8.5.24");
   assert.equal(workspace.overrides.tmp, "0.2.7");
   assert.equal(workspace.overrides.uuid, "11.1.1");
   assert.equal(
-    workspace.patchedDependencies["brace-expansion@5.0.8"],
-    "patches/brace-expansion@5.0.8.patch",
+    workspace.patchedDependencies["brace-expansion@5.0.9"],
+    "patches/brace-expansion@5.0.9.patch",
   );
 
-  const compatibilityPatch = repositoryFile("patches/brace-expansion@5.0.8.patch");
+  const compatibilityPatch = repositoryFile("patches/brace-expansion@5.0.9.patch");
   assert.match(compatibilityPatch, /module\.exports = expand/u);
   assert.match(compatibilityPatch, /EXPANSION_MAX_LENGTH/u);
 });

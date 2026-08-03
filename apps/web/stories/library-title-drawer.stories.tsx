@@ -58,6 +58,12 @@ export const MovieDetails: Story = {
     const canvas = within(canvasElement.ownerDocument.body);
     await waitFor(() => expect(canvas.getByRole("heading", { name: "Ember Coast" })).toBeVisible());
     expect(canvas.getByRole("button", { name: "Resume movie" })).toBeVisible();
+    expect(canvas.getByText("The horizon remembers.")).toBeVisible();
+    expect(canvas.getByText("Mara Voss")).toBeVisible();
+    await userEvent.click(canvas.getByText("Media information"));
+    await waitFor(() =>
+      expect(canvas.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible(),
+    );
     expect(canvas.getByText("Playback starts only when you ask.")).toBeVisible();
   },
 };

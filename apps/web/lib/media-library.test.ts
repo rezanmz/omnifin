@@ -47,6 +47,7 @@ describe("Media library client", () => {
     const detail = {
       generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
       media: series.media,
+      movie: null,
       playback: null,
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
@@ -108,6 +109,10 @@ describe("Media library client", () => {
   it("maps only normalized media proxy paths onto the current origin", () => {
     const path = `/v1/media/media_${"m".repeat(22)}/images/poster`;
     expect(sameOriginMediaPath(path)).toBe(`/api/media/media_${"m".repeat(22)}/images/poster`);
+    const personPath = `/v1/media/media_${"m".repeat(22)}/images/people/v2.opaque.image.grant`;
+    expect(sameOriginMediaPath(personPath)).toBe(
+      `/api/media/media_${"m".repeat(22)}/images/people/v2.opaque.image.grant`,
+    );
     expect(sameOriginMediaPath(null)).toBeUndefined();
     expect(sameOriginMediaPath("https://media.example/poster.jpg")).toBeUndefined();
     expect(sameOriginMediaPath("/untrusted/poster.jpg")).toBeUndefined();
