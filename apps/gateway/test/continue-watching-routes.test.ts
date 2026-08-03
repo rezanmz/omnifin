@@ -738,7 +738,7 @@ describe("Continue Watching routes", () => {
 
       updatePlaybackState.mockRejectedValueOnce(
         new SafeConnectorError({
-          code: "permission_denied",
+          code: "invalid_credentials",
           message: "private upstream denial",
           operation: "media.playback_state",
           retryable: false,
