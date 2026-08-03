@@ -2461,7 +2461,7 @@
   }
 
   .user-avatar {
-    display: none;
+    display: flex;
   }
 
   .dashboard {
@@ -2672,6 +2672,12 @@
     line-height: 1.52;
     margin-bottom: 20px;
     max-width: 35ch;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-command-bar__actions .connection-pulse {
+    display: none;
   }
 }
 

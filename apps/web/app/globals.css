@@ -4225,7 +4225,7 @@
   }
 
   .user-avatar {
-    display: none;
+    display: flex;
   }
 
   .dashboard {
@@ -4516,6 +4516,12 @@
 
   .login-card::before,
   .utility-card::before {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-command-bar__actions .connection-pulse {
     display: none;
   }
 }
