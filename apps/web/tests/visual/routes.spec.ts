@@ -363,6 +363,7 @@ test("light profile controls visual baseline", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Light theme uses desktop Chromium");
   await useLightTheme(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("button", { name: "Open profile menu" }).click();
   await expect(page.getByRole("dialog", { name: "Profile and appearance" })).toBeVisible();
   await expect(page).toHaveScreenshot("dashboard-profile-menu-light.png", { fullPage: true });
@@ -389,6 +390,7 @@ test("permission-aware command palette visual baseline", async ({ page }, testIn
   );
   await mockMediaRequestSession(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("combobox", { name: "Search media and commands" }).click();
   await page.getByRole("option", { name: /Calendar/i }).waitFor();
   await removeDevelopmentIndicator(page);
@@ -403,6 +405,7 @@ test("light permission-aware command palette visual baseline", async ({ page }, 
   await useLightTheme(page);
   await mockMediaRequestSession(page);
   await page.goto("/");
+  await stabilizeDashboardForFullPageCapture(page);
   await page.getByRole("combobox", { name: "Search media and commands" }).click();
   await page.getByRole("option", { name: /Calendar/i }).waitFor();
   await removeDevelopmentIndicator(page);
