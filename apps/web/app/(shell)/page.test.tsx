@@ -24,6 +24,7 @@ describe("DashboardPage", () => {
 
     expect(result.type).toBe(DashboardScreen);
     expect(result.props.demoSections).toBe(false);
+    expect(result.props.liveCalendar).toBe(false);
     expect(result.props.data.operations[0]?.provenance?.events[0]).toMatchObject({
       kind: "stalled",
       recovery: {
@@ -48,5 +49,22 @@ describe("DashboardPage", () => {
       type: "link",
     });
     expect(isValidElement(dashboard) && dashboard.type).toBe(DashboardScreen);
+    if (!isValidElement<ComponentProps<typeof DashboardScreen>>(dashboard)) {
+      throw new Error("Expected demo mode to render DashboardScreen after the preload.");
+    }
+    expect(dashboard.props.liveCalendar).toBe(false);
+  });
+
+  it("loads the live release cadence for a connected dashboard", async () => {
+    vi.stubEnv("OMNIFIN_DEMO_MODE", "false");
+
+    const result = await DashboardPage({ searchParams: Promise.resolve({}) });
+
+    expect(isValidElement(result)).toBe(true);
+    if (!isValidElement<ComponentProps<typeof DashboardScreen>>(result)) {
+      throw new Error("Expected the connected route to render DashboardScreen.");
+    }
+    expect(result.type).toBe(DashboardScreen);
+    expect(result.props.liveCalendar).toBe(true);
   });
 });

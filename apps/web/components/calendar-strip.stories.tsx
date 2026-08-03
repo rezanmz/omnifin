@@ -20,3 +20,11 @@ type Story = StoryObj<typeof meta>;
 
 export const Upcoming: Story = {};
 export const Quiet: Story = { args: { items: [] } };
+export const Loading: Story = { args: { items: [], state: "loading" } };
+export const Unavailable: Story = {
+  args: { items: [], onRetry: () => undefined, state: "unavailable" },
+};
+export const Forbidden: Story = { args: { items: [], state: "forbidden" } };
+export const SignedOut: Story = { args: { items: [], state: "signed_out" } };
+export const Unconfigured: Story = { args: { items: [], state: "unconfigured" } };
+export const Degraded: Story = { args: { degraded: true } };
