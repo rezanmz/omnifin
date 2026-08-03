@@ -192,6 +192,8 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
     .locator("img.media-card__artwork-image")
     .first();
   await expect(artwork).toHaveAttribute("src", /\/api\/discovery\/artwork\/discovery_art_/u);
+  const initialScroll = await page.evaluate(() => window.scrollY);
+  await artwork.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
       artwork.evaluate(
@@ -199,6 +201,8 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
       ),
     )
     .toBe(true);
+  await page.evaluate((scrollY) => window.scrollTo(0, scrollY), initialScroll);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(initialScroll);
 }
 
 test("light signed-out dashboard visual baseline", async ({ page }, testInfo) => {

@@ -2,7 +2,7 @@
 
 import { Activity, Check, ChevronDown, Gauge, HardDrive, Network } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { OperationModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 import { useInterfaceStore } from "../stores/interface-store";
@@ -17,7 +17,12 @@ const ManualReleaseWorkbench = dynamic(
   { ssr: false },
 );
 
+const subscribeToHydration = () => () => undefined;
+const clientHydrated = () => true;
+const serverHydrated = () => false;
+
 export function OperationsDock({ operations }: { operations: OperationModel[] }) {
+  const hydrated = useSyncExternalStore(subscribeToHydration, clientHydrated, serverHydrated);
   const expanded = useInterfaceStore((state) => state.operationsExpanded);
   const setExpanded = useInterfaceStore((state) => state.setOperationsExpanded);
   const average =
@@ -63,6 +68,7 @@ export function OperationsDock({ operations }: { operations: OperationModel[] })
         aria-expanded={expanded}
         className="operations-dock__summary"
         data-directional-item
+        disabled={!hydrated}
         onClick={() => setExpanded(!expanded)}
         type="button"
       >
