@@ -26,6 +26,7 @@ export const ExpandedByKeyboard: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const toggle = canvas.getByRole("button", { name: /2 acquisitions moving/i });
+    await expect(toggle).toBeEnabled();
     toggle.focus();
     await userEvent.keyboard("{Enter}");
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
