@@ -16,6 +16,11 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { ProfileMenuLoader } from "./profile-menu-loader";
 
 const SHELL_MOUNTS = ["search", "status", "profile"] as const;
+const PLACEHOLDER_CLASSES = {
+  profile: "profile-menu",
+  search: "global-search",
+  status: "connection-pulse",
+} as const satisfies Record<(typeof SHELL_MOUNTS)[number], string>;
 
 function mountedShellSlots() {
   return Object.fromEntries(
@@ -55,25 +60,27 @@ export function ApplicationShellEnhancements({
   const slots = mounted ? mountedShellSlots() : null;
 
   useEffect(() => {
-    const animationFrame = window.requestAnimationFrame(() => setMounted(true));
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, []);
-
-  useEffect(() => {
-    if (!mounted) return;
+    const restorations: (() => void)[] = [];
     for (const slot of SHELL_MOUNTS) {
-      document
-        .querySelector<HTMLElement>(`[data-shell-placeholder="${slot}"]`)
-        ?.setAttribute("hidden", "");
+      const placeholder = document.querySelector<HTMLElement>(`[data-shell-placeholder="${slot}"]`);
+      if (!placeholder) continue;
+      placeholder.setAttribute("hidden", "");
+      const className = PLACEHOLDER_CLASSES[slot];
+      const styledPlaceholder = placeholder.classList.contains(className)
+        ? placeholder
+        : placeholder.querySelector<HTMLElement>(`.${className}`);
+      styledPlaceholder?.classList.remove(className);
+      restorations.push(() => {
+        styledPlaceholder?.classList.add(className);
+        placeholder.removeAttribute("hidden");
+      });
     }
+    const animationFrame = window.requestAnimationFrame(() => setMounted(true));
     return () => {
-      for (const slot of SHELL_MOUNTS) {
-        document
-          .querySelector<HTMLElement>(`[data-shell-placeholder="${slot}"]`)
-          ?.removeAttribute("hidden");
-      }
+      window.cancelAnimationFrame(animationFrame);
+      restorations.forEach((restore) => restore());
     };
-  }, [mounted]);
+  }, []);
 
   useEffect(() => {
     setCurrentDestination(pathname ? applicationDestinationForPath(pathname) : initialCurrent);

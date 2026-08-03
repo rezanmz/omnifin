@@ -65,7 +65,7 @@ export default async function AboutPage({ searchParams }: AboutPageProperties) {
     <>
       <ApplicationShellEnhancements initialPreference={preference} />
       <ThemeProvider initialPreference={preference}>
-        <AboutScreen displayProfile={displayProfile} outcome={outcome} />
+        <AboutScreen displayProfile={displayProfile} embedded outcome={outcome} />
       </ThemeProvider>
     </>
   );
