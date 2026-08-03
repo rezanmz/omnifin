@@ -125,7 +125,9 @@
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art {
-  background: #101914;
+  background-color: #101914;
+  background-position: center;
+  background-size: cover;
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art::after {
@@ -140,14 +142,6 @@
   inset: 0;
   pointer-events: none;
   position: absolute;
-}
-
-.hero-spotlight__art-image {
-  height: 100%;
-  inset: 0;
-  object-fit: cover;
-  position: absolute;
-  width: 100%;
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__planet,

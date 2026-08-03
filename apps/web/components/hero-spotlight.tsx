@@ -25,6 +25,9 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
   if (safeArtworkPath) {
     preload(safeArtworkPath, { as: "image", fetchPriority: "high" });
   }
+  const artworkStyle = safeArtworkPath
+    ? ({ backgroundImage: `url("${safeArtworkPath}")` } satisfies CSSProperties)
+    : undefined;
   const style = {
     "--hero-accent": hero.accent,
   } as AccentStyle;
@@ -39,22 +42,7 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
       style={style}
       aria-labelledby="hero-title"
     >
-      <div className="hero-spotlight__art" aria-hidden="true">
-        {safeArtworkPath ? (
-          // The gateway already serves a bounded, session-protected image. Browser-native loading
-          // keeps credentials same-origin and avoids routing private artwork through an optimizer.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt=""
-            className="hero-spotlight__art-image"
-            decoding="async"
-            fetchPriority="high"
-            height={338}
-            loading="eager"
-            src={safeArtworkPath}
-            width={600}
-          />
-        ) : null}
+      <div className="hero-spotlight__art" style={artworkStyle} aria-hidden="true">
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />
         <div className="hero-spotlight__grain" />
