@@ -5,6 +5,7 @@ import { ShellIcon, type ShellIconName } from "./shell-icon";
 
 const destinations = [
   { href: "/", icon: "compass", id: "discover", label: "Discover" },
+  { href: "/browse", icon: "search", id: "browse", label: "Browse" },
   { href: "/library", icon: "library", id: "library", label: "Library" },
   { href: "/calendar", icon: "calendar", id: "calendar", label: "Calendar" },
   { href: "/operations/health", icon: "gauge", id: "operations", label: "Operations" },
@@ -82,18 +83,6 @@ export function MobileNavigation({
           <span>{label}</span>
         </a>
       ))}
-      <a
-        aria-current={current === "settings" ? "page" : undefined}
-        className="mobile-navigation__item"
-        data-current={current === "settings" || undefined}
-        data-destination="settings"
-        data-directional-item
-        data-shell-link
-        href="/settings"
-      >
-        <ShellIcon aria-hidden="true" name="settings" size={20} strokeWidth={1.65} />
-        <span>Settings</span>
-      </a>
     </nav>
   );
 }

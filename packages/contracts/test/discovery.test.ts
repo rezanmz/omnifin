@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  discoveryBrowseQueryJsonSchema,
+  discoveryBrowseQuerySchema,
+  discoveryBrowseResponseJsonSchema,
+  discoveryBrowseResponseSchema,
   discoveryFeedQueryJsonSchema,
   discoveryFeedQuerySchema,
   discoveryFeedResponseJsonSchema,
@@ -36,6 +40,91 @@ const movie = {
 } as const;
 
 describe("discovery contracts", () => {
+  it("normalizes a bounded browse query and rejects incompatible criteria", () => {
+    expect(
+      discoveryBrowseQuerySchema.parse({
+        availability: "requestable",
+        genre: "science-fiction",
+        kind: "movie",
+        locale: "en-CA",
+        minimumRating: "7.5",
+        minimumVotes: "250",
+        originalLanguage: "ja",
+        page: "3",
+        runtimeMax: "150",
+        sort: "rating",
+        yearFrom: "1990",
+        yearTo: "2026",
+      }),
+    ).toEqual({
+      availability: "requestable",
+      genre: "science-fiction",
+      kind: "movie",
+      locale: "en-CA",
+      minimumRating: 7.5,
+      minimumVotes: 250,
+      originalLanguage: "ja",
+      page: 3,
+      runtimeMax: 150,
+      sort: "rating",
+      yearFrom: 1990,
+      yearTo: 2026,
+    });
+    expect(
+      discoveryBrowseQuerySchema.safeParse({
+        genre: "science-fiction",
+        kind: "series",
+      }).success,
+    ).toBe(false);
+    expect(
+      discoveryBrowseQuerySchema.safeParse({ kind: "movie", yearFrom: 2027, yearTo: 1990 }).success,
+    ).toBe(false);
+    expect(
+      discoveryBrowseQuerySchema.safeParse({ kind: "movie", upstream: "private" }).success,
+    ).toBe(false);
+    expect(
+      discoveryBrowseQuerySchema.safeParse({
+        genre: "drama",
+        kind: "movie",
+        query: "arrival",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps paginated browse results normalized and artwork opaque", () => {
+    const criteria = discoveryBrowseQuerySchema.parse({ kind: "movie", page: 2 });
+    const response = discoveryBrowseResponseSchema.parse({
+      criteria,
+      generatedAt: "2026-08-03T10:00:00.000Z",
+      items: [
+        {
+          ...movie,
+          artwork: {
+            backdropPath: null,
+            posterPath: "/v1/discovery/artwork/discovery_art_abcdefghijklmnopqrstuv",
+          },
+        },
+      ],
+      page: 2,
+      totalPages: 12,
+      totalResults: 231,
+    });
+    expect(response.items[0]?.kind).toBe("movie");
+    expect(JSON.stringify(response)).not.toContain("tmdb.org");
+    expect(
+      discoveryBrowseResponseSchema.safeParse({
+        ...response,
+        items: [{ ...response.items[0], kind: "series" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("exports closed browse schemas for the HTTP boundary", () => {
+    expect(discoveryBrowseQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(JSON.stringify(discoveryBrowseQueryJsonSchema)).toContain("additionalProperties");
+  });
+
   it("normalizes a complete bounded discovery feed with opaque artwork", () => {
     const item = {
       ...movie,

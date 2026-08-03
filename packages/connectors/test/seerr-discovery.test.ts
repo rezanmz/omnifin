@@ -72,6 +72,97 @@ const searchResponse = {
 };
 
 describe("Seerr discovery", () => {
+  it("translates a bounded movie browse query into vetted Seerr parameters", async () => {
+    const requestableMovie = {
+      ...searchResponse.results[0],
+      id: 551,
+      mediaInfo: { status: 6 },
+      title: "Requestable signal",
+      voteAverage: 8.8,
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse({
+        page: 2,
+        results: [searchResponse.results[0], requestableMovie],
+        totalPages: 12,
+        totalResults: 231,
+      }),
+    ]);
+
+    const result = await adapter.browse({
+      availability: "requestable",
+      genre: "science-fiction",
+      kind: "movie",
+      locale: "fr-CA",
+      minimumRating: 7.5,
+      minimumVotes: 250,
+      originalLanguage: "ja",
+      page: 2,
+      runtimeMax: 150,
+      sort: "rating",
+      yearFrom: 1990,
+      yearTo: 2026,
+    });
+
+    expect(result).toMatchObject({
+      items: [{ media: { availability: "unavailable", id: "movie:551" } }],
+      page: 2,
+      totalPages: 12,
+      totalResults: 231,
+    });
+    expect(requests[0]?.url.pathname).toBe("/api/v1/discover/movies");
+    expect(Object.fromEntries(requests[0]!.url.searchParams)).toEqual({
+      genre: "878",
+      language: "ja",
+      page: "2",
+      primaryReleaseDateGte: "1990-01-01",
+      primaryReleaseDateLte: "2026-12-31",
+      sortBy: "vote_average.desc",
+      voteAverageGte: "7.5",
+      voteCountGte: "250",
+      withRuntimeLte: "150",
+    });
+    expect(requests[0]?.init.headers.get("accept-language")).toBe("fr-CA");
+    expect(requests[0]?.url.searchParams.has("availability")).toBe(false);
+  });
+
+  it("uses the media search endpoint without leaking incompatible browse filters", async () => {
+    const series = {
+      ...searchResponse.results[1],
+      firstAirDate: "2020-01-01",
+      mediaInfo: { status: 5 },
+      name: "A Series Result",
+      voteAverage: 9.1,
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse({ ...searchResponse, results: [searchResponse.results[0], series] }),
+    ]);
+
+    const result = await adapter.browse({
+      availability: "available",
+      kind: "series",
+      locale: "en-CA",
+      minimumRating: 8,
+      page: 1,
+      query: "series result",
+      sort: "newest",
+      yearFrom: 2010,
+    });
+
+    expect(result.items.map(({ media }) => media.id)).toEqual(["series:1399"]);
+    expect(requests[0]?.url.pathname).toBe("/api/v1/search");
+    expect(requests[0]?.url.search).toBe("?language=en-CA&page=1&query=series%20result");
+    await expect(
+      adapter.browse({
+        genre: "drama",
+        kind: "movie",
+        locale: "en",
+        query: "private passthrough",
+      } as never),
+    ).rejects.toBeTruthy();
+    expect(requests).toHaveLength(1);
+  });
+
   it("normalizes documented trending, popular, and upcoming discovery endpoints", async () => {
     const moviePage = {
       page: 1,

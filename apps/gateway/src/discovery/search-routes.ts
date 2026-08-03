@@ -1,6 +1,10 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
   discoveryArtworkReferenceIdSchema,
+  discoveryBrowseQueryJsonSchema,
+  discoveryBrowseQuerySchema,
+  discoveryBrowseResponseJsonSchema,
+  discoveryBrowseResponseSchema,
   discoveryFeedQueryJsonSchema,
   discoveryFeedQuerySchema,
   discoveryFeedResponseJsonSchema,
@@ -138,6 +142,50 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
   options,
 ) => {
   const discovery = new DiscoverySearchService(app.database, app.appConfig, options.dependencies);
+
+  app.get(
+    "/v1/discovery/browse",
+    {
+      config: { rateLimit: { max: 40, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        querystring: discoveryBrowseQueryJsonSchema,
+        response: { 200: discoveryBrowseResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return discoveryBrowseResponseSchema.parse(
+          await discovery.browse(
+            discoveryBrowseQuerySchema.parse(request.query),
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof DiscoverySearchError) throw searchError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
 
   app.get(
     "/v1/discovery/feed",

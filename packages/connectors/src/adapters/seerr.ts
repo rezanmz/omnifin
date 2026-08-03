@@ -4,12 +4,14 @@ import type {
   PartialFailure,
 } from "@omnifin/contracts/connectors";
 import {
+  DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE,
   DISCOVERY_DETAIL_MAX_CAST,
   DISCOVERY_DETAIL_MAX_CREW,
   DISCOVERY_DETAIL_MAX_RATINGS,
   DISCOVERY_DETAIL_MAX_RECOMMENDATIONS,
   DISCOVERY_DETAIL_MAX_TRAILERS,
   DISCOVERY_PERSON_MAX_CREDITS,
+  discoveryBrowseQuerySchema,
   discoveryMediaDetailParamsSchema,
   discoveryMediaDetailQuerySchema,
   discoveryMediaDetailResponseSchema,
@@ -22,6 +24,8 @@ import {
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryAvailability,
+  type DiscoveryBrowseAvailability,
+  type DiscoveryBrowseQuery,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryMediaDetailResponse,
@@ -743,6 +747,11 @@ export interface SeerrDiscoveryFeedPage {
   totalResults: number;
 }
 
+export interface SeerrDiscoveryBrowsePage extends SeerrDiscoveryFeedPage {
+  page: number;
+  totalPages: number;
+}
+
 export interface SeerrDiscoveryArtwork {
   body: Uint8Array;
   contentType: "image/avif" | "image/jpeg" | "image/png" | "image/webp";
@@ -793,6 +802,105 @@ function boundedFeedItems(items: readonly SeerrDiscoveryFeedItem[]) {
     seen.add(media.id);
     return true;
   });
+}
+
+const MOVIE_GENRE_IDS = Object.freeze({
+  action: 28,
+  adventure: 12,
+  animation: 16,
+  comedy: 35,
+  crime: 80,
+  documentary: 99,
+  drama: 18,
+  family: 10_751,
+  fantasy: 14,
+  history: 36,
+  horror: 27,
+  music: 10_402,
+  mystery: 9_648,
+  romance: 10_749,
+  "science-fiction": 878,
+  thriller: 53,
+  war: 10_752,
+  western: 37,
+} as const);
+const SERIES_GENRE_IDS = Object.freeze({
+  "action-adventure": 10_759,
+  animation: 16,
+  comedy: 35,
+  crime: 80,
+  documentary: 99,
+  drama: 18,
+  family: 10_751,
+  kids: 10_762,
+  mystery: 9_648,
+  news: 10_763,
+  reality: 10_764,
+  "sci-fi-fantasy": 10_765,
+  soap: 10_766,
+  talk: 10_767,
+  "war-politics": 10_768,
+  western: 37,
+} as const);
+const BROWSE_SORTS = Object.freeze({
+  movie: {
+    newest: "primary_release_date.desc",
+    popularity: "popularity.desc",
+    rating: "vote_average.desc",
+    title: "original_title.asc",
+  },
+  series: {
+    newest: "first_air_date.desc",
+    popularity: "popularity.desc",
+    rating: "vote_average.desc",
+    title: "original_name.asc",
+  },
+} as const);
+
+function matchesBrowseAvailability(
+  availability: DiscoveryAvailability,
+  filter: DiscoveryBrowseAvailability,
+) {
+  if (filter === "any") return true;
+  if (filter === "requestable") return availability === "unavailable";
+  return availability === filter;
+}
+
+function browseYear(item: SeerrDiscoveryFeedItem) {
+  return item.media.year ?? 0;
+}
+
+function locallyFilteredBrowseItems(
+  items: readonly SeerrDiscoveryFeedItem[],
+  criteria: DiscoveryBrowseQuery,
+) {
+  const filtered = boundedFeedItems(items).filter(({ media }) => {
+    const year = media.year;
+    return (
+      matchesBrowseAvailability(media.availability, criteria.availability) &&
+      (criteria.minimumRating === undefined ||
+        (media.voteAverage ?? -1) >= criteria.minimumRating) &&
+      (criteria.yearFrom === undefined || (year !== null && year >= criteria.yearFrom)) &&
+      (criteria.yearTo === undefined || (year !== null && year <= criteria.yearTo))
+    );
+  });
+  if (criteria.query === undefined) return filtered.slice(0, DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE);
+  const sorted = [...filtered];
+  if (criteria.sort === "rating") {
+    sorted.sort(
+      (left, right) =>
+        (right.media.voteAverage ?? -1) - (left.media.voteAverage ?? -1) ||
+        left.media.title.localeCompare(right.media.title),
+    );
+  } else if (criteria.sort === "newest") {
+    sorted.sort(
+      (left, right) =>
+        browseYear(right) - browseYear(left) || left.media.title.localeCompare(right.media.title),
+    );
+  } else if (criteria.sort === "title") {
+    sorted.sort((left, right) => left.media.title.localeCompare(right.media.title));
+  }
+  return sorted.slice(0, DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE);
 }
 
 function artworkContentType(value: string | null) {
@@ -1074,6 +1182,113 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     return {
       items: boundedFeedItems(interleaved),
       totalResults: Math.min(10_000_000, movies.totalResults + series.totalResults),
+    };
+  }
+
+  async browse(
+    input: DiscoveryBrowseQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryBrowsePage> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr discovery requires configured credentials.",
+        operation: "discovery.browse",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const criteria = discoveryBrowseQuerySchema.parse(input);
+    const options = {
+      headers: { "Accept-Language": criteria.locale, "X-Api-Key": this.#apiKey },
+      operation: "discovery.browse",
+      ...(signal ? { signal } : {}),
+    } as const;
+
+    if (criteria.query !== undefined) {
+      const response = await this.client.requestJson("api/v1/search", seerrSearchResponseSchema, {
+        ...options,
+        query: new URLSearchParams({
+          language: criteria.locale,
+          page: String(criteria.page),
+          query: criteria.query,
+        }),
+      });
+      const items = response.results.flatMap((result) => {
+        if (criteria.kind === "movie" && result.mediaType === "movie") {
+          return [feedMovie(result)];
+        }
+        if (criteria.kind === "series" && result.mediaType === "tv") {
+          return [feedSeries(result)];
+        }
+        return [];
+      });
+      return {
+        items: locallyFilteredBrowseItems(items, criteria),
+        page: response.page,
+        totalPages: response.totalPages,
+        totalResults: response.totalResults,
+      };
+    }
+
+    const parameters = new URLSearchParams({
+      page: String(criteria.page),
+      sortBy: BROWSE_SORTS[criteria.kind][criteria.sort],
+    });
+    if (criteria.genre !== undefined) {
+      const genreId =
+        criteria.kind === "movie"
+          ? MOVIE_GENRE_IDS[criteria.genre as keyof typeof MOVIE_GENRE_IDS]
+          : SERIES_GENRE_IDS[criteria.genre as keyof typeof SERIES_GENRE_IDS];
+      parameters.set("genre", String(genreId));
+    }
+    if (criteria.minimumRating !== undefined) {
+      parameters.set("voteAverageGte", String(criteria.minimumRating));
+    }
+    if (criteria.minimumVotes !== undefined) {
+      parameters.set("voteCountGte", String(criteria.minimumVotes));
+    }
+    if (criteria.originalLanguage !== undefined) {
+      parameters.set("language", criteria.originalLanguage);
+    }
+    if (criteria.runtimeMax !== undefined) {
+      parameters.set("withRuntimeLte", String(criteria.runtimeMax));
+    }
+    if (criteria.yearFrom !== undefined) {
+      parameters.set(
+        criteria.kind === "movie" ? "primaryReleaseDateGte" : "firstAirDateGte",
+        `${criteria.yearFrom}-01-01`,
+      );
+    }
+    if (criteria.yearTo !== undefined) {
+      parameters.set(
+        criteria.kind === "movie" ? "primaryReleaseDateLte" : "firstAirDateLte",
+        `${criteria.yearTo}-12-31`,
+      );
+    }
+    if (criteria.kind === "movie") {
+      const response = await this.client.requestJson(
+        "api/v1/discover/movies",
+        upstreamMovieFeedPageSchema,
+        { ...options, query: parameters },
+      );
+      return {
+        items: locallyFilteredBrowseItems(response.results.map(feedMovie), criteria),
+        page: response.page,
+        totalPages: response.totalPages,
+        totalResults: response.totalResults,
+      };
+    }
+    const response = await this.client.requestJson(
+      "api/v1/discover/tv",
+      upstreamSeriesFeedPageSchema,
+      { ...options, query: parameters },
+    );
+    return {
+      items: locallyFilteredBrowseItems(response.results.map(feedSeries), criteria),
+      page: response.page,
+      totalPages: response.totalPages,
+      totalResults: response.totalResults,
     };
   }
 
