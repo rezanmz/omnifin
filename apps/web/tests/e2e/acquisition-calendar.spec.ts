@@ -60,6 +60,7 @@ test("calendar month view keeps every day and event detail reachable", async ({ 
   );
 
   const eventCard = page.getByRole("button", { name: /Inspect The Far Meridian/i });
+  await expect(eventCard).toBeEnabled();
   await eventCard.focus();
   await page.keyboard.press("Enter");
   await expect(
