@@ -3,12 +3,53 @@
 import { useEffect } from "react";
 
 const GLASS_SELECTOR = "[data-liquid-glass]";
+const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
+// Scroll is intentionally excluded: unlike pointerdown and keydown, it does not finalize
+// the browser's LCP window, so a scroll-triggered material repaint can turn a fast
+// first render into a late LCP candidate.
+const MATERIAL_INTENT_EVENTS = ["pointerdown", "keydown"] as const;
 
 function percentage(value: number, start: number, size: number) {
   return `${Math.min(100, Math.max(0, ((value - start) / size) * 100)).toFixed(2)}%`;
 }
 
 export function LiquidGlassEnvironment() {
+  useEffect(() => {
+    if (document.documentElement.hasAttribute(GLASS_READY_ATTRIBUTE)) return;
+
+    let animationFrame = 0;
+    let listening = true;
+
+    const stopListening = () => {
+      if (!listening) return;
+      for (const eventName of MATERIAL_INTENT_EVENTS) {
+        document.removeEventListener(eventName, enableMaterial, true);
+      }
+      listening = false;
+    };
+
+    const enableMaterial = () => {
+      if (animationFrame) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, "");
+        stopListening();
+      });
+    };
+
+    for (const eventName of MATERIAL_INTENT_EVENTS) {
+      document.addEventListener(eventName, enableMaterial, {
+        capture: true,
+        passive: true,
+      });
+    }
+
+    return () => {
+      stopListening();
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
+
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let activeSurface: HTMLElement | null = null;

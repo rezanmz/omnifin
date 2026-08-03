@@ -1,17 +1,28 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { demoDashboard } from "../lib/dashboard-data";
+import { ApplicationShellEnhancements } from "./application-shell-enhancements";
 import { CalendarStrip } from "./calendar-strip";
 import { HeroSpotlight } from "./hero-spotlight";
 import { NavigationRail } from "./navigation-rail";
 import { OperationsDock } from "./operations-dock";
 import { TopCommandBar } from "./top-command-bar";
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/",
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 describe("directional navigation", () => {
   it("moves through primary navigation vertically", async () => {
     const user = userEvent.setup();
-    render(<NavigationRail />);
+    render(
+      <>
+        <NavigationRail />
+        <ApplicationShellEnhancements initialCurrent="discover" />
+      </>,
+    );
 
     const discover = screen.getByRole("link", { name: "Discover" });
     discover.focus();

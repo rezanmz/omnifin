@@ -2,29 +2,13 @@ import type { AcquisitionCalendarResponse } from "@omnifin/contracts/calendar";
 import { CalendarClock, CircleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { ThemePreference } from "../lib/theme";
 import { formatCalendarPeriod, type CalendarView } from "../lib/calendar-period";
-import { AcquisitionCalendarTopbar } from "./acquisition-calendar-topbar";
-import { CinematicBackdrop } from "./cinematic-backdrop";
-import { LiquidGlassEnvironment } from "./liquid-glass-environment";
-import { ThemeProvider } from "./theme-provider";
-import styles from "./acquisition-calendar.module.css";
+import styles from "./acquisition-calendar-frame.module.css";
 
-export function AcquisitionCalendarFrame({
-  children,
-  initialPreference,
-}: {
-  children: ReactNode;
-  initialPreference: ThemePreference;
-}) {
+export function AcquisitionCalendarFrame({ children }: { children: ReactNode }) {
   return (
     <div className={styles.layout}>
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
       <main className={styles.shell} id="main-content" tabIndex={-1}>
-        <ThemeProvider initialPreference={initialPreference}>
-          <AcquisitionCalendarTopbar />
-        </ThemeProvider>
         {children}
       </main>
     </div>

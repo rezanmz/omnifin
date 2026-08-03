@@ -6,7 +6,7 @@ import type {
   DiscoveryFeedRailKind,
   DiscoveryFeedResponse,
 } from "@omnifin/contracts/discovery";
-import { CloudOff, LockKeyhole, Radar, RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
+import { CloudOff, Info, LockKeyhole, Radar, RefreshCw, ShieldAlert, Sparkles } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,8 +18,17 @@ import {
   type DiscoveryFeedClientErrorKind,
 } from "../lib/discovery-feed";
 import type { MediaCardModel } from "../lib/dashboard-data";
+import {
+  discoveryAccent as accentFor,
+  discoveryAvailabilityLabel as availabilityLabel,
+  discoveryItemIsRequestable as requestable,
+  discoveryItemMedia as itemMedia,
+  discoverySpotlightItem,
+  discoverySpotlightHero,
+} from "../lib/discovery-presentation";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
+import { DirectionalNavigationGroup } from "./directional-navigation-group";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
 import { MediaRail } from "./media-rail";
@@ -47,8 +56,6 @@ const RAIL_EMPTY_COPY: Record<DiscoveryFeedRailKind, string> = {
   trending: "The daily trending signal is quiet right now.",
   upcoming: "No upcoming movies or series were returned for this region.",
 };
-const ACCENTS = ["#8ce8d3", "#a9d7ff", "#d8ff70", "#f0a77b", "#c9adff", "#f29ab5"];
-
 const FALLBACK_HERO = {
   accent: "#8de9d5",
   actions: "none" as const,
@@ -76,6 +83,7 @@ export interface DiscoveryDashboardProperties {
   live?: boolean;
   requestClient?: MediaRequestClient;
   showContinueWatching?: boolean;
+  suppressHero?: boolean;
 }
 
 function discoveryLanguage() {
@@ -83,51 +91,6 @@ function discoveryLanguage() {
   if (/^[a-z]{2}(?:-[A-Z]{2})?$/u.test(navigator.language)) return navigator.language;
   const base = navigator.language.slice(0, 2).toLowerCase();
   return /^[a-z]{2}$/u.test(base) ? base : "en";
-}
-
-function accentFor(item: DiscoveryFeedItem) {
-  return ACCENTS[item.tmdbId % ACCENTS.length]!;
-}
-
-function availabilityLabel(item: DiscoveryFeedItem) {
-  return {
-    available: "Ready to watch",
-    partial: "Partially available",
-    processing: "Acquiring",
-    requested: "Requested",
-    unavailable: "Available to request",
-    unknown: "Availability unknown",
-  }[item.availability];
-}
-
-function itemFacts(item: DiscoveryFeedItem) {
-  return [
-    item.kind === "movie" ? "Movie" : "Series",
-    item.year,
-    item.voteAverage === null ? null : `${item.voteAverage.toFixed(1)} ★`,
-    availabilityLabel(item),
-  ]
-    .filter((fact): fact is string | number => fact !== null)
-    .map(String);
-}
-
-function itemMedia(item: DiscoveryFeedItem): DetailMedia {
-  return {
-    availability: item.availability,
-    id: item.id,
-    kind: item.kind,
-    originalTitle: item.originalTitle,
-    overview: item.overview,
-    source: item.source,
-    title: item.title,
-    tmdbId: item.tmdbId,
-    voteAverage: item.voteAverage,
-    year: item.year,
-  };
-}
-
-function requestable(item: DiscoveryFeedItem) {
-  return item.availability === "unavailable" || item.availability === "partial";
 }
 
 function cardFor(item: DiscoveryFeedItem, locallyRequested: boolean): MediaCardModel {
@@ -389,6 +352,7 @@ function DiscoveryDashboardContent({
   live,
   requestClient,
   showContinueWatching,
+  suppressHero,
 }: Required<Pick<DiscoveryDashboardProperties, "client" | "showContinueWatching">> &
   Omit<DiscoveryDashboardProperties, "client" | "showContinueWatching">) {
   const language = discoveryLanguage();
@@ -436,7 +400,7 @@ function DiscoveryDashboardContent({
   if (query.isPending) {
     return (
       <>
-        <DiscoveryHeroSkeleton />
+        {suppressHero ? null : <DiscoveryHeroSkeleton />}
         {showContinueWatching ? <LazyContinueWatchingRail /> : null}
         {(Object.keys(RAIL_TITLES) as DiscoveryFeedRailKind[]).map((kind) => (
           <DiscoveryRailSkeleton key={kind} title={RAIL_TITLES[kind]} />
@@ -448,9 +412,11 @@ function DiscoveryDashboardContent({
   if (authorizationErrorKind) {
     return (
       <>
-        <HeroSpotlight
-          hero={authorizationErrorKind === "signed_out" ? SIGNED_OUT_HERO : FALLBACK_HERO}
-        />
+        {suppressHero ? null : (
+          <HeroSpotlight
+            hero={authorizationErrorKind === "signed_out" ? SIGNED_OUT_HERO : FALLBACK_HERO}
+          />
+        )}
         {showContinueWatching ? <LazyContinueWatchingRail /> : null}
         <DiscoveryBoundary
           errorKind={authorizationErrorKind}
@@ -465,42 +431,49 @@ function DiscoveryDashboardContent({
       query.error instanceof DiscoveryFeedClientError ? query.error.kind : "unavailable";
     return (
       <>
-        <HeroSpotlight hero={FALLBACK_HERO} />
+        {suppressHero ? null : <HeroSpotlight hero={FALLBACK_HERO} />}
         {showContinueWatching ? <LazyContinueWatchingRail /> : null}
         <DiscoveryBoundary errorKind={errorKind} onRetry={() => void query.refetch()} />
       </>
     );
   }
 
-  const spotlightItem =
-    data.rails.find(({ kind }) => kind === "trending")?.items[0] ??
-    data.rails.flatMap((rail) => rail.items)[0] ??
-    null;
+  const spotlightItem = discoverySpotlightItem(data);
   const spotlightArtworkPath =
     spotlightItem?.artwork.backdropPath ?? spotlightItem?.artwork.posterPath ?? null;
-
   return (
     <>
-      {spotlightArtworkPath ? (
+      {spotlightArtworkPath && !suppressHero ? (
         <link as="image" fetchPriority="high" href={spotlightArtworkPath} rel="preload" />
       ) : null}
-      {spotlightItem ? (
+      {suppressHero ? null : spotlightItem ? (
         <HeroSpotlight
+          actionRegion={
+            <DirectionalNavigationGroup className="hero-spotlight__actions">
+              <button
+                className="button button--primary"
+                data-directional-item
+                onClick={() => openDetails(spotlightItem)}
+                type="button"
+              >
+                <Info aria-hidden="true" size={18} />
+                View details
+              </button>
+              {requestable(spotlightItem) && !requestedIds.has(spotlightItem.id) ? (
+                <button
+                  className="button button--glass"
+                  data-directional-item
+                  onClick={() => openRequest(spotlightItem)}
+                  type="button"
+                >
+                  <Sparkles aria-hidden="true" size={17} />
+                  Request title
+                </button>
+              ) : null}
+            </DirectionalNavigationGroup>
+          }
           artworkPath={spotlightArtworkPath}
-          hero={{
-            accent: accentFor(spotlightItem),
-            actions: "none",
-            description:
-              spotlightItem.overview ??
-              "Open the full detail view for normalized metadata and availability.",
-            eyebrow: "Trending through Seerr",
-            facts: itemFacts(spotlightItem),
-            title: spotlightItem.title,
-          }}
-          onDetails={() => openDetails(spotlightItem)}
-          {...(requestable(spotlightItem) && !requestedIds.has(spotlightItem.id)
-            ? { onRequest: () => openRequest(spotlightItem) }
-            : {})}
+          hero={discoverySpotlightHero(spotlightItem)}
         />
       ) : (
         <HeroSpotlight hero={FALLBACK_HERO} />
@@ -590,6 +563,7 @@ export function DiscoveryDashboard({
   live,
   requestClient,
   showContinueWatching = true,
+  suppressHero = false,
 }: DiscoveryDashboardProperties) {
   return (
     <DiscoveryDashboardContent
@@ -599,6 +573,7 @@ export function DiscoveryDashboard({
       {...(live === undefined ? {} : { live })}
       {...(requestClient === undefined ? {} : { requestClient })}
       showContinueWatching={showContinueWatching}
+      suppressHero={suppressHero}
     />
   );
 }

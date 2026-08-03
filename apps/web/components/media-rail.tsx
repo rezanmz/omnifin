@@ -2,7 +2,6 @@
 
 import { ArrowRight, Clapperboard, PanelRightOpen, Play, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useEffect, useRef } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
 
@@ -33,18 +32,6 @@ export function MediaRail({
     (title.toLowerCase().includes("continue")
       ? "Start watching something in Jellyfin and it will appear here with your progress."
       : "Discovery will return when connected metadata and library services have suggestions.");
-  const scrollerReference = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const scroller = scrollerReference.current;
-    if (!scroller) return;
-    for (const image of scroller.querySelectorAll<HTMLImageElement>("img[data-artwork-src]")) {
-      const source = image.dataset.artworkSrc;
-      if (source) image.src = source;
-      image.removeAttribute("data-artwork-src");
-    }
-  }, [items]);
-
   return (
     <section className="media-rail" aria-labelledby={headingId}>
       <div className="section-heading">
@@ -74,7 +61,6 @@ export function MediaRail({
             })
           }
           role={onSelect ? undefined : "region"}
-          ref={scrollerReference}
           tabIndex={onSelect ? undefined : 0}
         >
           {items.map((item, index) => {
@@ -103,10 +89,10 @@ export function MediaRail({
                     <img
                       alt=""
                       className="media-card__artwork-image"
-                      data-artwork-src={artworkPath}
                       decoding="async"
                       fetchPriority="low"
                       loading="lazy"
+                      src={artworkPath}
                     />
                   ) : null}
                   <span className="media-card__motif media-card__motif--one" />

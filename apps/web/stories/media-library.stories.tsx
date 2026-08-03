@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 
 import { MediaLibrary } from "../components/media-library";
+import StandaloneApplicationShell from "../components/standalone-application-shell";
 import {
   emptyMediaLibraryOutcome,
   readyMediaLibraryOutcome,
@@ -9,6 +10,19 @@ import {
 
 const meta = {
   component: MediaLibrary,
+  decorators: [
+    (Story, context) => (
+      <StandaloneApplicationShell
+        accent="#6f8d84"
+        current="library"
+        displayProfile="standard"
+        status="attention"
+        themePreference={(context.args.themePreference as "dark" | "light" | "system") ?? "system"}
+      >
+        <Story />
+      </StandaloneApplicationShell>
+    ),
+  ],
   parameters: { layout: "fullscreen" },
   title: "Screens/Media library",
 } satisfies Meta<typeof MediaLibrary>;
