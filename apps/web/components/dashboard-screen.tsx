@@ -2,14 +2,12 @@ import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
-import { CalendarStrip } from "./calendar-strip";
 import { ApplicationShellContent } from "./application-shell";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
+import { DeferredDashboardSections } from "./deferred-dashboard-sections";
+import { DeferredDemoDashboardSections } from "./deferred-demo-dashboard-sections";
 import { DiscoveryDashboard } from "./discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
-import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
-import { MediaRail } from "./media-rail";
-import { OperationsDock } from "./operations-dock";
 
 function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
   if (services.some(({ status }) => status === "offline")) return "offline";
@@ -24,7 +22,9 @@ export function DashboardScreen({
   discoveryInitialFeed,
   discoveryRefresh = true,
   discoveryShowContinueWatching = true,
+  demoSections = false,
   displayProfile = "standard",
+  heroArtworkPath,
   liveContinueWatching = false,
   liveDiscovery = false,
 }: {
@@ -32,7 +32,9 @@ export function DashboardScreen({
   discoveryInitialFeed?: DiscoveryFeedResponse;
   discoveryRefresh?: boolean;
   discoveryShowContinueWatching?: boolean;
+  demoSections?: boolean;
   displayProfile?: DisplayProfile;
+  heroArtworkPath?: string;
   liveContinueWatching?: boolean;
   liveDiscovery?: boolean;
 }) {
@@ -55,18 +57,23 @@ export function DashboardScreen({
             showContinueWatching={discoveryShowContinueWatching}
           />
         ) : (
-          <>
-            <HeroSpotlight hero={data.hero} />
-            {liveContinueWatching ? (
-              <LazyContinueWatchingRail />
-            ) : (
-              <MediaRail items={data.continueWatching} title="Continue watching" />
-            )}
-            <MediaRail items={data.discovery} title="Made for tonight" />
-          </>
+          <HeroSpotlight
+            {...(heroArtworkPath === undefined ? {} : { artworkPath: heroArtworkPath })}
+            hero={data.hero}
+          />
         )}
-        <CalendarStrip items={data.calendar} />
-        <OperationsDock operations={data.operations} />
+        {demoSections ? (
+          <DeferredDemoDashboardSections />
+        ) : (
+          <DeferredDashboardSections
+            calendar={data.calendar}
+            continueWatching={data.continueWatching}
+            discovery={data.discovery}
+            liveContinueWatching={liveContinueWatching}
+            operations={data.operations}
+            showMedia={!liveDiscovery}
+          />
+        )}
       </main>
     </ApplicationShellContent>
   );

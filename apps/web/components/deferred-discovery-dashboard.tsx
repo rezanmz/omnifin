@@ -24,6 +24,7 @@ function DiscoveryRailsFallback({ failed, onRetry }: { failed: boolean; onRetry:
   return (
     <div
       aria-label={failed ? "Connected discovery failed to load" : "Preparing connected discovery"}
+      className="deferred-discovery-rails"
       role="region"
     >
       {RAIL_TITLES.map((title) => (

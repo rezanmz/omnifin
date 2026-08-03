@@ -21,9 +21,11 @@ describe("LiquidGlassEnvironment", () => {
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
     fireEvent.pointerMove(document.body, { clientX: 12, clientY: 18 });
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
+    fireEvent.scroll(document);
+    expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
     vi.mocked(window.requestAnimationFrame).mockClear();
 
-    fireEvent.click(document.body);
+    fireEvent.pointerDown(document.body);
     expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
 

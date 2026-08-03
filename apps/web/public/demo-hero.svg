@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="presentation">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101817"/>
+      <stop offset=".5" stop-color="#2b263e"/>
+      <stop offset="1" stop-color="#0a0e11"/>
+    </linearGradient>
+    <radialGradient id="signal" cx="72%" cy="28%" r="58%">
+      <stop offset="0" stop-color="#d8ff70" stop-opacity=".48"/>
+      <stop offset=".27" stop-color="#8972b7" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#2a2140" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="horizon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8ff70" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#8de9d5" stop-opacity=".03"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" fill="url(#base)"/>
+  <rect width="1200" height="675" fill="url(#signal)"/>
+  <circle cx="865" cy="205" r="120" fill="none" stroke="#f4f7ee" stroke-opacity=".17" stroke-width="2"/>
+  <circle cx="865" cy="205" r="188" fill="none" stroke="#d8ff70" stroke-opacity=".11" stroke-width="2"/>
+  <path d="M-40 530C220 372 566 360 1240 510" fill="none" stroke="url(#horizon)" stroke-width="3"/>
+  <path d="M-50 590C300 430 760 442 1260 604" fill="none" stroke="#f4f7ee" stroke-opacity=".08" stroke-width="2"/>
+</svg>
