@@ -503,6 +503,7 @@ function DiscoveryDashboardContent({
               }}
               {...(query.isError ? { statusMessage: "Saved results · refresh interrupted" } : {})}
               title={RAIL_TITLES[rail.kind]}
+              viewAllHref={`/browse?kind=${rail.kind === "popular_series" ? "series" : "movie"}${rail.kind === "upcoming" ? "&sort=newest" : ""}`}
             />
           ),
         )

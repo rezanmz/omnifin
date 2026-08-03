@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, Clapperboard, PanelRightOpen, Play, Sparkles } from "lucide-react";
+import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
@@ -16,6 +17,7 @@ export function MediaRail({
   onViewAll,
   statusMessage,
   title,
+  viewAllHref,
 }: {
   emptyCopy?: string;
   emptyTitle?: string;
@@ -25,6 +27,7 @@ export function MediaRail({
   onViewAll?: () => void;
   statusMessage?: string;
   title: string;
+  viewAllHref?: string;
 }) {
   const headingId = `rail-${title.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
   const resolvedEmptyCopy =
@@ -42,7 +45,11 @@ export function MediaRail({
               {statusMessage}
             </span>
           )}
-          {items.length > 0 && onViewAll ? (
+          {items.length > 0 && viewAllHref ? (
+            <Link className="text-action" href={viewAllHref}>
+              View all <ArrowRight aria-hidden="true" size={15} />
+            </Link>
+          ) : items.length > 0 && onViewAll ? (
             <button className="text-action" onClick={onViewAll} type="button">
               View all <ArrowRight aria-hidden="true" size={15} />
             </button>

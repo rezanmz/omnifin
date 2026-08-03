@@ -11,6 +11,46 @@ export const DISCOVERY_DETAIL_MAX_TRAILERS = 6;
 export const DISCOVERY_PERSON_MAX_CREDITS = 24;
 export const DISCOVERY_FEED_RAIL_COUNT = 4;
 export const DISCOVERY_FEED_MAX_ITEMS_PER_RAIL = 18;
+export const DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE = 40;
+
+export const DISCOVERY_MOVIE_GENRES = [
+  "action",
+  "adventure",
+  "animation",
+  "comedy",
+  "crime",
+  "documentary",
+  "drama",
+  "family",
+  "fantasy",
+  "history",
+  "horror",
+  "music",
+  "mystery",
+  "romance",
+  "science-fiction",
+  "thriller",
+  "war",
+  "western",
+] as const;
+export const DISCOVERY_SERIES_GENRES = [
+  "action-adventure",
+  "animation",
+  "comedy",
+  "crime",
+  "documentary",
+  "drama",
+  "family",
+  "kids",
+  "mystery",
+  "news",
+  "reality",
+  "sci-fi-fantasy",
+  "soap",
+  "talk",
+  "war-politics",
+  "western",
+] as const;
 
 const tmdbIdentifierSchema = z.int().positive().max(2_147_483_647);
 const titleSchema = z.string().trim().min(1).max(300);
@@ -105,6 +145,94 @@ export const discoveryFeedQuerySchema = z.strictObject({
 });
 export type DiscoveryFeedQuery = z.infer<typeof discoveryFeedQuerySchema>;
 
+export const discoveryBrowseKindSchema = z.enum(["movie", "series"]);
+export type DiscoveryBrowseKind = z.infer<typeof discoveryBrowseKindSchema>;
+export const discoveryBrowseSortSchema = z.enum(["popularity", "rating", "newest", "title"]);
+export type DiscoveryBrowseSort = z.infer<typeof discoveryBrowseSortSchema>;
+export const discoveryBrowseAvailabilitySchema = z.enum([
+  "any",
+  "available",
+  "partial",
+  "requested",
+  "processing",
+  "requestable",
+]);
+export type DiscoveryBrowseAvailability = z.infer<typeof discoveryBrowseAvailabilitySchema>;
+export const discoveryBrowseGenreSchema = z.enum([
+  ...DISCOVERY_MOVIE_GENRES,
+  ...DISCOVERY_SERIES_GENRES,
+]);
+export type DiscoveryBrowseGenre = z.infer<typeof discoveryBrowseGenreSchema>;
+export const discoveryBrowseOriginalLanguageSchema = z.enum([
+  "de",
+  "en",
+  "es",
+  "fr",
+  "hi",
+  "it",
+  "ja",
+  "ko",
+  "pt",
+  "zh",
+]);
+export type DiscoveryBrowseOriginalLanguage = z.infer<typeof discoveryBrowseOriginalLanguageSchema>;
+
+const movieBrowseGenres = new Set<string>(DISCOVERY_MOVIE_GENRES);
+const seriesBrowseGenres = new Set<string>(DISCOVERY_SERIES_GENRES);
+export const discoveryBrowseQuerySchema = z
+  .strictObject({
+    availability: discoveryBrowseAvailabilitySchema.default("any"),
+    genre: discoveryBrowseGenreSchema.optional(),
+    kind: discoveryBrowseKindSchema.default("movie"),
+    locale: languageSchema.default("en"),
+    minimumRating: z.coerce.number().finite().min(0).max(10).optional(),
+    minimumVotes: z.coerce.number().int().min(0).max(1_000_000).optional(),
+    originalLanguage: discoveryBrowseOriginalLanguageSchema.optional(),
+    page: z.coerce.number().int().min(1).max(500).default(1),
+    query: z.string().trim().min(2).max(120).optional(),
+    runtimeMax: z.coerce.number().int().min(15).max(600).optional(),
+    sort: discoveryBrowseSortSchema.default("popularity"),
+    yearFrom: z.coerce.number().int().min(1870).max(2200).optional(),
+    yearTo: z.coerce.number().int().min(1870).max(2200).optional(),
+  })
+  .superRefine((query, context) => {
+    if (
+      query.yearFrom !== undefined &&
+      query.yearTo !== undefined &&
+      query.yearFrom > query.yearTo
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The beginning of the release range cannot follow its end.",
+        path: ["yearFrom"],
+      });
+    }
+    if (
+      query.genre !== undefined &&
+      !(query.kind === "movie" ? movieBrowseGenres : seriesBrowseGenres).has(query.genre)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The selected genre is not available for this media type.",
+        path: ["genre"],
+      });
+    }
+    if (
+      query.query !== undefined &&
+      (query.genre !== undefined ||
+        query.minimumVotes !== undefined ||
+        query.originalLanguage !== undefined ||
+        query.runtimeMax !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Title search cannot be combined with discovery-only filters.",
+        path: ["query"],
+      });
+    }
+  });
+export type DiscoveryBrowseQuery = z.infer<typeof discoveryBrowseQuerySchema>;
+
 export const discoveryFeedRailKindSchema = z.enum([
   "trending",
   "popular_movies",
@@ -140,6 +268,44 @@ export const discoveryFeedItemSchema = z.discriminatedUnion("kind", [
   discoveryFeedSeriesSchema,
 ]);
 export type DiscoveryFeedItem = z.infer<typeof discoveryFeedItemSchema>;
+
+export const discoveryBrowseResponseSchema = z
+  .strictObject({
+    criteria: discoveryBrowseQuerySchema,
+    generatedAt: z.iso.datetime({ offset: true }),
+    items: z.array(discoveryFeedItemSchema).max(DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE),
+    page: z.int().min(1).max(500),
+    totalPages: z.int().min(0).max(500),
+    totalResults: z.int().nonnegative().max(10_000_000),
+  })
+  .superRefine((response, context) => {
+    const ids = new Set<string>();
+    for (const [index, item] of response.items.entries()) {
+      if (item.kind !== response.criteria.kind) {
+        context.addIssue({
+          code: "custom",
+          message: "Browse results must match the selected media type.",
+          path: ["items", index, "kind"],
+        });
+      }
+      if (ids.has(item.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Browse results must be unique within a page.",
+          path: ["items", index, "id"],
+        });
+      }
+      ids.add(item.id);
+    }
+    if (response.page !== response.criteria.page) {
+      context.addIssue({
+        code: "custom",
+        message: "Browse result pagination must match the requested page.",
+        path: ["page"],
+      });
+    }
+  });
+export type DiscoveryBrowseResponse = z.infer<typeof discoveryBrowseResponseSchema>;
 
 function failuresMatch(left: PartialFailure, right: PartialFailure) {
   return (
@@ -459,6 +625,10 @@ export const discoverySearchResponseJsonSchema = withoutSchemaDialect(
 );
 export const discoveryFeedQueryJsonSchema = withoutSchemaDialect(discoveryFeedQuerySchema);
 export const discoveryFeedResponseJsonSchema = withoutSchemaDialect(discoveryFeedResponseSchema);
+export const discoveryBrowseQueryJsonSchema = withoutSchemaDialect(discoveryBrowseQuerySchema);
+export const discoveryBrowseResponseJsonSchema = withoutSchemaDialect(
+  discoveryBrowseResponseSchema,
+);
 export const discoveryMediaDetailParamsJsonSchema = withoutSchemaDialect(
   discoveryMediaDetailParamsSchema,
 );

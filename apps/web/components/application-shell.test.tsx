@@ -51,6 +51,22 @@ describe("ApplicationShellFrame", () => {
     expect(screen.getByRole("main")).toHaveTextContent("System health");
   });
 
+  it("marks Browse as the current destination inside the persistent shell", async () => {
+    pathname = "/browse";
+    render(
+      shell(
+        <ApplicationShellContent status="healthy">
+          <main>Browse</main>
+        </ApplicationShellContent>,
+      ),
+    );
+
+    for (const browseLink of screen.getAllByRole("link", { name: "Browse" })) {
+      await waitFor(() => expect(browseLink).toHaveAttribute("aria-current", "page"));
+    }
+    expect(screen.getByRole("main")).toHaveTextContent("Browse");
+  });
+
   it("preserves the desktop rail while authenticated route content changes", () => {
     const { rerender } = render(shell(<main>Discover</main>));
     const navigation = screen.getByRole("complementary", { name: "Primary navigation" });

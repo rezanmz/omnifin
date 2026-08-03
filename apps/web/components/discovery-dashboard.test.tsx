@@ -62,7 +62,11 @@ describe("DiscoveryDashboard", () => {
     expect(screen.getByRole("heading", { name: "Popular movies" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Series people are watching" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Coming soon" })).toBeVisible();
-    expect(screen.queryByText("View all")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "View all" })).toHaveLength(4);
+    expect(screen.getAllByRole("link", { name: "View all" })[0]).toHaveAttribute(
+      "href",
+      "/browse?kind=movie",
+    );
     expect(screen.getAllByRole("button", { name: "Request The Far Meridian" })).not.toHaveLength(0);
     expect(screen.getByRole("region", { name: "The Far Meridian" })).toHaveAttribute(
       "data-artwork-source",

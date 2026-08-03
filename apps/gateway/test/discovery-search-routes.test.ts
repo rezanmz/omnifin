@@ -1,7 +1,11 @@
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
-import type { SeerrDiscoveryFeedPage } from "@omnifin/connectors/adapters/seerr";
+import type {
+  SeerrDiscoveryBrowsePage,
+  SeerrDiscoveryFeedPage,
+} from "@omnifin/connectors/adapters/seerr";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
+  discoveryBrowseResponseSchema,
   discoveryFeedResponseSchema,
   type DiscoveryFeedRailKind,
   discoveryMediaDetailResponseSchema,
@@ -165,6 +169,33 @@ async function harness(
     body: Uint8Array.from([1, 2, 3, 4]),
     contentType: "image/webp" as const,
   })),
+  browseImplementation = vi.fn(
+    async (input: {
+      kind: "movie" | "series";
+      page: number;
+    }): Promise<SeerrDiscoveryBrowsePage> => ({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: "/private/browse-poster.webp" },
+          media: {
+            availability: "unavailable",
+            id: `${input.kind}:${input.kind === "movie" ? 603 : 1396}`,
+            kind: input.kind,
+            originalTitle: null,
+            overview: "A private normalized browse result.",
+            source: "seerr",
+            title: "Browse result",
+            tmdbId: input.kind === "movie" ? 603 : 1396,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        },
+      ],
+      page: input.page,
+      totalPages: 5,
+      totalResults: 84,
+    }),
+  ),
 ) {
   const config = testConfig();
   const detailImplementation = vi.fn(async () => ({
@@ -176,6 +207,7 @@ async function harness(
     discoverySearchDependencies: {
       clock: () => now,
       createAdapter: () => ({
+        browse: browseImplementation,
         detail: detailImplementation,
         discover: discoverImplementation,
         personDetail: personDetailImplementation,
@@ -302,6 +334,7 @@ async function harness(
   return {
     app,
     artworkImplementation,
+    browseImplementation,
     detailImplementation,
     discoverImplementation,
     otherSession,
@@ -313,6 +346,57 @@ async function harness(
 }
 
 describe("discovery search routes", () => {
+  it("serves an authorized bounded browse page without forwarding passthrough parameters", async () => {
+    const { app, browseImplementation, recovery, session } = await harness();
+    try {
+      const anonymous = await app.inject({ method: "GET", url: "/v1/discovery/browse" });
+      expect(anonymous.statusCode).toBe(401);
+      const deniedRecovery = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/browse",
+      });
+      expect(deniedRecovery.statusCode).toBe(403);
+
+      const stripped = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/browse?kind=movie&privateUpstream=value",
+      });
+      expect(stripped.statusCode).toBe(200);
+      expect(browseImplementation).toHaveBeenCalledWith(
+        {
+          availability: "any",
+          kind: "movie",
+          locale: "en",
+          page: 1,
+          sort: "popularity",
+        },
+        expect.any(AbortSignal),
+      );
+      browseImplementation.mockClear();
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/browse?availability=requestable&genre=science-fiction&kind=movie&locale=en-CA&page=2&sort=rating",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const page = discoveryBrowseResponseSchema.parse(response.json());
+      expect(page).toMatchObject({ page: 2, totalPages: 5, totalResults: 84 });
+      expect(page.items[0]?.artwork.posterPath).toMatch(
+        /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toContain("/private/");
+      expect(response.body).not.toContain("route-private-api-key");
+      expect(browseImplementation).toHaveBeenCalledWith(page.criteria, expect.any(AbortSignal));
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves a private live feed and user-bound artwork with cache validators", async () => {
     const { app, artworkImplementation, discoverImplementation, otherSession, recovery, session } =
       await harness();

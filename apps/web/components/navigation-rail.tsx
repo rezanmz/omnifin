@@ -5,6 +5,7 @@ import { ShellIcon, type ShellIconName } from "./shell-icon";
 
 const destinations = [
   { href: "/", icon: "compass", id: "discover", label: "Discover" },
+  { href: "/browse", icon: "search", id: "browse", label: "Browse" },
   { href: "/library", icon: "library", id: "library", label: "Library" },
   { href: "/calendar", icon: "calendar", id: "calendar", label: "Calendar" },
   { href: "/operations/health", icon: "gauge", id: "operations", label: "Operations" },

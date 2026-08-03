@@ -1,8 +1,9 @@
 export type ApplicationDestination =
-  "calendar" | "discover" | "library" | "operations" | "requests" | "settings";
+  "browse" | "calendar" | "discover" | "library" | "operations" | "requests" | "settings";
 
 export function applicationDestinationForPath(pathname: string): ApplicationDestination | null {
   if (pathname === "/") return "discover";
+  if (pathname === "/browse" || pathname.startsWith("/browse/")) return "browse";
   if (pathname === "/library" || pathname.startsWith("/library/")) return "library";
   if (pathname === "/calendar" || pathname.startsWith("/calendar/")) return "calendar";
   if (pathname === "/operations/requests" || pathname.startsWith("/operations/requests/")) {
