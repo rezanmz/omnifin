@@ -378,6 +378,23 @@ test("series title hierarchy has no automatically detectable accessibility viola
   expect(results.violations).toEqual([]);
 });
 
+test("rich owned movie details have no automatically detectable accessibility violations", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: /View details for Ember Coast/u }).click();
+  const dialog = page.getByRole("dialog", { name: "Ember Coast details" });
+  await dialog.getByText("Media information").click();
+  await expect(dialog.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("request composer has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {

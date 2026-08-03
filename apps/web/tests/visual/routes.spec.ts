@@ -1155,6 +1155,37 @@ test("series title hierarchy visual baseline", async ({ page }, testInfo) => {
   await expect(dialog).toHaveScreenshot("media-library-series-title.png");
 });
 
+test("rich owned movie detail visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Owned movie details cover representative desktop and phone geometry",
+  );
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: /View details for Ember Coast/u }).click();
+  const dialog = page.getByRole("dialog", { name: "Ember Coast details" });
+  await expect(dialog.getByText("The horizon remembers.")).toBeVisible();
+  await dialog.getByText("Media information").click();
+  await expect(dialog.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(dialog).toHaveScreenshot("media-library-movie-detail.png");
+});
+
+test("light rich owned movie detail visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light owned movie details cover representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/library?test-view=ready");
+  await page.getByRole("button", { name: /View details for Ember Coast/u }).click();
+  const dialog = page.getByRole("dialog", { name: "Ember Coast details" });
+  await dialog.getByText("Media information").click();
+  await expect(dialog.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(dialog).toHaveScreenshot("media-library-movie-detail-light.png");
+});
+
 test("raised viewer library poster visual baseline", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium", "Hover treatment uses desktop Chromium");
   await page.goto("/library?test-view=ready");
