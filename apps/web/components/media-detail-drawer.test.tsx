@@ -396,6 +396,11 @@ describe("media detail drawer", () => {
 
     await user.click(await screen.findByRole("button", { name: "Request The Matrix" }));
     expect(onRequest).toHaveBeenCalledWith(movie);
+    expect(
+      screen
+        .getByRole("button", { name: "Request The Matrix" })
+        .closest(".media-detail__request-bar"),
+    ).toHaveClass("media-detail__request-bar");
     await user.click(screen.getByRole("button", { name: "Close media details" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
 

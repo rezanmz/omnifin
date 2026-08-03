@@ -23,6 +23,20 @@ export const WithProgress: Story = {};
 export const Discovery: Story = {
   args: { items: demoDashboard.discovery, title: "Made for tonight" },
 };
+export const QuickRequest: Story = {
+  args: {
+    items: demoDashboard.discovery.map((item, index) => ({ ...item, requestable: index < 2 })),
+    onRequest: fn(),
+    title: "Trending now",
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Request Low Orbit" }));
+    await expect(args.onRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "d-1", title: "Low Orbit" }),
+    );
+  },
+};
 export const Empty: Story = { args: { items: [], title: "Continue watching" } };
 
 export const DirectionalKeyboard: Story = {

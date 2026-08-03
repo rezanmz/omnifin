@@ -3,6 +3,7 @@
 import { CalendarDays, Info, Library, Sparkles } from "lucide-react";
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { preload } from "react-dom";
 import type { DashboardModel } from "../lib/dashboard-data";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
@@ -27,6 +28,9 @@ export function HeroSpotlight({
     artworkPath && /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath)
       ? artworkPath
       : null;
+  if (safeArtworkPath) {
+    preload(safeArtworkPath, { as: "image", fetchPriority: "high" });
+  }
   const style = {
     "--hero-accent": hero.accent,
   } as AccentStyle;
@@ -50,8 +54,10 @@ export function HeroSpotlight({
             className="hero-spotlight__art-image"
             decoding="sync"
             fetchPriority="high"
+            height={338}
             loading="eager"
             src={safeArtworkPath}
+            width={600}
           />
         ) : null}
         <div className="hero-spotlight__planet" />

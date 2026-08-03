@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { demoDashboard } from "../lib/dashboard-data";
 import { OperationsDock } from "./operations-dock";
 
@@ -26,9 +26,10 @@ export const ExpandedByKeyboard: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const toggle = canvas.getByRole("button", { name: /2 acquisitions moving/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
     toggle.focus();
     await userEvent.keyboard("{Enter}");
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-expanded", "true"));
     await expect(canvas.getByRole("button", { name: /The Far Meridian/i })).toBeInTheDocument();
   },
 };
