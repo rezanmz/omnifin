@@ -243,7 +243,9 @@ test("connected discovery renders live artwork and opens real title details", as
   await expect(page.getByRole("heading", { name: "Popular movies" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Series people are watching" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Coming soon" })).toBeVisible();
-  await expect(page.getByText("View all")).toHaveCount(0);
+  const browseLinks = page.getByRole("link", { name: "View all" });
+  await expect(browseLinks).toHaveCount(4);
+  await expect(browseLinks.first()).toHaveAttribute("href", "/browse?kind=movie");
   const spotlight = page.locator('.hero-spotlight[data-artwork-source="remote"]');
   await expect(spotlight).toBeVisible();
   const spotlightGeometry = await spotlight.evaluate((hero) => {

@@ -367,6 +367,7 @@ function BrowserContent({
   const [composerOpen, setComposerOpen] = useState(false);
   const [requestedIds, setRequestedIds] = useState(() => new Set<string>());
   const returnFocus = useRef<HTMLElement | null>(null);
+  const [initialCriteriaKey] = useState(() => browseUrl(initialCriteria));
 
   const navigate = useCallback(
     (next: DiscoveryBrowseQuery, replace = false) => {
@@ -413,7 +414,9 @@ function BrowserContent({
 
   const query = useQuery({
     enabled: live,
-    ...(initialResponse === undefined ? {} : { initialData: initialResponse }),
+    ...(initialResponse !== undefined && browseUrl(criteria) === initialCriteriaKey
+      ? { initialData: initialResponse }
+      : {}),
     placeholderData: (previous) => previous,
     queryFn: ({ signal }) => client.load(criteria, signal),
     queryKey: ["discovery-browse", criteria],
