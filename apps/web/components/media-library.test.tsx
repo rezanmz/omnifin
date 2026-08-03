@@ -213,6 +213,10 @@ describe("MediaLibrary", () => {
     const trigger = screen.getByRole("button", { name: /View details for Ember Coast/u });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
+    expect(screen.getByText("The horizon remembers.")).toBeVisible();
+    expect(screen.getByText("Mara Voss")).toBeVisible();
+    await user.click(screen.getByText("Media information"));
+    expect(screen.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
     expect(playbackClient.prepare).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Resume movie" }));
