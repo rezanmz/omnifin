@@ -46,3 +46,15 @@ export const Empty: Story = {
 export const Offline: Story = {
   args: { initialOutcome: { status: "unavailable" }, live: false },
 };
+
+export const Loading: Story = {
+  args: { initialOutcome: { status: "loading" }, live: false },
+};
+
+export const SignedOut: Story = {
+  args: { initialOutcome: { status: "signed_out" }, live: false },
+};
+
+export const Forbidden: Story = {
+  args: { initialOutcome: { status: "forbidden" }, live: false },
+};

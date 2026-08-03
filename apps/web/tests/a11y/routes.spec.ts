@@ -229,6 +229,30 @@ const routes = [
     path: "/library?test-view=loading",
   },
   {
+    label: "private viewing history",
+    path: "/history?test-view=ready",
+  },
+  {
+    label: "empty private viewing history",
+    path: "/history?test-view=empty",
+  },
+  {
+    label: "unavailable private viewing history",
+    path: "/history?test-view=unavailable",
+  },
+  {
+    label: "restricted private viewing history",
+    path: "/history?test-view=forbidden",
+  },
+  {
+    label: "signed-out private viewing history",
+    path: "/history?test-view=signed_out",
+  },
+  {
+    label: "loading private viewing history",
+    path: "/history?test-view=loading",
+  },
+  {
     label: "library care",
     path: "/operations/library?test-view=ready",
   },
@@ -612,6 +636,7 @@ for (const route of [
   { label: "download queue", path: "/operations/downloads?test-view=ready" },
   { label: "media issue workbench", path: "/operations/issues?test-view=ready" },
   { label: "acquisition calendar", path: "/calendar?test-view=ready" },
+  { label: "private viewing history", path: "/history?test-view=ready" },
 ] as const) {
   test(`${route.label} light theme has no automatically detectable accessibility violations`, async ({
     context,

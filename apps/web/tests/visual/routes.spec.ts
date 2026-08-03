@@ -1146,6 +1146,43 @@ test("acquisition calendar event drawer visual baseline", async ({ page }, testI
   await expect(page).toHaveScreenshot("acquisition-calendar-event.png");
 });
 
+test("private viewing history visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Private viewing history covers representative desktop and phone geometry",
+  );
+  await page.goto("/history?test-view=ready");
+  await page.getByRole("heading", { name: "Your story, in sequence." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("viewing-history.png", { fullPage: true });
+});
+
+test("light private viewing history visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light private viewing history covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/history?test-view=ready");
+  await page.getByRole("heading", { name: "Your story, in sequence." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("viewing-history-light.png", { fullPage: true });
+});
+
+for (const state of ["empty", "unavailable", "loading"] as const) {
+  test(`${state} private viewing history visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Private viewing history boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/history?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`viewing-history-${state}.png`, { fullPage: true });
+  });
+}
+
 test("viewer library visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),
