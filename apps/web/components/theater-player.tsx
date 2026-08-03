@@ -209,9 +209,11 @@ export function TheaterPlayer({
   const replacementReference = useRef<{
     generation: number;
     previous: PreparedPlayback;
+    previousPosition: number;
     previousPreferences: PlaybackPreferences;
     resume: boolean;
   } | null>(null);
+  const restorePositionReference = useRef<number | null>(null);
   const startWhenReadyReference = useRef(startWhenReady);
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
@@ -289,6 +291,7 @@ export function TheaterPlayer({
       }
       preferencesReference.current = replacement.previousPreferences;
       preparedReference.current = replacement.previous;
+      restorePositionReference.current = replacement.previousPosition;
       setPreferences(replacement.previousPreferences);
       setPrepared(replacement.previous);
       reportedStateReference.current = replacement.resume ? "paused" : "negotiated";
@@ -549,6 +552,7 @@ export function TheaterPlayer({
   ) {
     const active = preparedReference.current;
     if (!active) return;
+    const previousPosition = absolutePosition();
     const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
     const generation = replacementGenerationReference.current + 1;
     replacementGenerationReference.current = generation;
@@ -572,6 +576,7 @@ export function TheaterPlayer({
       replacementReference.current = {
         generation,
         previous: active,
+        previousPosition,
         previousPreferences: preferencesReference.current,
         resume: playing,
       };
@@ -734,6 +739,15 @@ export function TheaterPlayer({
           aria-label={`${media.title} video`}
           className={styles.video}
           onCanPlay={(event) => {
+            const restorePosition = restorePositionReference.current;
+            if (restorePosition !== null && prepared) {
+              event.currentTarget.currentTime =
+                prepared.session.delivery === "hls"
+                  ? Math.max(0, restorePosition - prepared.session.positionSeconds)
+                  : restorePosition;
+              setCurrentTime(restorePosition);
+              restorePositionReference.current = null;
+            }
             const replacement = replacementReference.current;
             if (replacement) {
               replacementReference.current = null;
@@ -755,7 +769,8 @@ export function TheaterPlayer({
           }}
           onLoadedMetadata={(event) => {
             if (prepared?.session.delivery === "direct" && prepared.session.positionSeconds > 0) {
-              event.currentTarget.currentTime = prepared.session.positionSeconds;
+              event.currentTarget.currentTime =
+                restorePositionReference.current ?? prepared.session.positionSeconds;
             }
           }}
           onPause={() => {

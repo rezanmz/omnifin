@@ -536,6 +536,56 @@ describe("TheaterPlayer", () => {
     );
   });
 
+  it("restores the active stream and position when replacement readiness fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    const replacementSessionId = `playback_${"s".repeat(22)}`;
+    const replacementSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      positionSeconds: 1_333,
+      sessionId: replacementSessionId,
+      streamPath: `/v1/playback/${replacementSessionId}/master.m3u8`,
+    };
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    video.currentTime = 1_333;
+    client.prepare.mockResolvedValueOnce({
+      canManageLibrary: false,
+      csrfToken,
+      session: replacementSession,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const onError = hlsHarness.instances[0]?.handlers.get("error");
+    const failure = { details: "levelLoadError", fatal: true, type: "networkError" };
+    onError?.("error", failure);
+    onError?.("error", failure);
+    onError?.("error", failure);
+
+    expect(await screen.findByText(/previous stream was restored/u)).toBeVisible();
+    await waitFor(() => expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`));
+    fireEvent.loadedMetadata(video);
+    fireEvent.canPlay(video);
+    expect(video.currentTime).toBe(1_333);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+  });
+
   it("exposes Bazarr discovery only to local library operators", async () => {
     const user = userEvent.setup();
     const { unmount } = render(
