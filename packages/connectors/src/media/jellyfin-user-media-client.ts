@@ -12,6 +12,8 @@ export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EPISODE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_SEASON_LIMIT = 100;
+const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
+const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
@@ -129,6 +131,23 @@ const jellyfinLibraryEpisodeSchema = z.object({
 
 const jellyfinLibraryEpisodesResponseSchema = z.object({
   Items: z.array(jellyfinLibraryEpisodeSchema).max(JELLYFIN_LIBRARY_EPISODE_LIMIT + 1),
+});
+
+const jellyfinLibraryEpisodeCountResponseSchema = z.object({
+  Items: z
+    .array(
+      z.object({
+        Id: z.string().trim().min(1).max(256),
+        Type: z.literal("Episode"),
+        UserData: z
+          .object({
+            Played: z.boolean().nullish(),
+          })
+          .nullish(),
+      }),
+    )
+    .max(JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT + 1),
+  TotalRecordCount: z.int().nonnegative().max(100_000).optional(),
 });
 
 const jellyfinLibraryQuerySchema = z.strictObject({
@@ -546,14 +565,24 @@ function normalizeLibraryEpisode(
   };
 }
 
+interface JellyfinSeasonProgressFallback {
+  episodeCount: number;
+  playedEpisodeCount: number | null;
+}
+
 function normalizeLibrarySeason(
   item: z.infer<typeof jellyfinLibrarySeasonSchema>,
+  fallback?: JellyfinSeasonProgressFallback,
 ): JellyfinLibrarySeason {
-  const episodeCount = item.RecursiveItemCount ?? item.ChildCount ?? 0;
+  const episodeCount = item.RecursiveItemCount ?? item.ChildCount ?? fallback?.episodeCount ?? 0;
   const unplayed = Math.min(episodeCount, item.UserData?.UnplayedItemCount ?? episodeCount);
   return {
     episodeCount,
-    playedEpisodeCount: item.UserData?.Played ? episodeCount : episodeCount - unplayed,
+    playedEpisodeCount: item.UserData?.Played
+      ? episodeCount
+      : item.UserData?.UnplayedItemCount !== null && item.UserData?.UnplayedItemCount !== undefined
+        ? episodeCount - unplayed
+        : (fallback?.playedEpisodeCount ?? 0),
     seasonNumber: item.IndexNumber,
     title: item.Name,
   };
@@ -712,12 +741,84 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
+    const seasonItems = seasonsResponse.Items.slice(0, JELLYFIN_LIBRARY_SEASON_LIMIT);
+    const fallbackProgress = new Map<string, JellyfinSeasonProgressFallback>();
+    const seasonsWithoutCounts = seasonItems.filter(
+      (season) =>
+        (season.RecursiveItemCount === null || season.RecursiveItemCount === undefined) &&
+        (season.ChildCount === null || season.ChildCount === undefined),
+    );
+    for (
+      let offset = 0;
+      offset < seasonsWithoutCounts.length;
+      offset += JELLYFIN_SEASON_COUNT_CONCURRENCY
+    ) {
+      const batch = seasonsWithoutCounts.slice(offset, offset + JELLYFIN_SEASON_COUNT_CONCURRENCY);
+      const progress = await Promise.all(
+        batch.map((season) =>
+          this.#readSeasonProgress(
+            {
+              seasonNumber: season.IndexNumber,
+              seriesId: input.itemId,
+              userId: input.userId,
+            },
+            signal,
+          ),
+        ),
+      );
+      for (const [index, season] of batch.entries()) {
+        fallbackProgress.set(season.Id, progress[index]!);
+      }
+    }
     return {
       item,
-      seasons: seasonsResponse.Items.slice(0, JELLYFIN_LIBRARY_SEASON_LIMIT).map(
-        normalizeLibrarySeason,
+      seasons: seasonItems.map((season) =>
+        normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
       ),
       seasonsTruncated: seasonsResponse.Items.length > JELLYFIN_LIBRARY_SEASON_LIMIT,
+    };
+  }
+
+  async #readSeasonProgress(
+    input: { seasonNumber: number; seriesId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<JellyfinSeasonProgressFallback> {
+    const response = await this.#client.requestJson(
+      `Shows/${input.seriesId}/Episodes`,
+      jellyfinLibraryEpisodeCountResponseSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.library",
+        query: {
+          EnableImages: "false",
+          EnableUserData: "true",
+          IsMissing: "false",
+          Limit: String(JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT + 1),
+          Season: String(input.seasonNumber),
+          StartIndex: "0",
+          UserId: input.userId,
+        },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    if (
+      response.TotalRecordCount !== undefined &&
+      response.TotalRecordCount < response.Items.length
+    ) {
+      throw this.#client.invalidResponse("media.library");
+    }
+    const pageIsComplete =
+      response.TotalRecordCount === undefined
+        ? response.Items.length <= JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT
+        : response.Items.length >= response.TotalRecordCount;
+    const episodeCount =
+      response.TotalRecordCount ?? (pageIsComplete ? response.Items.length : null);
+    if (episodeCount === null) throw this.#client.invalidResponse("media.library");
+    return {
+      episodeCount,
+      playedEpisodeCount: pageIsComplete
+        ? response.Items.filter((episode) => episode.UserData?.Played).length
+        : null,
     };
   }
 
