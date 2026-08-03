@@ -47,6 +47,39 @@ invalid Jellyfin pairing returns a safe `503` boundary error. Signed-out callers
 without `media.view` are rejected before connector I/O. Responses are private and use
 `Cache-Control: no-store`.
 
+## Personal playback state
+
+`POST /v1/media/library/:referenceId/playback-state` changes the paired user's own Jellyfin state.
+It requires `playback.history.self.manage`, a valid same-origin CSRF context, and a bounded
+`Idempotency-Key`. Supported actions are `mark_watched`, `mark_unwatched`, and `reset_progress`.
+The gateway always supplies the paired Jellyfin user ID itself; the browser cannot select another
+account. Marking a title unwatched follows Jellyfin's native semantics, while resetting progress
+sets the saved playback position to zero without changing the watched flag.
+
+Each accepted operation is durably reserved before connector I/O. Reusing a key with the same
+request returns the stored normalized response, while reusing it with different input fails with a
+conflict. A timed-out mutation is reconciled by reading current Jellyfin state before it is reported
+as failed, so retries converge on the requested state. Successful and failed mutations create an
+atomic audit record containing only the action, outcome, actor/session, request correlation, and a
+privacy-preserving IP digest. The audit record deliberately excludes media references, titles,
+upstream item IDs, positions, and other viewing-history data.
+
+## Private viewing history
+
+`GET /v1/media/history` returns recent movie and episode activity for the explicitly paired
+Jellyfin user. It requires `playback.history.self.manage` and accepts bounded `kind`, `state`,
+`range`, `limit`, and encrypted `cursor` parameters. Defaults are all media, all activity states,
+the previous 30 days, and 30 entries. Completed activity is ordered by Jellyfin's last-played time;
+resumable activity uses the current saved position. Omnifin does not copy playback activity into a
+competing history database.
+
+The first page fixes an exact date cutoff. Continuation cursors bind that cutoff and the last raw
+Jellyfin boundary to the current Omnifin user, identity link revision, filters, and page size. Newer
+activity therefore does not shift or duplicate later pages, and relinking or changing a filter
+invalidates the cursor. Entries expose only normalized title context, protected artwork paths,
+current playback state, and fresh opaque media references. A healthy empty result, temporary
+upstream unavailability, signed-out caller, and permission denial remain distinct response states.
+
 ## Viewer experience
 
 `/library` is the user-facing catalogue. It provides bounded search, movie and series filters,
@@ -55,6 +88,13 @@ hierarchy, and lazy-loaded theater playback behind an explicit play or resume ac
 card always shows title information first. The page never receives the Jellyfin user ID, connector
 address, API token, raw item ID, or filesystem path. Artwork and streams remain on Omnifin's
 authenticated origin.
+
+Movie and episode detail surfaces provide explicit mark-watched, mark-unwatched, and reset-progress
+controls. “Play from beginning” is a one-time playback choice and never silently clears the saved
+Jellyfin position. `/history` provides the same protected playback entry points in a private,
+date-grouped activity view with media, completion, and time-range filters. It distinguishes loading,
+empty, partial-page, offline, signed-out, and permission-denied states without exposing technical
+connector details.
 
 The interface has deliberate loading, empty, unavailable, signed-out, and permission-denied
 boundaries. Desktop cards leave headroom for their raised hover and focus treatment; the catalogue
