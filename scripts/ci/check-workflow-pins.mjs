@@ -54,29 +54,43 @@ function actionRepository(reference) {
   return reference.split("@", 1)[0].split("/").slice(0, 2).join("/");
 }
 
-function resolvePublicTag(repository, version) {
+export function resolvePublicTag(
+  repository,
+  version,
+  { attempts = 3, execute = execFileSync } = {},
+) {
   const url = `https://github.com/${repository}.git`;
-  const output = execFileSync(
-    "git",
-    [
-      "-c",
-      "credential.helper=",
-      "ls-remote",
-      url,
-      `refs/tags/${version}`,
-      `refs/tags/${version}^{}`,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_TERMINAL_PROMPT: "0",
-        PATH: process.env.PATH,
-      },
-      timeout: 30_000,
-    },
-  );
+  let output;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      output = execute(
+        "git",
+        [
+          "-c",
+          "credential.helper=",
+          "ls-remote",
+          url,
+          `refs/tags/${version}`,
+          `refs/tags/${version}^{}`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_TERMINAL_PROMPT: "0",
+            PATH: process.env.PATH,
+          },
+          timeout: 30_000,
+        },
+      );
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (output === undefined) throw lastError;
   const refs = new Map(
     output
       .trim()
