@@ -146,6 +146,172 @@ describe("JellyfinUserMediaClient", () => {
     });
   });
 
+  it("reads bounded private viewing history with current Jellyfin state", async () => {
+    const completedMovie = {
+      ...movie,
+      UserData: {
+        LastPlayedDate: "2026-07-27T12:00:00.000Z",
+        Played: true,
+        PlaybackPositionTicks: 0,
+      },
+    };
+    const episode = {
+      Id: "episode-upstream-1",
+      ImageTags: { Primary: "episode-still" },
+      IndexNumber: 3,
+      Name: "The Long Meridian",
+      ParentIndexNumber: 2,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      SeriesPrimaryImageTag: "series-poster",
+      Type: "Episode",
+      UserData: {
+        LastPlayedDate: "2026-07-26T11:00:00.000Z",
+        Played: false,
+        PlaybackPositionTicks: 900_000_000,
+      },
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Items: [completedMovie, episode, { ...completedMovie, Id: "movie-upstream-2" }],
+      }),
+    ]);
+
+    await expect(
+      client.readViewingHistory({
+        kind: "all",
+        limit: 2,
+        state: "all",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({
+      boundaryFound: true,
+      items: [
+        expect.objectContaining({
+          externalId: "movie-upstream-1",
+          kind: "movie",
+          lastPlayedAt: "2026-07-27T12:00:00.000Z",
+          played: true,
+          positionSeconds: 0,
+        }),
+        expect.objectContaining({
+          externalId: "episode-upstream-1",
+          kind: "episode",
+          played: false,
+          positionSeconds: 90,
+          subtitle: "S02E03 · The Long Meridian",
+          title: "Northern Lights",
+        }),
+      ],
+      nextAfterItemId: "episode-upstream-1",
+    });
+    expect(requests[0]?.url.pathname).toBe("/base/Users/paired-user-id/Items");
+    expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
+      EnableUserData: "true",
+      IncludeItemTypes: "Movie,Episode",
+      Limit: "100",
+      Recursive: "true",
+      SortBy: "DatePlayed",
+      SortOrder: "Descending",
+      StartIndex: "0",
+    });
+    expect(requests[0]?.url.searchParams.has("Filters")).toBe(false);
+    expect(requests[0]?.url.searchParams.has("api_key")).toBe(false);
+  });
+
+  it("continues after an opaque cursor boundary even when newer activity arrives", async () => {
+    const historyMovie = (id: string, playedAt: string) => ({
+      ...movie,
+      Id: id,
+      UserData: { LastPlayedDate: playedAt, Played: true, PlaybackPositionTicks: 0 },
+    });
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          historyMovie("newer-upstream", "2026-07-28T12:00:00.000Z"),
+          historyMovie("cursor-upstream", "2026-07-27T12:00:00.000Z"),
+          historyMovie("older-upstream", "2026-07-26T12:00:00.000Z"),
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readViewingHistory({
+        afterItemId: "cursor-upstream",
+        kind: "movies",
+        limit: 20,
+        state: "completed",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      boundaryFound: true,
+      items: [{ externalId: "older-upstream" }],
+      nextAfterItemId: null,
+    });
+  });
+
+  it("applies history state, type, and date filters without trusting upstream filtering", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            ...movie,
+            Id: "unexpected-resume",
+            UserData: {
+              LastPlayedDate: "2026-07-27T13:00:00.000Z",
+              Played: false,
+              PlaybackPositionTicks: 900_000_000,
+            },
+          },
+          {
+            ...movie,
+            Id: "completed-upstream",
+            UserData: {
+              LastPlayedDate: "2026-07-27T12:00:00.000Z",
+              Played: true,
+              PlaybackPositionTicks: 0,
+            },
+          },
+          {
+            ...movie,
+            Id: "too-old-upstream",
+            UserData: {
+              LastPlayedDate: "2026-06-01T12:00:00.000Z",
+              Played: true,
+              PlaybackPositionTicks: 0,
+            },
+          },
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readViewingHistory({
+        kind: "movies",
+        limit: 20,
+        since: "2026-07-01T00:00:00.000Z",
+        state: "completed",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({ items: [{ externalId: "completed-upstream" }] });
+    expect(requests[0]?.url.searchParams.get("Filters")).toBe("IsPlayed");
+    expect(requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Movie");
+
+    const missingBoundary = clientWithResponses([jsonResponse({ Items: [] })]);
+    await expect(
+      missingBoundary.client.readViewingHistory({
+        afterItemId: "gone-upstream",
+        kind: "episodes",
+        limit: 20,
+        state: "in_progress",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ boundaryFound: false, items: [], nextAfterItemId: null });
+    expect(missingBoundary.requests[0]?.url.searchParams.get("Filters")).toBe("IsResumable");
+    expect(missingBoundary.requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Episode");
+  });
+
   it("keeps resumable media available when Jellyfin returns a malformed blur hash", async () => {
     const { client } = clientWithResponses([
       jsonResponse({
@@ -729,6 +895,132 @@ describe("JellyfinUserMediaClient", () => {
         UserId: "paired-user-id",
       });
     }
+  });
+
+  it("marks paired-user media watched and reconciles the authoritative Jellyfin state", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({ Played: true, PlaybackPositionTicks: 0 }),
+      jsonResponse({
+        Id: "movie-upstream-1",
+        RunTimeTicks: 7_200_000_000,
+        Type: "Movie",
+        UserData: { Played: true, PlaybackPositionTicks: 0 },
+      }),
+    ]);
+
+    await expect(
+      client.updatePlaybackState({
+        action: "mark_watched",
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ durationSeconds: 720, played: true, positionSeconds: 0 });
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/UserPlayedItems/movie-upstream-1",
+      "/base/Items/movie-upstream-1",
+    ]);
+    expect(requests[0]?.init.method).toBe("POST");
+    expect(requests[0]?.url.searchParams.get("userId")).toBe("paired-user-id");
+    expect(requests[1]?.url.searchParams.get("EnableUserData")).toBe("true");
+    expect(requests[1]?.url.searchParams.get("UserId")).toBe("paired-user-id");
+    expect(requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
+  });
+
+  it("keeps mark-unwatched distinct from resetting only the resume position", async () => {
+    const unplayed = clientWithResponses([
+      jsonResponse({ Played: false, PlaybackPositionTicks: 0 }),
+      jsonResponse({
+        Id: "episode-upstream-1",
+        RunTimeTicks: 2_700_000_000,
+        Type: "Episode",
+        UserData: { Played: false, PlaybackPositionTicks: 0 },
+      }),
+    ]);
+    await expect(
+      unplayed.client.updatePlaybackState({
+        action: "mark_unwatched",
+        itemId: "episode-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ durationSeconds: 270, played: false, positionSeconds: 0 });
+    expect(unplayed.requests[0]?.url.pathname).toBe("/base/UserPlayedItems/episode-upstream-1");
+    expect(unplayed.requests[0]?.init.method).toBe("DELETE");
+
+    const reset = clientWithResponses([
+      jsonResponse({ Played: true, PlaybackPositionTicks: 0 }),
+      jsonResponse({
+        Id: "movie-upstream-1",
+        RunTimeTicks: 7_200_000_000,
+        Type: "Movie",
+        UserData: { Played: true, PlaybackPositionTicks: 0 },
+      }),
+    ]);
+    await expect(
+      reset.client.updatePlaybackState({
+        action: "reset_progress",
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ durationSeconds: 720, played: true, positionSeconds: 0 });
+    expect(reset.requests[0]?.url.pathname).toBe("/base/UserItems/movie-upstream-1/UserData");
+    expect(reset.requests[0]?.init.method).toBe("POST");
+    expect(reset.requests[0]?.init.headers.get("content-type")).toBe("application/json");
+    expect(Buffer.from(reset.requests[0]?.init.body ?? []).toString("utf8")).toBe(
+      '{"PlaybackPositionTicks":0}',
+    );
+  });
+
+  it("reconciles a retryable unknown mutation outcome before reporting failure", async () => {
+    let attempt = 0;
+    const client = new JellyfinUserMediaClient({
+      accessToken: "private-access-token",
+      deviceId: "installation-1",
+      target: {
+        baseUrl: "https://jellyfin.example.test/base/",
+        connectorId: "jellyfin-home",
+        displayName: "Home Jellyfin",
+        resolveHost: publicResolver,
+        transport: async () => {
+          attempt += 1;
+          if (attempt === 1) throw new Error("connection ended after write");
+          return jsonResponse({
+            Id: "movie-upstream-1",
+            RunTimeTicks: 7_200_000_000,
+            Type: "Movie",
+            UserData: { Played: true, PlaybackPositionTicks: 0 },
+          });
+        },
+      },
+    });
+
+    await expect(
+      client.updatePlaybackState({
+        action: "mark_watched",
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({ durationSeconds: 720, played: true, positionSeconds: 0 });
+    expect(attempt).toBe(2);
+  });
+
+  it("fails closed when Jellyfin does not converge to the requested playback state", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({ Played: false, PlaybackPositionTicks: 0 }),
+      jsonResponse({
+        Id: "movie-upstream-1",
+        RunTimeTicks: 7_200_000_000,
+        Type: "Movie",
+        UserData: { Played: false, PlaybackPositionTicks: 1_800_000_000 },
+      }),
+    ]);
+
+    await expect(
+      client.updatePlaybackState({
+        action: "mark_watched",
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.playback_state" });
   });
 
   it("fails closed on malformed resume data and unsafe tokens", async () => {

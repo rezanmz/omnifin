@@ -1018,6 +1018,90 @@ export const libraryMutationOperations = sqliteTable(
   ],
 );
 
+export const userMediaStateOperations = sqliteTable(
+  "user_media_state_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    referenceId: text("reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+      .notNull()
+      .default("pending"),
+    responseJson: text("response_json"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("user_media_state_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    index("user_media_state_operations_state_created_idx").on(table.state, table.createdAt),
+    index("user_media_state_operations_reference_idx").on(table.referenceId, table.createdAt),
+    check(
+      "user_media_state_operations_id_check",
+      sql`length(${table.id}) = 39
+        and substr(${table.id}, 1, 17) = 'user_media_state_'
+        and substr(${table.id}, 18) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "user_media_state_operations_reference_check",
+      sql`length(${table.referenceId}) = 28
+        and substr(${table.referenceId}, 1, 6) = 'media_'
+        and substr(${table.referenceId}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "user_media_state_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "user_media_state_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "user_media_state_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+    ),
+    check(
+      "user_media_state_operations_response_json_check",
+      sql`${table.responseJson} is null
+        or (json_valid(${table.responseJson}) and json_type(${table.responseJson}) = 'object')`,
+    ),
+    check(
+      "user_media_state_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.responseJson} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.responseJson} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.responseJson} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "user_media_state_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const downloadQueueRemovalOperations = sqliteTable(
   "download_queue_removal_operations",
   {

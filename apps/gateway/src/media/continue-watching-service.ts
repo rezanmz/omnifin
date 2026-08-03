@@ -14,14 +14,26 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseSchema,
   libraryBrowseSortSchema,
+  libraryMutationIdempotencyKeySchema,
+  libraryPlaybackStateMutationRequestSchema,
+  libraryPlaybackStateMutationResponseSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
+  viewingHistoryKindSchema,
+  viewingHistoryQuerySchema,
+  viewingHistoryRangeSchema,
+  viewingHistoryResponseSchema,
+  viewingHistoryStateSchema,
   type LibraryBrowseQuery,
   type LibraryBrowseResponse,
+  type LibraryPlaybackStateMutationRequest,
+  type LibraryPlaybackStateMutationResponse,
   type LibrarySeasonEpisodesQuery,
   type LibrarySeasonEpisodesResponse,
   type LibraryTitleDetailResponse,
+  type ViewingHistoryQuery,
+  type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import { createHash, X509Certificate } from "node:crypto";
@@ -30,7 +42,7 @@ import { z, ZodError } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher } from "../security/crypto.js";
+import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import {
   MediaReferenceError,
   MediaReferenceService,
@@ -39,6 +51,10 @@ import {
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UPSTREAM_MEDIA_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER = 4_096;
+const STALE_USER_MEDIA_STATE_OPERATION_MS = 5 * 60 * 1_000;
+const USER_MEDIA_STATE_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const USER_MEDIA_STATE_OPERATION_ID_PATTERN = /^user_media_state_[A-Za-z0-9_-]{22}$/u;
 const libraryPersonImagePayloadSchema = z.strictObject({
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
   version: z.literal(1),
@@ -66,6 +82,19 @@ const librarySeasonCursorPayloadSchema = z.strictObject({
 });
 type LibrarySeasonCursorPayload = z.infer<typeof librarySeasonCursorPayloadSchema>;
 
+const viewingHistoryCursorPayloadSchema = z.strictObject({
+  afterItemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
+  kind: viewingHistoryKindSchema,
+  limit: z.int().positive().max(50),
+  linkId: z.string().regex(IDENTIFIER_PATTERN),
+  linkRevision: z.int().nonnegative().max(2_147_483_647),
+  range: viewingHistoryRangeSchema,
+  since: z.iso.datetime({ offset: true }).nullable(),
+  state: viewingHistoryStateSchema,
+  version: z.literal(1),
+});
+type ViewingHistoryCursorPayload = z.infer<typeof viewingHistoryCursorPayloadSchema>;
+
 interface ContinueWatchingSourceRow {
   baseUrl: string;
   connectorDisplayName: string;
@@ -91,8 +120,19 @@ interface StoredConnectorSecrets {
   tlsCaCertificatePem?: unknown;
 }
 
+interface UserMediaStateOperationRow {
+  createdAt: number;
+  failureCode: string | null;
+  fingerprintHash: string;
+  id: string;
+  responseJson: string | null;
+  state: string;
+}
+
 export interface ContinueWatchingContext {
+  ipAddress?: string;
   principal: SessionPrincipal;
+  requestId?: string;
 }
 
 export interface ContinueWatchingClientFactoryInput extends ConnectorTargetConfig {
@@ -102,13 +142,19 @@ export interface ContinueWatchingClientFactoryInput extends ConnectorTargetConfi
 
 export interface ContinueWatchingDependencies {
   clock?: () => Date;
+  createAuditToken?: () => string;
+  createUserMediaStateOperationToken?: () => string;
   createClient?: (
     input: ContinueWatchingClientFactoryInput,
   ) => Pick<JellyfinUserMediaClient, "readContinueWatching" | "readImage"> &
     Partial<
       Pick<
         JellyfinUserMediaClient,
-        "readLibrary" | "readLibrarySeasonEpisodes" | "readLibraryTitle"
+        | "readLibrary"
+        | "readLibrarySeasonEpisodes"
+        | "readLibraryTitle"
+        | "readViewingHistory"
+        | "updatePlaybackState"
       >
     >;
   mediaReferences?: MediaReferenceDependencies;
@@ -139,6 +185,48 @@ export class MediaLibraryError extends Error {
       options,
     );
     this.name = "MediaLibraryError";
+    this.reason = reason;
+  }
+}
+
+export type MediaPlaybackStateErrorReason =
+  | "idempotency_conflict"
+  | "idempotency_in_progress"
+  | "not_found"
+  | "operation_limit_reached"
+  | "permission_denied"
+  | "response_invalid"
+  | "storage_failure"
+  | "unavailable";
+
+export class MediaPlaybackStateError extends Error {
+  public readonly reason: MediaPlaybackStateErrorReason;
+
+  public constructor(reason: MediaPlaybackStateErrorReason, options?: ErrorOptions) {
+    super("The Jellyfin playback state could not be updated.", options);
+    this.name = "MediaPlaybackStateError";
+    this.reason = reason;
+  }
+}
+
+export interface MediaPlaybackStateMutationResult {
+  replayed: boolean;
+  response: LibraryPlaybackStateMutationResponse;
+}
+
+export type ViewingHistoryErrorReason = "cursor_invalid" | "unavailable";
+
+export class ViewingHistoryError extends Error {
+  public readonly reason: ViewingHistoryErrorReason;
+
+  public constructor(reason: ViewingHistoryErrorReason, options?: ErrorOptions) {
+    super(
+      reason === "cursor_invalid"
+        ? "The viewing-history cursor is invalid or no longer current."
+        : "Viewing history is temporarily unavailable.",
+      options,
+    );
+    this.name = "ViewingHistoryError";
     this.reason = reason;
   }
 }
@@ -226,7 +314,7 @@ function defaultClient(input: ContinueWatchingClientFactoryInput) {
   return new JellyfinUserMediaClient({ accessToken, deviceId, target });
 }
 
-type UserMediaOperation = "media.continue_watching" | "media.library";
+type UserMediaOperation = "media.continue_watching" | "media.library" | "media.viewing_history";
 
 function safeFailure(
   error: unknown,
@@ -258,19 +346,27 @@ function safeFailure(
   }
   return {
     code: "upstream_error",
-    message:
-      error instanceof MediaReferenceError
-        ? operation === "media.library"
-          ? "Library references are temporarily unavailable."
-          : "Continue Watching references are temporarily unavailable."
-        : operation === "media.library"
-          ? "The Jellyfin library is temporarily unavailable."
-          : "Jellyfin Continue Watching is temporarily unavailable.",
+    message: mediaOperationFailureMessage(error, operation),
     occurredAt: occurredAt.toISOString(),
     operation: error instanceof MediaReferenceError ? "media.reference" : operation,
     retryable: true,
     service: "jellyfin",
   };
+}
+
+function mediaOperationFailureMessage(error: unknown, operation: UserMediaOperation) {
+  if (error instanceof MediaReferenceError) {
+    if (operation === "media.library") return "Library references are temporarily unavailable.";
+    if (operation === "media.viewing_history") {
+      return "Viewing history references are temporarily unavailable.";
+    }
+    return "Continue Watching references are temporarily unavailable.";
+  }
+  if (operation === "media.library") return "The Jellyfin library is temporarily unavailable.";
+  if (operation === "media.viewing_history") {
+    return "Jellyfin viewing history is temporarily unavailable.";
+  }
+  return "Jellyfin Continue Watching is temporarily unavailable.";
 }
 
 function unavailableResponse(
@@ -311,11 +407,38 @@ function unavailableLibraryResponse(
   });
 }
 
+function playbackStateFailure(error: unknown): MediaPlaybackStateErrorReason {
+  if (error instanceof MediaPlaybackStateError) return error.reason;
+  if (error instanceof SafeConnectorError) {
+    if (error.status === 404) return "not_found";
+    if (error.status === 403) return "permission_denied";
+    if (error.code === "response_invalid" || error.code === "unsupported_version") {
+      return "response_invalid";
+    }
+    return "unavailable";
+  }
+  if (error instanceof ZodError) return "response_invalid";
+  return "unavailable";
+}
+
+function viewingHistorySince(range: ViewingHistoryQuery["range"], now: Date) {
+  if (range === "all") return null;
+  const since = new Date(now);
+  if (range === "1_year") since.setUTCFullYear(since.getUTCFullYear() - 1);
+  else {
+    const days = range === "7_days" ? 7 : range === "30_days" ? 30 : 90;
+    since.setUTCDate(since.getUTCDate() - days);
+  }
+  return since.toISOString();
+}
+
 export class ContinueWatchingService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
+  readonly #createAuditToken: () => string;
   readonly #createClient: NonNullable<ContinueWatchingDependencies["createClient"]>;
+  readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
 
@@ -328,7 +451,10 @@ export class ContinueWatchingService {
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
+    this.#createAuditToken = dependencies.createAuditToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
+    this.#createUserMediaStateOperationToken =
+      dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
   }
 
@@ -383,6 +509,50 @@ export class ContinueWatchingService {
         safeFailure(error, occurredAt, "media.library"),
         occurredAt,
       );
+    }
+  }
+
+  public async readViewingHistory(
+    rawQuery: ViewingHistoryQuery,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<ViewingHistoryResponse> {
+    const principal = requirePermission(context.principal, "playback.history.self.manage");
+    const query = viewingHistoryQuerySchema.parse(rawQuery);
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    const cursor = query.cursor ? this.#decodeViewingHistoryCursor(query.cursor, query, row) : null;
+    const since = cursor?.since ?? viewingHistorySince(query.range, occurredAt);
+
+    try {
+      const client = this.#client(row);
+      if (!client.readViewingHistory) throw new ContinueWatchingConfigurationError();
+      const result = await client.readViewingHistory(
+        {
+          ...(cursor === null ? {} : { afterItemId: cursor.afterItemId }),
+          kind: query.kind,
+          limit: query.limit,
+          ...(since === null ? {} : { since }),
+          state: query.state,
+          userId: row.externalUserId,
+        },
+        signal,
+      );
+      if (!result.boundaryFound) throw new ViewingHistoryError("cursor_invalid");
+      return this.#viewingHistoryResponse(row, query, result, since, occurredAt);
+    } catch (error) {
+      if (error instanceof ViewingHistoryError) throw error;
+      return viewingHistoryResponseSchema.parse({
+        generatedAt: occurredAt.toISOString(),
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: safeDisplayName(row.connectorDisplayName),
+          failure: safeFailure(error, occurredAt, "media.viewing_history"),
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
     }
   }
 
@@ -540,6 +710,85 @@ export class ContinueWatchingService {
     } catch (error) {
       if (error instanceof MediaLibraryError) throw error;
       throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
+  public async updatePlaybackState(
+    referenceId: string,
+    rawRequest: LibraryPlaybackStateMutationRequest,
+    rawIdempotencyKey: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<MediaPlaybackStateMutationResult> {
+    const principal = requirePermission(context.principal, "playback.history.self.manage");
+    if (!principal.userId) throw new MediaPlaybackStateError("permission_denied");
+    const request = libraryPlaybackStateMutationRequestSchema.parse(rawRequest);
+    const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
+    const row = this.#source(principal);
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaPlaybackStateError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie" && reference.kind !== "episode") {
+      throw new MediaPlaybackStateError("not_found");
+    }
+
+    const keyHash = hashToken(`${principal.userId}\0media_playback_state\0${idempotencyKey}`);
+    const fingerprintHash = hashToken(
+      JSON.stringify({
+        action: request.action,
+        linkId: row.linkId,
+        linkRevision: row.linkRevision,
+        referenceId,
+        version: 1,
+      }),
+    );
+    const reservation = this.#reserveUserMediaStateOperation(
+      principal.userId,
+      referenceId,
+      keyHash,
+      fingerprintHash,
+    );
+    if (reservation.kind === "replay") {
+      return { replayed: true, response: reservation.response };
+    }
+    if (reservation.kind === "conflict") {
+      throw new MediaPlaybackStateError("idempotency_conflict");
+    }
+    if (reservation.kind === "pending") {
+      throw new MediaPlaybackStateError("idempotency_in_progress");
+    }
+
+    try {
+      const client = this.#client(row);
+      if (!client.updatePlaybackState) throw new ContinueWatchingConfigurationError();
+      const playback = await client.updatePlaybackState(
+        {
+          action: request.action,
+          itemId: reference.itemId,
+          userId: row.externalUserId,
+        },
+        signal,
+      );
+      const response = libraryPlaybackStateMutationResponseSchema.parse({
+        action: request.action,
+        playback,
+        referenceId,
+        updatedAt: this.#clock().toISOString(),
+      });
+      this.#completeUserMediaStateOperation(
+        reservation.operationId,
+        response,
+        context,
+        request.action,
+      );
+      return { replayed: false, response };
+    } catch (error) {
+      const reason = playbackStateFailure(error);
+      this.#failUserMediaStateOperation(reservation.operationId, reason, context, request.action);
+      throw new MediaPlaybackStateError(reason, { cause: error });
     }
   }
 
@@ -765,6 +1014,64 @@ export class ContinueWatchingService {
     });
   }
 
+  #viewingHistoryResponse(
+    row: ContinueWatchingSourceRow,
+    query: ViewingHistoryQuery,
+    result: Awaited<ReturnType<JellyfinUserMediaClient["readViewingHistory"]>>,
+    since: string | null,
+    occurredAt: Date,
+  ) {
+    const referenceIds = this.#references.createOrRefresh(
+      this.#referenceContext(row),
+      result.items.map((item) => ({
+        artwork: {
+          backdropItemId: item.artwork.backdrop?.itemId ?? null,
+          posterItemId: item.artwork.poster?.itemId ?? null,
+        },
+        episodeNumber: item.episodeNumber,
+        itemId: item.externalId,
+        kind: item.kind,
+        seasonNumber: item.seasonNumber,
+        title: item.title,
+        year: item.year,
+      })),
+    );
+    const items = result.items.map((item, index) => ({
+      activity: item.played ? ("completed" as const) : ("in_progress" as const),
+      lastPlayedAt: item.lastPlayedAt,
+      media: this.#viewingHistoryMedia(item, referenceIds[index]!),
+      playback: {
+        durationSeconds: item.runtimeSeconds,
+        played: item.played,
+        positionSeconds: item.positionSeconds,
+      },
+    }));
+    return viewingHistoryResponseSchema.parse({
+      generatedAt: occurredAt.toISOString(),
+      items,
+      nextCursor:
+        result.nextAfterItemId === null
+          ? null
+          : this.#encodeViewingHistoryCursor({
+              afterItemId: result.nextAfterItemId,
+              kind: query.kind,
+              limit: query.limit,
+              linkId: row.linkId,
+              linkRevision: row.linkRevision,
+              range: query.range,
+              since,
+              state: query.state,
+              version: 1,
+            }),
+      source: {
+        displayName: safeDisplayName(row.connectorDisplayName),
+        failure: null,
+        status: "healthy",
+      },
+      state: items.length === 0 ? "empty" : "complete",
+    });
+  }
+
   #libraryMedia(
     item: Awaited<ReturnType<JellyfinUserMediaClient["readLibrary"]>>["items"][number],
     id: string,
@@ -814,6 +1121,29 @@ export class ContinueWatchingService {
     };
   }
 
+  #viewingHistoryMedia(
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readViewingHistory"]>>["items"][number],
+    id: string,
+  ) {
+    return {
+      artwork: {
+        accentColor: item.artwork.accentColor,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
+        blurHash: item.artwork.blurHash,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+      },
+      availability: "available" as const,
+      contentRating: item.contentRating,
+      id,
+      kind: item.kind,
+      overview: item.overview,
+      runtimeMinutes: Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+      subtitle: item.subtitle,
+      title: item.title,
+      year: item.year,
+    };
+  }
+
   #titleReferenceInput(
     item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>["item"],
   ) {
@@ -849,6 +1179,10 @@ export class ContinueWatchingService {
 
   #encodeLibraryCursor(value: LibraryCursorPayload) {
     return this.#cipher.encrypt(JSON.stringify(value), "media_library_cursor");
+  }
+
+  #encodeViewingHistoryCursor(value: ViewingHistoryCursorPayload) {
+    return this.#cipher.encrypt(JSON.stringify(value), "media_viewing_history_cursor");
   }
 
   #encodeLibrarySeasonCursor(value: LibrarySeasonCursorPayload) {
@@ -900,6 +1234,244 @@ export class ContinueWatchingService {
     } catch (error) {
       throw new MediaLibraryError("cursor_invalid", { cause: error });
     }
+  }
+
+  #decodeViewingHistoryCursor(
+    value: string,
+    query: ViewingHistoryQuery,
+    row: ContinueWatchingSourceRow,
+  ) {
+    try {
+      const decoded = viewingHistoryCursorPayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(value, "media_viewing_history_cursor")),
+      );
+      if (
+        decoded.linkId !== row.linkId ||
+        decoded.linkRevision !== row.linkRevision ||
+        decoded.kind !== query.kind ||
+        decoded.limit !== query.limit ||
+        decoded.range !== query.range ||
+        decoded.state !== query.state
+      ) {
+        throw new Error("invalid");
+      }
+      return decoded;
+    } catch (error) {
+      throw new ViewingHistoryError("cursor_invalid", { cause: error });
+    }
+  }
+
+  #reserveUserMediaStateOperation(
+    userId: string,
+    referenceId: string,
+    keyHash: string,
+    fingerprintHash: string,
+  ) {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const now = this.#clock().valueOf();
+          this.#pruneUserMediaStateOperations(userId, now);
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      response_json as responseJson, failure_code as failureCode,
+                      created_at as createdAt
+               from user_media_state_operations
+               where user_id = ? and idempotency_key_hash = ?
+               limit 1`,
+            )
+            .get(userId, keyHash) as UserMediaStateOperationRow | undefined;
+          if (existing) {
+            if (existing.fingerprintHash !== fingerprintHash) {
+              return { kind: "conflict" as const };
+            }
+            if (existing.state === "succeeded" && existing.responseJson) {
+              return {
+                kind: "replay" as const,
+                response: libraryPlaybackStateMutationResponseSchema.parse(
+                  JSON.parse(existing.responseJson),
+                ),
+              };
+            }
+            if (
+              existing.state === "pending" &&
+              existing.createdAt > now - STALE_USER_MEDIA_STATE_OPERATION_MS
+            ) {
+              return { kind: "pending" as const };
+            }
+            if (existing.state !== "pending" && existing.state !== "failed") {
+              throw new MediaPlaybackStateError("storage_failure");
+            }
+            const updated = this.#database.sqlite
+              .prepare(
+                `update user_media_state_operations
+                 set state = 'pending', response_json = null, failure_code = null,
+                     completed_at = null, created_at = ?, updated_at = ?
+                 where id = ? and fingerprint_hash = ?`,
+              )
+              .run(now, now, existing.id, fingerprintHash);
+            if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
+            return { kind: "reserved" as const, operationId: existing.id };
+          }
+
+          const count = this.#database.sqlite
+            .prepare("select count(*) as count from user_media_state_operations where user_id = ?")
+            .get(userId) as { count: number };
+          if (count.count >= MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER) {
+            throw new MediaPlaybackStateError("operation_limit_reached");
+          }
+          const operationId = this.#userMediaStateOperationId();
+          this.#database.sqlite
+            .prepare(
+              `insert into user_media_state_operations (
+                 id, user_id, reference_id, idempotency_key_hash,
+                 fingerprint_hash, state, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(operationId, userId, referenceId, keyHash, fingerprintHash, now, now);
+          return { kind: "reserved" as const, operationId };
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof MediaPlaybackStateError) throw error;
+      throw new MediaPlaybackStateError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeUserMediaStateOperation(
+    operationId: string,
+    response: LibraryPlaybackStateMutationResponse,
+    context: ContinueWatchingContext,
+    action: LibraryPlaybackStateMutationRequest["action"],
+  ) {
+    try {
+      const now = this.#clock().valueOf();
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update user_media_state_operations
+               set state = 'succeeded', response_json = ?, failure_code = null,
+                   completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(JSON.stringify(response), now, now, operationId);
+          if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
+          this.#auditUserMediaStateOperation(operationId, "success", { action }, context, now);
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof MediaPlaybackStateError) throw error;
+      throw new MediaPlaybackStateError("storage_failure", { cause: error });
+    }
+  }
+
+  #failUserMediaStateOperation(
+    operationId: string,
+    failureCode: MediaPlaybackStateErrorReason,
+    context: ContinueWatchingContext,
+    action: LibraryPlaybackStateMutationRequest["action"],
+  ) {
+    try {
+      const now = this.#clock().valueOf();
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update user_media_state_operations
+               set state = 'failed', response_json = null, failure_code = ?,
+                   completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(failureCode, now, now, operationId);
+          if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
+          this.#auditUserMediaStateOperation(
+            operationId,
+            "failure",
+            { action, failureCode },
+            context,
+            now,
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof MediaPlaybackStateError) throw error;
+      throw new MediaPlaybackStateError("storage_failure", { cause: error });
+    }
+  }
+
+  #auditUserMediaStateOperation(
+    operationId: string,
+    outcome: "success" | "failure",
+    metadata: {
+      action: LibraryPlaybackStateMutationRequest["action"];
+      failureCode?: MediaPlaybackStateErrorReason;
+    },
+    context: ContinueWatchingContext,
+    createdAt: number,
+  ) {
+    if (!context.principal.userId) throw new MediaPlaybackStateError("storage_failure");
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method,
+           event_type, outcome, target_type, target_id, request_id,
+           metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, 'media.playback_state.changed', ?,
+                   'user_media_state_operation', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        this.#userMediaStateAuditId(),
+        context.principal.userId,
+        context.principal.sessionId,
+        context.principal.authenticationMethod.kind,
+        outcome,
+        operationId,
+        context.requestId ?? null,
+        JSON.stringify(metadata),
+        context.ipAddress
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        createdAt,
+      );
+  }
+
+  #userMediaStateAuditId() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `audit_${this.#createAuditToken()}`;
+      if (!IDENTIFIER_PATTERN.test(candidate)) {
+        throw new MediaPlaybackStateError("storage_failure");
+      }
+      const exists = this.#database.sqlite
+        .prepare("select 1 from audit_events where id = ? limit 1")
+        .get(candidate);
+      if (!exists) return candidate;
+    }
+    throw new MediaPlaybackStateError("storage_failure");
+  }
+
+  #pruneUserMediaStateOperations(userId: string, now: number) {
+    this.#database.sqlite
+      .prepare(
+        `delete from user_media_state_operations
+         where user_id = ? and state <> 'pending' and completed_at <= ?`,
+      )
+      .run(userId, now - USER_MEDIA_STATE_OPERATION_RETENTION_MS);
+  }
+
+  #userMediaStateOperationId() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `user_media_state_${this.#createUserMediaStateOperationToken()}`;
+      if (!USER_MEDIA_STATE_OPERATION_ID_PATTERN.test(candidate)) {
+        throw new MediaPlaybackStateError("storage_failure");
+      }
+      const exists = this.#database.sqlite
+        .prepare("select 1 from user_media_state_operations where id = ? limit 1")
+        .get(candidate);
+      if (!exists) return candidate;
+    }
+    throw new MediaPlaybackStateError("storage_failure");
   }
 
   #source(principal: SessionPrincipal) {
