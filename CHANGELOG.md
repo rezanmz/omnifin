@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.8.0](https://github.com/rezanmz/omnifin/compare/v0.7.2...v0.8.0) (2026-08-03)
+
+
+### Features
+
+* **discovery:** add filterable browse workspace ([#246](https://github.com/rezanmz/omnifin/issues/246)) ([ee78139](https://github.com/rezanmz/omnifin/commit/ee78139104754efa6fc0548f717bed8d339a6c60)), closes [#233](https://github.com/rezanmz/omnifin/issues/233)
+* **discovery:** add quick request actions ([#218](https://github.com/rezanmz/omnifin/issues/218)) ([cc4cec7](https://github.com/rezanmz/omnifin/commit/cc4cec783bdaa26b81f7bf9991772e5746b95060))
+* **gateway:** bind HLS assets to short session handles ([#226](https://github.com/rezanmz/omnifin/issues/226)) ([42b5ea9](https://github.com/rezanmz/omnifin/commit/42b5ea974ffacb6302d8143af4c61fa9b2498dee)), closes [#223](https://github.com/rezanmz/omnifin/issues/223)
+* **ui:** add rich episode details ([#240](https://github.com/rezanmz/omnifin/issues/240)) ([5970b3f](https://github.com/rezanmz/omnifin/commit/5970b3f0f245d0dd8385c61219647a29392cf749)), closes [#229](https://github.com/rezanmz/omnifin/issues/229)
+* **ui:** add rich owned movie details ([#262](https://github.com/rezanmz/omnifin/issues/262)) ([aee2b48](https://github.com/rezanmz/omnifin/commit/aee2b48552d9995a5c8d4a76220dbddbfbb3e4c8))
+* **web:** show live dashboard release cadence ([#239](https://github.com/rezanmz/omnifin/issues/239)) ([ff02dd6](https://github.com/rezanmz/omnifin/commit/ff02dd62cbbf8ae37dd7cb58d3e1dc66d83a291e)), closes [#231](https://github.com/rezanmz/omnifin/issues/231)
+
+
+### Fixes
+
+* **ci:** retry action tag resolution ([#236](https://github.com/rezanmz/omnifin/issues/236)) ([6c5dd39](https://github.com/rezanmz/omnifin/commit/6c5dd39df2c69f6bd119aa5a3815c6b5a7c942d4))
+* **ci:** synchronize compatibility check contracts ([#244](https://github.com/rezanmz/omnifin/issues/244)) ([650e181](https://github.com/rezanmz/omnifin/commit/650e1819fe63d1cefc3c17926f776c57f05189df)), closes [#237](https://github.com/rezanmz/omnifin/issues/237)
+* **connectors:** derive missing season totals ([#234](https://github.com/rezanmz/omnifin/issues/234)) ([904820c](https://github.com/rezanmz/omnifin/commit/904820cc44c58de40b676b37cb33561c2d236ee0)), closes [#228](https://github.com/rezanmz/omnifin/issues/228)
+* **connectors:** preserve regional discovery locales ([#235](https://github.com/rezanmz/omnifin/issues/235)) ([2c0824a](https://github.com/rezanmz/omnifin/commit/2c0824a81f65f887ef100de6c237a9dd31fd658a)), closes [#230](https://github.com/rezanmz/omnifin/issues/230)
+* **connectors:** retain series in library catalogue ([#225](https://github.com/rezanmz/omnifin/issues/225)) ([1d97115](https://github.com/rezanmz/omnifin/commit/1d9711578f5b1b81e580c9b708d9a3d69ed5f394))
+* make playback source-quality and transactional ([#261](https://github.com/rezanmz/omnifin/issues/261)) ([f9f350f](https://github.com/rezanmz/omnifin/commit/f9f350f99c59c46e2e14ad20f3915be8da3c3b2d)), closes [#247](https://github.com/rezanmz/omnifin/issues/247)
+* **web:** contain long mobile hero titles ([#238](https://github.com/rezanmz/omnifin/issues/238)) ([4c6b678](https://github.com/rezanmz/omnifin/commit/4c6b6789cfa67975004a1dd26d34378df3849cb0)), closes [#232](https://github.com/rezanmz/omnifin/issues/232)
+* **web:** preserve application shell across navigation ([#211](https://github.com/rezanmz/omnifin/issues/211)) ([aa6a141](https://github.com/rezanmz/omnifin/commit/aa6a141ea670801931eeb012e934fee480e410ee))
+
 ## [0.7.2](https://github.com/rezanmz/omnifin/compare/v0.7.1...v0.7.2) (2026-08-03)
 
 
