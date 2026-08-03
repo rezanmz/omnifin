@@ -126,7 +126,10 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
     setLoading(true);
     void loadGlobalSearch()
       .then((Component) => {
-        setRestoreFocus(shortcut || document.activeElement === placeholderReference.current);
+        setRestoreFocus(
+          (requested) =>
+            requested || shortcut || document.activeElement === placeholderReference.current,
+        );
         setSearchComponent(() => Component);
       })
       .catch(() => setLoading(false));
