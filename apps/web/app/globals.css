@@ -1718,12 +1718,38 @@
 }
 
 @media (max-width: 720px) {
+  .hero-spotlight[data-artwork-source="remote"] {
+    min-height: 500px;
+    padding: clamp(176px, 48vw, 210px) 14px 22px;
+  }
+
   .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__content {
     border-radius: 26px;
-    bottom: 22px;
-    left: 14px;
-    max-width: calc(100% - 28px);
-    padding: 22px;
+    inset: auto;
+    max-width: none;
+    padding: clamp(18px, 5vw, 22px);
+    position: relative;
+  }
+
+  .hero-spotlight[data-artwork-source="remote"] h1 {
+    font-size: clamp(2.5rem, 12vw, 3.8rem);
+    line-height: 0.9;
+    max-width: none;
+    overflow-wrap: anywhere;
+  }
+
+  .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__actions {
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__actions .button {
+    flex: 1 1 0;
+    font-size: 0.74rem;
+    gap: 6px;
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: nowrap;
   }
 
   .discovery-hero-skeleton__lens {

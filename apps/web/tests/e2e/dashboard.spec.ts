@@ -16,6 +16,7 @@ import {
   mockAcquisitionSearch,
 } from "../fixtures/acquisition-recovery";
 import {
+  longTitleDiscoveryFeedFixture,
   mockDiscoveryDetails,
   mockDiscoveryFeed,
   mockDiscoveryFeedDetails,
@@ -280,6 +281,54 @@ test("connected discovery renders live artwork and opens real title details", as
   const detail = page.getByRole("dialog", { name: "The Far Meridian details" });
   await expect(detail).toBeVisible();
   await expect(detail.getByText("Follow the signal.")).toBeVisible();
+});
+
+test("long remote discovery titles stay inside the hero at every narrow width", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Chromium covers deterministic CSS geometry.");
+  await mockDiscoveryFeed(page, longTitleDiscoveryFeedFixture);
+  await mockQuietContinueWatching(page);
+
+  for (const width of [320, 360, 393, 430]) {
+    await page.setViewportSize({ height: 852, width });
+    await page.goto("/?test-view=continue-watching-live");
+    await page.evaluate(() => document.fonts.ready);
+    await expect(
+      page.getByRole("heading", {
+        level: 1,
+        name: "The Extraordinary Cartography of Distant Forgotten Worlds",
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { exact: true, name: "View details" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request title" })).toBeVisible();
+
+    const bounds = await page
+      .locator('.hero-spotlight[data-artwork-source="remote"]')
+      .evaluate((hero) => {
+        const content = hero.querySelector<HTMLElement>(".hero-spotlight__content");
+        if (!content) throw new Error("Spotlight content is missing.");
+        const heroBox = hero.getBoundingClientRect();
+        const contentBox = content.getBoundingClientRect();
+        return {
+          contentBottom: contentBox.bottom,
+          contentLeft: contentBox.left,
+          contentRight: contentBox.right,
+          contentTop: contentBox.top,
+          heroBottom: heroBox.bottom,
+          heroLeft: heroBox.left,
+          heroRight: heroBox.right,
+          heroTop: heroBox.top,
+        };
+      });
+
+    expect(bounds.contentTop, `${width}px content top`).toBeGreaterThanOrEqual(bounds.heroTop);
+    expect(bounds.contentBottom, `${width}px content bottom`).toBeLessThanOrEqual(
+      bounds.heroBottom,
+    );
+    expect(bounds.contentLeft, `${width}px content left`).toBeGreaterThanOrEqual(bounds.heroLeft);
+    expect(bounds.contentRight, `${width}px content right`).toBeLessThanOrEqual(bounds.heroRight);
+  }
 });
 
 test("operators can inspect a title-level acquisition trace before choosing recovery", async ({
