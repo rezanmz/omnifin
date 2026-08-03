@@ -330,6 +330,7 @@
 
 .poster {
   align-items: center;
+  align-self: start;
   aspect-ratio: 2 / 3;
   background:
     radial-gradient(circle at 70% 16%, var(--glass-specular), transparent 24%),
@@ -338,8 +339,10 @@
   border-radius: 18px;
   display: flex;
   justify-content: center;
+  min-width: 0;
   overflow: hidden;
   position: relative;
+  width: 100%;
 }
 
 .poster img {

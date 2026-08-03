@@ -1153,6 +1153,16 @@ test("private viewing history visual baseline", async ({ page }, testInfo) => {
   );
   await page.goto("/history?test-view=ready");
   await page.getByRole("heading", { name: "Your story, in sequence." }).waitFor();
+  if (testInfo.project.name === "mobile") {
+    const firstEntry = page.locator('section[aria-labelledby^="history-day-"] li').first();
+    const poster = firstEntry.locator(":scope > span");
+    const copy = firstEntry.locator(":scope > div");
+    const [posterBox, copyBox] = await Promise.all([poster.boundingBox(), copy.boundingBox()]);
+    expect(posterBox).not.toBeNull();
+    expect(copyBox).not.toBeNull();
+    expect(posterBox!.width).toBeLessThanOrEqual(90);
+    expect(posterBox!.x + posterBox!.width).toBeLessThanOrEqual(copyBox!.x);
+  }
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("viewing-history.png", { fullPage: true });
 });
