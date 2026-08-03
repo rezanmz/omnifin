@@ -30,6 +30,7 @@ import {
   DockerImagePullError,
   DOCKER_LOCAL_IMAGE_ARGUMENTS,
 } from "./docker-runtime.mjs";
+import { COMPATIBILITY_CHECKS } from "./compatibility-checks.mjs";
 import { applyCompatibilityTargetOverride } from "./compatibility-targets.mjs";
 
 const downloadClientTargets = applyCompatibilityTargetOverride({
@@ -74,16 +75,6 @@ const SAFE_CONNECTOR_FAILURE_CODES = new Set([
   "unsupported_version",
   "upstream_error",
 ]);
-const CHECK_NAMES = [
-  "authentication",
-  "coordinatedPauseResume",
-  "credentialRejection",
-  "exactPause",
-  "exactPromotion",
-  "exactResume",
-  "preserveFilesRemoval",
-  "queueRead",
-];
 const QBITTORRENT_AUTH_DIAGNOSTIC_CODES = new Set([
   "authentication_cookie_invalid",
   "authentication_rejected",
@@ -105,6 +96,7 @@ function sortedKeys(value) {
 }
 
 export function validateSanitizedReport(report) {
+  const expectedChecks = COMPATIBILITY_CHECKS[report?.service] ?? [];
   if (
     !report ||
     typeof report !== "object" ||
@@ -118,8 +110,8 @@ export function validateSanitizedReport(report) {
     !report.checks ||
     typeof report.checks !== "object" ||
     Array.isArray(report.checks) ||
-    sortedKeys(report.checks).join(",") !== [...CHECK_NAMES].sort().join(",") ||
-    CHECK_NAMES.some((name) => report.checks[name] !== "passed") ||
+    sortedKeys(report.checks).join(",") !== [...expectedChecks].sort().join(",") ||
+    expectedChecks.some((name) => report.checks[name] !== "passed") ||
     JSON.stringify(report).length > 4_096
   ) {
     throw new DownloadFixtureFailure("report_invalid");
@@ -764,7 +756,7 @@ async function runQBittorrent(context, server) {
   }
 
   return validateSanitizedReport({
-    checks: Object.fromEntries(CHECK_NAMES.map((name) => [name, "passed"])),
+    checks: Object.fromEntries(COMPATIBILITY_CHECKS.qbittorrent.map((name) => [name, "passed"])),
     image: DOWNLOAD_CLIENT_IMAGES.qbittorrent,
     schemaVersion: 1,
     serverVersion: version,
@@ -897,7 +889,7 @@ async function runSabnzbd(context, server) {
   }
 
   return validateSanitizedReport({
-    checks: Object.fromEntries(CHECK_NAMES.map((name) => [name, "passed"])),
+    checks: Object.fromEntries(COMPATIBILITY_CHECKS.sabnzbd.map((name) => [name, "passed"])),
     image: DOWNLOAD_CLIENT_IMAGES.sabnzbd,
     schemaVersion: 1,
     serverVersion: version,
