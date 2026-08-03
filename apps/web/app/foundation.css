@@ -677,6 +677,10 @@ a {
   top: 0;
   z-index: 30;
 }
+.shell-search-slot,
+.shell-search-slot__mount {
+  display: contents;
+}
 .global-search {
   align-items: center;
   -webkit-backdrop-filter: none;

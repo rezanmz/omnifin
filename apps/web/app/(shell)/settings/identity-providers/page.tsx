@@ -6,6 +6,7 @@ import {
 } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { IdentityProviderConsoleLoader } from "../../../../components/identity-provider-console-loader";
 import { IdentityProviderPageShell } from "../../../../components/identity-provider-page-shell";
 import type { IdentityProviderAdminLoadOutcome } from "../../../../lib/identity-provider-admin";
@@ -100,30 +101,33 @@ export default async function IdentityProvidersPage({
   const displayProfile =
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   return (
-    <IdentityProviderPageShell displayProfile={displayProfile}>
-      <IdentityProviderConsoleLoader
-        embedded
-        initialMappings={
-          process.env.OMNIFIN_TEST_MODE === "true"
-            ? {
-                "oidc-authentik": [
-                  {
-                    claimPath: ["groups"],
-                    enabled: true,
-                    id: "mapping-operators",
-                    operator: "contains_any",
-                    priority: 500,
-                    providerId: "oidc-authentik",
-                    role: "operator",
-                    values: ["media-operators"],
-                  },
-                ],
-              }
-            : undefined
-        }
-        initialOutcome={testOutcome(parameters["test-view"])}
-        publicBaseUrl={process.env.OMNIFIN_BASE_URL ?? "http://localhost:3000"}
-      />
-    </IdentityProviderPageShell>
+    <>
+      <ApplicationShellEnhancements />
+      <IdentityProviderPageShell displayProfile={displayProfile}>
+        <IdentityProviderConsoleLoader
+          embedded
+          initialMappings={
+            process.env.OMNIFIN_TEST_MODE === "true"
+              ? {
+                  "oidc-authentik": [
+                    {
+                      claimPath: ["groups"],
+                      enabled: true,
+                      id: "mapping-operators",
+                      operator: "contains_any",
+                      priority: 500,
+                      providerId: "oidc-authentik",
+                      role: "operator",
+                      values: ["media-operators"],
+                    },
+                  ],
+                }
+              : undefined
+          }
+          initialOutcome={testOutcome(parameters["test-view"])}
+          publicBaseUrl={process.env.OMNIFIN_BASE_URL ?? "http://localhost:3000"}
+        />
+      </IdentityProviderPageShell>
+    </>
   );
 }

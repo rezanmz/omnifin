@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { DownloadQueue } from "../../../../components/download-queue";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import type { DownloadQueueLoadOutcome } from "../../../../lib/download-queue";
@@ -121,8 +122,13 @@ export default async function DownloadQueuePage({ searchParams }: DownloadQueueP
   const outcome = test ?? demo;
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <DownloadQueue {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <DownloadQueue
+          {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}
+        />
+      </ThemeProvider>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { IndexerIntelligence } from "../../../../components/indexer-intelligence";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import type { IndexerIntelligenceLoadOutcome } from "../../../../lib/indexer-intelligence";
@@ -243,8 +244,11 @@ export default async function IndexerPage({ searchParams }: IndexerPagePropertie
   const outcome = testOutcome(parameters["test-view"]);
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <IndexerIntelligence {...(outcome === undefined ? {} : { initialOutcome: outcome })} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <IndexerIntelligence {...(outcome === undefined ? {} : { initialOutcome: outcome })} />
+      </ThemeProvider>
+    </>
   );
 }

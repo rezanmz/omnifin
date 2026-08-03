@@ -2,6 +2,7 @@ import type { RuntimeIdentity } from "@omnifin/contracts/runtime";
 import type { Metadata } from "next";
 
 import { AboutScreen } from "../../../components/about-screen";
+import { ApplicationShellEnhancements } from "../../../components/application-shell-enhancements";
 import { ThemeProvider } from "../../../components/theme-provider";
 import { loadRuntimeIdentity, type RuntimeIdentityLoadOutcome } from "../../../lib/runtime-identity";
 import { readThemePreference } from "../../../lib/theme-server";
@@ -61,8 +62,11 @@ export default async function AboutPage({ searchParams }: AboutPageProperties) {
   const preference = await readThemePreference();
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <AboutScreen displayProfile={displayProfile} outcome={outcome} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <AboutScreen displayProfile={displayProfile} outcome={outcome} />
+      </ThemeProvider>
+    </>
   );
 }

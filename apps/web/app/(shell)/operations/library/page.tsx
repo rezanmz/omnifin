@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ApplicationShellEnhancements } from "../../../../components/application-shell-enhancements";
 import { LibraryCare } from "../../../../components/library-care";
 import { ThemeProvider } from "../../../../components/theme-provider";
 import { emptyLibraryOutcome, readyLibraryOutcome } from "../../../../lib/library-care-demo";
@@ -37,8 +38,11 @@ export default async function LibraryCarePage({ searchParams }: LibraryCarePageP
   const preference = await readThemePreference();
 
   return (
-    <ThemeProvider initialPreference={preference}>
-      <LibraryCare {...(initialOutcome === undefined ? {} : { initialOutcome })} />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <LibraryCare {...(initialOutcome === undefined ? {} : { initialOutcome })} />
+      </ThemeProvider>
+    </>
   );
 }

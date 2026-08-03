@@ -5,6 +5,7 @@ import {
   AcquisitionCalendarFrame,
   AcquisitionCalendarHero,
 } from "../../../components/acquisition-calendar-frame";
+import { ApplicationShellEnhancements } from "../../../components/application-shell-enhancements";
 import {
   degradedAcquisitionCalendar,
   demoAcquisitionCalendar,
@@ -59,16 +60,19 @@ export default async function AcquisitionCalendarPage({
   const initialView = parameters["test-view"] === "month" ? "month" : "week";
 
   return (
-    <AcquisitionCalendarFrame initialPreference={preference}>
-      {outcome?.status === "ready" ? (
-        <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
-      ) : null}
-      <AcquisitionCalendarLoader
-        embedded
-        hideHero={outcome?.status === "ready"}
-        initialView={initialView}
-        {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}
-      />
-    </AcquisitionCalendarFrame>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <AcquisitionCalendarFrame initialPreference={preference}>
+        {outcome?.status === "ready" ? (
+          <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
+        ) : null}
+        <AcquisitionCalendarLoader
+          embedded
+          hideHero={outcome?.status === "ready"}
+          initialView={initialView}
+          {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}
+        />
+      </AcquisitionCalendarFrame>
+    </>
   );
 }

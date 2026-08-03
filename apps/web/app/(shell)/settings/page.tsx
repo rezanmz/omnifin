@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { AccountSecurityPanel } from "../../../components/account-security-panel";
+import { ApplicationShellEnhancements } from "../../../components/application-shell-enhancements";
 import { ThemeProvider } from "../../../components/theme-provider";
 import { readThemePreference } from "../../../lib/theme-server";
 import "../../globals.css";
@@ -20,11 +21,14 @@ export default async function SettingsPage({ searchParams }: SettingsPagePropert
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   const preference = await readThemePreference();
   return (
-    <ThemeProvider initialPreference={preference}>
-      <AccountSecurityPanel
-        displayProfile={displayProfile}
-        initialConfirmation={providerLogoutConfirmation ? "provider" : null}
-      />
-    </ThemeProvider>
+    <>
+      <ApplicationShellEnhancements initialPreference={preference} />
+      <ThemeProvider initialPreference={preference}>
+        <AccountSecurityPanel
+          displayProfile={displayProfile}
+          initialConfirmation={providerLogoutConfirmation ? "provider" : null}
+        />
+      </ThemeProvider>
+    </>
   );
 }
