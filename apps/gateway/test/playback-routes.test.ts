@@ -1205,49 +1205,52 @@ describe("playback routes", () => {
     }
   });
 
-  it("bounds direct-play range requests and preserves safe range metadata", async () => {
-    const { app, headers, negotiate, readPlaybackTarget, referenceId } = await harness();
-    negotiate.mockResolvedValueOnce({
-      ...playbackResult(),
-      delivery: "direct",
-      playMethod: "DirectPlay",
-      upstreamTarget: { path: `Videos/${privateItemId}/stream`, query: "static=true" },
-    });
-    try {
-      const created = await app.inject({
-        headers,
-        method: "POST",
-        payload: negotiation,
-        url: `/v1/media/${referenceId}/playback`,
+  it.each(["DirectPlay", "DirectStream"] as const)(
+    "bounds %s range requests and preserves safe range metadata",
+    async (playMethod) => {
+      const { app, headers, negotiate, readPlaybackTarget, referenceId } = await harness();
+      negotiate.mockResolvedValueOnce({
+        ...playbackResult(),
+        delivery: "direct",
+        playMethod,
+        upstreamTarget: { path: `Videos/${privateItemId}/stream`, query: "static=true" },
       });
-      const playback = playbackNegotiationResponseSchema.parse(created.json());
-      const bytes = new Uint8Array([1, 2, 3, 4]);
-      readPlaybackTarget.mockResolvedValueOnce({
-        body: bytes,
-        headers: new Headers({
-          "content-range": "bytes 1200-1203/72000000",
-          "content-type": "video/mp4",
-        }),
-        status: 206,
-      });
+      try {
+        const created = await app.inject({
+          headers,
+          method: "POST",
+          payload: negotiation,
+          url: `/v1/media/${referenceId}/playback`,
+        });
+        const playback = playbackNegotiationResponseSchema.parse(created.json());
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        readPlaybackTarget.mockResolvedValueOnce({
+          body: bytes,
+          headers: new Headers({
+            "content-range": "bytes 1200-1203/72000000",
+            "content-type": "video/mp4",
+          }),
+          status: 206,
+        });
 
-      const stream = await app.inject({
-        headers: { cookie: headers.cookie, range: "bytes=1200-999999999" },
-        method: "GET",
-        url: playback.streamPath,
-      });
-      expect(stream.statusCode, stream.body).toBe(206);
-      expect(stream.rawPayload).toEqual(Buffer.from(bytes));
-      expect(stream.headers["accept-ranges"]).toBe("bytes");
-      expect(stream.headers["content-range"]).toBe("bytes 1200-1203/72000000");
-      expect(stream.headers.vary).toContain("Range");
-      expect(readPlaybackTarget).toHaveBeenCalledWith(
-        expect.objectContaining({ range: `bytes=1200-${1200 + 8 * 1_024 * 1_024 - 1}` }),
-      );
-    } finally {
-      await app.close();
-    }
-  });
+        const stream = await app.inject({
+          headers: { cookie: headers.cookie, range: "bytes=1200-999999999" },
+          method: "GET",
+          url: playback.streamPath,
+        });
+        expect(stream.statusCode, stream.body).toBe(206);
+        expect(stream.rawPayload).toEqual(Buffer.from(bytes));
+        expect(stream.headers["accept-ranges"]).toBe("bytes");
+        expect(stream.headers["content-range"]).toBe("bytes 1200-1203/72000000");
+        expect(stream.headers.vary).toContain("Range");
+        expect(readPlaybackTarget).toHaveBeenCalledWith(
+          expect.objectContaining({ range: `bytes=1200-${1200 + 8 * 1_024 * 1_024 - 1}` }),
+        );
+      } finally {
+        await app.close();
+      }
+    },
+  );
 
   it("returns a safe 416 for malformed and unsatisfied direct-play ranges", async () => {
     const { app, headers, negotiate, readPlaybackTarget, referenceId } = await harness();
