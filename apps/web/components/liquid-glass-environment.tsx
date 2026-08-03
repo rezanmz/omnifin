@@ -4,7 +4,10 @@ import { useEffect } from "react";
 
 const GLASS_SELECTOR = "[data-liquid-glass]";
 const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
-const MATERIAL_INTENT_EVENTS = ["click", "keydown", "scroll"] as const;
+// Scroll is intentionally excluded: unlike pointerdown and keydown, it does not finalize
+// the browser's LCP window, so a scroll-triggered material repaint can turn a fast
+// first render into a late LCP candidate.
+const MATERIAL_INTENT_EVENTS = ["pointerdown", "keydown"] as const;
 
 function percentage(value: number, start: number, size: number) {
   return `${Math.min(100, Math.max(0, ((value - start) / size) * 100)).toFixed(2)}%`;

@@ -17,7 +17,9 @@ export interface HeroSpotlightProperties {
 
 export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlightProperties) {
   const safeArtworkPath =
-    artworkPath && /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath)
+    artworkPath === "/demo-hero.svg" ||
+    (artworkPath &&
+      /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath))
       ? artworkPath
       : null;
   if (safeArtworkPath) {
@@ -43,7 +45,7 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
           <img
             alt=""
             className="hero-spotlight__art-image"
-            decoding="async"
+            decoding={safeArtworkPath === "/demo-hero.svg" ? "sync" : "async"}
             fetchPriority="high"
             height={338}
             loading="eager"
@@ -69,11 +71,21 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
           (hasFallbackActions ? (
             <DirectionalNavigationGroup className="hero-spotlight__actions">
               <>
-                <Link className="button button--primary" data-directional-item href="/library">
+                <Link
+                  className="button button--primary"
+                  data-directional-item
+                  href="/library"
+                  prefetch={false}
+                >
                   <Library aria-hidden="true" size={17} />
                   Browse library
                 </Link>
-                <Link className="button button--glass" data-directional-item href="/calendar">
+                <Link
+                  className="button button--glass"
+                  data-directional-item
+                  href="/calendar"
+                  prefetch={false}
+                >
                   <CalendarDays aria-hidden="true" size={18} />
                   Open calendar
                 </Link>

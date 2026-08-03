@@ -9,6 +9,8 @@ import { demoDiscoveryFeed } from "../../lib/discovery-feed-demo";
 import { discoverySpotlightHero, discoverySpotlightItem } from "../../lib/discovery-presentation";
 import "../dashboard.css";
 
+const DEMO_HERO_ARTWORK_PATH = "/demo-hero.svg";
+
 export const dynamic = "force-dynamic";
 
 interface DashboardPageProperties {
@@ -134,6 +136,8 @@ export default async function DashboardPage({ searchParams }: DashboardPagePrope
           }
         : {})}
       displayProfile={displayProfile}
+      demoSections={showDemoDashboard}
+      {...(showDemoDashboard ? { heroArtworkPath: DEMO_HERO_ARTWORK_PATH } : {})}
       liveContinueWatching={
         showLiveDashboard || (!showDemoDashboard && !showQueueRecoveryDashboard)
       }

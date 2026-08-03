@@ -99,6 +99,7 @@
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-float);
   color: var(--paper-0);
+  contain: layout paint style;
   isolation: isolate;
   min-height: clamp(430px, 54vw, 670px);
   overflow: hidden;
@@ -123,9 +124,63 @@
       transparent 24%
     ),
     linear-gradient(112deg, #0c1611 10%, #16251c 52%, #0b1210 100%);
+  contain: layout paint style;
   inset: 0;
   overflow: hidden;
   position: absolute;
+}
+
+.dashboard > .media-rail,
+.dashboard > .calendar-strip,
+.dashboard > .operations-dock,
+.dashboard > .deferred-discovery-rails {
+  content-visibility: auto;
+}
+
+.dashboard > .media-rail,
+.dashboard > .deferred-discovery-rails {
+  contain-intrinsic-block-size: auto 390px;
+}
+
+.dashboard > .calendar-strip {
+  contain-intrinsic-block-size: auto 180px;
+}
+
+.dashboard > .operations-dock {
+  contain-intrinsic-block-size: auto 120px;
+}
+
+.deferred-dashboard-sections {
+  display: contents;
+}
+
+.dashboard-sections__operations-skeleton {
+  align-items: center;
+  background:
+    radial-gradient(ellipse at 18% 0%, var(--glass-specular), transparent 48%),
+    color-mix(in srgb, var(--glass) 42%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--glass-specular);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(160px, 1fr) minmax(100px, 0.42fr) 72px;
+  min-height: 104px;
+  padding: 24px 28px;
+}
+
+.dashboard-sections__operations-skeleton > span {
+  background: color-mix(in srgb, var(--glass-strong) 78%, transparent);
+  border-radius: 99px;
+  height: 11px;
+}
+
+.dashboard-sections__operations-skeleton > span:nth-child(2) {
+  opacity: 0.72;
+}
+
+.dashboard-sections__operations-skeleton > span:last-child {
+  opacity: 0.5;
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__art {
