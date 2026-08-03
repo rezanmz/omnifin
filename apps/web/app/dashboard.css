@@ -134,8 +134,25 @@
   position: absolute;
 }
 
-.hero-spotlight__art-image {
+.hero-spotlight__art-tiles {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  inset: 0;
+  position: absolute;
+}
+
+.hero-spotlight__art-tile {
+  overflow: hidden;
+  position: relative;
+}
+
+.hero-spotlight__art-tile img {
+  height: 400%;
+  max-width: none;
   object-fit: cover;
+  position: absolute;
+  width: 600%;
 }
 
 .dashboard > .media-rail,

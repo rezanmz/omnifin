@@ -74,7 +74,9 @@ describe("DiscoveryDashboard", () => {
     );
     const spotlightArtwork = container.querySelector(".hero-spotlight__art");
     expect(spotlightArtwork).not.toHaveAttribute("style");
-    expect(container.querySelector(".hero-spotlight__art-image")).toHaveAttribute(
+    const artworkTiles = container.querySelectorAll(".hero-spotlight__art-tile img");
+    expect(artworkTiles).toHaveLength(24);
+    expect(artworkTiles[0]).toHaveAttribute(
       "src",
       "/api/discovery/artwork/discovery_art_eeeeeeeeeeeeeeeeeeeeee",
     );

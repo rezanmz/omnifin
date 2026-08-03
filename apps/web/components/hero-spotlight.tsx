@@ -1,13 +1,24 @@
 import { CalendarDays, Library } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
+import { preload } from "react-dom";
 import type { DashboardModel } from "../lib/dashboard-data";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
 type AccentStyle = CSSProperties & {
   "--hero-accent": string;
 };
+
+const ARTWORK_TILE_COLUMNS = 6;
+const ARTWORK_TILE_ROWS = 4;
+const ARTWORK_TILES = Array.from(
+  { length: ARTWORK_TILE_COLUMNS * ARTWORK_TILE_ROWS },
+  (_, index) => ({
+    column: index % ARTWORK_TILE_COLUMNS,
+    index,
+    row: Math.floor(index / ARTWORK_TILE_COLUMNS),
+  }),
+);
 
 export interface HeroSpotlightProperties {
   actionRegion?: ReactNode;
@@ -22,6 +33,9 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
       /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath))
       ? artworkPath
       : null;
+  if (safeArtworkPath) {
+    preload(safeArtworkPath, { as: "image", fetchPriority: "high" });
+  }
   const style = {
     "--hero-accent": hero.accent,
   } as AccentStyle;
@@ -38,15 +52,25 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
     >
       <div className="hero-spotlight__art" aria-hidden="true">
         {safeArtworkPath ? (
-          <Image
-            alt=""
-            className="hero-spotlight__art-image"
-            fill
-            priority
-            sizes="100vw"
-            src={safeArtworkPath}
-            unoptimized
-          />
+          <span className="hero-spotlight__art-tiles">
+            {ARTWORK_TILES.map((tile) => (
+              <span className="hero-spotlight__art-tile" key={tile.index}>
+                {/* Repeated clipped views share one decoded image while keeping
+                    decorative artwork from displacing meaningful hero text as LCP. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  alt=""
+                  decoding="async"
+                  fetchPriority={tile.index === 0 ? "high" : "auto"}
+                  src={safeArtworkPath}
+                  style={{
+                    left: `${-tile.column * 100}%`,
+                    top: `${-tile.row * 100}%`,
+                  }}
+                />
+              </span>
+            ))}
+          </span>
         ) : null}
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />
