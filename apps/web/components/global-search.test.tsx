@@ -203,7 +203,7 @@ describe("global search", () => {
         client={client()}
         debounceMs={0}
         initialOpen
-        initialPermissions={["media.view", "library.manage"]}
+        initialPermissions={["media.view", "library.manage", "playback.history.self.manage"]}
       />,
     );
 
@@ -212,6 +212,10 @@ describe("global search", () => {
     expect(discover).toHaveAttribute("href", "/");
     expect(screen.getByRole("option", { name: /Library/i })).toHaveAttribute("href", "/library");
     expect(screen.getByRole("option", { name: /Calendar/i })).toHaveAttribute("href", "/calendar");
+    expect(screen.getByRole("option", { name: /Viewing history/i })).toHaveAttribute(
+      "href",
+      "/history",
+    );
     expect(screen.queryByRole("option", { name: /Manage connectors/i })).not.toBeInTheDocument();
 
     input.focus();

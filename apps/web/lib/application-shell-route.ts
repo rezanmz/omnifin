@@ -5,6 +5,7 @@ export function applicationDestinationForPath(pathname: string): ApplicationDest
   if (pathname === "/") return "discover";
   if (pathname === "/browse" || pathname.startsWith("/browse/")) return "browse";
   if (pathname === "/library" || pathname.startsWith("/library/")) return "library";
+  if (pathname === "/history" || pathname.startsWith("/history/")) return "library";
   if (pathname === "/calendar" || pathname.startsWith("/calendar/")) return "calendar";
   if (pathname === "/operations/requests" || pathname.startsWith("/operations/requests/")) {
     return "requests";

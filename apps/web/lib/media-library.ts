@@ -2,6 +2,8 @@ import type {
   LibraryBrowseKind,
   LibraryBrowseResponse,
   LibraryBrowseSort,
+  LibraryPlaybackStateMutationRequest,
+  LibraryPlaybackStateMutationResponse,
   LibrarySeasonEpisodesResponse,
   LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
@@ -12,11 +14,12 @@ interface ResponseSchema<T> {
 
 async function loadContractSchemas() {
   await import("./zod-browser");
-  const [library, errors] = await Promise.all([
+  const [auth, library, errors] = await Promise.all([
+    import("@omnifin/contracts/auth"),
     import("@omnifin/contracts/library"),
     import("@omnifin/contracts/errors"),
   ]);
-  return { errors, library };
+  return { auth, errors, library };
 }
 
 let contractSchemasPromise: ReturnType<typeof loadContractSchemas> | undefined;
@@ -130,6 +133,12 @@ export interface MediaLibraryClient {
     signal?: AbortSignal,
   ): Promise<LibrarySeasonEpisodesResponse>;
   loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
+  updatePlaybackState?(
+    referenceId: string,
+    request: LibraryPlaybackStateMutationRequest,
+    signal?: AbortSignal,
+    idempotencyKey?: string,
+  ): Promise<LibraryPlaybackStateMutationResponse>;
 }
 
 const MEDIA_REFERENCE_PATTERN = /^media_[A-Za-z0-9_-]{22}$/u;
@@ -145,12 +154,20 @@ function assertMediaReference(referenceId: string) {
 }
 
 async function fetchLibraryJson<T>(path: string, schema: ResponseSchema<T>, signal?: AbortSignal) {
-  let response: Response;
+  const response = await fetchLibraryResponse(
+    path,
+    { headers: { accept: "application/json" } },
+    signal,
+  );
+  return parsedResponse(response, schema);
+}
+
+async function fetchLibraryResponse(path: string, init: RequestInit = {}, signal?: AbortSignal) {
   try {
-    response = await fetch(path, {
+    return await fetch(path, {
       cache: "no-store",
       credentials: "same-origin",
-      headers: { accept: "application/json" },
+      ...init,
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
@@ -161,7 +178,6 @@ async function fetchLibraryJson<T>(path: string, schema: ResponseSchema<T>, sign
       "The gateway could not be reached.",
     );
   }
-  return parsedResponse(response, schema);
 }
 
 export const mediaLibraryClient: MediaLibraryClient = {
@@ -199,6 +215,47 @@ export const mediaLibraryClient: MediaLibraryClient = {
       schemas.libraryTitleDetailResponseSchema,
       signal,
     );
+  },
+  async updatePlaybackState(referenceId, request, signal, idempotencyKey = crypto.randomUUID()) {
+    assertMediaReference(referenceId);
+    const schemas = await contractSchemas();
+    const body = schemas.library.libraryPlaybackStateMutationRequestSchema.parse(request);
+    const sessionResponse = await fetchLibraryResponse(
+      "/api/auth/session",
+      { headers: { accept: "application/json" } },
+      signal,
+    );
+    if (!sessionResponse.ok) throw await responseError(sessionResponse);
+    const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(sessionResponse));
+    if (!session.success || session.data.principal === null || session.data.csrfToken === null) {
+      throw new MediaLibraryClientError(
+        "signed_out",
+        "authentication_required",
+        "Your session ended. Sign in again to update Jellyfin.",
+      );
+    }
+    if (!session.data.principal.permissions.includes("playback.history.self.manage")) {
+      throw new MediaLibraryClientError(
+        "forbidden",
+        "permission_denied",
+        "Your account cannot update Jellyfin playback state.",
+      );
+    }
+    const response = await fetchLibraryResponse(
+      `/api/media/library/${referenceId}/playback-state`,
+      {
+        body: JSON.stringify(body),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          "x-omnifin-csrf": session.data.csrfToken,
+        },
+        method: "POST",
+      },
+      signal,
+    );
+    return parsedResponse(response, schemas.library.libraryPlaybackStateMutationResponseSchema);
   },
 };
 

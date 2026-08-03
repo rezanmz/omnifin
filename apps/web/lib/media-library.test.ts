@@ -1,6 +1,7 @@
 import type { LibraryBrowseResponse } from "@omnifin/contracts/library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { libraryDemoPrincipal } from "./library-care-demo";
 import { readyMediaLibraryOutcome } from "./media-library-demo";
 import {
   MediaLibraryClientError,
@@ -76,6 +77,69 @@ describe("Media library client", () => {
       `/api/media/library/${series.media.id}`,
       `/api/media/library/${series.media.id}/seasons/2/episodes?limit=20&cursor=cursor_abcdefghijklmnop`,
     ]);
+  });
+
+  it("updates playback state with the active session CSRF token and an idempotency key", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const csrfToken = "media_library_csrf_0123456789abcdefghijklmnop";
+    const result = {
+      action: "reset_progress" as const,
+      playback: { durationSeconds: 7_080, played: false, positionSeconds: 0 },
+      referenceId,
+      updatedAt: "2026-07-30T12:30:00.000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ csrfToken, principal: libraryDemoPrincipal }))
+      .mockResolvedValueOnce(Response.json(result));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      mediaLibraryClient.updatePlaybackState!(
+        referenceId,
+        { action: "reset_progress" },
+        undefined,
+        "playback-state-browser-0123456789",
+      ),
+    ).resolves.toEqual(result);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/auth/session");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`/api/media/library/${referenceId}/playback-state`);
+    const request = fetchMock.mock.calls[1]?.[1];
+    const headers = new Headers(request?.headers);
+    expect(request?.method).toBe("POST");
+    expect(JSON.parse(String(request?.body))).toEqual({ action: "reset_progress" });
+    expect(headers.get("idempotency-key")).toBe("playback-state-browser-0123456789");
+    expect(headers.get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(String(fetchMock.mock.calls)).not.toContain("jellyfin-user");
+  });
+
+  it("fails playback-state writes closed when the session is absent or lacks permission", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ csrfToken: null, principal: null })),
+    );
+    await expect(
+      mediaLibraryClient.updatePlaybackState!(readyMediaLibraryOutcome.feed.items[0]!.media.id, {
+        action: "mark_watched",
+      }),
+    ).rejects.toMatchObject({ code: "authentication_required", kind: "signed_out" });
+
+    const csrfToken = "media_library_csrf_0123456789abcdefghijklmnop";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          csrfToken,
+          principal: { ...libraryDemoPrincipal, permissions: ["media.view"] },
+        }),
+      ),
+    );
+    await expect(
+      mediaLibraryClient.updatePlaybackState!(readyMediaLibraryOutcome.feed.items[0]!.media.id, {
+        action: "mark_watched",
+      }),
+    ).rejects.toMatchObject({ code: "permission_denied", kind: "forbidden" });
   });
 
   it("fails closed when the gateway response violates the browser contract", async () => {

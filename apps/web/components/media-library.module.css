@@ -51,12 +51,16 @@
   text-wrap: balance;
 }
 
-.heroCopy > p:last-child {
+.heroCopy > p:not(.eyebrow) {
   color: var(--paper-1);
   font-size: clamp(1rem, 1.35vw, 1.18rem);
   line-height: 1.7;
   margin-top: 28px;
   max-width: 690px;
+}
+
+.historyLink {
+  margin-top: 22px;
 }
 
 .heroMetrics,

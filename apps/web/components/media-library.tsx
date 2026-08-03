@@ -16,6 +16,7 @@ import {
   Check,
   ChevronDown,
   Clapperboard,
+  Clock3,
   CloudOff,
   Film,
   Info,
@@ -78,6 +79,15 @@ const lazyMediaLibraryDemoClient: MediaLibraryClient = {
   async loadTitle(referenceId, signal) {
     const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
     return mediaLibraryDemoClient.loadTitle!(referenceId, signal);
+  },
+  async updatePlaybackState(referenceId, request, signal, idempotencyKey) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.updatePlaybackState!(
+      referenceId,
+      request,
+      signal,
+      idempotencyKey,
+    );
   },
 };
 
@@ -482,6 +492,9 @@ function MediaLibraryContent({
             Browse what your paired Jellyfin account can actually play. Omnifin keeps the service,
             token, and original media identity behind the glass.
           </p>
+          <Link className={`button button--glass ${styles.historyLink}`} href="/history">
+            <Clock3 aria-hidden="true" size={16} /> Viewing history
+          </Link>
         </div>
         <dl className={styles.heroMetrics} data-liquid-glass>
           <div>
@@ -679,7 +692,7 @@ function SelectedTheater({
             .filter(Boolean)
             .join(" · "),
         id: selection.media.id,
-        positionSeconds: selection.playback.positionSeconds,
+        positionSeconds: selection.startPositionSeconds ?? selection.playback.positionSeconds,
         title: selection.media.title,
       }}
       onClose={onClose}

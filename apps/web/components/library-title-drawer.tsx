@@ -8,6 +8,7 @@ import type {
   LibraryMovieDetail,
   LibraryMovieMediaSource,
   LibraryPlaybackState,
+  LibraryPlaybackStateAction,
   LibrarySeasonEpisode,
   LibrarySeasonEpisodesResponse,
   LibraryTitleDetailResponse,
@@ -45,6 +46,7 @@ import {
 export interface PlayableLibrarySelection {
   media: LibrarySeasonEpisode["media"] | LibraryBrowseItem["media"];
   playback: LibraryPlaybackState;
+  startPositionSeconds?: number;
 }
 
 export interface LibraryTitleDrawerProperties {
@@ -176,6 +178,135 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
         <RotateCcw aria-hidden="true" size={17} /> Try again
       </button>
     </section>
+  );
+}
+
+type PlaybackMutationState =
+  | { kind: "idle" }
+  | { action: LibraryPlaybackStateAction; kind: "pending" }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
+
+function playbackMutationErrorMessage(error: unknown) {
+  if (error instanceof MediaLibraryClientError) {
+    if (error.kind === "signed_out") return "Your session ended. Sign in again to make changes.";
+    if (error.kind === "forbidden") return "Your account cannot change Jellyfin watch history.";
+  }
+  return "Jellyfin could not save that change. Nothing else was altered.";
+}
+
+function PlaybackActions({
+  client,
+  label,
+  media,
+  onChange,
+  onPlay,
+  playback,
+}: {
+  client: MediaLibraryClient;
+  label: "episode" | "movie";
+  media: PlayableLibrarySelection["media"];
+  onChange: (playback: LibraryPlaybackState) => void;
+  onPlay: (startPositionSeconds?: number) => void;
+  playback: LibraryPlaybackState;
+}) {
+  const [mutation, setMutation] = useState<PlaybackMutationState>({ kind: "idle" });
+  const pending = mutation.kind === "pending";
+  const watchedAction = playback.played ? "mark_unwatched" : "mark_watched";
+
+  async function updatePlaybackState(action: LibraryPlaybackStateAction) {
+    if (!client.updatePlaybackState || pending) return;
+    setMutation({ action, kind: "pending" });
+    try {
+      const response = await client.updatePlaybackState(media.id, { action });
+      onChange(response.playback);
+      setMutation({
+        kind: "success",
+        message:
+          action === "mark_watched"
+            ? "Marked watched in Jellyfin."
+            : action === "mark_unwatched"
+              ? "Marked unwatched in Jellyfin."
+              : "Saved progress reset in Jellyfin.",
+      });
+    } catch (error) {
+      setMutation({ kind: "error", message: playbackMutationErrorMessage(error) });
+    }
+  }
+
+  return (
+    <div className="library-title__playback-actions">
+      <div className="library-title__playback-primary">
+        <button
+          className="button button--primary"
+          data-directional-item
+          disabled={pending}
+          onClick={() => onPlay()}
+          type="button"
+        >
+          <Play aria-hidden="true" fill="currentColor" />
+          {playback.positionSeconds > 0 ? `Resume ${label}` : `Play ${label}`}
+        </button>
+        {playback.positionSeconds > 0 ? (
+          <button
+            className="button button--glass"
+            data-directional-item
+            disabled={pending}
+            onClick={() => onPlay(0)}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" /> Play {label} from beginning
+          </button>
+        ) : null}
+      </div>
+      {client.updatePlaybackState ? (
+        <div
+          aria-label={`Playback history for ${media.title}`}
+          className="library-title__history-controls"
+          role="group"
+        >
+          <button
+            className="button button--glass"
+            data-directional-item
+            disabled={pending}
+            onClick={() => void updatePlaybackState(watchedAction)}
+            type="button"
+          >
+            {pending && mutation.action === watchedAction ? (
+              <LoaderCircle aria-hidden="true" className="library-title__spinner" />
+            ) : playback.played ? (
+              <RotateCcw aria-hidden="true" />
+            ) : (
+              <Check aria-hidden="true" />
+            )}
+            {playback.played ? "Mark unwatched" : "Mark watched"}
+          </button>
+          {playback.positionSeconds > 0 ? (
+            <button
+              className="button button--glass"
+              data-directional-item
+              disabled={pending}
+              onClick={() => void updatePlaybackState("reset_progress")}
+              type="button"
+            >
+              {pending && mutation.action === "reset_progress" ? (
+                <LoaderCircle aria-hidden="true" className="library-title__spinner" />
+              ) : (
+                <RotateCcw aria-hidden="true" />
+              )}
+              Reset saved progress
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <p aria-live="polite" className="library-title__history-status" data-state={mutation.kind}>
+        {mutation.kind === "pending"
+          ? "Saving to Jellyfin…"
+          : mutation.kind === "success" || mutation.kind === "error"
+            ? mutation.message
+            : ""}
+      </p>
+    </div>
   );
 }
 
@@ -450,7 +581,17 @@ function EpisodeArtwork({ episode }: { episode: LibrarySeasonEpisode }) {
   );
 }
 
-function EpisodeDetail({ episode, onPlay }: { episode: LibrarySeasonEpisode; onPlay: () => void }) {
+function EpisodeDetail({
+  client,
+  episode,
+  onPlaybackChange,
+  onPlay,
+}: {
+  client: MediaLibraryClient;
+  episode: LibrarySeasonEpisode;
+  onPlaybackChange: (playback: LibraryPlaybackState) => void;
+  onPlay: (startPositionSeconds?: number) => void;
+}) {
   const airDate = formatAirDate(episode.airDate);
   const cast = episode.credits.filter(({ type }) => type === "cast");
   const crew = episode.credits.filter(({ type }) => type !== "cast");
@@ -557,26 +698,29 @@ function EpisodeDetail({ episode, onPlay }: { episode: LibrarySeasonEpisode; onP
         </p>
       ) : null}
 
-      <button
-        className="button button--primary library-title__episode-detail-play"
-        data-directional-item
-        onClick={onPlay}
-        type="button"
-      >
-        <Play aria-hidden="true" fill="currentColor" />
-        {episode.playback.positionSeconds > 0 ? "Resume episode" : "Play episode"}
-      </button>
+      <PlaybackActions
+        client={client}
+        label="episode"
+        media={episode.media}
+        onChange={onPlaybackChange}
+        onPlay={onPlay}
+        playback={episode.playback}
+      />
     </section>
   );
 }
 
 function EpisodeList({
+  client,
   onLoadMore,
+  onPlaybackChange,
   onPlay,
   state,
 }: {
+  client: MediaLibraryClient;
   onLoadMore: () => void;
-  onPlay: (episode: LibrarySeasonEpisode) => void;
+  onPlaybackChange: (episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) => void;
+  onPlay: (selection: PlayableLibrarySelection) => void;
   state: Extract<EpisodeState, { kind: "ready" }>;
 }) {
   const [expandedEpisodeId, setExpandedEpisodeId] = useState<string | null>(null);
@@ -644,7 +788,20 @@ function EpisodeList({
               >
                 <Play aria-hidden="true" fill="currentColor" />
               </button>
-              {expanded ? <EpisodeDetail episode={episode} onPlay={() => onPlay(episode)} /> : null}
+              {expanded ? (
+                <EpisodeDetail
+                  client={client}
+                  episode={episode}
+                  onPlaybackChange={(playback) => onPlaybackChange(episode, playback)}
+                  onPlay={(startPositionSeconds) =>
+                    onPlay({
+                      media: episode.media,
+                      playback: episode.playback,
+                      ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
+                    })
+                  }
+                />
+              ) : null}
             </li>
           );
         })}
@@ -821,6 +978,47 @@ export function LibraryTitleDrawer({
     }
   }
 
+  function updateMoviePlayback(playback: LibraryPlaybackState) {
+    setTitleState((state) => {
+      if (state?.kind !== "ready" || state.detail.media.id !== referenceId) return state;
+      return { ...state, detail: { ...state.detail, playback } };
+    });
+  }
+
+  function updateEpisodePlayback(episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) {
+    setEpisodeState((state) => {
+      if (state?.kind !== "ready" || state.requestKey !== episodeRequestKey) return state;
+      return {
+        ...state,
+        items: state.items.map((item) =>
+          item.media.id === episode.media.id ? { ...item, playback } : item,
+        ),
+      };
+    });
+    if (episode.playback.played === playback.played || activeSeasonNumber === null) return;
+    const playedDelta = playback.played ? 1 : -1;
+    setTitleState((state) => {
+      if (state?.kind !== "ready" || state.detail.media.id !== referenceId) return state;
+      return {
+        ...state,
+        detail: {
+          ...state.detail,
+          seasons: state.detail.seasons.map((season) =>
+            season.seasonNumber === activeSeasonNumber
+              ? {
+                  ...season,
+                  playedEpisodeCount: Math.max(
+                    0,
+                    Math.min(season.episodeCount, season.playedEpisodeCount + playedDelta),
+                  ),
+                }
+              : season,
+          ),
+        },
+      };
+    });
+  }
+
   if (!item) return null;
   const episodePanelId = `library-title-${item.media.id}-episodes`;
   const activeSeasonTabId =
@@ -912,15 +1110,20 @@ export function LibraryTitleDrawer({
                   ) : null}
                   {detail!.media.overview ? <p>{detail!.media.overview}</p> : null}
                   {detail!.playback ? (
-                    <button
-                      className="button button--primary library-title__primary-play"
-                      data-directional-item
-                      onClick={() => onPlay({ media: detail!.media, playback: detail!.playback! })}
-                      type="button"
-                    >
-                      <Play aria-hidden="true" fill="currentColor" />
-                      {detail!.playback.positionSeconds > 0 ? "Resume movie" : "Play movie"}
-                    </button>
+                    <PlaybackActions
+                      client={client}
+                      label="movie"
+                      media={detail!.media}
+                      onChange={updateMoviePlayback}
+                      onPlay={(startPositionSeconds) =>
+                        onPlay({
+                          media: detail!.media,
+                          playback: detail!.playback!,
+                          ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
+                        })
+                      }
+                      playback={detail!.playback}
+                    />
                   ) : null}
                 </div>
               </section>
@@ -1006,7 +1209,9 @@ export function LibraryTitleDrawer({
                           />
                         ) : (
                           <EpisodeList
+                            client={client}
                             onLoadMore={() => void loadMoreEpisodes()}
+                            onPlaybackChange={updateEpisodePlayback}
                             onPlay={(episode) => onPlay(episode)}
                             state={visibleEpisodeState}
                           />
