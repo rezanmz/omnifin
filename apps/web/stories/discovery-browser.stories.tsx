@@ -11,7 +11,7 @@ import {
 const meta = {
   args: { initialCriteria: demoBrowseCriteria, live: false },
   component: DiscoveryBrowser,
-  parameters: { layout: "fullscreen" },
+  parameters: { layout: "fullscreen", nextjs: { appDirectory: true } },
   title: "Screens/Browse discovery",
 } satisfies Meta<typeof DiscoveryBrowser>;
 

@@ -38,6 +38,37 @@ describe("DiscoveryBrowser", () => {
     expect(push).toHaveBeenCalledWith("/browse?kind=series&minimumRating=7", { scroll: false });
   });
 
+  it("replaces bootstrap movies with the requested media kind", async () => {
+    const user = userEvent.setup();
+    const load = vi.fn(async (criteria: typeof demoBrowseCriteria) => ({
+      ...demoBrowseResponse,
+      criteria,
+      items: demoBrowseResponse.items.map((item) => ({
+        ...item,
+        id: `series:${item.tmdbId}`,
+        kind: "series" as const,
+        title: `${item.title} Files`,
+      })),
+    }));
+    render(
+      <DiscoveryBrowser
+        client={{ load }}
+        initialCriteria={demoBrowseCriteria}
+        initialResponse={demoBrowseResponse}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Series" }));
+
+    expect(
+      await screen.findByRole("button", { name: "View details for The Far Meridian Files" }),
+    ).toBeVisible();
+    expect(load).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "series" }),
+      expect.anything(),
+    );
+  });
+
   it("debounces title search and preserves scroll position through URL state", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
