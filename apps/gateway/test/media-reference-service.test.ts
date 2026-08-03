@@ -105,7 +105,7 @@ describe("MediaReferenceService", () => {
         id: reference,
         itemId: media.itemId,
         kind: "episode",
-        schemaVersion: 2,
+        schemaVersion: 3,
         seasonNumber: 2,
         title: "Northern Lights",
         year: 2026,
@@ -121,6 +121,45 @@ describe("MediaReferenceService", () => {
       expect(() => service(database).resolve({ ...context, linkRevision: 4 }, reference)).toThrow(
         MediaReferenceError,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("stores local bonus videos as a distinct playable reference kind", () => {
+    const database = seededDatabase();
+    try {
+      const extra = { ...media, episodeNumber: null, kind: "extra" as const, seasonNumber: null };
+      const reference = service(database).createOrRefresh(context, [extra])[0]!;
+      expect(service(database).resolve(context, reference)).toMatchObject({
+        itemId: media.itemId,
+        kind: "extra",
+        schemaVersion: 3,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("never reclassifies an existing title reference as a local extra", () => {
+    const database = seededDatabase();
+    try {
+      const mediaService = service(database);
+      const reference = mediaService.createOrRefresh(context, [media])[0]!;
+      const conflictingExtra = {
+        ...media,
+        episodeNumber: null,
+        kind: "extra" as const,
+        seasonNumber: null,
+      };
+
+      expect(() => mediaService.createOrRefresh(context, [conflictingExtra])).toThrow(
+        MediaReferenceError,
+      );
+      expect(mediaService.resolve(context, reference)).toMatchObject({
+        itemId: media.itemId,
+        kind: "episode",
+      });
     } finally {
       database.close();
     }

@@ -5,6 +5,8 @@ import "./library-title-drawer.css";
 
 import type {
   LibraryBrowseItem,
+  LibraryExtra,
+  LibraryExtrasResponse,
   LibraryMovieDetail,
   LibraryMovieMediaSource,
   LibraryPlaybackState,
@@ -71,6 +73,16 @@ type EpisodeState =
       requestKey: string;
     };
 
+type ExtrasState =
+  | { kind: "error"; message: string; requestKey: string }
+  | {
+      items: LibraryExtra[];
+      kind: "ready";
+      loadingMore: boolean;
+      nextCursor: string | null;
+      requestKey: string;
+    };
+
 function detailErrorMessage(error: unknown) {
   if (error instanceof MediaLibraryClientError) {
     if (error.kind === "signed_out")
@@ -78,6 +90,16 @@ function detailErrorMessage(error: unknown) {
     if (error.kind === "forbidden") return "Your account can no longer inspect this library.";
   }
   return "Jellyfin could not provide this title right now. Your library was not changed.";
+}
+
+function extrasErrorMessage(error: unknown) {
+  if (error instanceof MediaLibraryClientError) {
+    if (error.kind === "signed_out")
+      return "Your session ended. Sign in again to inspect local extras.";
+    if (error.kind === "forbidden")
+      return "Your account can no longer inspect extras in this library.";
+  }
+  return "Jellyfin could not provide local extras right now. The title and watch state were not changed.";
 }
 
 function formatRuntime(minutes: number | null) {
@@ -558,6 +580,183 @@ function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
   );
 }
 
+const EXTRA_GROUPS = [
+  { label: "Trailers & clips", types: ["trailer", "clip"] },
+  { label: "Featurettes & behind the scenes", types: ["featurette", "behind_the_scenes"] },
+  { label: "Deleted scenes", types: ["deleted_scene", "scene"] },
+  { label: "Interviews", types: ["interview"] },
+  { label: "Shorts & samples", types: ["short", "sample"] },
+  { label: "Other bonus material", types: ["other"] },
+] as const;
+
+function extraTypeLabel(extraType: LibraryExtra["extraType"]) {
+  return extraType
+    .split("_")
+    .map((word) => word[0]!.toLocaleUpperCase("en-US") + word.slice(1))
+    .join(" ");
+}
+
+function ExtrasSkeleton() {
+  return (
+    <section
+      aria-label="Loading trailers and extras"
+      className="library-title__extras library-title__extras--loading"
+      role="status"
+    >
+      <div className="library-title__section-heading">
+        <div>
+          <p className="eyebrow">Bonus shelf</p>
+          <h3>Trailers & extras</h3>
+        </div>
+      </div>
+      <div aria-hidden="true" className="library-title__extras-skeleton">
+        {Array.from({ length: 3 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </div>
+      <span className="sr-only">Loading local Jellyfin bonus videos.</span>
+    </section>
+  );
+}
+
+function ExtrasSection({
+  onLoadMore,
+  onPlay,
+  onRetry,
+  state,
+}: {
+  onLoadMore: () => void;
+  onPlay: (selection: PlayableLibrarySelection) => void;
+  onRetry: () => void;
+  state: ExtrasState;
+}) {
+  if (state.kind === "error") {
+    return (
+      <section aria-labelledby="library-title-extras-heading" className="library-title__extras">
+        <div className="library-title__section-heading">
+          <div>
+            <p className="eyebrow">Bonus shelf</p>
+            <h3 id="library-title-extras-heading">Trailers & extras</h3>
+          </div>
+        </div>
+        <div className="library-title__extras-unavailable" role="status">
+          <WifiOff aria-hidden="true" />
+          <div>
+            <strong>Local extras are temporarily out of reach.</strong>
+            <p>{state.message}</p>
+          </div>
+          <button className="button button--glass" onClick={onRetry} type="button">
+            <RotateCcw aria-hidden="true" /> Retry extras
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section aria-labelledby="library-title-extras-heading" className="library-title__extras">
+      <div className="library-title__section-heading">
+        <div>
+          <p className="eyebrow">Bonus shelf</p>
+          <h3 id="library-title-extras-heading">Trailers & extras</h3>
+        </div>
+        <span>Local · private Jellyfin playback</span>
+      </div>
+      {state.items.length === 0 ? (
+        <div className="library-title__extras-empty" role="status">
+          <Clapperboard aria-hidden="true" />
+          <p>No local bonus videos are attached to this title in Jellyfin.</p>
+        </div>
+      ) : (
+        <div className="library-title__extra-groups">
+          {EXTRA_GROUPS.map((group) => {
+            const items = state.items.filter((extra) =>
+              (group.types as readonly LibraryExtra["extraType"][]).includes(extra.extraType),
+            );
+            if (items.length === 0) return null;
+            return (
+              <section aria-label={group.label} key={group.label}>
+                <h4>{group.label}</h4>
+                <ul>
+                  {items.map((extra) => {
+                    const artwork = sameOriginMediaPath(
+                      extra.media.artwork.posterPath ?? extra.media.artwork.backdropPath,
+                    );
+                    const progress = Math.round(
+                      (extra.playback.positionSeconds / extra.playback.durationSeconds) * 100,
+                    );
+                    const action = extra.playback.positionSeconds > 0 ? "Resume" : "Play";
+                    return (
+                      <li key={extra.media.id}>
+                        <button
+                          aria-label={`${action} local extra ${extra.media.title}`}
+                          data-directional-item
+                          onClick={() => onPlay({ media: extra.media, playback: extra.playback })}
+                          type="button"
+                        >
+                          <span
+                            className="library-title__extra-artwork"
+                            data-artwork-source={artwork ? "remote" : "generated"}
+                          >
+                            <Clapperboard aria-hidden="true" />
+                            {artwork ? (
+                              // Extra artwork stays on the authenticated Omnifin media route.
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img alt="" decoding="async" loading="lazy" src={artwork} />
+                            ) : null}
+                            <span className="library-title__extra-play" aria-hidden="true">
+                              <Play fill="currentColor" />
+                            </span>
+                            {progress > 0 && !extra.playback.played ? (
+                              <i style={{ width: `${progress}%` }} />
+                            ) : null}
+                          </span>
+                          <span className="library-title__extra-copy">
+                            <strong>{extra.media.title}</strong>
+                            <span>
+                              {extraTypeLabel(extra.extraType)}
+                              {extra.media.runtimeMinutes
+                                ? ` · ${formatRuntime(extra.media.runtimeMinutes)}`
+                                : ""}
+                            </span>
+                            <small>
+                              Local
+                              {extra.playback.played
+                                ? " · Watched"
+                                : extra.playback.positionSeconds > 0
+                                  ? ` · ${playbackLabel(extra.playback)}`
+                                  : ""}
+                            </small>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+      )}
+      {state.nextCursor ? (
+        <button
+          className="button button--glass library-title__more"
+          disabled={state.loadingMore}
+          onClick={onLoadMore}
+          type="button"
+        >
+          {state.loadingMore ? (
+            <LoaderCircle aria-hidden="true" className="library-title__spinner" />
+          ) : (
+            <ChevronRight aria-hidden="true" />
+          )}
+          {state.loadingMore ? "Loading extras…" : "More extras"}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function EpisodeArtwork({ episode }: { episode: LibrarySeasonEpisode }) {
   const source = sameOriginMediaPath(episode.media.artwork.posterPath);
   return (
@@ -836,10 +1035,13 @@ export function LibraryTitleDrawer({
   const [attempt, setAttempt] = useState(0);
   const [episodeAttempt, setEpisodeAttempt] = useState(0);
   const [episodeState, setEpisodeState] = useState<EpisodeState | null>(null);
+  const [extrasAttempt, setExtrasAttempt] = useState(0);
+  const [extrasState, setExtrasState] = useState<ExtrasState | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
   const referenceId = item?.media.id ?? "none";
   const requestKey = `${referenceId}:${attempt}`;
+  const extrasRequestKey = `${referenceId}:${extrasAttempt}`;
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -886,6 +1088,55 @@ export function LibraryTitleDrawer({
     return titleState;
   }, [item, open, requestKey, titleState]);
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
+
+  useEffect(() => {
+    if (!open || !item || detail?.media.id !== item.media.id) return;
+    const controller = new AbortController();
+    let current = true;
+    const request = client.loadExtras
+      ? client.loadExtras(item.media.id, { limit: 12 }, controller.signal)
+      : Promise.reject(
+          new MediaLibraryClientError(
+            "unavailable",
+            "title_extras_unavailable",
+            "Local extras are unavailable.",
+          ),
+        );
+    void request
+      .then((response) => {
+        if (!current) return;
+        if (response.state === "unavailable") {
+          setExtrasState({
+            kind: "error",
+            message:
+              response.source.failure?.message ??
+              "Jellyfin could not provide local extras right now.",
+            requestKey: extrasRequestKey,
+          });
+          return;
+        }
+        setExtrasState({
+          items: response.items,
+          kind: "ready",
+          loadingMore: false,
+          nextCursor: response.nextCursor,
+          requestKey: extrasRequestKey,
+        });
+      })
+      .catch((error: unknown) => {
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+        setExtrasState({
+          kind: "error",
+          message: extrasErrorMessage(error),
+          requestKey: extrasRequestKey,
+        });
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [client, detail, extrasRequestKey, item, open]);
+
   const recommendedSeason =
     detail?.seasons.find((season) => season.playedEpisodeCount < season.episodeCount) ??
     detail?.seasons[0];
@@ -978,6 +1229,44 @@ export function LibraryTitleDrawer({
     }
   }
 
+  async function loadMoreExtras() {
+    const nextCursor = extrasState?.kind === "ready" ? extrasState.nextCursor : null;
+    if (
+      !item ||
+      !client.loadExtras ||
+      extrasState?.kind !== "ready" ||
+      !nextCursor ||
+      extrasState.loadingMore
+    ) {
+      return;
+    }
+    const currentState = extrasState;
+    setExtrasState({ ...currentState, loadingMore: true });
+    try {
+      const response: LibraryExtrasResponse = await client.loadExtras(item.media.id, {
+        cursor: nextCursor,
+        limit: 12,
+      });
+      if (response.state === "unavailable") throw new Error("extras unavailable");
+      const known = new Set(currentState.items.map((extra) => extra.media.id));
+      setExtrasState({
+        ...currentState,
+        items: [
+          ...currentState.items,
+          ...response.items.filter((extra) => !known.has(extra.media.id)),
+        ],
+        loadingMore: false,
+        nextCursor: response.nextCursor,
+      });
+    } catch (error) {
+      setExtrasState({
+        kind: "error",
+        message: extrasErrorMessage(error),
+        requestKey: extrasRequestKey,
+      });
+    }
+  }
+
   function updateMoviePlayback(playback: LibraryPlaybackState) {
     setTitleState((state) => {
       if (state?.kind !== "ready" || state.detail.media.id !== referenceId) return state;
@@ -1031,6 +1320,7 @@ export function LibraryTitleDrawer({
       item.media.artwork.posterPath,
   );
   const visibleEpisodeState = episodeState?.requestKey === episodeRequestKey ? episodeState : null;
+  const visibleExtrasState = extrasState?.requestKey === extrasRequestKey ? extrasState : null;
 
   return (
     <dialog
@@ -1129,6 +1419,17 @@ export function LibraryTitleDrawer({
               </section>
 
               {detail!.movie ? <MovieInformation movie={detail!.movie} /> : null}
+
+              {visibleExtrasState ? (
+                <ExtrasSection
+                  onLoadMore={() => void loadMoreExtras()}
+                  onPlay={onPlay}
+                  onRetry={() => setExtrasAttempt((value) => value + 1)}
+                  state={visibleExtrasState}
+                />
+              ) : (
+                <ExtrasSkeleton />
+              )}
 
               {detail!.media.kind === "series" ? (
                 <section className="library-title__hierarchy">

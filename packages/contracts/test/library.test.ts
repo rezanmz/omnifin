@@ -9,6 +9,10 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseJsonSchema,
   libraryBrowseResponseSchema,
+  libraryExtrasQueryJsonSchema,
+  libraryExtrasQuerySchema,
+  libraryExtrasResponseJsonSchema,
+  libraryExtrasResponseSchema,
   libraryItemRefreshRequestSchema,
   libraryMetadataUpdateRequestSchema,
   libraryMutationResponseSchema,
@@ -391,6 +395,52 @@ describe("library operation contracts", () => {
     );
   });
 
+  it("models bounded local extras without exposing parent or child upstream identity", () => {
+    const extraReferenceId = `media_${"x".repeat(22)}`;
+    const response = {
+      generatedAt: catalogue.generatedAt,
+      items: [
+        {
+          extraType: "behind_the_scenes" as const,
+          media: {
+            ...catalogue.items[0]!.media,
+            artwork: {
+              ...catalogue.items[0]!.media.artwork,
+              backdropPath: `/v1/media/${extraReferenceId}/images/backdrop`,
+              posterPath: `/v1/media/${extraReferenceId}/images/poster`,
+            },
+            id: extraReferenceId,
+            kind: "other" as const,
+            subtitle: "Local extra",
+            title: "Building the Meridian",
+          },
+          playback: { durationSeconds: 720, played: false, positionSeconds: 120 },
+          source: "local" as const,
+        },
+      ],
+      nextCursor: "ZXh0cmFz.c2lnbmF0dXJl",
+      parentReferenceId: referenceId,
+      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+      state: "complete" as const,
+    };
+
+    expect(libraryExtrasResponseSchema.parse(response)).toEqual(response);
+    expect(libraryExtrasQuerySchema.parse({ limit: "12" })).toEqual({ limit: 12 });
+    expect(libraryExtrasQuerySchema.safeParse({ limit: 25 }).success).toBe(false);
+    expect(JSON.stringify(response)).not.toMatch(/external|jellyfin\.example|upstream|itemId/iu);
+    expect(
+      libraryExtrasResponseSchema.safeParse({
+        ...response,
+        items: [
+          {
+            ...response.items[0],
+            media: { ...response.items[0]!.media, id: referenceId },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("models rich owned-movie facts without accepting cross-reference person artwork", () => {
     const media = catalogue.items[0]!.media;
     const detail = {
@@ -538,6 +588,8 @@ describe("library operation contracts", () => {
     expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryExtrasQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryExtrasResponseJsonSchema).not.toHaveProperty("$schema");
     expect(librarySeasonEpisodesQueryJsonSchema).not.toHaveProperty("$schema");
     expect(librarySeasonEpisodesResponseJsonSchema).not.toHaveProperty("$schema");
   });

@@ -1,5 +1,6 @@
 import type {
   JellyfinContinueWatchingResult,
+  JellyfinLibraryExtrasResult,
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
@@ -14,6 +15,7 @@ import {
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import {
   libraryBrowseResponseSchema,
+  libraryExtrasResponseSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
@@ -212,6 +214,28 @@ function harness(options: { withIdentity?: boolean } = {}) {
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
   }));
+  const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    items: [
+      {
+        artwork: {
+          accentColor: "#775544",
+          backdrop: { itemId: "private-extra-backdrop", type: "Backdrop" },
+          blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+          poster: { itemId: "private-extra-poster", type: "Primary" },
+        },
+        contentRating: null,
+        externalId: "private-upstream-trailer",
+        extraType: "trailer",
+        overview: "A local theatrical trailer.",
+        played: false,
+        positionSeconds: 15,
+        runtimeSeconds: 142,
+        title: "Official trailer",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 12,
+  }));
   const readLibrarySeasonEpisodes = vi.fn(
     async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
       items: [
@@ -265,6 +289,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
@@ -287,6 +312,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
@@ -668,6 +694,101 @@ describe("ContinueWatchingService", () => {
         ),
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
       expect(readLibrarySeasonEpisodes).toHaveBeenCalledTimes(calls);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("pages parent-scoped local extras without exposing Jellyfin identities", async () => {
+    const { database, readLibraryExtras, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const parentReferenceId = catalogue.items[0]!.media.id;
+      const first = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+
+      expect(libraryExtrasResponseSchema.parse(first)).toEqual(first);
+      expect(first).toMatchObject({
+        items: [
+          {
+            extraType: "trailer",
+            media: {
+              artwork: {
+                backdropPath: `/v1/media/media_${"e".repeat(22)}/images/backdrop`,
+                posterPath: `/v1/media/media_${"e".repeat(22)}/images/poster`,
+              },
+              id: `media_${"e".repeat(22)}`,
+              kind: "other",
+              title: "Official trailer",
+            },
+            playback: { durationSeconds: 142, played: false, positionSeconds: 15 },
+            source: "local",
+          },
+        ],
+        parentReferenceId,
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      });
+      expect(first.nextCursor).toMatch(/^v2\./u);
+      expect(JSON.stringify(first)).not.toMatch(/private-|viewer-external|jellyfin-access/iu);
+      expect(readLibraryExtras).toHaveBeenCalledWith(
+        {
+          itemId: privateSeriesId,
+          limit: 12,
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+
+      await service.readLibraryExtras(
+        parentReferenceId,
+        { cursor: first.nextCursor!, limit: 12 },
+        { principal: principal() },
+      );
+      expect(readLibraryExtras).toHaveBeenLastCalledWith(
+        expect.objectContaining({ startIndex: 12 }),
+        undefined,
+      );
+
+      const calls = readLibraryExtras.mock.calls.length;
+      await expect(
+        service.readLibraryExtras(
+          parentReferenceId,
+          { cursor: `${first.nextCursor!}tampered`, limit: 12 },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+      expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
+
+      readLibraryExtras.mockRejectedValueOnce(
+        new Error(`private ${privateAccessToken} ${privateItemId}`),
+      );
+      const unavailable = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(unavailable).toMatchObject({
+        items: [],
+        nextCursor: null,
+        parentReferenceId,
+        source: {
+          failure: {
+            message: "The Jellyfin library is temporarily unavailable.",
+            operation: "media.library",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
+      expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
     } finally {
       database.close();
     }

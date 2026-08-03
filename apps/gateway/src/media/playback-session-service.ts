@@ -430,7 +430,7 @@ export class PlaybackSessionService {
     } catch (error) {
       throw new PlaybackSessionError("not_found", { cause: error });
     }
-    if (reference.kind !== "movie" && reference.kind !== "episode") {
+    if (reference.kind !== "movie" && reference.kind !== "episode" && reference.kind !== "extra") {
       throw new PlaybackSessionError("not_found");
     }
 

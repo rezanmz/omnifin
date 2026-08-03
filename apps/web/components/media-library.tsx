@@ -76,6 +76,10 @@ const lazyMediaLibraryDemoClient: MediaLibraryClient = {
     const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
     return mediaLibraryDemoClient.loadSeasonEpisodes!(referenceId, seasonNumber, input, signal);
   },
+  async loadExtras(referenceId, input, signal) {
+    const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
+    return mediaLibraryDemoClient.loadExtras!(referenceId, input, signal);
+  },
   async loadTitle(referenceId, signal) {
     const { mediaLibraryDemoClient } = await import("../lib/media-library-demo");
     return mediaLibraryDemoClient.loadTitle!(referenceId, signal);
