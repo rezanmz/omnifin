@@ -193,6 +193,9 @@ async function waitForVisibleDiscoveryArtwork(page: Page) {
     .first();
   await expect(artwork).toHaveAttribute("src", /\/api\/discovery\/artwork\/discovery_art_/u);
   const initialScroll = await page.evaluate(() => window.scrollY);
+  await artwork.evaluate((image) => {
+    if (image instanceof HTMLImageElement) image.loading = "eager";
+  });
   await artwork.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
