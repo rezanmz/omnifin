@@ -2,7 +2,14 @@
 
 import { Command, Search } from "lucide-react";
 import type { ComponentType, RefObject } from "react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { GlobalSearchProperties } from "./global-search";
 import {
@@ -110,9 +117,11 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const [pendingQuery, setPendingQuery] = useState(properties.initialQuery ?? "");
   const [restoreFocus, setRestoreFocus] = useState(false);
   const [shortcutRequested, setShortcutRequested] = useState(false);
+  const activationScrollReference = useRef<DocumentScrollPosition | null>(null);
   const placeholderReference = useRef<HTMLInputElement>(null);
 
   const activate = useCallback((shortcut = false) => {
+    activationScrollReference.current ??= captureDocumentScrollPosition();
     if (shortcut) setShortcutRequested(true);
     setLoading(true);
     void loadGlobalSearch()
@@ -122,6 +131,12 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
       })
       .catch(() => setLoading(false));
   }, []);
+
+  useLayoutEffect(() => {
+    if (!SearchComponent) return;
+    restoreDocumentScrollPosition(activationScrollReference.current);
+    activationScrollReference.current = null;
+  }, [SearchComponent]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {

@@ -1,0 +1,92 @@
+.loading {
+  padding-top: clamp(74px, 9vw, 136px);
+}
+
+.loading[data-hide-hero] {
+  padding-top: 0;
+}
+
+.loadingHero {
+  display: grid;
+  gap: 15px;
+  padding-bottom: 42px;
+}
+
+.loadingHero i,
+.loadingHero b,
+.loadingHero span,
+.loadingCommand,
+.loadingMetrics span,
+.loadingWeek span {
+  animation: shimmer 1.4s ease-in-out infinite;
+  background: linear-gradient(105deg, var(--fill-subtle), var(--fill-hover), var(--fill-subtle));
+  background-size: 200% 100%;
+  border-radius: 15px;
+  display: block;
+}
+
+.loadingHero i {
+  height: 14px;
+  width: 160px;
+}
+
+.loadingHero b {
+  height: clamp(70px, 10vw, 126px);
+  width: min(720px, 74vw);
+}
+
+.loadingHero span {
+  height: 48px;
+  width: min(630px, 70vw);
+}
+
+.loadingCommand {
+  height: 66px;
+  margin-bottom: 20px;
+}
+
+.loadingMetrics,
+.loadingWeek {
+  display: grid;
+  gap: 12px;
+}
+
+.loadingMetrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.loadingMetrics span {
+  height: 132px;
+}
+
+.loadingWeek {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.loadingWeek span {
+  height: 470px;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (max-width: 840px) {
+  .loadingMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingHero i,
+  .loadingHero b,
+  .loadingHero span,
+  .loadingCommand,
+  .loadingMetrics span,
+  .loadingWeek span {
+    animation: none;
+  }
+}

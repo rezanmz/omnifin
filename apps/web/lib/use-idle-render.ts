@@ -20,20 +20,33 @@ export function useIdleRender(minimumDelayMs = 0) {
     let idleHandle = 0;
     let secondFrame = 0;
     let firstFrame = 0;
+    let delayElapsed = minimumDelayMs === 0;
+    let paintedFramesElapsed = false;
+    let idleScheduled = false;
     const scheduleWhenIdle = () => {
+      if (!delayElapsed || !paintedFramesElapsed || idleScheduled) return;
+      idleScheduled = true;
       if (browser.requestIdleCallback && browser.cancelIdleCallback) {
         idleHandle = browser.requestIdleCallback(() => setReady(true), {
           timeout: MAXIMUM_IDLE_DELAY_MS,
         });
         return;
       }
-      firstFrame = window.requestAnimationFrame(() => {
-        secondFrame = window.requestAnimationFrame(() => setReady(true));
-      });
+      setReady(true);
     };
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        paintedFramesElapsed = true;
+        scheduleWhenIdle();
+      });
+    });
     const delayHandle =
-      minimumDelayMs > 0 ? window.setTimeout(scheduleWhenIdle, minimumDelayMs) : undefined;
-    if (delayHandle === undefined) scheduleWhenIdle();
+      minimumDelayMs > 0
+        ? window.setTimeout(() => {
+            delayElapsed = true;
+            scheduleWhenIdle();
+          }, minimumDelayMs)
+        : undefined;
 
     return () => {
       if (delayHandle !== undefined) window.clearTimeout(delayHandle);

@@ -2,18 +2,12 @@ import type { CSSProperties } from "react";
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 
 import type { DashboardModel, DisplayProfile, ServiceStatus } from "../lib/dashboard-data";
-import type { ThemePreference } from "../lib/theme";
-import { CalendarStrip } from "./calendar-strip";
-import { CinematicBackdrop } from "./cinematic-backdrop";
+import { ApplicationShellContent } from "./application-shell";
 import { DashboardState, type DashboardStateKind } from "./dashboard-state";
-import { DiscoveryDashboard } from "./discovery-dashboard";
+import { DeferredDashboardSections } from "./deferred-dashboard-sections";
+import { DeferredDemoDashboardSections } from "./deferred-demo-dashboard-sections";
+import { DeferredDiscoveryDashboard } from "./deferred-discovery-dashboard";
 import { HeroSpotlight } from "./hero-spotlight";
-import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
-import { LiquidGlassEnvironment } from "./liquid-glass-environment";
-import { MediaRail } from "./media-rail";
-import { MobileNavigation, NavigationRail } from "./navigation-rail";
-import { OperationsDock } from "./operations-dock";
-import { TopCommandBar } from "./top-command-bar";
 
 function aggregateStatus(services: DashboardModel["services"]): ServiceStatus {
   if (services.some(({ status }) => status === "offline")) return "offline";
@@ -28,83 +22,77 @@ export function DashboardScreen({
   discoveryInitialFeed,
   discoveryRefresh = true,
   discoveryShowContinueWatching = true,
+  demoSections = false,
   displayProfile = "standard",
+  heroArtworkPath,
   liveContinueWatching = false,
   liveDiscovery = false,
-  themePreference = "system",
 }: {
   data: DashboardModel;
   discoveryInitialFeed?: DiscoveryFeedResponse;
   discoveryRefresh?: boolean;
   discoveryShowContinueWatching?: boolean;
+  demoSections?: boolean;
   displayProfile?: DisplayProfile;
+  heroArtworkPath?: string;
   liveContinueWatching?: boolean;
   liveDiscovery?: boolean;
-  themePreference?: ThemePreference;
 }) {
   return (
-    <div
-      className="application-frame"
-      data-display-profile={displayProfile}
-      style={{ "--ambient-accent": data.hero.accent } as AmbientStyle}
+    <ApplicationShellContent
+      accent={data.hero.accent}
+      displayProfile={displayProfile}
+      status={aggregateStatus(data.services)}
     >
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail />
-      <div className="application-shell">
-        <TopCommandBar
-          connectionStatus={aggregateStatus(data.services)}
-          themePreference={themePreference}
-        />
-        <main className="dashboard" id="main-content" tabIndex={-1}>
-          {liveDiscovery ? (
-            <DiscoveryDashboard
-              {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
-              live={discoveryRefresh}
-              showContinueWatching={discoveryShowContinueWatching}
-            />
-          ) : (
-            <>
-              <HeroSpotlight hero={data.hero} />
-              {liveContinueWatching ? (
-                <LazyContinueWatchingRail />
-              ) : (
-                <MediaRail items={data.continueWatching} title="Continue watching" />
-              )}
-              <MediaRail items={data.discovery} title="Made for tonight" />
-            </>
-          )}
-          <CalendarStrip items={data.calendar} />
-          <OperationsDock operations={data.operations} />
-        </main>
-      </div>
-      <MobileNavigation />
-    </div>
+      <main
+        className="dashboard"
+        id="main-content"
+        style={{ "--ambient-accent": data.hero.accent } as AmbientStyle}
+        tabIndex={-1}
+      >
+        {liveDiscovery ? (
+          <DeferredDiscoveryDashboard
+            {...(discoveryInitialFeed === undefined ? {} : { initialFeed: discoveryInitialFeed })}
+            live={discoveryRefresh}
+            showContinueWatching={discoveryShowContinueWatching}
+            suppressHero={false}
+          />
+        ) : (
+          <HeroSpotlight
+            {...(heroArtworkPath === undefined ? {} : { artworkPath: heroArtworkPath })}
+            hero={data.hero}
+          />
+        )}
+        {demoSections ? (
+          <DeferredDemoDashboardSections />
+        ) : (
+          <DeferredDashboardSections
+            calendar={data.calendar}
+            continueWatching={data.continueWatching}
+            discovery={data.discovery}
+            liveContinueWatching={liveContinueWatching}
+            operations={data.operations}
+            showMedia={!liveDiscovery}
+          />
+        )}
+      </main>
+    </ApplicationShellContent>
   );
 }
 
 export function DashboardStateScreen({
   displayProfile = "standard",
   kind,
-  themePreference = "system",
 }: {
   displayProfile?: DisplayProfile;
   kind: DashboardStateKind;
-  themePreference?: ThemePreference;
 }) {
   const connectionStatus: ServiceStatus = kind === "offline" ? "offline" : "attention";
   return (
-    <div className="application-frame" data-display-profile={displayProfile}>
-      <LiquidGlassEnvironment />
-      <CinematicBackdrop />
-      <NavigationRail />
-      <div className="application-shell">
-        <TopCommandBar connectionStatus={connectionStatus} themePreference={themePreference} />
-        <main className="dashboard" id="main-content" tabIndex={-1}>
-          <DashboardState kind={kind} />
-        </main>
-      </div>
-      <MobileNavigation />
-    </div>
+    <ApplicationShellContent displayProfile={displayProfile} status={connectionStatus}>
+      <main className="dashboard" id="main-content" tabIndex={-1}>
+        <DashboardState kind={kind} />
+      </main>
+    </ApplicationShellContent>
   );
 }

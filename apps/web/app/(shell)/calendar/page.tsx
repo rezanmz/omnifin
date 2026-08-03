@@ -1,0 +1,74 @@
+import type { Metadata } from "next";
+
+import { AcquisitionCalendarLoader } from "../../../components/acquisition-calendar-loader";
+import {
+  AcquisitionCalendarFrame,
+  AcquisitionCalendarHero,
+} from "../../../components/acquisition-calendar-frame";
+import {
+  degradedAcquisitionCalendar,
+  demoAcquisitionCalendar,
+  demoMonthAcquisitionCalendar,
+  emptyAcquisitionCalendar,
+  unconfiguredAcquisitionCalendar,
+} from "../../../lib/acquisition-calendar-demo";
+import type { AcquisitionCalendarLoadOutcome } from "../../../lib/acquisition-calendar";
+import "../../control-room.css";
+
+export const metadata: Metadata = { title: "Acquisition calendar" };
+export const dynamic = "force-dynamic";
+
+interface AcquisitionCalendarPageProperties {
+  searchParams: Promise<{ "test-view"?: string | string[] }>;
+}
+
+function testOutcome(
+  view: string | string[] | undefined,
+): AcquisitionCalendarLoadOutcome | undefined {
+  if (process.env.OMNIFIN_TEST_MODE !== "true") return undefined;
+  if (["forbidden", "signed_out", "unavailable"].includes(String(view))) {
+    return { status: String(view) } as Exclude<AcquisitionCalendarLoadOutcome, { status: "ready" }>;
+  }
+  const calendar =
+    view === "empty"
+      ? emptyAcquisitionCalendar
+      : view === "degraded"
+        ? degradedAcquisitionCalendar
+        : view === "unconfigured"
+          ? unconfiguredAcquisitionCalendar
+          : view === "month"
+            ? demoMonthAcquisitionCalendar
+            : view === "ready"
+              ? demoAcquisitionCalendar
+              : undefined;
+  return calendar ? { calendar, status: "ready" } : undefined;
+}
+
+export default async function AcquisitionCalendarPage({
+  searchParams,
+}: AcquisitionCalendarPageProperties) {
+  const parameters = await searchParams;
+  const test = testOutcome(parameters["test-view"]);
+  const demo =
+    test === undefined && process.env.OMNIFIN_DEMO_MODE === "true"
+      ? ({ calendar: demoAcquisitionCalendar, status: "ready" } as const)
+      : undefined;
+  const outcome = test ?? demo;
+  const initialView = parameters["test-view"] === "month" ? "month" : "week";
+
+  return (
+    <>
+      <AcquisitionCalendarFrame>
+        {outcome?.status === "ready" ? (
+          <AcquisitionCalendarHero calendar={outcome.calendar} view={initialView} />
+        ) : null}
+        <AcquisitionCalendarLoader
+          embedded
+          hideHero={outcome?.status === "ready"}
+          initialView={initialView}
+          {...(outcome === undefined ? {} : { initialOutcome: outcome, live: false })}
+        />
+      </AcquisitionCalendarFrame>
+    </>
+  );
+}

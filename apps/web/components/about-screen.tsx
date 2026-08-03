@@ -164,71 +164,18 @@ function AboutFooter() {
   );
 }
 
-export function AboutScreenSkeleton({
-  displayProfile = "standard",
-}: {
-  displayProfile?: DisplayProfile;
-}) {
-  return (
-    <div className="about-layout" data-display-profile={displayProfile}>
-      <CinematicBackdrop />
-      <main aria-busy="true" className="about-shell" id="main-content" tabIndex={-1}>
-        <AboutNavigation />
-        <AboutHero />
-        <div className="sr-only" role="status">
-          Loading local build identity…
-        </div>
-        <div aria-hidden="true" className="about-grid">
-          <article className="about-passport about-passport--skeleton" data-liquid-glass>
-            <div className="about-passport__header">
-              <span className="about-skeleton-line about-skeleton-line--heading" />
-              <span className="about-skeleton-line about-skeleton-line--badge" />
-            </div>
-            <div className="about-passport__version-block">
-              <span className="about-skeleton-line about-skeleton-line--version" />
-              <span className="about-skeleton-line about-skeleton-line--copy" />
-            </div>
-            <div className="about-passport__facts about-passport__facts--skeleton">
-              {[0, 1, 2, 3].map((index) => (
-                <div key={index}>
-                  <span className="about-skeleton-line about-skeleton-line--label" />
-                  <span className="about-skeleton-line about-skeleton-line--fact" />
-                </div>
-              ))}
-            </div>
-            <div className="about-passport__footer">
-              <span className="about-skeleton-line about-skeleton-line--action" />
-              <span className="about-skeleton-line about-skeleton-line--action" />
-            </div>
-          </article>
-          <aside className="about-sidebar">
-            {[0, 1].map((index) => (
-              <section className="about-integrity about-integrity--skeleton" key={index}>
-                <span className="about-skeleton-line about-skeleton-line--label" />
-                <span className="about-skeleton-line about-skeleton-line--sidebar-title" />
-                <span className="about-skeleton-line about-skeleton-line--copy" />
-                <span className="about-skeleton-line about-skeleton-line--copy" />
-                <span className="about-skeleton-line about-skeleton-line--copy" />
-              </section>
-            ))}
-          </aside>
-        </div>
-        <AboutFooter />
-      </main>
-    </div>
-  );
-}
-
 export function AboutScreen({
   displayProfile = "standard",
+  embedded = false,
   outcome,
 }: {
   displayProfile?: DisplayProfile;
+  embedded?: boolean;
   outcome: RuntimeIdentityLoadOutcome;
 }) {
   return (
     <div className="about-layout" data-display-profile={displayProfile}>
-      <CinematicBackdrop />
+      {embedded ? null : <CinematicBackdrop />}
       <main className="about-shell" id="main-content" tabIndex={-1}>
         <AboutNavigation />
         <AboutHero />
@@ -260,3 +207,5 @@ export function AboutScreen({
     </div>
   );
 }
+
+export { AboutScreenSkeleton } from "./about-screen-skeleton";

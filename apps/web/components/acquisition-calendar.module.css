@@ -15,8 +15,8 @@
 .heroLens {
   --glass-pointer-x: 22%;
   --glass-pointer-y: 0%;
-  -webkit-backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
-  backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   background:
     radial-gradient(
       circle 132px at var(--glass-pointer-x) var(--glass-pointer-y),
@@ -34,6 +34,13 @@
     0 4px 12px color-mix(in srgb, var(--glass-cast-shadow) 48%, transparent);
   isolation: isolate;
   position: relative;
+}
+
+:global(:root[data-liquid-glass-ready]) .topbar,
+:global(:root[data-liquid-glass-ready]) .commandGlass,
+:global(:root[data-liquid-glass-ready]) .heroLens {
+  -webkit-backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
+  backdrop-filter: blur(40px) saturate(180%) contrast(1.03) brightness(1.04);
 }
 
 .topbar::before,

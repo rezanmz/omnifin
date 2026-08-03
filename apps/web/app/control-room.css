@@ -9,16 +9,20 @@
 
 .cinematic-backdrop__aurora {
   border-radius: 999px;
-  filter: blur(110px);
-  opacity: 0.18;
+  opacity: 0.32;
   position: absolute;
 }
 
 .cinematic-backdrop__aurora--one {
-  background: color-mix(
-    in srgb,
-    var(--ambient-accent, var(--backdrop-aurora-one)) 36%,
-    var(--backdrop-aurora-one)
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(
+        in srgb,
+        var(--ambient-accent, var(--backdrop-aurora-one)) 36%,
+        var(--backdrop-aurora-one)
+      )
+      0%,
+    transparent 72%
   );
   height: 42vw;
   right: -14vw;
@@ -27,7 +31,7 @@
 }
 
 .cinematic-backdrop__aurora--two {
-  background: var(--backdrop-aurora-two);
+  background: radial-gradient(ellipse at center, var(--backdrop-aurora-two) 0%, transparent 72%);
   bottom: -26vw;
   height: 48vw;
   left: 12vw;

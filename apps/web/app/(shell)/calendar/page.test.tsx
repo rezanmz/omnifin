@@ -1,0 +1,82 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import AcquisitionCalendarPage from "./page";
+
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined }),
+}));
+
+describe("AcquisitionCalendarPage", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders geometry-preserving loading while the media boundary resolves", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+
+    render(await AcquisitionCalendarPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByLabelText("Loading acquisition calendar")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.getByRole("main")).toContainElement(
+      screen.getByLabelText("Loading acquisition calendar"),
+    );
+    expect(
+      screen.queryByRole("navigation", { name: "Calendar navigation" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Color theme" })).not.toBeInTheDocument();
+  });
+
+  it("exposes deterministic normalized arrivals only in explicit test mode", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+
+    render(
+      await AcquisitionCalendarPage({ searchParams: Promise.resolve({ "test-view": "ready" }) }),
+    );
+
+    expect(screen.getByRole("heading", { level: 1, name: "See what arrives next." })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /Inspect The Far Meridian/i })).toBeVisible();
+    expect(screen.getByText("Opaque by design")).toBeVisible();
+  });
+
+  it("renders a deterministic month horizon for visual and accessibility checks", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+
+    render(
+      await AcquisitionCalendarPage({ searchParams: Promise.resolve({ "test-view": "month" }) }),
+    );
+
+    expect(await screen.findByRole("heading", { name: "Month at a glance" })).toBeVisible();
+    await waitFor(() => expect(screen.getAllByText("July 2026")).toHaveLength(2));
+    expect(screen.getAllByRole("gridcell")).toHaveLength(42);
+    expect(screen.getByRole("button", { name: "Month view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("renders the unconfigured service path without contacting a source", async () => {
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+
+    render(
+      await AcquisitionCalendarPage({
+        searchParams: Promise.resolve({ "test-view": "unconfigured" }),
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Connect your release horizon." }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Configure services" })).toHaveAttribute(
+      "href",
+      "/settings/connectors",
+    );
+  });
+});
