@@ -1,7 +1,7 @@
 import { CalendarDays, Library } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
-import { preload } from "react-dom";
 import type { DashboardModel } from "../lib/dashboard-data";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
@@ -22,12 +22,6 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
       /^\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u.test(artworkPath))
       ? artworkPath
       : null;
-  if (safeArtworkPath) {
-    preload(safeArtworkPath, { as: "image", fetchPriority: "high" });
-  }
-  const artworkStyle = safeArtworkPath
-    ? ({ backgroundImage: `url("${safeArtworkPath}")` } satisfies CSSProperties)
-    : undefined;
   const style = {
     "--hero-accent": hero.accent,
   } as AccentStyle;
@@ -42,7 +36,18 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
       style={style}
       aria-labelledby="hero-title"
     >
-      <div className="hero-spotlight__art" style={artworkStyle} aria-hidden="true">
+      <div className="hero-spotlight__art" aria-hidden="true">
+        {safeArtworkPath ? (
+          <Image
+            alt=""
+            className="hero-spotlight__art-image"
+            fill
+            priority
+            sizes="100vw"
+            src={safeArtworkPath}
+            unoptimized
+          />
+        ) : null}
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />
         <div className="hero-spotlight__grain" />

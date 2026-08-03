@@ -134,6 +134,10 @@
   position: absolute;
 }
 
+.hero-spotlight__art-image {
+  object-fit: cover;
+}
+
 .dashboard > .media-rail,
 .dashboard > .calendar-strip,
 .dashboard > .operations-dock,
@@ -214,6 +218,7 @@
   inset: 0;
   pointer-events: none;
   position: absolute;
+  z-index: 1;
 }
 
 .hero-spotlight[data-artwork-source="remote"] .hero-spotlight__planet,
