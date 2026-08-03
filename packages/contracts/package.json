@@ -53,6 +53,10 @@
       "types": "./dist/issues.d.ts",
       "default": "./dist/issues.js"
     },
+    "./households": {
+      "types": "./dist/households.d.ts",
+      "default": "./dist/households.js"
+    },
     "./library": {
       "types": "./dist/library.d.ts",
       "default": "./dist/library.js"
