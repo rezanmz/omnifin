@@ -13,6 +13,7 @@ import type { Role } from "@omnifin/contracts/auth";
 import {
   libraryBrowseResponseSchema,
   libraryExtrasResponseSchema,
+  libraryRemovalOperationSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
@@ -204,6 +205,7 @@ async function harness(
     played: true,
     positionSeconds: 0,
   }));
+  const deleteLibraryItem = vi.fn(async () => undefined);
   const readViewingHistory = vi.fn(async (): Promise<JellyfinViewingHistoryResult> => ({
     boundaryFound: true,
     items: [
@@ -229,13 +231,24 @@ async function harness(
         readLibrarySeasonEpisodes,
         readLibraryTitle,
         readViewingHistory,
+        deleteLibraryItem,
         updatePlaybackState,
       }),
+      createRemovalOperationToken: () => "o".repeat(22),
       createRemovalPreviewToken: () => "d".repeat(22),
       ...(options.resolveLibraryMovie === undefined
         ? {}
         : {
-            createRadarrAdapter: () => ({ resolveLibraryMovie: options.resolveLibraryMovie! }),
+            createRadarrAdapter: () => ({
+              deleteLibraryMovie: vi.fn(async () => undefined),
+              deleteLibraryMovieFile: vi.fn(async () => undefined),
+              resolveLibraryMovie: options.resolveLibraryMovie!,
+              updateAcquisitionMonitoring: vi.fn(async (input) => ({
+                monitored: input.monitored,
+                target: { kind: "movie" as const, mediaId: input.mediaId, service: input.service },
+                verifiedAt: now.toISOString(),
+              })),
+            }),
           }),
       createUserMediaStateOperationToken: () => String(++stateOperationIndex).padStart(22, "o"),
       mediaReferences: {
@@ -340,6 +353,7 @@ async function harness(
   });
   return {
     app,
+    deleteLibraryItem,
     readContinueWatching,
     readImage,
     readLibrary,
@@ -887,6 +901,103 @@ describe("Continue Watching routes", () => {
         options: [{ mode: "delete_unmanaged_files" }],
         source: { kind: "unmanaged", monitored: null, service: "jellyfin" },
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("protects and idempotently commits an exact Jellyfin-owned removal", async () => {
+    const { app, deleteLibraryItem, viewer } = await harness({ role: "admin" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const previewResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+      const preview = libraryRemovalPreviewSchema.parse(previewResponse.json());
+      const request = {
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": "route-library-removal-0001",
+          origin: "https://omnifin.example",
+          [SESSION_CSRF_HEADER]: viewer.csrfToken,
+        },
+        method: "POST" as const,
+        payload: {
+          confirmationTitle: preview.title,
+          mode: "delete_unmanaged_files",
+          previewId: preview.previewId,
+        },
+        url: `/v1/media/library/${referenceId}/removals`,
+      };
+
+      const missingCsrf = await app.inject({
+        ...request,
+        headers: Object.fromEntries(
+          Object.entries(request.headers).filter(([name]) => name !== SESSION_CSRF_HEADER),
+        ),
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe("csrf_denied");
+
+      const first = await app.inject(request);
+      expect(first.statusCode, first.body).toBe(201);
+      expect(first.headers["idempotency-replayed"]).toBe("false");
+      const operation = libraryRemovalOperationSchema.parse(first.json());
+      expect(operation).toMatchObject({
+        mode: "delete_unmanaged_files",
+        previewId: preview.previewId,
+        referenceId,
+        state: "succeeded",
+      });
+      expect(first.headers["cache-control"]).toBe("no-store");
+      expect(first.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+
+      const replay = await app.inject(request);
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.headers["idempotency-replayed"]).toBe("true");
+      expect(replay.json()).toEqual(first.json());
+      expect(deleteLibraryItem).toHaveBeenCalledOnce();
+      expect(deleteLibraryItem).toHaveBeenCalledWith(privateItemId, expect.any(AbortSignal));
+
+      const status = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/removals/${operation.operationId}`,
+      });
+      expect(status.statusCode, status.body).toBe(200);
+      expect(libraryRemovalOperationSchema.parse(status.json())).toEqual(operation);
+      expect(status.headers["cache-control"]).toBe("no-store");
+
+      const missingStatus = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/removals/library_removal_operation_${"z".repeat(22)}`,
+      });
+      expect(missingStatus.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(missingStatus.json()).error.code).toBe(
+        "library_removal_not_found",
+      );
+
+      app.database.sqlite
+        .prepare("update library_removal_operations set response_json = '{}' where id = ?")
+        .run(operation.operationId);
+      const corruptedStatus = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/removals/${operation.operationId}`,
+      });
+      expect(corruptedStatus.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(corruptedStatus.json()).error.code).toBe(
+        "library_removal_unavailable",
+      );
     } finally {
       await app.close();
     }
