@@ -1086,6 +1086,7 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.playbackSessions).toBeDefined();
     expect(authenticationSchema.libraryArtworkSearches).toBeDefined();
     expect(authenticationSchema.libraryMutationOperations).toBeDefined();
+    expect(authenticationSchema.libraryRemovalPreviews).toBeDefined();
     expect(authenticationSchema.userMediaStateOperations).toBeDefined();
     expect(authenticationSchema.subtitleDownloadOperations).toBeDefined();
     expect(authenticationSchema.subtitleSearches).toBeDefined();
@@ -1113,6 +1114,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("playback_sessions");
       expect(names).toContain("library_artwork_searches");
       expect(names).toContain("library_mutation_operations");
+      expect(names).toContain("library_removal_previews");
       expect(names).toContain("user_media_state_operations");
       expect(names).toContain("download_queue_removal_operations");
       expect(names).toContain("download_queue_bulk_operations");

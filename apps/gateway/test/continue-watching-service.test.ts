@@ -217,6 +217,7 @@ function harness(
     resolveManagedMovie?: (input: {
       providerIds: { imdb: string | null; tmdb: number | null };
     }) => Promise<{
+      connectorId: string;
       hasFile: boolean;
       mediaId: number;
       monitored: boolean;
@@ -415,6 +416,7 @@ describe("ContinueWatchingService", () => {
 
   it("previews exact Radarr-managed removal effects for an authorized administrator", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
+      connectorId: "radarr-main",
       hasFile: true,
       mediaId: 42,
       monitored: true,
@@ -432,7 +434,7 @@ describe("ContinueWatchingService", () => {
       year: 2026,
     };
     readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
-    readLibraryTitle.mockResolvedValueOnce({
+    readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: {
         cast: [],
@@ -487,6 +489,133 @@ describe("ContinueWatchingService", () => {
       expect(JSON.stringify(preview)).not.toMatch(
         /private-upstream|viewer-external|tt1234567|98765/iu,
       );
+      const stored = database.sqlite
+        .prepare(
+          `select id, user_id as userId, session_id as sessionId,
+                  service_identity_link_id as linkId, link_revision as linkRevision,
+                  media_reference_id as referenceId, encrypted_payload as encryptedPayload,
+                  expires_at as expiresAt
+             from library_removal_previews`,
+        )
+        .get() as Record<string, unknown>;
+      expect(stored).toMatchObject({
+        expiresAt: now.getTime() + 5 * 60 * 1_000,
+        id: preview.previewId,
+        linkId: "viewer-link",
+        linkRevision: 3,
+        referenceId,
+        sessionId: "viewer-session",
+        userId: "viewer-user",
+      });
+      expect(JSON.stringify(stored)).not.toMatch(
+        /private-upstream|viewer-external|tt1234567|98765|The Long Meridian|radarr-main/iu,
+      );
+      expect(
+        JSON.parse(
+          new EnvelopeCipher(testConfig().encryptionKey).decrypt(
+            String(stored.encryptedPayload),
+            `library_removal_preview:${preview.previewId}`,
+          ),
+        ),
+      ).toMatchObject({
+        itemId: "private-upstream-movie",
+        linkRevision: 3,
+        referenceId,
+        schemaVersion: 1,
+        source: { connectorId: "radarr-main", kind: "managed", mediaId: 42 },
+        title: "The Long Meridian",
+        userId: "viewer-user",
+      });
+      const audit = database.sqlite
+        .prepare(
+          `select event_type as eventType, target_id as targetId, metadata_json as metadataJson
+             from audit_events
+            where target_id = ?`,
+        )
+        .get(preview.previewId) as Record<string, unknown>;
+      expect(audit).toMatchObject({
+        eventType: "library.removal.preview.created",
+        targetId: preview.previewId,
+      });
+      expect(JSON.parse(String(audit.metadataJson))).toEqual({
+        optionCount: 3,
+        source: "radarr",
+      });
+      expect(JSON.stringify(audit)).not.toMatch(
+        /private-upstream|viewer-external|tt1234567|98765|The Long Meridian|radarr-main/iu,
+      );
+      await expect(
+        service.previewLibraryRemoval(referenceId, { principal: adminPrincipal() }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from library_removal_previews").get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed without evicting another active destructive preview at the per-user bound", async () => {
+    const resolveManagedMovie = vi.fn(async () => ({
+      connectorId: "radarr-main",
+      hasFile: true,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      resolveManagedMovie,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      movie: null,
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: 6_979_321_856,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const insert = database.sqlite.prepare(
+        `insert into library_removal_previews (
+           id, user_id, session_id, service_identity_link_id, link_revision,
+           media_reference_id, encrypted_payload, expires_at, created_at, updated_at
+         ) values (?, 'viewer-user', 'viewer-session', 'viewer-link', 3, ?, ?, ?, ?, ?)`,
+      );
+      for (let index = 0; index < 20; index += 1) {
+        insert.run(
+          `library_removal_preview_${String(index).padStart(22, "0")}`,
+          referenceId,
+          `v1.fixture-${index}`,
+          now.getTime() + 5 * 60 * 1_000,
+          now.getTime(),
+          now.getTime(),
+        );
+      }
+
+      await expect(
+        service.previewLibraryRemoval(referenceId, { principal: adminPrincipal() }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from library_removal_previews").get(),
+      ).toEqual({ count: 20 });
     } finally {
       database.close();
     }

@@ -1018,6 +1018,63 @@ export const libraryMutationOperations = sqliteTable(
   ],
 );
 
+export const libraryRemovalPreviews = sqliteTable(
+  "library_removal_previews",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull(),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("library_removal_previews_expiry_idx").on(table.expiresAt),
+    index("library_removal_previews_user_created_idx").on(table.userId, table.createdAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "library_removal_previews_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "library_removal_previews_id_check",
+      sql`length(${table.id}) = 46
+        and substr(${table.id}, 1, 24) = 'library_removal_preview_'
+        and substr(${table.id}, 25) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_previews_session_id_check",
+      sql`length(${table.sessionId}) between 1 and 128
+        and ${table.sessionId} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "library_removal_previews_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "library_removal_previews_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 65536`,
+    ),
+    check(
+      "library_removal_previews_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} < ${table.expiresAt}
+        and (${table.consumedAt} is null
+          or (${table.consumedAt} between ${table.createdAt} and ${table.expiresAt}
+            and ${table.consumedAt} <= ${table.updatedAt}))`,
+    ),
+  ],
+);
+
 export const userMediaStateOperations = sqliteTable(
   "user_media_state_operations",
   {
