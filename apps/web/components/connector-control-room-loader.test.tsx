@@ -19,4 +19,10 @@ describe("ConnectorControlRoomLoader", () => {
     );
     expect(useIdleRender).toHaveBeenCalledWith(800);
   });
+
+  it("does not hold an already-resolved server fixture behind the paint grace period", () => {
+    render(<ConnectorControlRoomLoader initialOutcome={{ status: "forbidden" }} />);
+
+    expect(useIdleRender).toHaveBeenLastCalledWith(0);
+  });
 });
