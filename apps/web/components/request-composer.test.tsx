@@ -293,6 +293,7 @@ describe("request composer", () => {
     );
 
     await screen.findByText("Mina Jellyfin");
+    await screen.findByRole("option", { name: "Remux · Series archive" });
     await user.selectOptions(screen.getByRole("combobox", { name: "Quality profile" }), [
       routingReference("quality-2"),
     ]);
