@@ -522,7 +522,7 @@ describe("media request service", () => {
         { is4k: false, kind: "series", seasons: [1, 3], tmdbId: 1399 },
         42,
         undefined,
-        undefined,
+        { profileId: 4, rootFolder: "/srv/media/movies", serverId: 1 },
       );
       const operation = database.sqlite
         .prepare(
@@ -549,6 +549,37 @@ describe("media request service", () => {
         tmdbId: 1399,
       });
       expect(JSON.stringify({ audit, operation })).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("blocks an unroutable default format before creating a Seerr request", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({
+        destinations: [],
+        failures: [],
+        is4k,
+        kind,
+      }),
+    );
+    const { createMediaRequest, database, service } = harness({ listRequestRouting });
+    try {
+      await expect(
+        service.create(
+          { is4k: true, kind: "movie", tmdbId: 278 },
+          "request-key-no-default",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "routing_unavailable" });
+      expect(createMediaRequest).not.toHaveBeenCalled();
+      expect(
+        database.sqlite
+          .prepare(
+            "select failure_code as failureCode, state from media_request_operations where idempotency_key_hash is not null",
+          )
+          .get(),
+      ).toEqual({ failureCode: "routing_unavailable", state: "failed" });
     } finally {
       database.close();
     }

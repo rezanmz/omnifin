@@ -126,7 +126,15 @@ function client(
       tmdbId: input.tmdbId,
     },
   }),
-  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async () => seriesRoutingOptions,
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) => ({
+    ...seriesRoutingOptions,
+    destinations: seriesRoutingOptions.destinations.map((destination) => ({
+      ...destination,
+      service: kind === "movie" ? "radarr" : "sonarr",
+    })),
+    is4k,
+    kind,
+  }),
 ): MediaRequestClient {
   return { create, loadEligibility, loadRoutingOptions };
 }
@@ -231,7 +239,7 @@ export const Accepted: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: /Send request/i }));
-    const message = await canvas.findByRole("heading", { name: "The signal is in motion" });
+    const message = await canvas.findByRole("heading", { name: "Request received" });
     await waitFor(() => expect(message).toBeVisible());
   },
 };
