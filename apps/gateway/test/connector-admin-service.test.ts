@@ -156,6 +156,7 @@ describe("connector administration service", () => {
         credentialsConfigured: true,
         enabled: false,
         healthState: "unknown",
+        publicUiUrl: null,
       });
       expect(JSON.stringify(created)).not.toContain(radarrRequest.credentials.apiKey);
       expect(row.enabled).toBe(0);
@@ -171,6 +172,63 @@ describe("connector administration service", () => {
       expect(audit.eventType).toBe("connector.configuration.created");
       expect(audit.metadataJson).not.toContain(radarrRequest.credentials.apiKey);
       expect(audit.ipHash).toMatch(/^[A-Za-z0-9_-]{22}$/u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("stores a canonical browser URL separately without invalidating service health", async () => {
+    const { database, service } = createHarness({
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"] as const,
+        probe: async () => healthyRadarr(),
+        service: "radarr" as const,
+      }),
+    });
+    try {
+      const created = service.create(
+        { ...radarrRequest, publicUiUrl: "https://media.example.test/radarr" },
+        context(),
+      );
+      expect(created.publicUiUrl).toBe("https://media.example.test/radarr/");
+      const probed = await service.probe(created.id, context());
+      const enabled = service.update(
+        created.id,
+        { enabled: true, revision: probed.revision },
+        context(),
+      );
+      const changed = service.update(
+        created.id,
+        {
+          publicUiUrl: "http://radarr.lan/ui",
+          revision: enabled.revision,
+        },
+        context(),
+      );
+
+      expect(changed).toMatchObject({
+        enabled: true,
+        healthState: "healthy",
+        publicUiUrl: "http://radarr.lan/ui/",
+      });
+      expect(
+        database.sqlite
+          .prepare("select public_ui_url as publicUiUrl from connector_configs where id = ?")
+          .get(created.id),
+      ).toEqual({ publicUiUrl: "http://radarr.lan/ui/" });
+      const cleared = service.update(
+        created.id,
+        { publicUiUrl: null, revision: changed.revision },
+        context(),
+      );
+      expect(cleared.publicUiUrl).toBeNull();
+      const audit = database.sqlite
+        .prepare(
+          "select metadata_json as metadataJson from audit_events where event_type = 'connector.configuration.updated' order by created_at desc limit 1",
+        )
+        .get() as { metadataJson: string };
+      expect(JSON.parse(audit.metadataJson)).toMatchObject({ changedFields: ["publicUiUrl"] });
+      expect(audit.metadataJson).not.toContain("radarr.lan");
     } finally {
       database.close();
     }

@@ -41,6 +41,7 @@ interface ConnectorRow {
   type: string;
   displayName: string;
   baseUrl: string;
+  publicUiUrl: string | null;
   encryptedCredentials: string;
   tlsPolicy: string;
   insecureHttpApproved: number;
@@ -154,6 +155,13 @@ function revisionFor(row: Pick<ConnectorRow, "id" | "type" | "updatedAt">) {
 
 function canonicalBaseUrl(value: string, allowInsecureHttp: boolean) {
   const url = validateDestinationUrlLiteral(value, { allowInsecureHttp });
+  if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
+  return url.href;
+}
+
+function canonicalPublicUiUrl(value: string | null | undefined) {
+  if (value === null || value === undefined) return null;
+  const url = new URL(value);
   if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
   return url.href;
 }
@@ -311,6 +319,7 @@ export class ConnectorAdminService {
             type,
             display_name as displayName,
             base_url as baseUrl,
+            public_ui_url as publicUiUrl,
             encrypted_credentials as encryptedCredentials,
             tls_policy as tlsPolicy,
             insecure_http_approved as insecureHttpApproved,
@@ -350,8 +359,10 @@ export class ConnectorAdminService {
     const connector = parsed.data;
     this.#authorize(context, connector.service);
     let baseUrl: string;
+    let publicUiUrl: string | null;
     try {
       baseUrl = canonicalBaseUrl(connector.baseUrl, connector.insecureHttpApproved);
+      publicUiUrl = canonicalPublicUiUrl(connector.publicUiUrl);
     } catch (error) {
       throw new ConnectorAdminError("configuration_invalid", { cause: error });
     }
@@ -390,6 +401,7 @@ export class ConnectorAdminService {
                 type,
                 display_name,
                 base_url,
+                public_ui_url,
                 encrypted_credentials,
                 tls_policy,
                 insecure_http_approved,
@@ -398,13 +410,14 @@ export class ConnectorAdminService {
                 enabled,
                 created_at,
                 updated_at
-              ) values (?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?)`,
+              ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?)`,
             )
             .run(
               connector.id,
               connector.service,
               connector.displayName,
               baseUrl,
+              publicUiUrl,
               encryptedCredentials,
               connector.tlsPolicy,
               connector.insecureHttpApproved ? 1 : 0,
@@ -421,6 +434,7 @@ export class ConnectorAdminService {
             {
               credentialKind: connector.credentials.kind,
               insecureHttpApproved: connector.insecureHttpApproved,
+              publicUiUrlConfigured: publicUiUrl !== null,
               service: connector.service,
               tlsCaCertificateConfigured: connector.tlsCaCertificatePem !== undefined,
               tlsPolicy: connector.tlsPolicy,
@@ -464,6 +478,8 @@ export class ConnectorAdminService {
       service,
       displayName: parsed.data.displayName ?? current.displayName,
       baseUrl: parsed.data.baseUrl ?? current.baseUrl,
+      publicUiUrl:
+        parsed.data.publicUiUrl === undefined ? current.publicUiUrl : parsed.data.publicUiUrl,
       credentials,
       tlsPolicy,
       ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
@@ -471,8 +487,10 @@ export class ConnectorAdminService {
     });
     if (!candidate.success) throw new ConnectorAdminError("configuration_invalid");
     let baseUrl: string;
+    let publicUiUrl: string | null;
     try {
       baseUrl = canonicalBaseUrl(candidate.data.baseUrl, candidate.data.insecureHttpApproved);
+      publicUiUrl = canonicalPublicUiUrl(candidate.data.publicUiUrl);
     } catch (error) {
       throw new ConnectorAdminError("configuration_invalid", { cause: error });
     }
@@ -511,6 +529,7 @@ export class ConnectorAdminService {
     const changedFields = [
       ...(parsed.data.displayName === undefined ? [] : ["displayName"]),
       ...(parsed.data.baseUrl === undefined ? [] : ["baseUrl"]),
+      ...(parsed.data.publicUiUrl === undefined ? [] : ["publicUiUrl"]),
       ...(parsed.data.credentials === undefined ? [] : ["credentials"]),
       ...(parsed.data.tlsPolicy === undefined ? [] : ["tlsPolicy"]),
       ...(parsed.data.tlsCaCertificatePem === undefined ? [] : ["tlsCaCertificatePem"]),
@@ -525,6 +544,7 @@ export class ConnectorAdminService {
               `update connector_configs
                set display_name = ?,
                    base_url = ?,
+                   public_ui_url = ?,
                    encrypted_credentials = ?,
                    tls_policy = ?,
                    insecure_http_approved = ?,
@@ -537,6 +557,7 @@ export class ConnectorAdminService {
             .run(
               candidate.data.displayName,
               baseUrl,
+              publicUiUrl,
               encryptedCredentials,
               candidate.data.tlsPolicy,
               candidate.data.insecureHttpApproved ? 1 : 0,
@@ -766,6 +787,7 @@ export class ConnectorAdminService {
       service,
       displayName: row.displayName,
       baseUrl: row.baseUrl,
+      publicUiUrl: row.publicUiUrl,
       credentialKind: secrets.credentials.kind,
       credentialsConfigured: secrets.credentials.kind !== "none",
       tlsPolicy: row.tlsPolicy,
@@ -794,6 +816,7 @@ export class ConnectorAdminService {
             type,
             display_name as displayName,
             base_url as baseUrl,
+            public_ui_url as publicUiUrl,
             encrypted_credentials as encryptedCredentials,
             tls_policy as tlsPolicy,
             insecure_http_approved as insecureHttpApproved,

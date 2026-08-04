@@ -34,6 +34,7 @@ interface FormFields {
   id: string;
   insecureHttpApproved: boolean;
   password: string;
+  publicUiUrl: string;
   service: ManagedConnectorService;
   tlsCaCertificatePem: string;
   tlsPolicy: "allow_self_signed" | "strict";
@@ -56,6 +57,7 @@ function initialFields(connector?: ConnectorAdmin): FormFields {
     id: connector?.id ?? `${service}-primary`,
     insecureHttpApproved: connector?.insecureHttpApproved ?? false,
     password: "",
+    publicUiUrl: connector?.publicUiUrl ?? "",
     service,
     tlsCaCertificatePem: "",
     tlsPolicy: connector?.tlsPolicy ?? "strict",
@@ -140,6 +142,7 @@ export function ConnectorForm({
           ? connectorServicePresentation[service].label
           : current.displayName,
       id: current.id === `${current.service}-primary` ? `${service}-primary` : current.id,
+      publicUiUrl: service === "radarr" || service === "sonarr" ? current.publicUiUrl : "",
       service,
     }));
     setErrors({});
@@ -179,6 +182,9 @@ export function ConnectorForm({
       baseUrl: fields.baseUrl.trim(),
       displayName: fields.displayName.trim(),
       insecureHttpApproved: fields.insecureHttpApproved,
+      ...(["radarr", "sonarr"].includes(fields.service)
+        ? { publicUiUrl: fields.publicUiUrl.trim() || null }
+        : {}),
       tlsPolicy: fields.tlsPolicy,
       ...(fields.tlsCaCertificatePem.trim().length > 0
         ? { tlsCaCertificatePem: fields.tlsCaCertificatePem.trim() }
@@ -314,6 +320,25 @@ export function ConnectorForm({
             <option value="allow_self_signed">Pinned self-signed CA</option>
           </select>
         </Field>
+        {fields.service === "radarr" || fields.service === "sonarr" ? (
+          <Field
+            description="Optional browser-facing base URL. It is never inferred from the private service URL."
+            error={errors.publicUiUrl}
+            label="Browser URL"
+            name={`${formId}-public-ui-url`}
+          >
+            <input
+              autoCapitalize="none"
+              autoComplete="url"
+              id={`${formId}-public-ui-url`}
+              inputMode="url"
+              onChange={(event) => update("publicUiUrl", event.target.value)}
+              placeholder="https://radarr.example.test"
+              spellCheck={false}
+              value={fields.publicUiUrl}
+            />
+          </Field>
+        ) : null}
       </div>
 
       {fields.tlsPolicy === "allow_self_signed" ? (
