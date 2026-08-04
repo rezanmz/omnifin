@@ -5,6 +5,7 @@ import {
   type SeerrDiscoveryFeedPage,
   type SeerrDiscoveryMediaDetail,
   type SeerrDiscoveryPersonDetail,
+  type SeerrDiscoveryPersonCredits,
 } from "@omnifin/connectors/adapters/seerr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
@@ -23,6 +24,8 @@ import {
   discoveryPersonDetailParamsSchema,
   discoveryPersonDetailQuerySchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryBrowseQuery,
@@ -34,6 +37,7 @@ import {
   type DiscoveryMediaDetailQuery,
   type DiscoveryPersonDetailParams,
   type DiscoveryPersonDetailQuery,
+  type DiscoveryPersonCreditsQuery,
   type DiscoverySearchQuery,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -85,6 +89,11 @@ export interface DiscoverySearchAdapter {
     query: DiscoveryPersonDetailQuery,
     signal?: AbortSignal,
   ): Promise<SeerrDiscoveryPersonDetail>;
+  personCredits(
+    params: DiscoveryPersonDetailParams,
+    query: DiscoveryPersonCreditsQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryPersonCredits>;
   search(input: DiscoverySearchQuery, signal?: AbortSignal): Promise<DiscoverySearchResponse>;
   readDiscoveryArtwork?(
     path: string,
@@ -537,6 +546,21 @@ export class DiscoverySearchService {
       ...detail.response,
       item: { ...detail.response.item, profilePath },
     });
+  }
+
+  public async personCredits(
+    paramsInput: DiscoveryPersonDetailParams,
+    queryInput: DiscoveryPersonCreditsQuery,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
+    const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = discoveryPersonCreditsQuerySchema.parse(queryInput);
+    const row = this.#connector();
+    const response = await this.#adapterFor(row).personCredits(params, query, signal);
+    return discoveryPersonCreditsResponseSchema.parse(response);
   }
 
   #adapter() {

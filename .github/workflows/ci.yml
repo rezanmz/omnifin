@@ -66,7 +66,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
       - name: Install policy dependencies without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: scripts/ci/install-dependencies.sh --ignore-scripts
       - name: Resolve every action pin from its public version tag
         run: node scripts/ci/check-workflow-pins.mjs --remote
 
@@ -90,7 +90,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Verify action pins
         run: node scripts/ci/check-workflow-pins.mjs
       - name: Verify public-project foundation contract
@@ -133,7 +133,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Verify normalized connector contracts
         run: pnpm test:contracts
 
@@ -157,7 +157,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build production artifacts
         run: pnpm build
 
@@ -181,7 +181,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Validate migration history metadata
         run: pnpm --filter @omnifin/gateway db:check
       - name: Reject schema changes without a committed migration
@@ -196,7 +196,7 @@ jobs:
   browser:
     name: Browser tests (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -220,7 +220,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install browser runtime
@@ -244,7 +244,7 @@ jobs:
   storybook:
     name: Storybook
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,7 +261,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install Chromium
@@ -274,7 +274,7 @@ jobs:
   accessibility:
     name: Accessibility
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -291,7 +291,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install browser runtimes
@@ -302,7 +302,7 @@ jobs:
   visual:
     name: Visual regression
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -319,7 +319,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install browser runtimes
@@ -340,7 +340,7 @@ jobs:
   lighthouse:
     name: Lighthouse budgets
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -357,7 +357,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install Chromium
@@ -394,7 +394,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build gateway and workspace dependencies
         run: pnpm --filter @omnifin/gateway... build
       - name: Enforce gateway load budgets

@@ -230,6 +230,7 @@ export const discoveryPersonDetailFixture = {
       },
     ],
     creditsState: "ready",
+    creditsTotal: 1,
     deathday: null,
     department: "Acting",
     id: "person:6384",

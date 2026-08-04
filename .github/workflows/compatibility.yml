@@ -66,7 +66,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Pull immutable media runtime
         run: >-
           docker pull
@@ -129,7 +129,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Install isolated browser runtime
         if: matrix.browser
         run: node scripts/ci/install-playwright.mjs chromium
