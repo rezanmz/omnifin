@@ -222,21 +222,25 @@ describe("MediaLibrary", () => {
 
     await user.click(screen.getByRole("button", { name: "Play movie from beginning" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
-    expect(playbackClient.prepare).toHaveBeenCalledWith(
-      `media_${"a".repeat(22)}`,
-      0,
-      expect.any(AbortSignal),
-      expect.objectContaining({ mode: "auto" }),
+    await waitFor(() =>
+      expect(playbackClient.prepare).toHaveBeenCalledWith(
+        `media_${"a".repeat(22)}`,
+        0,
+        expect.any(AbortSignal),
+        expect.objectContaining({ mode: "auto" }),
+      ),
     );
     await user.click(screen.getByRole("button", { name: "Close player" }));
 
     await user.click(screen.getByRole("button", { name: "Resume movie" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
-    expect(playbackClient.prepare).toHaveBeenCalledWith(
-      `media_${"a".repeat(22)}`,
-      2_940,
-      expect.any(AbortSignal),
-      expect.objectContaining({ mode: "auto" }),
+    await waitFor(() =>
+      expect(playbackClient.prepare).toHaveBeenCalledWith(
+        `media_${"a".repeat(22)}`,
+        2_940,
+        expect.any(AbortSignal),
+        expect.objectContaining({ mode: "auto" }),
+      ),
     );
 
     await user.click(screen.getByRole("button", { name: "Close player" }));
