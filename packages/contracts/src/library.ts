@@ -319,10 +319,19 @@ export const libraryMovieCreditSchema = z.strictObject({
     .regex(/^\/v1\/media\/media_[A-Za-z0-9_-]{22}\/images\/people\/[A-Za-z0-9_.-]{64,768}$/u)
     .nullable(),
   name: safeTextSchema.max(160),
+  personReferenceId: mediaReferenceIdSchema.nullable(),
   role: safeTextSchema.max(200).nullable(),
   type: z.enum(["cast", "director", "writer", "producer"]),
 });
 export type LibraryMovieCredit = z.infer<typeof libraryMovieCreditSchema>;
+
+export const libraryTitleCreditsSchema = z.strictObject({
+  cast: z.array(libraryMovieCreditSchema).max(LIBRARY_MOVIE_MAX_CAST),
+  castTruncated: z.boolean(),
+  crew: z.array(libraryMovieCreditSchema).max(LIBRARY_MOVIE_MAX_CREW),
+  crewTruncated: z.boolean(),
+});
+export type LibraryTitleCredits = z.infer<typeof libraryTitleCreditsSchema>;
 
 const libraryMovieTrackSchema = z.strictObject({
   bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
@@ -394,6 +403,7 @@ export const libraryTitleDetailResponseSchema = z
     playback: libraryPlaybackStateSchema.nullable(),
     seasons: z.array(librarySeasonSummarySchema).max(LIBRARY_TITLE_MAX_SEASONS),
     seasonsTruncated: z.boolean(),
+    seriesCredits: libraryTitleCreditsSchema.nullable(),
   })
   .superRefine((detail, context) => {
     if (!mediaReferenceIdSchema.safeParse(detail.media.id).success) {
@@ -422,9 +432,13 @@ export const libraryTitleDetailResponseSchema = z
       detail.movie !== null &&
       detail.playback !== null &&
       detail.seasons.length === 0 &&
-      !detail.seasonsTruncated;
+      !detail.seasonsTruncated &&
+      detail.seriesCredits === null;
     const seriesShape =
-      detail.media.kind === "series" && detail.movie === null && detail.playback === null;
+      detail.media.kind === "series" &&
+      detail.movie === null &&
+      detail.playback === null &&
+      detail.seriesCredits !== null;
     if (!movieShape && !seriesShape) {
       context.addIssue({
         code: "custom",
@@ -441,15 +455,20 @@ export const libraryTitleDetailResponseSchema = z
         path: ["seasons"],
       });
     }
-    for (const collection of ["cast", "crew"] as const) {
-      for (const [index, credit] of (detail.movie?.[collection] ?? []).entries()) {
-        const expectedPrefix = `/v1/media/${detail.media.id}/images/people/`;
-        if (credit.imagePath !== null && !credit.imagePath.startsWith(expectedPrefix)) {
-          context.addIssue({
-            code: "custom",
-            message: "Library person artwork must belong to the same opaque media reference.",
-            path: ["movie", collection, index, "imagePath"],
-          });
+    for (const [container, credits] of [
+      ["movie", detail.movie],
+      ["seriesCredits", detail.seriesCredits],
+    ] as const) {
+      for (const collection of ["cast", "crew"] as const) {
+        for (const [index, credit] of (credits?.[collection] ?? []).entries()) {
+          const expectedPrefix = `/v1/media/${detail.media.id}/images/people/`;
+          if (credit.imagePath !== null && !credit.imagePath.startsWith(expectedPrefix)) {
+            context.addIssue({
+              code: "custom",
+              message: "Library person artwork must belong to the same opaque media reference.",
+              path: [container, collection, index, "imagePath"],
+            });
+          }
         }
       }
     }
@@ -634,10 +653,20 @@ export type LibrarySeasonEpisodesQuery = z.infer<typeof librarySeasonEpisodesQue
 
 export const libraryEpisodeCreditSchema = z.strictObject({
   name: safeTextSchema.max(160),
+  personReferenceId: mediaReferenceIdSchema.nullable(),
   role: safeTextSchema.max(200).nullable(),
   type: z.enum(["cast", "director", "writer"]),
 });
 export type LibraryEpisodeCredit = z.infer<typeof libraryEpisodeCreditSchema>;
+
+export const libraryPersonProfileLinkResponseSchema = z.strictObject({
+  generatedAt: timestampSchema,
+  name: safeTextSchema.max(160),
+  tmdbId: z.int().positive().max(2_147_483_647),
+});
+export type LibraryPersonProfileLinkResponse = z.infer<
+  typeof libraryPersonProfileLinkResponseSchema
+>;
 
 export const librarySeasonEpisodeSchema = z
   .strictObject({
@@ -1240,6 +1269,9 @@ export const librarySeasonEpisodesQueryJsonSchema = withoutSchemaDialect(
 );
 export const librarySeasonEpisodesResponseJsonSchema = withoutSchemaDialect(
   librarySeasonEpisodesResponseSchema,
+);
+export const libraryPersonProfileLinkResponseJsonSchema = withoutSchemaDialect(
+  libraryPersonProfileLinkResponseSchema,
 );
 export const libraryDownloadPrepareRequestJsonSchema = withoutSchemaDialect(
   libraryDownloadPrepareRequestSchema,
