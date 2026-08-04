@@ -56,10 +56,10 @@ export function LiquidGlassEnvironment() {
         passive: true,
       });
     }
-    // Deterministic fixture routes represent the fully settled interface in committed visual
-    // baselines. Production routes still wait for completed user intent so optical repainting
+    // The visual harness opts into the settled material after hydration. Other fixture consumers,
+    // including performance budgets, retain the production intent boundary so optical repainting
     // cannot become a late first-paint candidate.
-    if (new URLSearchParams(window.location.search).has("test-view")) enableMaterial();
+    if (window.sessionStorage.getItem("omnifin-test-material") === "settled") enableMaterial();
 
     return () => {
       stopListening();

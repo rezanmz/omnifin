@@ -28,6 +28,12 @@ const lightVisualProjects = new Set(["chromium", "mobile"]);
 
 test.use({ contextOptions: { reducedMotion: "reduce" } });
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("omnifin-test-material", "settled");
+  });
+});
+
 function routeForProject(path: string, projectName: string) {
   if (projectName !== "ten-foot") return path;
   const url = new URL(path, "http://omnifin.test");

@@ -6,6 +6,8 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 describe("LiquidGlassEnvironment", () => {
   afterEach(() => {
     document.documentElement.removeAttribute("data-liquid-glass-ready");
+    window.history.replaceState(null, "", "/");
+    window.sessionStorage.removeItem("omnifin-test-material");
     vi.restoreAllMocks();
   });
 
@@ -15,6 +17,7 @@ describe("LiquidGlassEnvironment", () => {
       animationCallback = callback;
       return 17;
     });
+    window.history.replaceState(null, "", "/?test-view=ready");
 
     render(<LiquidGlassEnvironment />);
 
@@ -49,5 +52,22 @@ describe("LiquidGlassEnvironment", () => {
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(23);
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
+  });
+
+  it("settles material fixtures only when the visual harness opts in", async () => {
+    let animationCallback: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      animationCallback = callback;
+      return 31;
+    });
+    window.sessionStorage.setItem("omnifin-test-material", "settled");
+
+    render(<LiquidGlassEnvironment />);
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
+    act(() => animationCallback?.(performance.now()));
+    await waitFor(() =>
+      expect(document.documentElement).toHaveAttribute("data-liquid-glass-ready"),
+    );
   });
 });
