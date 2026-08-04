@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
-import { discoveryTrailerSchema } from "./discovery.js";
+import { discoveryTrailerSchema, titleProviderReferenceSchema } from "./discovery.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
@@ -401,6 +401,7 @@ export const libraryTitleDetailResponseSchema = z
     media: mediaSummarySchema,
     movie: libraryMovieDetailSchema.nullable(),
     playback: libraryPlaybackStateSchema.nullable(),
+    providerReferences: z.array(titleProviderReferenceSchema).max(3).default([]),
     seasons: z.array(librarySeasonSummarySchema).max(LIBRARY_TITLE_MAX_SEASONS),
     seasonsTruncated: z.boolean(),
     seriesCredits: libraryTitleCreditsSchema.nullable(),
@@ -419,6 +420,24 @@ export const libraryTitleDetailResponseSchema = z
         message: "Library title details must describe a movie or series.",
         path: ["media", "kind"],
       });
+    }
+    const providers = new Set<string>();
+    for (const [index, reference] of detail.providerReferences.entries()) {
+      if (reference.mediaKind !== detail.media.kind) {
+        context.addIssue({
+          code: "custom",
+          message: "Provider references must match the library title kind.",
+          path: ["providerReferences", index, "mediaKind"],
+        });
+      }
+      if (providers.has(reference.provider)) {
+        context.addIssue({
+          code: "custom",
+          message: "Library title provider references must be unique.",
+          path: ["providerReferences", index, "provider"],
+        });
+      }
+      providers.add(reference.provider);
     }
     if (detail.media.availability !== "available") {
       context.addIssue({

@@ -157,6 +157,7 @@ async function harness(
       studios: [],
       tagline: null,
     },
+    providerReferences: [],
     removal: {
       canDelete: options.canDelete ?? true,
       providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
@@ -579,6 +580,10 @@ describe("Continue Watching routes", () => {
           studios: ["Northlight Pictures"],
           tagline: "The horizon remembers.",
         },
+        providerReferences: [
+          { identifier: "tt1234567", mediaKind: "movie", provider: "imdb" },
+          { identifier: 98_765, mediaKind: "movie", provider: "tmdb" },
+        ],
         seasons: [],
         seasonsTruncated: false,
         seriesCredits: null,
@@ -593,6 +598,10 @@ describe("Continue Watching routes", () => {
       const detail = libraryTitleDetailResponseSchema.parse(detailResponse.json());
       const personPath = detail.movie?.cast[0]?.imagePath;
       const personReferenceId = detail.movie?.cast[0]?.personReferenceId;
+      expect(detail.providerReferences).toEqual([
+        { identifier: "tt1234567", mediaKind: "movie", provider: "imdb" },
+        { identifier: 98_765, mediaKind: "movie", provider: "tmdb" },
+      ]);
       expect(personPath).toMatch(new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`));
       expect(personReferenceId).toMatch(/^media_[A-Za-z0-9_-]{22}$/u);
       expect(detailResponse.body).not.toMatch(/route-private-person|viewer-external/iu);
@@ -1046,6 +1055,7 @@ describe("Continue Watching routes", () => {
     readLibraryTitle.mockResolvedValueOnce({
       item: series,
       movie: null,
+      providerReferences: [],
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
       seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },

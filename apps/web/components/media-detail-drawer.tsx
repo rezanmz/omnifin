@@ -40,6 +40,7 @@ import {
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
+import { titleProviderHref } from "../lib/title-provider-reference";
 
 export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
 
@@ -377,14 +378,38 @@ function DetailContent({
           <ul className="media-detail__ratings">
             {detail.intelligence.ratings.map((rating) => (
               <li key={`${rating.source}-${rating.audience}`}>
-                <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
-                <span>{rating.label}</span>
-                <small>
-                  {rating.sentiment ??
-                    (rating.voteCount === null
-                      ? "Community signal"
-                      : formatRatings(rating.voteCount))}
-                </small>
+                {rating.providerReference ? (
+                  <a
+                    aria-label={`${rating.label} rating ${formatRatingValue(rating.value, rating.scale)} — open canonical title page in a new tab`}
+                    className="media-detail__rating-signal media-detail__rating-signal--linked"
+                    data-directional-item
+                    href={titleProviderHref(rating.providerReference)}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
+                    <span>
+                      {rating.label} <ExternalLink aria-hidden="true" />
+                    </span>
+                    <small>
+                      {rating.sentiment ??
+                        (rating.voteCount === null
+                          ? "Community signal"
+                          : formatRatings(rating.voteCount))}
+                    </small>
+                  </a>
+                ) : (
+                  <div className="media-detail__rating-signal">
+                    <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
+                    <span>{rating.label}</span>
+                    <small>
+                      {rating.sentiment ??
+                        (rating.voteCount === null
+                          ? "Community signal"
+                          : formatRatings(rating.voteCount))}
+                    </small>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

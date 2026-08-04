@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TitleProviderReference } from "@omnifin/contracts/discovery";
 import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
@@ -534,6 +535,7 @@ export interface JellyfinLibrarySeason {
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
   movie: JellyfinLibraryMovieDetail | null;
+  providerReferences: TitleProviderReference[];
   removal?: JellyfinLibraryRemovalFacts | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
@@ -979,6 +981,56 @@ function resolvedTitleCredits(
     cast: credits.cast.map((credit) => resolvedCredit(credit, people)),
     crew: credits.crew.map((credit) => resolvedCredit(credit, people)),
   };
+}
+
+function normalizedRottenTomatoesIdentifier(
+  providerIds: Record<string, string> | null | undefined,
+  mediaKind: TitleProviderReference["mediaKind"],
+) {
+  const rawValue = Object.entries(providerIds ?? {}).find(([key]) =>
+    ["rottentomatoes", "rotten tomatoes"].includes(key.toLocaleLowerCase("en-US")),
+  )?.[1];
+  const value = rawValue?.trim();
+  if (!value) return null;
+  if (/^[a-z0-9](?:[a-z0-9_-]{0,199})$/u.test(value)) return value;
+  try {
+    const url = new URL(value);
+    const segments = url.pathname.split("/").filter(Boolean);
+    const expectedCollection = mediaKind === "movie" ? "m" : "tv";
+    return url.origin === "https://www.rottentomatoes.com" &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password &&
+      segments.length === 2 &&
+      segments[0] === expectedCollection &&
+      /^[a-z0-9](?:[a-z0-9_-]{0,199})$/u.test(segments[1] ?? "")
+      ? segments[1]!
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTitleProviderReferences(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+): TitleProviderReference[] {
+  const mediaKind = item.Type === "Movie" ? ("movie" as const) : ("series" as const);
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
+  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,9}$/u.test(tmdb) ? Number(tmdb) : null;
+  const rottenTomatoes = normalizedRottenTomatoesIdentifier(item.ProviderIds, mediaKind);
+  return [
+    ...(imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb)
+      ? [{ identifier: imdb, mediaKind, provider: "imdb" as const }]
+      : []),
+    ...(parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb <= 2_147_483_647
+      ? [{ identifier: parsedTmdb, mediaKind, provider: "tmdb" as const }]
+      : []),
+    ...(rottenTomatoes === null
+      ? []
+      : [{ identifier: rottenTomatoes, mediaKind, provider: "rotten_tomatoes" as const }]),
+  ];
 }
 
 function normalizeMovieRemovalFacts(
@@ -1717,6 +1769,7 @@ export class JellyfinUserMediaClient {
       return {
         item,
         movie: { ...normalizeMovieDetail(itemResponse), ...credits },
+        providerReferences: normalizeTitleProviderReferences(itemResponse),
         removal: normalizeMovieRemovalFacts(itemResponse),
         seasons: [],
         seasonsTruncated: false,
@@ -1776,6 +1829,7 @@ export class JellyfinUserMediaClient {
     return {
       item,
       movie: null,
+      providerReferences: normalizeTitleProviderReferences(itemResponse),
       seasons: seasonItems.map((season) =>
         normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
       ),

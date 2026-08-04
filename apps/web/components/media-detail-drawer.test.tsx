@@ -67,6 +67,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "community",
           label: "TMDB",
+          providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
           scale: 10,
           sentiment: null,
           source: "tmdb",
@@ -76,6 +77,11 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "critics",
           label: "Tomatometer",
+          providerReference: {
+            identifier: "the_matrix",
+            mediaKind: "movie",
+            provider: "rotten_tomatoes",
+          },
           scale: 100,
           sentiment: "Certified Fresh",
           source: "rotten_tomatoes",
@@ -235,6 +241,18 @@ describe("media detail drawer", () => {
     expect(screen.getByText("Keanu Reeves")).toBeVisible();
     expect(screen.getByText("Lana Wachowski")).toBeVisible();
     expect(screen.getByText("83%")).toBeVisible();
+    expect(screen.getByRole("link", { name: /TMDB rating/iu })).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org/movie/603",
+    );
+    expect(screen.getByRole("link", { name: /Tomatometer rating/iu })).toHaveAttribute(
+      "href",
+      "https://www.rottentomatoes.com/m/the_matrix",
+    );
+    expect(screen.getByRole("link", { name: /TMDB rating/iu })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
     expect(screen.getByRole("link", { name: /Official trailer/iu })).toHaveAttribute(
       "href",
       "https://www.youtube.com/watch?v=m8e-FF8MsqU",

@@ -761,6 +761,7 @@ export class ContinueWatchingService {
                 positionSeconds: result.item.positionSeconds,
               }
             : null,
+        providerReferences: result.providerReferences,
         seasons: result.seasons,
         seasonsTruncated: result.seasonsTruncated,
         seriesCredits:

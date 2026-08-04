@@ -235,6 +235,7 @@ function harness(
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: libraryResult().items[0]!,
     movie: null,
+    providerReferences: [],
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
     seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
@@ -465,6 +466,7 @@ describe("ContinueWatchingService", () => {
         studios: [],
         tagline: null,
       },
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -594,6 +596,7 @@ describe("ContinueWatchingService", () => {
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: null,
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -1276,6 +1279,7 @@ describe("ContinueWatchingService", () => {
         studios: ["Northlight Pictures"],
         tagline: "The horizon remembers.",
       },
+      providerReferences: [],
       seasons: [],
       seasonsTruncated: false,
       seriesCredits: null,

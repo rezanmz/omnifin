@@ -271,6 +271,7 @@ describe("discovery contracts", () => {
           {
             audience: "community",
             label: "TMDB",
+            providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
             scale: 10,
             sentiment: null,
             source: "tmdb",
@@ -280,6 +281,11 @@ describe("discovery contracts", () => {
           {
             audience: "critics",
             label: "Tomatometer",
+            providerReference: {
+              identifier: "the_matrix",
+              mediaKind: "movie",
+              provider: "rotten_tomatoes",
+            },
             scale: 100,
             sentiment: "Certified Fresh",
             source: "rotten_tomatoes",
@@ -317,6 +323,11 @@ describe("discovery contracts", () => {
       item: common,
     });
     expect(response.item.kind).toBe("movie");
+    expect(response.item.intelligence.ratings[0]?.providerReference).toEqual({
+      identifier: 603,
+      mediaKind: "movie",
+      provider: "tmdb",
+    });
 
     const series = discoveryMediaDetailResponseSchema.parse({
       generatedAt: "2026-07-28T20:00:00.000Z",
@@ -324,6 +335,20 @@ describe("discovery contracts", () => {
         ...common,
         episodeCount: 73,
         id: "series:1396",
+        intelligence: {
+          ...common.intelligence,
+          ratings: common.intelligence.ratings.map((rating) => ({
+            ...rating,
+            providerReference:
+              rating.source === "tmdb"
+                ? { identifier: 1396, mediaKind: "series" as const, provider: "tmdb" as const }
+                : {
+                    identifier: "the_matrix",
+                    mediaKind: "series" as const,
+                    provider: "rotten_tomatoes" as const,
+                  },
+          })),
+        },
         kind: "series",
         runtimeMinutes: 48,
         seasonCount: 5,
@@ -338,6 +363,45 @@ describe("discovery contracts", () => {
     });
     expect(series.item.kind).toBe("series");
     if (series.item.kind === "series") expect(series.item.seasons).toHaveLength(2);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          ...common,
+          intelligence: {
+            ...common.intelligence,
+            ratings: [
+              {
+                ...common.intelligence.ratings[0],
+                providerReference: { identifier: 1396, mediaKind: "series", provider: "tmdb" },
+              },
+            ],
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          ...common,
+          intelligence: {
+            ...common.intelligence,
+            ratings: [
+              {
+                ...common.intelligence.ratings[0],
+                providerReference: {
+                  href: "https://private.invalid/title/603",
+                  identifier: 603,
+                  mediaKind: "movie",
+                  provider: "tmdb",
+                },
+              },
+            ],
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects raw upstream fields and unbounded detail collections", () => {

@@ -54,6 +54,12 @@ export const DISCOVERY_SERIES_GENRES = [
 ] as const;
 
 const tmdbIdentifierSchema = z.int().positive().max(2_147_483_647);
+const imdbTitleIdentifierSchema = z.string().regex(/^tt[0-9]{5,12}$/u);
+const rottenTomatoesTitleIdentifierSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[a-z0-9](?:[a-z0-9_-]{0,199})$/u);
 const titleSchema = z.string().trim().min(1).max(300);
 const overviewSchema = z.string().trim().max(2_000).nullable();
 const yearSchema = z.int().min(1870).max(2200).nullable();
@@ -455,26 +461,56 @@ const discoveryCrewCreditSchema = z.strictObject({
 export const discoveryIntelligenceStateSchema = z.enum(["ready", "empty", "unavailable"]);
 export type DiscoveryIntelligenceState = z.infer<typeof discoveryIntelligenceStateSchema>;
 
+export const titleProviderReferenceSchema = z.discriminatedUnion("provider", [
+  z.strictObject({
+    identifier: imdbTitleIdentifierSchema,
+    mediaKind: discoveryMediaKindSchema,
+    provider: z.literal("imdb"),
+  }),
+  z.strictObject({
+    identifier: tmdbIdentifierSchema,
+    mediaKind: discoveryMediaKindSchema,
+    provider: z.literal("tmdb"),
+  }),
+  z.strictObject({
+    identifier: rottenTomatoesTitleIdentifierSchema,
+    mediaKind: discoveryMediaKindSchema,
+    provider: z.literal("rotten_tomatoes"),
+  }),
+]);
+export type TitleProviderReference = z.infer<typeof titleProviderReferenceSchema>;
+
 const discoveryRatingBase = {
   audience: z.enum(["audience", "community", "critics"]),
   label: z.string().trim().min(1).max(80),
   sentiment: z.string().trim().min(1).max(80).nullable(),
   source: z.enum(["imdb", "rotten_tomatoes", "tmdb"]),
+  providerReference: titleProviderReferenceSchema.nullable().default(null),
   voteCount: z.int().nonnegative().max(1_000_000_000).nullable(),
 } as const;
 
-export const discoveryRatingSchema = z.discriminatedUnion("scale", [
-  z.strictObject({
-    ...discoveryRatingBase,
-    scale: z.literal(10),
-    value: z.number().finite().min(0).max(10),
-  }),
-  z.strictObject({
-    ...discoveryRatingBase,
-    scale: z.literal(100),
-    value: z.number().finite().min(0).max(100),
-  }),
-]);
+export const discoveryRatingSchema = z
+  .discriminatedUnion("scale", [
+    z.strictObject({
+      ...discoveryRatingBase,
+      scale: z.literal(10),
+      value: z.number().finite().min(0).max(10),
+    }),
+    z.strictObject({
+      ...discoveryRatingBase,
+      scale: z.literal(100),
+      value: z.number().finite().min(0).max(100),
+    }),
+  ])
+  .superRefine((rating, context) => {
+    if (rating.providerReference && rating.providerReference.provider !== rating.source) {
+      context.addIssue({
+        code: "custom",
+        message: "Rating references must match their normalized source.",
+        path: ["providerReference", "provider"],
+      });
+    }
+  });
 export type DiscoveryRating = z.infer<typeof discoveryRatingSchema>;
 
 export const discoveryTrailerSchema = z.strictObject({
@@ -564,10 +600,31 @@ export const discoveryMediaDetailSchema = z.discriminatedUnion("kind", [
 ]);
 export type DiscoveryMediaDetail = z.infer<typeof discoveryMediaDetailSchema>;
 
-export const discoveryMediaDetailResponseSchema = z.strictObject({
-  generatedAt: z.iso.datetime({ offset: true }),
-  item: discoveryMediaDetailSchema,
-});
+export const discoveryMediaDetailResponseSchema = z
+  .strictObject({
+    generatedAt: z.iso.datetime({ offset: true }),
+    item: discoveryMediaDetailSchema,
+  })
+  .superRefine((response, context) => {
+    for (const [index, rating] of response.item.intelligence.ratings.entries()) {
+      const reference = rating.providerReference;
+      if (reference === null) continue;
+      if (reference.mediaKind !== response.item.kind) {
+        context.addIssue({
+          code: "custom",
+          message: "Rating references must match the detailed media kind.",
+          path: ["item", "intelligence", "ratings", index, "providerReference", "mediaKind"],
+        });
+      }
+      if (reference.provider === "tmdb" && reference.identifier !== response.item.tmdbId) {
+        context.addIssue({
+          code: "custom",
+          message: "TMDB rating references must match the detailed title.",
+          path: ["item", "intelligence", "ratings", index, "providerReference", "identifier"],
+        });
+      }
+    }
+  });
 export type DiscoveryMediaDetailResponse = z.infer<typeof discoveryMediaDetailResponseSchema>;
 
 export const discoveryPersonDetailParamsSchema = z.strictObject({
