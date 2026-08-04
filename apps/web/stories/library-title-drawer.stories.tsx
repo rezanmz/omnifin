@@ -48,7 +48,9 @@ export const SeriesHierarchy: Story = {
     expect(canvas.getByRole("tab", { name: /Season 1/u })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(canvas.getByRole("list", { name: "Episodes" })).toBeVisible());
     await userEvent.click(canvas.getByRole("tab", { name: /Season 2/u }));
-    await waitFor(() => expect(canvas.getByRole("button", { name: /Resume/u })).toBeVisible());
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "Resume The Long Meridian" })).toBeVisible(),
+    );
   },
 };
 
