@@ -907,6 +907,9 @@ export const libraryAttentionResponseSchema = z
 export type LibraryAttentionResponse = z.infer<typeof libraryAttentionResponseSchema>;
 
 export const libraryOperationIdSchema = z.string().regex(/^library_operation_[A-Za-z0-9_-]{22}$/u);
+export const libraryRemovalPreviewIdSchema = z
+  .string()
+  .regex(/^library_removal_preview_[A-Za-z0-9_-]{22}$/u);
 export const libraryArtworkSearchIdSchema = z
   .string()
   .regex(/^library_artwork_search_[A-Za-z0-9_-]{22}$/u);
@@ -965,6 +968,145 @@ export const libraryDownloadPrepareResponseSchema = z
     }
   });
 export type LibraryDownloadPrepareResponse = z.infer<typeof libraryDownloadPrepareResponseSchema>;
+
+export const libraryRemovalModeSchema = z.enum([
+  "delete_files_keep_monitored",
+  "delete_files_and_unmonitor",
+  "remove_from_radarr_and_delete_files",
+  "delete_unmanaged_files",
+]);
+export type LibraryRemovalMode = z.infer<typeof libraryRemovalModeSchema>;
+
+export const libraryRemovalSourceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("managed"),
+    monitored: z.boolean(),
+    service: z.literal("radarr"),
+  }),
+  z.strictObject({
+    kind: z.literal("unmanaged"),
+    monitored: z.null(),
+    service: z.literal("jellyfin"),
+  }),
+]);
+export type LibraryRemovalSource = z.infer<typeof libraryRemovalSourceSchema>;
+
+const libraryRemovalEffectsSchema = z.strictObject({
+  managerRecord: z.enum(["retained", "removed", "not_applicable"]),
+  monitoring: z.enum(["monitored", "unmonitored", "removed", "not_applicable"]),
+  organizedFiles: z.literal("deleted"),
+  reacquisitionRisk: z.enum(["possible", "prevented", "not_managed"]),
+  requestHistory: z.literal("retained"),
+  seedingCopies: z.literal("unchanged"),
+  storageReclamation: z.literal("may_be_delayed"),
+});
+
+export const libraryRemovalOptionSchema = z.strictObject({
+  effects: libraryRemovalEffectsSchema,
+  mode: libraryRemovalModeSchema,
+});
+export type LibraryRemovalOption = z.infer<typeof libraryRemovalOptionSchema>;
+
+const commonRemovalEffects = {
+  organizedFiles: "deleted",
+  requestHistory: "retained",
+  seedingCopies: "unchanged",
+  storageReclamation: "may_be_delayed",
+} as const;
+
+const expectedRemovalEffects = {
+  delete_files_keep_monitored: {
+    ...commonRemovalEffects,
+    managerRecord: "retained",
+    monitoring: "monitored",
+    reacquisitionRisk: "possible",
+  },
+  delete_files_and_unmonitor: {
+    ...commonRemovalEffects,
+    managerRecord: "retained",
+    monitoring: "unmonitored",
+    reacquisitionRisk: "prevented",
+  },
+  remove_from_radarr_and_delete_files: {
+    ...commonRemovalEffects,
+    managerRecord: "removed",
+    monitoring: "removed",
+    reacquisitionRisk: "prevented",
+  },
+  delete_unmanaged_files: {
+    ...commonRemovalEffects,
+    managerRecord: "not_applicable",
+    monitoring: "not_applicable",
+    reacquisitionRisk: "not_managed",
+  },
+} as const satisfies Record<LibraryRemovalMode, z.infer<typeof libraryRemovalEffectsSchema>>;
+
+const managedRemovalModes = [
+  "delete_files_keep_monitored",
+  "delete_files_and_unmonitor",
+  "remove_from_radarr_and_delete_files",
+] as const satisfies readonly LibraryRemovalMode[];
+
+export const libraryRemovalPreviewSchema = z
+  .strictObject({
+    confirmation: z.strictObject({
+      expectedTitle: safeTextSchema.max(300),
+      kind: z.literal("exact_title"),
+      recentAuthenticationRequired: z.literal(true),
+    }),
+    expiresAt: timestampSchema,
+    generatedAt: timestampSchema,
+    options: z.array(libraryRemovalOptionSchema).min(1).max(managedRemovalModes.length),
+    previewId: libraryRemovalPreviewIdSchema,
+    referenceId: mediaReferenceIdSchema,
+    sizeBytes: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+    source: libraryRemovalSourceSchema,
+    title: safeTextSchema.max(300),
+    year: yearSchema,
+  })
+  .superRefine((preview, context) => {
+    if (Date.parse(preview.expiresAt) <= Date.parse(preview.generatedAt)) {
+      context.addIssue({
+        code: "custom",
+        message: "Library removal previews must expire after generation.",
+        path: ["expiresAt"],
+      });
+    }
+    if (preview.confirmation.expectedTitle !== preview.title) {
+      context.addIssue({
+        code: "custom",
+        message: "Library removal confirmation must use the exact displayed title.",
+        path: ["confirmation", "expectedTitle"],
+      });
+    }
+
+    const expectedModes: readonly LibraryRemovalMode[] =
+      preview.source.kind === "managed" ? managedRemovalModes : ["delete_unmanaged_files"];
+    if (
+      preview.options.length !== expectedModes.length ||
+      preview.options.some((option, index) => option.mode !== expectedModes[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library removal modes must match the resolved source of truth.",
+        path: ["options"],
+      });
+    }
+
+    for (const [index, option] of preview.options.entries()) {
+      const expected = expectedRemovalEffects[option.mode];
+      for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
+        if (option.effects[key] !== expected[key]) {
+          context.addIssue({
+            code: "custom",
+            message: "Library removal effects must match the selected mode.",
+            path: ["options", index, "effects", key],
+          });
+        }
+      }
+    }
+  });
+export type LibraryRemovalPreview = z.infer<typeof libraryRemovalPreviewSchema>;
 
 export const libraryScanRequestSchema = z.strictObject({});
 export type LibraryScanRequest = z.infer<typeof libraryScanRequestSchema>;
@@ -1115,6 +1257,7 @@ export const libraryMetadataUpdateRequestJsonSchema = withoutSchemaDialect(
 export const libraryMutationResponseJsonSchema = withoutSchemaDialect(
   libraryMutationResponseSchema,
 );
+export const libraryRemovalPreviewJsonSchema = withoutSchemaDialect(libraryRemovalPreviewSchema);
 export const libraryArtworkSearchRequestJsonSchema = withoutSchemaDialect(
   libraryArtworkSearchRequestSchema,
 );

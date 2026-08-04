@@ -24,6 +24,8 @@ import {
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseJsonSchema,
   libraryPlaybackStateMutationResponseSchema,
+  libraryRemovalPreviewJsonSchema,
+  libraryRemovalPreviewSchema,
   librarySeasonEpisodesQueryJsonSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseJsonSchema,
@@ -41,6 +43,7 @@ const referenceId = `media_${"m".repeat(22)}`;
 const searchId = `library_artwork_search_${"s".repeat(22)}`;
 const resultId = `library_artwork_result_${"r".repeat(22)}`;
 const downloadGrantId = `media_download_${"d".repeat(22)}`;
+const removalPreviewId = `library_removal_preview_${"d".repeat(22)}`;
 
 const attention = {
   generatedAt: "2026-07-28T14:00:00.000Z",
@@ -613,6 +616,119 @@ describe("library operation contracts", () => {
     ).toBe("accepted");
   });
 
+  it("models a short-lived managed-movie removal preview without upstream identity", () => {
+    const commonEffects = {
+      organizedFiles: "deleted" as const,
+      requestHistory: "retained" as const,
+      seedingCopies: "unchanged" as const,
+      storageReclamation: "may_be_delayed" as const,
+    };
+    const preview = {
+      confirmation: {
+        expectedTitle: "The Long Meridian",
+        kind: "exact_title" as const,
+        recentAuthenticationRequired: true as const,
+      },
+      expiresAt: "2026-07-28T14:05:00.000Z",
+      generatedAt: "2026-07-28T14:00:00.000Z",
+      options: [
+        {
+          effects: {
+            ...commonEffects,
+            managerRecord: "retained" as const,
+            monitoring: "monitored" as const,
+            reacquisitionRisk: "possible" as const,
+          },
+          mode: "delete_files_keep_monitored" as const,
+        },
+        {
+          effects: {
+            ...commonEffects,
+            managerRecord: "retained" as const,
+            monitoring: "unmonitored" as const,
+            reacquisitionRisk: "prevented" as const,
+          },
+          mode: "delete_files_and_unmonitor" as const,
+        },
+        {
+          effects: {
+            ...commonEffects,
+            managerRecord: "removed" as const,
+            monitoring: "removed" as const,
+            reacquisitionRisk: "prevented" as const,
+          },
+          mode: "remove_from_radarr_and_delete_files" as const,
+        },
+      ],
+      previewId: removalPreviewId,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+      source: { kind: "managed" as const, monitored: true, service: "radarr" as const },
+      title: "The Long Meridian",
+      year: 2026,
+    };
+
+    expect(libraryRemovalPreviewSchema.parse(preview)).toEqual(preview);
+    expect(JSON.stringify(preview)).not.toMatch(/\/private\/|externalId|upstream|connectorUrl/iu);
+    expect(
+      libraryRemovalPreviewSchema.safeParse({
+        ...preview,
+        options: [
+          {
+            ...preview.options[0],
+            effects: { ...preview.options[0]!.effects, reacquisitionRisk: "prevented" },
+          },
+          ...preview.options.slice(1),
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("limits unmanaged removal previews to a Jellyfin-authorized file operation", () => {
+    const preview = {
+      confirmation: {
+        expectedTitle: "The Long Meridian",
+        kind: "exact_title" as const,
+        recentAuthenticationRequired: true as const,
+      },
+      expiresAt: "2026-07-28T14:05:00.000Z",
+      generatedAt: "2026-07-28T14:00:00.000Z",
+      options: [
+        {
+          effects: {
+            managerRecord: "not_applicable" as const,
+            monitoring: "not_applicable" as const,
+            organizedFiles: "deleted" as const,
+            reacquisitionRisk: "not_managed" as const,
+            requestHistory: "retained" as const,
+            seedingCopies: "unchanged" as const,
+            storageReclamation: "may_be_delayed" as const,
+          },
+          mode: "delete_unmanaged_files" as const,
+        },
+      ],
+      previewId: removalPreviewId,
+      referenceId,
+      sizeBytes: null,
+      source: { kind: "unmanaged" as const, monitored: null, service: "jellyfin" as const },
+      title: "The Long Meridian",
+      year: null,
+    };
+
+    expect(libraryRemovalPreviewSchema.parse(preview)).toEqual(preview);
+    expect(
+      libraryRemovalPreviewSchema.safeParse({
+        ...preview,
+        options: [
+          {
+            ...preview.options[0],
+            mode: "remove_from_radarr_and_delete_files",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("binds opaque artwork previews to their short-lived search", () => {
     const response = {
       expiresAt: "2026-07-28T14:20:00.000Z",
@@ -651,6 +767,8 @@ describe("library operation contracts", () => {
     expect(libraryBrowseResponseJsonSchema).toMatchObject({ type: "object" });
     expect(libraryPlaybackStateMutationRequestJsonSchema).not.toHaveProperty("$schema");
     expect(libraryPlaybackStateMutationResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryRemovalPreviewJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryRemovalPreviewJsonSchema).toMatchObject({ type: "object" });
     expect(viewingHistoryQueryJsonSchema).not.toHaveProperty("$schema");
     expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
