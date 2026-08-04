@@ -48,6 +48,7 @@ import {
   type MediaDownloadEligibility,
   type MediaLibraryClient,
 } from "../lib/media-library";
+import { SavedTitleActions } from "./saved-title-actions";
 
 export interface PlayableLibrarySelection {
   media: LibrarySeasonEpisode["media"] | LibraryBrowseItem["media"];
@@ -1584,6 +1585,12 @@ export function LibraryTitleDrawer({
                       <span key={fact}>{fact}</span>
                     ))}
                   </div>
+                  <SavedTitleActions
+                    eager
+                    key={detail!.media.id}
+                    referenceId={detail!.media.id}
+                    title={detail!.media.title}
+                  />
                   {detail!.movie?.tagline ? (
                     <blockquote className="library-title__tagline">
                       {detail!.movie.tagline}

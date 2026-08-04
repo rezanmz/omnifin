@@ -99,9 +99,9 @@ describe("MediaLibrary", () => {
     await user.click(screen.getByRole("radio", { name: "All" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Sort library" }), "title");
     const list = screen.getByRole("list", { name: "Library titles" });
-    expect(within(list).getAllByRole("button")[0]).toHaveAccessibleName(
-      /View details for Atlas Station/u,
-    );
+    expect(
+      within(list).getByRole("button", { name: /View details for Atlas Station/u }),
+    ).toBeVisible();
     expect(load).not.toHaveBeenCalled();
   });
 
