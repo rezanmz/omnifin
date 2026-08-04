@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { DEFAULT_PLAYBACK_PREFERENCES } from "@omnifin/contracts/playback";
 
 import { PlaybackPreferencesPanel } from "../../../../components/playback-preferences-panel";
-import "../../../../globals.css";
+import "../../../globals.css";
 
 export const metadata: Metadata = { title: "Playback preferences" };
 
