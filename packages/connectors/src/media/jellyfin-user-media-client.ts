@@ -1531,10 +1531,12 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    const totalResults = response.TotalRecordCount ?? null;
-    if (totalResults !== null && totalResults < input.startIndex + response.Items.length) {
-      throw this.#client.invalidResponse("media.library");
-    }
+    const reportedTotalResults = response.TotalRecordCount ?? null;
+    const totalResults =
+      reportedTotalResults !== null &&
+      reportedTotalResults >= input.startIndex + response.Items.length
+        ? reportedTotalResults
+        : null;
     const consumed = Math.min(response.Items.length, input.limit);
     const nextStartIndex =
       totalResults === null

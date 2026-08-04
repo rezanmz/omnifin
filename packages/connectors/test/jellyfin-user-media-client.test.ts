@@ -524,6 +524,25 @@ describe("JellyfinUserMediaClient", () => {
     });
   });
 
+  it("keeps a valid catalogue page when an older Jellyfin reports an incoherent total", async () => {
+    const { client } = clientWithResponses([jsonResponse({ Items: [movie], TotalRecordCount: 0 })]);
+
+    await expect(
+      client.readLibrary({
+        kind: "movies",
+        limit: 30,
+        sort: "title",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ externalId: "movie-upstream-1" })],
+      nextStartIndex: null,
+      totalResults: null,
+      truncated: false,
+    });
+  });
+
   it("uses exact library type and sorting allowlists and fails closed on version drift", async () => {
     const movieClient = clientWithResponses([
       jsonResponse({
@@ -587,19 +606,13 @@ describe("JellyfinUserMediaClient", () => {
   });
 
   it.each([
-    { response: { Items: [movie], TotalRecordCount: 0 }, title: "a total below the returned page" },
     { response: { Items: [], TotalRecordCount: -1 }, title: "a negative total" },
     { response: { Items: [], TotalRecordCount: 1.5 }, title: "a fractional total" },
     {
       response: { Items: [], TotalRecordCount: 10_000_001 },
       title: "an implausibly large total",
     },
-    {
-      response: { Items: [], TotalRecordCount: 29 },
-      startIndex: 30,
-      title: "a total behind the requested cursor",
-    },
-  ])("rejects $title", async ({ response, startIndex = 0 }) => {
+  ])("rejects $title", async ({ response }) => {
     const { client } = clientWithResponses([jsonResponse(response)]);
 
     await expect(
@@ -607,7 +620,7 @@ describe("JellyfinUserMediaClient", () => {
         kind: "all",
         limit: 30,
         sort: "recent",
-        startIndex,
+        startIndex: 0,
         userId: "paired-user-id",
       }),
     ).rejects.toMatchObject({ code: "response_invalid", operation: "media.library" });
