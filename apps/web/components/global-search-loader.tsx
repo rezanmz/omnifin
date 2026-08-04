@@ -16,6 +16,7 @@ import {
   captureDocumentScrollPosition,
   focusWithoutDocumentScroll,
   restoreDocumentScrollPosition,
+  stabilizeDocumentScrollPosition,
   type DocumentScrollPosition,
 } from "../lib/focus-preservation";
 
@@ -58,7 +59,10 @@ function GlobalSearchPlaceholder({
         data-directional-item
         disabled={!interactive}
         id="global-search-placeholder"
-        onClick={() => activate?.(true)}
+        onClick={(event) => {
+          event.preventDefault();
+          activate?.(true);
+        }}
         onBlur={() => {
           pointerActivationReference.current = false;
         }}
@@ -160,8 +164,9 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
 
   useLayoutEffect(() => {
     if (!SearchComponent) return;
-    restoreDocumentScrollPosition(activationScrollReference.current);
+    const stopStabilizing = stabilizeDocumentScrollPosition(activationScrollReference.current);
     activationScrollReference.current = null;
+    return stopStabilizing;
   }, [SearchComponent]);
 
   useEffect(() => {

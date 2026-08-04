@@ -141,6 +141,11 @@ describe("global search", () => {
         expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
       );
       await waitFor(() => expect(scrollTop).toBe(1_200));
+
+      // WebKit can apply one more sticky-focus adjustment after the replacement input mounts.
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      scrollTop = 88;
+      await waitFor(() => expect(scrollTop).toBe(1_200));
     } finally {
       vi.mocked(window.scrollTo).mockReset();
       if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
