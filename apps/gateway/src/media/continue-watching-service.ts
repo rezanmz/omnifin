@@ -51,6 +51,10 @@ import {
   type ViewingHistoryQuery,
   type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
+import {
+  playbackContextResponseSchema,
+  type PlaybackContextResponse,
+} from "@omnifin/contracts/playback";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import type { DiscoveryTrailer } from "@omnifin/contracts/discovery";
 import { createHash, X509Certificate } from "node:crypto";
@@ -258,6 +262,7 @@ export interface ContinueWatchingDependencies {
         | "readLibrary"
         | "readLibrarySeasonEpisodes"
         | "readLibraryTitle"
+        | "readPlaybackContext"
         | "readViewingHistory"
         | "deleteLibraryItem"
         | "updatePlaybackState"
@@ -378,6 +383,23 @@ export class MediaPlaybackStateError extends Error {
   public constructor(reason: MediaPlaybackStateErrorReason, options?: ErrorOptions) {
     super("The Jellyfin playback state could not be updated.", options);
     this.name = "MediaPlaybackStateError";
+    this.reason = reason;
+  }
+}
+
+export type MediaPlaybackContextErrorReason = "not_found" | "unavailable";
+
+export class MediaPlaybackContextError extends Error {
+  public readonly reason: MediaPlaybackContextErrorReason;
+
+  public constructor(reason: MediaPlaybackContextErrorReason, options?: ErrorOptions) {
+    super(
+      reason === "not_found"
+        ? "The playback context is no longer available."
+        : "Playback context is temporarily unavailable.",
+      options,
+    );
+    this.name = "MediaPlaybackContextError";
     this.reason = reason;
   }
 }
@@ -1422,6 +1444,77 @@ export class ContinueWatchingService {
         : operation;
     } catch (error) {
       throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  public async readPlaybackContext(
+    referenceId: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<PlaybackContextResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaPlaybackContextError("not_found", { cause: error });
+    }
+    if (reference.kind !== "episode") throw new MediaPlaybackContextError("not_found");
+
+    try {
+      const client = this.#client(row);
+      if (!client.readPlaybackContext) throw new ContinueWatchingConfigurationError();
+      const result = await client.readPlaybackContext(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (result.nextEpisode?.externalId === reference.itemId) {
+        throw new MediaReferenceError();
+      }
+      const nextReferenceId = result.nextEpisode
+        ? this.#references.createOrRefresh(this.#referenceContext(row), [
+            {
+              artwork: {
+                backdropItemId: result.nextEpisode.artwork.backdrop?.itemId ?? null,
+                posterItemId: result.nextEpisode.artwork.poster?.itemId ?? null,
+              },
+              episodeNumber: result.nextEpisode.episodeNumber,
+              itemId: result.nextEpisode.externalId,
+              kind: "episode",
+              seasonNumber: result.nextEpisode.seasonNumber,
+              title: result.nextEpisode.title,
+              year: result.nextEpisode.year,
+            },
+          ])[0]!
+        : null;
+      const nextEpisode = result.nextEpisode
+        ? {
+            artworkPath: result.nextEpisode.artwork.backdrop
+              ? `/v1/media/${nextReferenceId}/images/backdrop`
+              : result.nextEpisode.artwork.poster
+                ? `/v1/media/${nextReferenceId}/images/poster`
+                : null,
+            durationSeconds: result.nextEpisode.durationSeconds,
+            episodeNumber: result.nextEpisode.episodeNumber,
+            mediaReferenceId: nextReferenceId,
+            seasonNumber: result.nextEpisode.seasonNumber,
+            seriesTitle: result.nextEpisode.seriesTitle,
+            title: result.nextEpisode.title,
+          }
+        : null;
+      return playbackContextResponseSchema.parse({
+        currentDurationSeconds: result.current.durationSeconds,
+        generatedAt: occurredAt.toISOString(),
+        mediaReferenceId: referenceId,
+        nextEpisode,
+        nextState: result.nextState,
+        segments: result.segments,
+        segmentsState: result.segmentsState,
+      });
+    } catch (error) {
+      throw new MediaPlaybackContextError("unavailable", { cause: error });
     }
   }
 

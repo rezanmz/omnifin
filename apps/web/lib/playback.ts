@@ -1,4 +1,5 @@
 import type {
+  PlaybackContextResponse,
   PlaybackNegotiationResponse,
   PlaybackProgressRequest,
   PlaybackProgressResponse,
@@ -55,6 +56,7 @@ export interface PlaybackPreparationOptions {
 }
 
 export interface PlaybackClient {
+  loadContext?(mediaReferenceId: string, signal?: AbortSignal): Promise<PlaybackContextResponse>;
   prepare(
     mediaReferenceId: string,
     positionSeconds: number,
@@ -149,7 +151,36 @@ export function browserPlaybackPath(path: string) {
   return path.replace(/^\/v1\//u, "/api/");
 }
 
-export const playbackClient: PlaybackClient = {
+export const playbackClient: PlaybackClient & {
+  loadContext(mediaReferenceId: string, signal?: AbortSignal): Promise<PlaybackContextResponse>;
+} = {
+  async loadContext(mediaReferenceId, signal) {
+    if (!/^media_[A-Za-z0-9_-]{22}$/u.test(mediaReferenceId)) {
+      throw new PlaybackClientError(
+        "invalid_response",
+        "invalid_media_reference",
+        "The player received an invalid media reference.",
+      );
+    }
+    const schemas = await contractSchemas();
+    const response = await fetchSameOrigin(`/api/media/${mediaReferenceId}/playback-context`, {
+      headers: { accept: "application/json" },
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (!response.ok) throw await responseError(response);
+    const parsed = schemas.playback.playbackContextResponseSchema.safeParse(
+      await safeJson(response),
+    );
+    if (!parsed.success || parsed.data.mediaReferenceId !== mediaReferenceId) {
+      throw new PlaybackClientError(
+        "invalid_response",
+        "invalid_playback_context_response",
+        "The gateway returned playback context outside the public contract.",
+      );
+    }
+    return parsed.data;
+  },
+
   async prepare(mediaReferenceId, positionSeconds, signal, options = {}) {
     const schemas = await contractSchemas();
     const sessionResponse = await fetchSameOrigin("/api/auth/session", {

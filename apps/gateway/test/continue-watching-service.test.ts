@@ -4,6 +4,7 @@ import type {
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
+  JellyfinPlaybackContextResult,
   JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import type { RadarrAdapter } from "@omnifin/connectors/adapters/radarr";
@@ -23,6 +24,7 @@ import {
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
 } from "@omnifin/contracts/library";
+import { playbackContextResponseSchema } from "@omnifin/contracts/playback";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -335,6 +337,30 @@ function harness(
       truncated: true,
     }),
   );
+  const readPlaybackContext = vi.fn(async (): Promise<JellyfinPlaybackContextResult> => ({
+    current: {
+      durationSeconds: 2_700,
+      episodeNumber: 3,
+      seasonNumber: 2,
+      seriesId: privateSeriesId,
+    },
+    nextEpisode: {
+      artwork: resumeResult().items[0]!.artwork,
+      durationSeconds: 2_700,
+      episodeNumber: 4,
+      externalId: "private-upstream-next-episode",
+      seasonNumber: 2,
+      seriesTitle: "Northern Lights",
+      title: "Event Horizon",
+      year: 2025,
+    },
+    nextState: "ready",
+    segments: [
+      { endSeconds: 86, kind: "intro", startSeconds: 4 },
+      { endSeconds: 2_690, kind: "credits", startSeconds: 2_610 },
+    ],
+    segmentsState: "ready",
+  }));
   const readImage = vi.fn(async () => ({
     body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
     contentType: "image/jpeg" as const,
@@ -368,6 +394,7 @@ function harness(
     readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readPlaybackContext,
     readViewingHistory,
     deleteLibraryItem,
     updatePlaybackState,
@@ -402,6 +429,7 @@ function harness(
     readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readPlaybackContext,
     readOnlineExtras,
     readViewingHistory,
     service,
@@ -1813,6 +1841,119 @@ describe("ContinueWatchingService", () => {
         service.readLibraryExtras(localExtraReferenceId, { limit: 12 }, { principal: principal() }),
       ).rejects.toMatchObject({ reason: "not_found" });
       expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns trusted playback context through user-bound opaque references", async () => {
+    const { database, readPlaybackContext, service } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+
+      const context = await service.readPlaybackContext(referenceId, {
+        principal: principal(),
+      });
+
+      expect(playbackContextResponseSchema.parse(context)).toEqual(context);
+      expect(context).toMatchObject({
+        currentDurationSeconds: 2_700,
+        mediaReferenceId: referenceId,
+        nextEpisode: {
+          artworkPath: `/v1/media/media_${"e".repeat(22)}/images/backdrop`,
+          episodeNumber: 4,
+          mediaReferenceId: `media_${"e".repeat(22)}`,
+          seasonNumber: 2,
+          seriesTitle: "Northern Lights",
+          title: "Event Horizon",
+        },
+        nextState: "ready",
+        segmentsState: "ready",
+      });
+      expect(readPlaybackContext).toHaveBeenCalledWith(
+        { itemId: privateItemId, userId: "viewer-external" },
+        undefined,
+      );
+      expect(JSON.stringify(context)).not.toMatch(/private-upstream|viewer-external/iu);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps a requestable next episode opaque and explicitly non-playable", async () => {
+    const { database, readPlaybackContext, service } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      const baseline = await readPlaybackContext();
+      readPlaybackContext.mockResolvedValueOnce({
+        ...baseline,
+        nextEpisode: { ...baseline.nextEpisode!, durationSeconds: null },
+        nextState: "requestable",
+      });
+
+      await expect(
+        service.readPlaybackContext(referenceId, { principal: principal() }),
+      ).resolves.toMatchObject({
+        nextEpisode: {
+          durationSeconds: null,
+          mediaReferenceId: `media_${"e".repeat(22)}`,
+          title: "Event Horizon",
+        },
+        nextState: "requestable",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed for stale, self-referential, and incomplete next-episode context", async () => {
+    const { database, readPlaybackContext, service } = harness();
+    try {
+      await expect(
+        service.readPlaybackContext(`media_${"z".repeat(22)}`, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      const baseline = await readPlaybackContext();
+      readPlaybackContext.mockClear();
+      readPlaybackContext.mockResolvedValueOnce({
+        ...baseline,
+        nextEpisode: { ...baseline.nextEpisode!, externalId: privateItemId },
+      });
+      await expect(
+        service.readPlaybackContext(referenceId, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      readPlaybackContext.mockResolvedValueOnce({
+        ...baseline,
+        nextEpisode: {
+          ...baseline.nextEpisode!,
+          artwork: {
+            ...baseline.nextEpisode!.artwork,
+            backdrop: null,
+            poster: { itemId: "private-upstream-next-episode", type: "Primary" },
+          },
+        },
+      });
+      await expect(
+        service.readPlaybackContext(referenceId, { principal: principal() }),
+      ).resolves.toMatchObject({
+        nextEpisode: { artworkPath: `/v1/media/media_${"e".repeat(22)}/images/poster` },
+      });
+
+      readPlaybackContext.mockResolvedValueOnce({
+        ...baseline,
+        nextEpisode: {
+          ...baseline.nextEpisode!,
+          artwork: { ...baseline.nextEpisode!.artwork, backdrop: null, poster: null },
+        },
+      });
+      await expect(
+        service.readPlaybackContext(referenceId, { principal: principal() }),
+      ).resolves.toMatchObject({ nextEpisode: { artworkPath: null } });
     } finally {
       database.close();
     }

@@ -42,6 +42,7 @@ const JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE = 100;
 const JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES = 20;
 const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
 const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
+const JELLYFIN_PLAYBACK_CONTEXT_LOOKAHEAD_LIMIT = 8;
 const JELLYFIN_LIBRARY_EXTRAS_UPSTREAM_LIMIT = 256;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
@@ -295,6 +296,20 @@ const jellyfinLibraryEpisodesResponseSchema = z.object({
   Items: z.array(jellyfinLibraryEpisodeSchema).max(JELLYFIN_LIBRARY_EPISODE_LIMIT + 1),
 });
 
+const jellyfinPlaybackContextEpisodeSchema = jellyfinLibraryEpisodeSchema.extend({
+  IsPlaceHolder: z.boolean().nullish(),
+  LocationType: z.enum(["FileSystem", "Offline", "Remote", "Virtual"]).nullish(),
+  RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS).nullish(),
+});
+
+const jellyfinPlaybackContextEpisodesResponseSchema = z.object({
+  Items: z
+    .array(jellyfinPlaybackContextEpisodeSchema)
+    .max(JELLYFIN_PLAYBACK_CONTEXT_LOOKAHEAD_LIMIT),
+  StartIndex: z.int().nonnegative().optional(),
+  TotalRecordCount: z.int().nonnegative().max(100_000).optional(),
+});
+
 const jellyfinLibraryEpisodeCountResponseSchema = z.object({
   Items: z
     .array(
@@ -320,6 +335,20 @@ const jellyfinPlaybackStateItemSchema = z.object({
     Played: z.boolean().nullish(),
     PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
   }),
+});
+
+const jellyfinMediaSegmentSchema = z.object({
+  EndTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
+  Id: z.string().trim().min(1).max(256),
+  ItemId: z.string().trim().min(1).max(256),
+  StartTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS),
+  Type: z.union([z.string().trim().min(1).max(64), z.int().nonnegative().max(64)]),
+});
+
+const jellyfinMediaSegmentsResponseSchema = z.object({
+  Items: z.array(jellyfinMediaSegmentSchema).max(64),
+  StartIndex: z.int().nonnegative().optional(),
+  TotalRecordCount: z.int().nonnegative().max(64).optional(),
 });
 
 const jellyfinFavoriteStateItemSchema = z.object({
@@ -420,6 +449,17 @@ const jellyfinPlaybackStateMutationInputSchema = z.strictObject({
 
 const jellyfinFavoriteStateInputSchema = z.strictObject({
   favorite: z.boolean(),
+  itemId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
+const jellyfinPlaybackContextInputSchema = z.strictObject({
   itemId: z
     .string()
     .trim()
@@ -625,6 +665,41 @@ export interface JellyfinPlaybackStateMutationInput {
   action: LibraryPlaybackStateAction;
   itemId: string;
   userId: string;
+}
+
+export interface JellyfinPlaybackContextInput {
+  itemId: string;
+  userId: string;
+}
+
+export interface JellyfinPlaybackSegment {
+  endSeconds: number;
+  kind: "credits" | "intro";
+  startSeconds: number;
+}
+
+export interface JellyfinPlaybackContextEpisode {
+  artwork: JellyfinContinueWatchingItem["artwork"];
+  durationSeconds: number | null;
+  episodeNumber: number | null;
+  externalId: string;
+  seasonNumber: number | null;
+  seriesTitle: string;
+  title: string;
+  year: number | null;
+}
+
+export interface JellyfinPlaybackContextResult {
+  current: {
+    durationSeconds: number;
+    episodeNumber: number | null;
+    seasonNumber: number | null;
+    seriesId: string;
+  };
+  nextEpisode: JellyfinPlaybackContextEpisode | null;
+  nextState: "end" | "ready" | "requestable" | "unavailable";
+  segments: JellyfinPlaybackSegment[];
+  segmentsState: "empty" | "ready" | "unavailable";
 }
 
 export interface JellyfinLibraryEpisode extends Omit<
@@ -1335,6 +1410,46 @@ function normalizeLibraryEpisode(
   };
 }
 
+function normalizePlaybackContextEpisode(
+  item: z.infer<typeof jellyfinPlaybackContextEpisodeSchema>,
+): JellyfinPlaybackContextEpisode | null {
+  const missing = item.LocationType === "Virtual" || item.IsPlaceHolder === true;
+  const durationSeconds = item.RunTimeTicks ? secondsFromTicks(item.RunTimeTicks) : null;
+  if (!missing && (durationSeconds === null || durationSeconds < 1)) return null;
+  const posterTag = item.ImageTags?.Primary ?? item.SeriesPrimaryImageTag ?? undefined;
+  const backdropTag = item.ParentBackdropImageTags?.[0] ?? item.BackdropImageTags?.[0];
+  const backdropItemId = item.ParentBackdropImageTags?.length
+    ? (item.ParentBackdropItemId ?? item.SeriesId)
+    : item.BackdropImageTags?.length
+      ? item.Id
+      : undefined;
+  return {
+    artwork: {
+      ...artworkPalette(item, posterTag, backdropTag),
+      backdrop: backdropItemId ? { itemId: backdropItemId, type: "Backdrop" } : null,
+      poster: posterTag
+        ? {
+            itemId: item.ImageTags?.Primary ? item.Id : item.SeriesId,
+            type: "Primary",
+          }
+        : null,
+    },
+    durationSeconds: missing ? null : durationSeconds,
+    episodeNumber: item.IndexNumber ?? null,
+    externalId: item.Id,
+    seasonNumber: item.ParentIndexNumber ?? null,
+    seriesTitle: compactText(item.SeriesName, 300) ?? "Series",
+    title: item.Name,
+    year:
+      item.ProductionYear !== null &&
+      item.ProductionYear !== undefined &&
+      item.ProductionYear >= 1870 &&
+      item.ProductionYear <= 2200
+        ? item.ProductionYear
+        : null,
+  };
+}
+
 interface JellyfinSeasonProgressFallback {
   episodeCount: number;
   playedEpisodeCount: number | null;
@@ -1888,6 +2003,130 @@ export class JellyfinUserMediaClient {
         .filter((item): item is JellyfinLibraryEpisode => item !== null),
       nextStartIndex: truncated ? input.startIndex + input.limit : null,
       truncated,
+    };
+  }
+
+  public async readPlaybackContext(
+    rawInput: JellyfinPlaybackContextInput,
+    signal?: AbortSignal,
+  ): Promise<JellyfinPlaybackContextResult> {
+    const input = jellyfinPlaybackContextInputSchema.parse(rawInput);
+    const current = await this.#client.requestJson(
+      `Items/${input.itemId}`,
+      jellyfinLibraryEpisodeSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.playback_context",
+        query: { EnableUserData: "true", UserId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    if (current.Id !== input.itemId) throw this.#client.invalidResponse("media.playback_context");
+    const durationSeconds = secondsFromTicks(current.RunTimeTicks);
+    if (durationSeconds < 1) throw this.#client.invalidResponse("media.playback_context");
+
+    const [segmentOutcome, episodeOutcome] = await Promise.allSettled([
+      this.#client.requestJson(
+        `MediaSegments/${input.itemId}`,
+        jellyfinMediaSegmentsResponseSchema,
+        {
+          headers: { authorization: this.#authorization },
+          operation: "media.playback_context",
+          query: { includeSegmentTypes: "Intro,Outro" },
+          ...(signal === undefined ? {} : { signal }),
+        },
+      ),
+      this.#client.requestJson(
+        `Shows/${current.SeriesId}/Episodes`,
+        jellyfinPlaybackContextEpisodesResponseSchema,
+        {
+          headers: { authorization: this.#authorization },
+          operation: "media.playback_context",
+          query: {
+            EnableImageTypes: "Primary,Backdrop",
+            EnableUserData: "true",
+            Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+            ImageTypeLimit: "1",
+            IsUnaired: "false",
+            Limit: String(JELLYFIN_PLAYBACK_CONTEXT_LOOKAHEAD_LIMIT),
+            SortBy: "IndexNumber",
+            StartIndex: "1",
+            StartItemId: input.itemId,
+            UserId: input.userId,
+          },
+          ...(signal === undefined ? {} : { signal }),
+        },
+      ),
+    ]);
+    if (signal?.aborted) {
+      if (segmentOutcome.status === "rejected") throw segmentOutcome.reason;
+      if (episodeOutcome.status === "rejected") throw episodeOutcome.reason;
+    }
+
+    const segmentsByKind = new Map<JellyfinPlaybackSegment["kind"], JellyfinPlaybackSegment>();
+    for (const segment of segmentOutcome.status === "fulfilled" ? segmentOutcome.value.Items : []) {
+      if (segment.ItemId !== input.itemId || segment.EndTicks > current.RunTimeTicks) continue;
+      const kind =
+        segment.Type === 5 || String(segment.Type).toLocaleLowerCase("en-US") === "intro"
+          ? ("intro" as const)
+          : segment.Type === 4 || String(segment.Type).toLocaleLowerCase("en-US") === "outro"
+            ? ("credits" as const)
+            : null;
+      if (!kind || segment.EndTicks <= segment.StartTicks || segmentsByKind.has(kind)) continue;
+      segmentsByKind.set(kind, {
+        endSeconds: secondsFromTicks(segment.EndTicks),
+        kind,
+        startSeconds: secondsFromTicks(segment.StartTicks),
+      });
+    }
+    const segments = [...segmentsByKind.values()].sort(
+      (left, right) => left.startSeconds - right.startSeconds,
+    );
+    const episodeWindow = episodeOutcome.status === "fulfilled" ? episodeOutcome.value : undefined;
+    const skipUnexpectedSpecials = current.ParentIndexNumber !== 0;
+    const nextItem = episodeWindow?.Items.find(
+      (item) => !skipUnexpectedSpecials || item.ParentIndexNumber !== 0,
+    );
+    const nextWindowComplete = Boolean(
+      episodeWindow &&
+      (episodeWindow.Items.length < JELLYFIN_PLAYBACK_CONTEXT_LOOKAHEAD_LIMIT ||
+        (episodeWindow.TotalRecordCount !== undefined &&
+          (episodeWindow.StartIndex ?? 1) + episodeWindow.Items.length >=
+            episodeWindow.TotalRecordCount)),
+    );
+    const normalizedNext =
+      nextItem?.SeriesId === current.SeriesId ? normalizePlaybackContextEpisode(nextItem) : null;
+    const requestableNext =
+      normalizedNext !== null &&
+      (nextItem?.LocationType === "Virtual" || nextItem?.IsPlaceHolder === true);
+
+    return {
+      current: {
+        durationSeconds,
+        episodeNumber: current.IndexNumber ?? null,
+        seasonNumber: current.ParentIndexNumber ?? null,
+        seriesId: current.SeriesId,
+      },
+      nextEpisode: normalizedNext,
+      nextState:
+        episodeOutcome.status === "rejected"
+          ? "unavailable"
+          : nextItem === undefined
+            ? nextWindowComplete
+              ? "end"
+              : "unavailable"
+            : normalizedNext
+              ? requestableNext
+                ? "requestable"
+                : "ready"
+              : "unavailable",
+      segments,
+      segmentsState:
+        segmentOutcome.status === "rejected"
+          ? "unavailable"
+          : segments.length > 0
+            ? "ready"
+            : "empty",
     };
   }
 

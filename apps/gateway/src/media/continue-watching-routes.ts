@@ -35,6 +35,10 @@ import {
   viewingHistoryResponseJsonSchema,
   viewingHistoryResponseSchema,
 } from "@omnifin/contracts/library";
+import {
+  playbackContextResponseJsonSchema,
+  playbackContextResponseSchema,
+} from "@omnifin/contracts/playback";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
@@ -48,6 +52,7 @@ import {
   LibraryRemovalError,
   MediaArtworkError,
   MediaLibraryError,
+  MediaPlaybackContextError,
   MediaPlaybackStateError,
   LibraryRemovalPreviewError,
   ViewingHistoryError,
@@ -578,6 +583,59 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       } catch (error) {
         if (error instanceof LibraryRemovalError) throw libraryRemovalError(error, reply);
         throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/:referenceId/playback-context",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: libraryTitleParamsJsonSchema,
+        response: { 200: playbackContextResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const { referenceId } = libraryTitleParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return playbackContextResponseSchema.parse(
+          await service.readPlaybackContext(referenceId, { principal }, controller.signal),
+        );
+      } catch (error) {
+        if (error instanceof MediaPlaybackContextError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "playback_context_not_found"
+                : "playback_context_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "The playback context is no longer available."
+                : "Playback context is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
       }
     },
   );

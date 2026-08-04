@@ -22,6 +22,7 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { PlaybackContextResponse } from "@omnifin/contracts/playback";
 
 import { resolvePlaybackPreferences } from "../lib/playback-preference-resolution";
 import {
@@ -69,6 +70,17 @@ export interface TheaterPlayerProperties {
   subtitleClient?: SubtitleClient;
 }
 
+interface TheaterPlayerSessionProperties extends TheaterPlayerProperties {
+  autoplayEpisodeCount: number;
+  initialHandoff?: EpisodePlaybackHandoff;
+  onAdvance: (
+    episode: NonNullable<PlaybackContextResponse["nextEpisode"]>,
+    reason: "autoplay" | "manual",
+    handoff: EpisodePlaybackHandoff,
+  ) => void;
+  onViewerIntent: () => void;
+}
+
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset =
@@ -89,6 +101,19 @@ interface PlaybackPreferences {
   audioStreamIndex: number | null;
   quality: QualityPreset;
   subtitleStreamIndex: number | null;
+}
+
+interface EpisodePlaybackHandoff {
+  preferences: PlaybackPreferences;
+  prepared: PreparedPlayback;
+}
+
+interface EpisodePlaybackPreferences {
+  autoplay: boolean;
+  countdownSeconds: number;
+  skipCredits: boolean;
+  skipIntro: boolean;
+  stillWatchingAfter: number | null;
 }
 
 const QUALITY_PRESETS = {
@@ -214,14 +239,18 @@ function isInteractiveTarget(target: EventTarget | null) {
   );
 }
 
-export function TheaterPlayer({
+function TheaterPlayerSession({
+  autoplayEpisodeCount,
   client = playbackClient,
+  initialHandoff,
   media,
+  onAdvance,
   onClose,
+  onViewerIntent,
   preferenceClient = playbackPreferenceClient,
   startWhenReady = false,
   subtitleClient,
-}: TheaterPlayerProperties) {
+}: TheaterPlayerSessionProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const videoReference = useRef<HTMLVideoElement>(null);
   const hlsReference = useRef<HlsType | null>(null);
@@ -236,6 +265,10 @@ export function TheaterPlayer({
   const replacementControllerReference = useRef<AbortController | null>(null);
   const replacementGenerationReference = useRef(0);
   const replacementReference = useRef<{
+    episodeAdvance?: {
+      episode: NonNullable<PlaybackContextResponse["nextEpisode"]>;
+      reason: "autoplay" | "manual";
+    };
     generation: number;
     previous: PreparedPlayback;
     previousOnePlayOverride: boolean;
@@ -251,6 +284,7 @@ export function TheaterPlayer({
   const requestedPositionReference = useRef(media.positionSeconds);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
+  const autoSkippedIntroReference = useRef<string | null>(null);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
@@ -287,6 +321,19 @@ export function TheaterPlayer({
     subtitles: string;
   } | null>(null);
   const [onePlayOverride, setOnePlayOverride] = useState(false);
+  const [playbackContextResult, setPlaybackContextResult] = useState<{
+    context: PlaybackContextResponse;
+    mediaId: string;
+  } | null>(null);
+  const [episodePreferences, setEpisodePreferences] = useState<EpisodePlaybackPreferences>({
+    autoplay: false,
+    countdownSeconds: 10,
+    skipCredits: true,
+    skipIntro: true,
+    stillWatchingAfter: 3,
+  });
+  const [autoplayCancelled, setAutoplayCancelled] = useState(false);
+  const [stillWatching, setStillWatching] = useState(false);
 
   const close = useCallback(() => {
     const dialog = dialogReference.current;
@@ -301,6 +348,21 @@ export function TheaterPlayer({
   useEffect(() => {
     preferencesReference.current = preferences;
   }, [preferences]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!client.loadContext) return () => controller.abort();
+    void client
+      .loadContext(media.id, controller.signal)
+      .then((context) => {
+        if (!controller.signal.aborted) setPlaybackContextResult({ context, mediaId: media.id });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (!controller.signal.aborted) setPlaybackContextResult(null);
+      });
+    return () => controller.abort();
+  }, [client, media.id]);
 
   const stopSession = useCallback(
     (target: PreparedPlayback, positionSeconds: number, keepalive = false) => {
@@ -438,6 +500,13 @@ export function TheaterPlayer({
         );
       }
       if (controller.signal.aborted) return;
+      setEpisodePreferences(profile.preferences.episodes);
+      if (initialHandoff) {
+        preferencesReference.current = initialHandoff.preferences;
+        setPreferences(initialHandoff.preferences);
+        setOnePlayOverride(true);
+        return initialHandoff.prepared;
+      }
       const networkClass =
         profile.preferences.quality.defaultNetworkPolicy === "auto"
           ? profile.networkClass
@@ -533,7 +602,7 @@ export function TheaterPlayer({
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id, preferenceClient, stopSession]);
+  }, [attempt, client, initialHandoff, media.id, preferenceClient, stopSession]);
 
   useEffect(() => {
     if (!prepared) return;
@@ -666,6 +735,7 @@ export function TheaterPlayer({
   async function togglePlayback() {
     const video = videoReference.current;
     if (!video || status !== "ready") return;
+    onViewerIntent();
     if (video.paused) {
       startWhenReadyReference.current = false;
       await video.play().catch(() => undefined);
@@ -736,9 +806,10 @@ export function TheaterPlayer({
     }
   }
 
-  function seekWithinSession(next: number) {
+  function seekWithinSession(next: number, viewerInitiated = false) {
     const video = videoReference.current;
     if (!video || !prepared) return;
+    if (viewerInitiated) onViewerIntent();
     const minimum = prepared.session.delivery === "hls" ? prepared.session.positionSeconds : 0;
     const safe = Math.min(duration, Math.max(0, next));
     if (prepared.session.delivery === "hls" && safe < minimum) {
@@ -753,13 +824,14 @@ export function TheaterPlayer({
     const next = Number(rawValue);
     if (!Number.isFinite(next)) return;
     if (seekPreview === null && Math.abs(next - currentTime) < 1) return;
-    seekWithinSession(next);
+    seekWithinSession(next, true);
     setSeekPreview(null);
   }
 
   function changeVolume(next: number) {
     const video = videoReference.current;
     if (!video) return;
+    onViewerIntent();
     video.volume = next;
     video.muted = next === 0;
     setVolume(next);
@@ -769,6 +841,7 @@ export function TheaterPlayer({
   function toggleMuted() {
     const video = videoReference.current;
     if (!video) return;
+    onViewerIntent();
     video.muted = !video.muted;
     setMuted(video.muted);
   }
@@ -776,6 +849,7 @@ export function TheaterPlayer({
   async function toggleFullscreen() {
     const dialog = dialogReference.current;
     if (!dialog) return;
+    onViewerIntent();
     if (document.fullscreenElement) await document.exitFullscreen();
     else await dialog.requestFullscreen?.();
   }
@@ -820,10 +894,10 @@ export function TheaterPlayer({
       void togglePlayback();
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
-      seekWithinSession(currentTime - 10);
+      seekWithinSession(currentTime - 10, true);
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      seekWithinSession(currentTime + 10);
+      seekWithinSession(currentTime + 10, true);
     } else if (event.key.toLowerCase() === "m") {
       event.preventDefault();
       toggleMuted();
@@ -835,6 +909,46 @@ export function TheaterPlayer({
   }
 
   const displayedPosition = seekPreview ?? currentTime;
+  const playbackContext =
+    playbackContextResult?.mediaId === media.id ? playbackContextResult.context : null;
+  const activeIntro = playbackContext?.segments.find(
+    (segment) =>
+      segment.kind === "intro" &&
+      currentTime >= segment.startSeconds &&
+      currentTime < segment.endSeconds,
+  );
+  const credits = playbackContext?.segments.find((segment) => segment.kind === "credits");
+  const activeCredits =
+    credits && currentTime >= credits.startSeconds && currentTime < credits.endSeconds
+      ? credits
+      : null;
+  const nextEpisode = playbackContext?.nextState === "ready" ? playbackContext.nextEpisode : null;
+  const requestableNextEpisode =
+    playbackContext?.nextState === "requestable" ? playbackContext.nextEpisode : null;
+  const upNextVisible = Boolean(
+    nextEpisode &&
+    (currentTime >= (credits?.startSeconds ?? Number.POSITIVE_INFINITY) ||
+      duration - currentTime <= Math.max(30, episodePreferences.countdownSeconds)),
+  );
+  const requestableNextVisible = Boolean(
+    requestableNextEpisode &&
+    (currentTime >= (credits?.startSeconds ?? Number.POSITIVE_INFINITY) ||
+      duration - currentTime <= 30),
+  );
+  const stillWatchingDue = Boolean(
+    episodePreferences.stillWatchingAfter !== null &&
+    (autoplayEpisodeCount + 1) % episodePreferences.stillWatchingAfter === 0,
+  );
+  const autoplayCountdownSeconds = Math.max(0, Math.ceil(duration - currentTime));
+  const autoplayCountdownVisible = Boolean(
+    episodePreferences.autoplay &&
+    !autoplayCancelled &&
+    nextEpisode &&
+    autoplayCountdownSeconds <= episodePreferences.countdownSeconds,
+  );
+  useEffect(() => {
+    autoSkippedIntroReference.current = null;
+  }, [media.id]);
   const selectedAudioIndex =
     preferences.audioStreamIndex ??
     prepared?.session.audioTracks.find((track) => track.selected)?.index ??
@@ -842,6 +956,67 @@ export function TheaterPlayer({
     prepared?.session.audioTracks[0]?.index ??
     null;
   const poster = media.artworkPath;
+
+  async function advanceToNext(reason: "autoplay" | "manual" = "manual") {
+    if (!nextEpisode || switching) return;
+    const active = preparedReference.current;
+    if (!active) return;
+    const previousPosition = absolutePosition();
+    const generation = replacementGenerationReference.current + 1;
+    replacementGenerationReference.current = generation;
+    replacementControllerReference.current?.abort();
+    const controller = new AbortController();
+    replacementControllerReference.current = controller;
+    setSwitching(true);
+    setTransitionMessage(`Preparing ${nextEpisode.title} while this stream stays available…`);
+    setSettingsOpen(false);
+    try {
+      const result = await client.prepare(
+        nextEpisode.mediaReferenceId,
+        0,
+        controller.signal,
+        preparationOptions(preferencesReference.current),
+      );
+      if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
+        stopSession(result, 0);
+        return;
+      }
+      replacementReference.current = {
+        episodeAdvance: { episode: nextEpisode, reason },
+        generation,
+        previous: active,
+        previousOnePlayOverride: onePlayOverride,
+        previousPosition,
+        previousPreferences: preferencesReference.current,
+        resume: playing,
+      };
+      preparedReference.current = result;
+      reportedStateReference.current = "negotiated";
+      startWhenReadyReference.current = false;
+      setOnePlayOverride(true);
+      setPrepared(result);
+      setPlaying(false);
+      setBuffering(false);
+      setDuration(result.session.media.durationSeconds);
+      setCurrentTime(0);
+      setSeekPreview(null);
+      setStatus("preparing");
+      setMessage(`Preparing ${nextEpisode.title}…`);
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        generation !== replacementGenerationReference.current ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        return;
+      }
+      replacementControllerReference.current = null;
+      setSwitching(false);
+      setTransitionMessage(
+        "The next episode could not be prepared. This stream is unchanged; try Play next again.",
+      );
+    }
+  }
 
   return (
     <dialog
@@ -882,6 +1057,18 @@ export function TheaterPlayer({
             const replacement = replacementReference.current;
             if (replacement) {
               replacementReference.current = null;
+              const episodeAdvance = replacement.episodeAdvance;
+              if (episodeAdvance && prepared) {
+                stopSession(replacement.previous, replacement.previousPosition);
+                preparedReference.current = null;
+                replacementControllerReference.current = null;
+                setSwitching(false);
+                onAdvance(episodeAdvance.episode, episodeAdvance.reason, {
+                  preferences: preferencesReference.current,
+                  prepared,
+                });
+                return;
+              }
               stopSession(replacement.previous, absolutePositionReference.current());
               setSwitching(false);
               setTransitionMessage("Playback changed without losing your place.");
@@ -898,14 +1085,32 @@ export function TheaterPlayer({
               setDuration(prepared?.session.media.durationSeconds ?? event.currentTarget.duration);
             }
           }}
+          onEnded={() => {
+            setPlaying(false);
+            setBuffering(false);
+            setCurrentTime(duration);
+            if (episodePreferences.autoplay && !autoplayCancelled && nextEpisode) {
+              const autoplayNeedsConfirmation =
+                document.visibilityState !== "visible" || !navigator.onLine;
+              if (stillWatchingDue || autoplayNeedsConfirmation) {
+                setStillWatching(true);
+                setControlsVisible(true);
+              } else void advanceToNext("autoplay");
+            } else setControlsVisible(true);
+          }}
           onLoadedMetadata={(event) => {
             if (prepared?.session.delivery === "direct" && prepared.session.positionSeconds > 0) {
               event.currentTarget.currentTime =
                 restorePositionReference.current ?? prepared.session.positionSeconds;
             }
           }}
-          onPause={() => {
+          onPause={(event) => {
             setPlaying(false);
+            if (autoplayCountdownVisible && !switching && !event.currentTarget.ended) {
+              setAutoplayCancelled(true);
+              setControlsVisible(true);
+              setTransitionMessage("Autoplay cancelled because playback was paused.");
+            }
             if (reportedStateReference.current === "playing") {
               queueReport("paused", absolutePosition());
             }
@@ -919,6 +1124,24 @@ export function TheaterPlayer({
           onPlaying={() => setBuffering(false)}
           onTimeUpdate={() => {
             const position = absolutePosition();
+            const intro = playbackContext?.segments.find(
+              (segment) =>
+                segment.kind === "intro" &&
+                position >= segment.startSeconds &&
+                position < segment.endSeconds,
+            );
+            const marker = intro ? `${intro.startSeconds}:${intro.endSeconds}` : null;
+            if (
+              intro &&
+              marker &&
+              episodePreferences.skipIntro &&
+              autoSkippedIntroReference.current !== marker
+            ) {
+              autoSkippedIntroReference.current = marker;
+              seekWithinSession(intro.endSeconds);
+              setTransitionMessage("Intro skipped using your account preference.");
+              return;
+            }
             setCurrentTime(position);
             if (Math.abs(position - lastProgressReference.current) >= 10) {
               lastProgressReference.current = position;
@@ -1025,6 +1248,112 @@ export function TheaterPlayer({
           <span aria-label="Buffering" className={styles.buffering} role="status">
             <LoaderCircle aria-hidden="true" className={styles.spinner} size={25} />
           </span>
+        )}
+
+        {status === "ready" && activeIntro && (
+          <button
+            className={styles.skipButton}
+            onClick={() => seekWithinSession(activeIntro.endSeconds, true)}
+            type="button"
+          >
+            Skip intro
+          </button>
+        )}
+
+        {status === "ready" && activeCredits && episodePreferences.skipCredits && (
+          <button
+            className={`${styles.skipButton} ${styles.skipButtonCredits}`}
+            onClick={() => {
+              if (nextEpisode) void advanceToNext();
+              else seekWithinSession(activeCredits.endSeconds, true);
+            }}
+            type="button"
+          >
+            Skip credits
+          </button>
+        )}
+
+        {status === "ready" && stillWatching && nextEpisode && (
+          <section aria-label="Still watching?" className={styles.upNext} role="alert">
+            <span className={styles.upNextEyebrow}>Playback paused</span>
+            <strong>Still watching?</strong>
+            <span>
+              Up next ·{" "}
+              {nextEpisode.seasonNumber === null || nextEpisode.episodeNumber === null
+                ? nextEpisode.title
+                : `S${String(nextEpisode.seasonNumber).padStart(2, "0")}E${String(
+                    nextEpisode.episodeNumber,
+                  ).padStart(2, "0")} · ${nextEpisode.title}`}
+            </span>
+            <button
+              aria-label="Continue watching"
+              onClick={() => {
+                setStillWatching(false);
+                void advanceToNext();
+              }}
+              type="button"
+            >
+              <Play aria-hidden="true" fill="currentColor" size={16} /> Continue watching
+            </button>
+          </section>
+        )}
+
+        {status === "ready" && requestableNextVisible && requestableNextEpisode && (
+          <section aria-label="Next episode missing" className={styles.upNext} role="status">
+            <span className={styles.upNextEyebrow}>Next episode missing</span>
+            <strong>{requestableNextEpisode.seriesTitle}</strong>
+            <span>
+              {requestableNextEpisode.seasonNumber === null ||
+              requestableNextEpisode.episodeNumber === null
+                ? requestableNextEpisode.title
+                : `S${String(requestableNextEpisode.seasonNumber).padStart(2, "0")}E${String(
+                    requestableNextEpisode.episodeNumber,
+                  ).padStart(2, "0")} · ${requestableNextEpisode.title}`}
+            </span>
+            <span>
+              This episode is not in your library. Request it from the series page when you are
+              ready.
+            </span>
+          </section>
+        )}
+
+        {status === "ready" && upNextVisible && !stillWatching && nextEpisode && (
+          <section aria-label="Up next" className={styles.upNext}>
+            <span className={styles.upNextEyebrow}>Up next</span>
+            <strong>{nextEpisode.seriesTitle}</strong>
+            <span>
+              {nextEpisode.seasonNumber === null || nextEpisode.episodeNumber === null
+                ? nextEpisode.title
+                : `S${String(nextEpisode.seasonNumber).padStart(2, "0")}E${String(
+                    nextEpisode.episodeNumber,
+                  ).padStart(2, "0")} · ${nextEpisode.title}`}
+            </span>
+            {autoplayCountdownVisible && (
+              <span aria-label="Episode autoplay countdown" role="status">
+                Autoplay in {autoplayCountdownSeconds}{" "}
+                {autoplayCountdownSeconds === 1 ? "second" : "seconds"}
+              </span>
+            )}
+            <div className={styles.upNextActions}>
+              <button
+                aria-label="Play next episode"
+                onClick={() => void advanceToNext()}
+                type="button"
+              >
+                <Play aria-hidden="true" fill="currentColor" size={16} /> Play next
+              </button>
+              {episodePreferences.autoplay && !autoplayCancelled && (
+                <button
+                  aria-label="Cancel autoplay"
+                  className={styles.upNextSecondary}
+                  onClick={() => setAutoplayCancelled(true)}
+                  type="button"
+                >
+                  Cancel autoplay
+                </button>
+              )}
+            </div>
+          </section>
         )}
 
         <footer className={styles.controls}>
@@ -1160,6 +1489,7 @@ export function TheaterPlayer({
                   aria-label="Audio track"
                   disabled={switching || prepared.session.audioTracks.length === 0}
                   onChange={(event) => {
+                    onViewerIntent();
                     const nextIndex = Number(event.currentTarget.value);
                     const defaultIndex =
                       prepared.session.audioTracks.find((track) => track.default)?.index ??
@@ -1194,6 +1524,7 @@ export function TheaterPlayer({
                   aria-label="Subtitle track"
                   disabled={switching}
                   onChange={(event) => {
+                    onViewerIntent();
                     const nextIndex =
                       event.currentTarget.value === "off"
                         ? null
@@ -1251,6 +1582,7 @@ export function TheaterPlayer({
                   aria-label="Playback quality"
                   disabled={switching}
                   onChange={(event) => {
+                    onViewerIntent();
                     const quality = event.currentTarget.value as QualityPreset;
                     void replacePlayback(
                       { ...preferences, quality },
@@ -1402,5 +1734,55 @@ export function TheaterPlayer({
         </footer>
       </div>
     </dialog>
+  );
+}
+
+function nextTheaterMedia(
+  current: TheaterMedia,
+  episode: NonNullable<PlaybackContextResponse["nextEpisode"]>,
+): TheaterMedia {
+  const episodeLabel =
+    episode.seasonNumber === null || episode.episodeNumber === null
+      ? episode.title
+      : `S${String(episode.seasonNumber).padStart(2, "0")}E${String(episode.episodeNumber).padStart(
+          2,
+          "0",
+        )} · ${episode.title}`;
+  return {
+    accent: current.accent,
+    ...(episode.artworkPath === null
+      ? {}
+      : { artworkPath: episode.artworkPath.replace(/^\/v1\//u, "/api/") }),
+    eyebrow: episodeLabel,
+    id: episode.mediaReferenceId,
+    positionSeconds: 0,
+    title: episode.seriesTitle,
+  };
+}
+
+export function TheaterPlayer(properties: TheaterPlayerProperties) {
+  const [activePlayback, setActivePlayback] = useState<{
+    handoff?: EpisodePlaybackHandoff;
+    media: TheaterMedia;
+  }>({ media: properties.media });
+  const [autoplayEpisodeCount, setAutoplayEpisodeCount] = useState(0);
+
+  return (
+    <TheaterPlayerSession
+      {...properties}
+      {...(activePlayback.handoff ? { initialHandoff: activePlayback.handoff } : {})}
+      autoplayEpisodeCount={autoplayEpisodeCount}
+      key={activePlayback.media.id}
+      media={activePlayback.media}
+      onAdvance={(episode, reason, handoff) => {
+        setAutoplayEpisodeCount((count) => (reason === "autoplay" ? count + 1 : 0));
+        setActivePlayback((current) => ({
+          handoff,
+          media: nextTheaterMedia(current.media, episode),
+        }));
+      }}
+      onViewerIntent={() => setAutoplayEpisodeCount(0)}
+      startWhenReady={Boolean(activePlayback.handoff) || properties.startWhenReady === true}
+    />
   );
 }

@@ -4,6 +4,8 @@ import {
   DEFAULT_PLAYBACK_PREFERENCES,
   playbackNegotiationRequestSchema,
   playbackNegotiationResponseSchema,
+  playbackContextResponseJsonSchema,
+  playbackContextResponseSchema,
   playbackProgressRequestSchema,
   playbackProgressResponseSchema,
   playbackPreferencesResponseJsonSchema,
@@ -146,6 +148,60 @@ describe("playback contracts", () => {
         state: "paused",
       }),
     ).toMatchObject({ sessionId, state: "paused" });
+  });
+
+  it("publishes a bounded playback context without upstream media identities", () => {
+    const nextMediaReferenceId = "media_CCCCCCCCCCCCCCCCCCCCCC";
+    const context = {
+      currentDurationSeconds: 270,
+      generatedAt: "2026-08-03T20:00:00.000Z",
+      mediaReferenceId,
+      nextEpisode: {
+        artworkPath: `/v1/media/${nextMediaReferenceId}/images/backdrop`,
+        durationSeconds: 270,
+        episodeNumber: 3,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 1,
+        seriesTitle: "Northern Lights",
+        title: "The Long Meridian",
+      },
+      nextState: "ready",
+      segments: [
+        { endSeconds: 86, kind: "intro", startSeconds: 4 },
+        { endSeconds: 269, kind: "credits", startSeconds: 261 },
+      ],
+      segmentsState: "ready",
+    } as const;
+
+    expect(playbackContextResponseSchema.parse(context)).toEqual(context);
+    expect(JSON.stringify(context)).not.toContain("upstream");
+    expect(playbackContextResponseJsonSchema).toMatchObject({
+      additionalProperties: false,
+      type: "object",
+    });
+  });
+
+  it("represents a missing canonical episode without making it playable", () => {
+    const nextMediaReferenceId = "media_DDDDDDDDDDDDDDDDDDDDDD";
+    const context = {
+      currentDurationSeconds: 270,
+      generatedAt: "2026-08-03T20:00:00.000Z",
+      mediaReferenceId,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: null,
+        episodeNumber: 4,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 1,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "requestable",
+      segments: [],
+      segmentsState: "empty",
+    } as const;
+
+    expect(playbackContextResponseSchema.parse(context)).toEqual(context);
   });
 
   it("accepts versioned semantic playback preferences without stream identities", () => {

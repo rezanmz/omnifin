@@ -1,5 +1,6 @@
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackContextResponse,
   type PlaybackNegotiationResponse,
 } from "@omnifin/contracts/playback";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
@@ -77,8 +78,13 @@ const directSession: PlaybackNegotiationResponse = {
 };
 const csrfToken = "storybook_playback_csrf_0123456789abcdefghijklmnop";
 
-function clientFor(session: PlaybackNegotiationResponse, canManageLibrary = true): PlaybackClient {
+function clientFor(
+  session: PlaybackNegotiationResponse,
+  canManageLibrary = true,
+  context?: PlaybackContextResponse,
+): PlaybackClient {
   return {
+    ...(context ? { loadContext: async () => context } : {}),
     prepare: async () => ({ canManageLibrary, csrfToken, session }),
     report: async (_currentSessionId, request) => ({
       acceptedAt: "2026-07-28T12:30:00.000Z",
@@ -139,6 +145,63 @@ export const HlsReady: Story = {
       delivery: "hls",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     }),
+  },
+};
+
+const nearCreditsMedia = { ...media, positionSeconds: 7_195 };
+const nearCreditsSession = { ...directSession, positionSeconds: 7_195 };
+const nextMediaReferenceId = `media_${"n".repeat(22)}`;
+const nextEpisode = {
+  artworkPath: null,
+  durationSeconds: 2_700,
+  episodeNumber: 4,
+  mediaReferenceId: nextMediaReferenceId,
+  seasonNumber: 2,
+  seriesTitle: "Northern Lights",
+  title: "Event Horizon",
+};
+
+export const UpNextReady: Story = {
+  args: {
+    client: clientFor(nearCreditsSession, true, {
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode,
+      nextState: "ready",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    }),
+    media: nearCreditsMedia,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("region", { name: "Up next" })).toHaveTextContent(
+      "S02E04 · Event Horizon",
+    );
+    await expect(canvas.getByRole("button", { name: "Play next episode" })).toBeVisible();
+  },
+};
+
+export const NextEpisodeMissing: Story = {
+  args: {
+    client: clientFor(nearCreditsSession, true, {
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: { ...nextEpisode, durationSeconds: null },
+      nextState: "requestable",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    }),
+    media: nearCreditsMedia,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("status", { name: "Next episode missing" }),
+    ).toHaveTextContent("Request it from the series page when you are ready.");
+    await expect(canvas.queryByRole("button", { name: "Play next episode" })).toBeNull();
   },
 };
 

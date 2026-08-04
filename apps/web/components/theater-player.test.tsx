@@ -1,5 +1,6 @@
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackContextResponse,
   type PlaybackNegotiationResponse,
 } from "@omnifin/contracts/playback";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -100,10 +101,20 @@ function readyClient(
   preparedSession: PlaybackNegotiationResponse = session,
   canManageLibrary = false,
 ): PlaybackClient & {
+  loadContext: ReturnType<typeof vi.fn>;
   prepare: ReturnType<typeof vi.fn>;
   report: ReturnType<typeof vi.fn>;
   reportIssue: ReturnType<typeof vi.fn>;
 } {
+  const loadContext = vi.fn<NonNullable<PlaybackClient["loadContext"]>>(async () => ({
+    currentDurationSeconds: preparedSession.media.durationSeconds,
+    generatedAt: "2026-07-28T12:30:00.000Z",
+    mediaReferenceId: preparedSession.mediaReferenceId,
+    nextEpisode: null,
+    nextState: "end",
+    segments: [],
+    segmentsState: "empty",
+  }));
   const prepare = vi.fn(async () => ({ canManageLibrary, csrfToken, session: preparedSession }));
   const report = vi.fn<PlaybackClient["report"]>(async (_id, request) => ({
     acceptedAt: "2026-07-28T12:30:00.000Z",
@@ -119,7 +130,7 @@ function readyClient(
     positionSeconds: request.positionSeconds,
     status: "open",
   }));
-  return { prepare, report, reportIssue };
+  return { loadContext, prepare, report, reportIssue };
 }
 
 describe("TheaterPlayer", () => {
@@ -175,6 +186,658 @@ describe("TheaterPlayer", () => {
     expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Mute" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
+  });
+
+  it("offers a manual intro skip from trusted Jellyfin markers", async () => {
+    const user = userEvent.setup();
+    const openingSession = {
+      ...session,
+      positionSeconds: 0,
+    } satisfies PlaybackNegotiationResponse;
+    const client = readyClient(openingSession);
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: null,
+      nextState: "end",
+      segments: [{ endSeconds: 86, kind: "intro", startSeconds: 4 }],
+      segmentsState: "ready",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValueOnce({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: { ...DEFAULT_PLAYBACK_PREFERENCES.episodes, skipIntro: false },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(
+      <TheaterPlayer
+        client={client}
+        media={{ ...media, positionSeconds: 0 }}
+        onClose={() => undefined}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 10;
+    fireEvent.timeUpdate(video);
+    await user.click(await screen.findByRole("button", { name: "Skip intro" }));
+
+    expect(video.currentTime).toBe(86);
+  });
+
+  it("offers a credit skip that hands episodic playback to the canonical next item", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"e".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 4,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "ready",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    } satisfies PlaybackContextResponse);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_165;
+    fireEvent.timeUpdate(video);
+    await user.click(await screen.findByRole("button", { name: "Skip credits" }));
+
+    await waitFor(() =>
+      expect(client.prepare).toHaveBeenLastCalledWith(
+        nextMediaReferenceId,
+        0,
+        expect.any(AbortSignal),
+        expect.anything(),
+      ),
+    );
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(
+        client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("hands off to the canonical next episode only after the viewer chooses it", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"n".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: `/v1/media/${nextMediaReferenceId}/images/backdrop`,
+        durationSeconds: 2_700,
+        episodeNumber: 4,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "ready",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    } satisfies PlaybackContextResponse);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_165;
+    fireEvent.timeUpdate(video);
+    const upNext = await screen.findByRole("region", { name: "Up next" });
+    expect(upNext).toHaveTextContent("S02E04");
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Play next episode" }));
+    await waitFor(() =>
+      expect(client.prepare).toHaveBeenLastCalledWith(
+        nextMediaReferenceId,
+        0,
+        expect.any(AbortSignal),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("shows a missing canonical episode as requestable without negotiating playback", async () => {
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"r".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: null,
+        episodeNumber: 4,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "requestable",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    } satisfies PlaybackContextResponse);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_165;
+    fireEvent.timeUpdate(video);
+
+    const missing = await screen.findByRole("status", { name: "Next episode missing" });
+    expect(missing).toHaveTextContent("S02E04 · Event Horizon");
+    expect(missing).toHaveTextContent("Request it from the series page when you are ready.");
+    expect(screen.queryByRole("button", { name: "Play next episode" })).not.toBeInTheDocument();
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the current episode session alive until the selected next stream can play", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"t".repeat(22)}`;
+    const nextSession = {
+      ...session,
+      mediaReferenceId: nextMediaReferenceId,
+      positionSeconds: 0,
+      sessionId: `playback_${"t".repeat(22)}`,
+      streamPath: `/v1/playback/playback_${"t".repeat(22)}/stream`,
+    } satisfies PlaybackNegotiationResponse;
+    client.prepare
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session })
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session: nextSession });
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 4,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "ready",
+      segments: [{ endSeconds: 7_200, kind: "credits", startSeconds: 7_160 }],
+      segmentsState: "ready",
+    } satisfies PlaybackContextResponse);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_165;
+    fireEvent.timeUpdate(video);
+    await user.click(await screen.findByRole("button", { name: "Play next episode" }));
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(
+      client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+    ).toHaveLength(0);
+
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(
+        client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+      ).toHaveLength(1),
+    );
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("autoplays the canonical next episode only after the current episode ends", async () => {
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"a".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 5,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValueOnce({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: null,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    await waitFor(() =>
+      expect(client.prepare).toHaveBeenLastCalledWith(
+        nextMediaReferenceId,
+        0,
+        expect.any(AbortSignal),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it.each([
+    { condition: "the app is backgrounded", online: true, visibility: "hidden" as const },
+    { condition: "the network is offline", online: false, visibility: "visible" as const },
+  ])("requires confirmation instead of opening the next stream when $condition", async (state) => {
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"v".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 5,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValueOnce({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: null,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    const visibility = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue(state.visibility);
+    const connection = vi.spyOn(navigator, "onLine", "get").mockReturnValue(state.online);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    expect(await screen.findByRole("alert", { name: "Still watching?" })).toHaveTextContent(
+      "Afterimage",
+    );
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+    visibility.mockRestore();
+    connection.mockRestore();
+  });
+
+  it("keeps a failed next-episode preparation recoverable without retrying in a loop", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"w".repeat(22)}`;
+    client.prepare
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session })
+      .mockRejectedValueOnce(new Error("The next episode could not be prepared."));
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 5,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValue({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: null,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    expect(
+      await screen.findByText(
+        "The next episode could not be prepared. This stream is unchanged; try Play next again.",
+      ),
+    ).toBeVisible();
+    expect(
+      client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+    ).toHaveLength(0);
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Play next episode" }));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(
+      client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+    ).toHaveLength(0);
+  });
+
+  it("counts down visibly and lets the viewer cancel episode autoplay", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"d".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 5,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValueOnce({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          countdownSeconds: 10,
+          stillWatchingAfter: null,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_195;
+    fireEvent.timeUpdate(video);
+
+    expect(
+      await screen.findByRole("status", { name: "Episode autoplay countdown" }),
+    ).toHaveTextContent("Autoplay in 5 seconds");
+    await user.click(screen.getByRole("button", { name: "Cancel autoplay" }));
+    fireEvent.ended(video);
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a deliberate pause during the countdown as an autoplay cancellation", async () => {
+    const client = readyClient();
+    const nextMediaReferenceId = `media_${"p".repeat(22)}`;
+    client.loadContext.mockResolvedValueOnce({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId: media.id,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber: 5,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    } satisfies PlaybackContextResponse);
+    playbackPreferenceHarness.load.mockResolvedValueOnce({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          countdownSeconds: 10,
+          stillWatchingAfter: null,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 7_195;
+    fireEvent.timeUpdate(video);
+    await screen.findByRole("status", { name: "Episode autoplay countdown" });
+
+    fireEvent.play(video);
+    fireEvent.pause(video);
+
+    expect(
+      screen.queryByRole("status", { name: "Episode autoplay countdown" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play next episode" })).toBeVisible();
+    fireEvent.ended(video);
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses binge autoplay at the configured still-watching boundary", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const secondReferenceId = `media_${"b".repeat(22)}`;
+    const thirdReferenceId = `media_${"c".repeat(22)}`;
+    const contextWithNext = (
+      mediaReferenceId: string,
+      nextMediaReferenceId: string,
+      episodeNumber: number,
+    ): PlaybackContextResponse => ({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: episodeNumber === 6 ? "Signal Return" : "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    });
+    client.loadContext
+      .mockResolvedValueOnce(contextWithNext(media.id, secondReferenceId, 5))
+      .mockResolvedValueOnce(contextWithNext(secondReferenceId, thirdReferenceId, 6));
+    playbackPreferenceHarness.load.mockResolvedValue({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: 2,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    fireEvent.canPlay(screen.getByLabelText(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    const confirmation = await screen.findByRole("alert", { name: "Still watching?" });
+    expect(confirmation).toHaveTextContent("Signal Return");
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Continue watching" }));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+  });
+
+  it("starts a fresh binge window after a manual next-episode choice", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    const secondReferenceId = `media_${"f".repeat(22)}`;
+    const thirdReferenceId = `media_${"g".repeat(22)}`;
+    const contextWithNext = (
+      mediaReferenceId: string,
+      nextMediaReferenceId: string,
+      episodeNumber: number,
+    ): PlaybackContextResponse => ({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: episodeNumber === 6 ? "Signal Return" : "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    });
+    client.loadContext
+      .mockResolvedValueOnce(contextWithNext(media.id, secondReferenceId, 5))
+      .mockResolvedValueOnce(contextWithNext(secondReferenceId, thirdReferenceId, 6));
+    playbackPreferenceHarness.load.mockResolvedValue({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: 2,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const firstVideo = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    firstVideo.currentTime = 7_195;
+    fireEvent.timeUpdate(firstVideo);
+    await user.click(await screen.findByRole("button", { name: "Play next episode" }));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    fireEvent.canPlay(screen.getByLabelText(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("alert", { name: "Still watching?" })).not.toBeInTheDocument();
+  });
+
+  it("resets the binge window after explicit playback interaction", async () => {
+    const client = readyClient();
+    const secondReferenceId = `media_${"h".repeat(22)}`;
+    const thirdReferenceId = `media_${"j".repeat(22)}`;
+    const contextWithNext = (
+      mediaReferenceId: string,
+      nextMediaReferenceId: string,
+      episodeNumber: number,
+    ): PlaybackContextResponse => ({
+      currentDurationSeconds: 7_200,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId,
+      nextEpisode: {
+        artworkPath: null,
+        durationSeconds: 2_700,
+        episodeNumber,
+        mediaReferenceId: nextMediaReferenceId,
+        seasonNumber: 2,
+        seriesTitle: "Northern Lights",
+        title: episodeNumber === 6 ? "Signal Return" : "Afterimage",
+      },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "empty",
+    });
+    client.loadContext
+      .mockResolvedValueOnce(contextWithNext(media.id, secondReferenceId, 5))
+      .mockResolvedValueOnce(contextWithNext(secondReferenceId, thirdReferenceId, 6));
+    playbackPreferenceHarness.load.mockResolvedValue({
+      networkClass: "home",
+      preferences: {
+        ...DEFAULT_PLAYBACK_PREFERENCES,
+        episodes: {
+          ...DEFAULT_PLAYBACK_PREFERENCES.episodes,
+          autoplay: true,
+          stillWatchingAfter: 2,
+        },
+      },
+      revision: 1,
+      updatedAt: "2026-07-28T12:00:00.000Z",
+    });
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    fireEvent.canPlay(screen.getByLabelText(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+
+    fireEvent.keyDown(screen.getByRole("dialog", { name: media.title }), { key: "ArrowRight" });
+    fireEvent.ended(screen.getByLabelText(`${media.title} video`));
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("alert", { name: "Still watching?" })).not.toBeInTheDocument();
   });
 
   it("uses source-quality compatibility negotiation by default", async () => {

@@ -4,6 +4,7 @@ import type {
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
+  JellyfinPlaybackContextResult,
   JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
@@ -19,6 +20,7 @@ import {
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
 } from "@omnifin/contracts/library";
+import { playbackContextResponseSchema } from "@omnifin/contracts/playback";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -200,6 +202,18 @@ async function harness(
     ],
     nextStartIndex: 12,
   }));
+  const readPlaybackContext = vi.fn(async (): Promise<JellyfinPlaybackContextResult> => ({
+    current: {
+      durationSeconds: 2_700,
+      episodeNumber: 2,
+      seasonNumber: 1,
+      seriesId: "route-private-upstream-series",
+    },
+    nextEpisode: null,
+    nextState: "end",
+    segments: [{ endSeconds: 86, kind: "intro", startSeconds: 4 }],
+    segmentsState: "ready",
+  }));
   const updatePlaybackState = vi.fn(async () => ({
     durationSeconds: 7_200,
     played: true,
@@ -230,6 +244,7 @@ async function harness(
         readLibraryExtras,
         readLibrarySeasonEpisodes,
         readLibraryTitle,
+        readPlaybackContext,
         readViewingHistory,
         deleteLibraryItem,
         updatePlaybackState,
@@ -360,6 +375,7 @@ async function harness(
     readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readPlaybackContext,
     readViewingHistory,
     updatePlaybackState,
     viewer,
@@ -394,6 +410,129 @@ describe("Continue Watching routes", () => {
       expect(response.body).not.toContain(privateToken);
       expect(response.body).not.toContain(privateItemId);
       expect(readContinueWatching).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves bounded episode playback context through the private media route", async () => {
+    const { app, readContinueWatching, readPlaybackContext, viewer } = await harness();
+    readContinueWatching.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: {
+            accentColor: "#336699",
+            backdrop: null,
+            blurHash: null,
+            poster: null,
+          },
+          contentRating: "TV-14",
+          episodeNumber: 2,
+          externalId: privateItemId,
+          kind: "episode",
+          lastPlayedAt: "2026-07-28T05:15:00.000Z",
+          overview: null,
+          positionSeconds: 90,
+          runtimeSeconds: 2_700,
+          seasonNumber: 1,
+          subtitle: "S01E02 · Aperture",
+          title: "Northern Lights",
+          year: 2026,
+        },
+      ],
+      truncated: false,
+    });
+
+    try {
+      const feedResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/continue-watching",
+      });
+      const referenceId = continueWatchingResponseSchema.parse(feedResponse.json()).items[0]!.media
+        .id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/${referenceId}/playback-context`,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(playbackContextResponseSchema.parse(response.json())).toMatchObject({
+        mediaReferenceId: referenceId,
+        nextEpisode: null,
+        nextState: "end",
+        segments: [{ endSeconds: 86, kind: "intro", startSeconds: 4 }],
+        segmentsState: "ready",
+      });
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toContain("Cookie");
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+      expect(readPlaybackContext).toHaveBeenCalledWith(
+        { itemId: privateItemId, userId: "viewer-external" },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps stale and unavailable playback context to sanitized public failures", async () => {
+    const { app, readContinueWatching, readPlaybackContext, viewer } = await harness();
+    readContinueWatching.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: {
+            accentColor: "#336699",
+            backdrop: null,
+            blurHash: null,
+            poster: null,
+          },
+          contentRating: "TV-14",
+          episodeNumber: 2,
+          externalId: privateItemId,
+          kind: "episode",
+          lastPlayedAt: "2026-07-28T05:15:00.000Z",
+          overview: null,
+          positionSeconds: 90,
+          runtimeSeconds: 2_700,
+          seasonNumber: 1,
+          subtitle: "S01E02 · Aperture",
+          title: "Northern Lights",
+          year: 2026,
+        },
+      ],
+      truncated: false,
+    });
+
+    try {
+      const cookie = `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`;
+      const missing = await app.inject({
+        headers: { cookie },
+        method: "GET",
+        url: `/v1/media/media_${"z".repeat(22)}/playback-context`,
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(missing.json()).error.code).toBe("playback_context_not_found");
+
+      const feedResponse = await app.inject({
+        headers: { cookie },
+        method: "GET",
+        url: "/v1/media/continue-watching",
+      });
+      const referenceId = continueWatchingResponseSchema.parse(feedResponse.json()).items[0]!.media
+        .id;
+      readPlaybackContext.mockRejectedValueOnce(new Error("private upstream failure"));
+      const unavailable = await app.inject({
+        headers: { cookie },
+        method: "GET",
+        url: `/v1/media/${referenceId}/playback-context`,
+      });
+      expect(unavailable.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
+        "playback_context_unavailable",
+      );
+      expect(missing.body + unavailable.body).not.toMatch(/private upstream/iu);
     } finally {
       await app.close();
     }
