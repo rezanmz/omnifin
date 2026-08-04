@@ -327,6 +327,40 @@
   scroll-snap-align: start;
 }
 
+.library-title__person-action {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0;
+  text-align: left;
+  transition:
+    opacity 150ms ease,
+    transform 180ms ease;
+  width: 100%;
+}
+
+.library-title__person-action:hover {
+  transform: translateY(-3px);
+}
+
+.library-title__person-action:focus-visible .library-title__person-portrait {
+  border-color: var(--accent-line);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent),
+    0 16px 30px color-mix(in srgb, var(--glass-cast-shadow) 48%, transparent);
+}
+
+.library-title__person-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .library-title__person-portrait {
   align-items: center;
   aspect-ratio: 4 / 5;
@@ -369,7 +403,8 @@
   line-height: 1.3;
 }
 
-.library-title__people li > span:last-child {
+.library-title__people li > span:last-child,
+.library-title__person-action > span:last-child {
   color: var(--paper-2);
   font-size: 0.66rem;
   line-height: 1.35;
@@ -410,6 +445,43 @@
   color: var(--paper-0);
   font-size: 0.76rem;
   text-align: right;
+}
+
+.library-title__crew-action {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--paper-0);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  gap: 5px;
+  justify-content: flex-end;
+  min-height: 44px;
+  padding: 0;
+  text-align: right;
+}
+
+.library-title__crew-action svg {
+  height: 14px;
+  transition: transform 160ms ease;
+  width: 14px;
+}
+
+.library-title__crew-action:hover svg,
+.library-title__crew-action:focus-visible svg {
+  transform: translateX(2px);
+}
+
+.library-title__person-message {
+  background: color-mix(in srgb, var(--fill-subtle) 78%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  color: var(--paper-1);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  padding: 12px 14px;
 }
 
 .library-title__crew > small {
@@ -1229,6 +1301,35 @@
 .library-title__episode-credits dd {
   color: var(--paper-0);
   font-size: 0.76rem;
+}
+
+.library-title__episode-person-action {
+  align-items: baseline;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.library-title__episode-person-action > span {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.library-title__episode-person-action:disabled,
+.library-title__crew-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
 }
 
 .library-title__episode-credits li > span,

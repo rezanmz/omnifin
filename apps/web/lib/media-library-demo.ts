@@ -186,18 +186,21 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
             {
               imagePath: `/v1/media/${item.media.id}/images/people/${"p".repeat(64)}`,
               name: "Mara Voss",
+              personReferenceId: `media_${"p".repeat(22)}`,
               role: "Iris Vale",
               type: "cast" as const,
             },
             {
               imagePath: `/v1/media/${item.media.id}/images/people/${"q".repeat(64)}`,
               name: "Inez Laurent",
+              personReferenceId: null,
               role: "Captain Sol",
               type: "cast" as const,
             },
             {
               imagePath: null,
               name: "Theo Amari",
+              personReferenceId: null,
               role: "Jonas",
               type: "cast" as const,
             },
@@ -205,8 +208,20 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
           castTruncated: false,
           communityRating: 8.4,
           crew: [
-            { imagePath: null, name: "Jon Bell", role: null, type: "director" as const },
-            { imagePath: null, name: "Ari Chen", role: null, type: "writer" as const },
+            {
+              imagePath: null,
+              name: "Jon Bell",
+              personReferenceId: null,
+              role: null,
+              type: "director" as const,
+            },
+            {
+              imagePath: null,
+              name: "Ari Chen",
+              personReferenceId: null,
+              role: null,
+              type: "writer" as const,
+            },
           ],
           crewTruncated: false,
           criticRating: 91,
@@ -267,6 +282,23 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
           ]
         : [],
     seasonsTruncated: false,
+    seriesCredits:
+      item.media.kind === "series"
+        ? {
+            cast: [
+              {
+                imagePath: null,
+                name: "Mara Voss",
+                personReferenceId: `media_${"s".repeat(22)}`,
+                role: "Dr. Elian Vale",
+                type: "cast",
+              },
+            ],
+            castTruncated: false,
+            crew: [],
+            crewTruncated: false,
+          }
+        : null,
   };
 }
 
@@ -290,10 +322,15 @@ function demoEpisode(
     airDate: `2026-0${Math.min(9, seasonNumber + 2)}-${String(episodeNumber * 3).padStart(2, "0")}`,
     communityRating: 7.4 + episodeNumber / 10,
     credits: [
-      { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
-      { name: "Inez Laurent", role: "Captain Rhea Sol", type: "cast" },
-      { name: "Jon Bell", role: null, type: "director" },
-      { name: "Ari Chen", role: null, type: "writer" },
+      {
+        name: "Mara Voss",
+        personReferenceId: `media_${"u".repeat(22)}`,
+        role: "Dr. Elian Vale",
+        type: "cast",
+      },
+      { name: "Inez Laurent", personReferenceId: null, role: "Captain Rhea Sol", type: "cast" },
+      { name: "Jon Bell", personReferenceId: null, role: null, type: "director" },
+      { name: "Ari Chen", personReferenceId: null, role: null, type: "writer" },
     ],
     creditsTruncated: false,
     criticRating: episodeNumber === 2 ? 84 : null,
@@ -406,6 +443,16 @@ export const mediaLibraryDemoClient: MediaLibraryClient = {
     const detail = demoDetails.get(referenceId);
     if (!detail) throw new Error("Title unavailable");
     return detail;
+  },
+  async resolvePerson(referenceId) {
+    if (
+      ![`media_${"p".repeat(22)}`, `media_${"s".repeat(22)}`, `media_${"u".repeat(22)}`].includes(
+        referenceId,
+      )
+    ) {
+      throw new Error("Person unavailable");
+    }
+    return { generatedAt, name: "Mara Voss", tmdbId: 12_345 };
   },
   async updatePlaybackState(referenceId, request) {
     const previous = demoPlaybackStates.get(referenceId);

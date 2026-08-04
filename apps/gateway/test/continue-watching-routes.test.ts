@@ -164,6 +164,7 @@ async function harness(
     },
     seasons: [],
     seasonsTruncated: false,
+    seriesCredits: null,
   }));
   const readLibrarySeasonEpisodes = vi.fn(
     async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
@@ -172,6 +173,11 @@ async function harness(
       truncated: false,
     }),
   );
+  const readLibraryPerson = vi.fn(async (input: { itemId: string }) => ({
+    itemId: input.itemId,
+    name: "Mara Voss",
+    tmdbId: 12_345,
+  }));
   const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
     catalogTmdbId: null,
     items: [
@@ -222,6 +228,7 @@ async function harness(
         readImage,
         readLibrary,
         readLibraryExtras,
+        readLibraryPerson,
         readLibrarySeasonEpisodes,
         readLibraryTitle,
         readViewingHistory,
@@ -340,6 +347,7 @@ async function harness(
     readImage,
     readLibrary,
     readLibraryExtras,
+    readLibraryPerson,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
@@ -533,7 +541,8 @@ describe("Continue Watching routes", () => {
   });
 
   it("serves rich movie details and cast artwork through an opaque same-origin grant", async () => {
-    const { app, readImage, readLibrary, readLibraryTitle, viewer } = await harness();
+    const { app, readImage, readLibrary, readLibraryPerson, readLibraryTitle, viewer } =
+      await harness();
     try {
       const catalogueResponse = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
@@ -551,6 +560,9 @@ describe("Continue Watching routes", () => {
               image: { itemId: "route-private-person", type: "Primary" },
               imagePath: null,
               name: "Mara Voss",
+              person: { itemId: "route-private-person", tmdbId: 12_345 },
+              personItemId: "route-private-person",
+              personReferenceId: null,
               role: "Iris Vale",
               type: "cast",
             },
@@ -569,6 +581,7 @@ describe("Continue Watching routes", () => {
         },
         seasons: [],
         seasonsTruncated: false,
+        seriesCredits: null,
       });
 
       const detailResponse = await app.inject({
@@ -579,8 +592,35 @@ describe("Continue Watching routes", () => {
       expect(detailResponse.statusCode, detailResponse.body).toBe(200);
       const detail = libraryTitleDetailResponseSchema.parse(detailResponse.json());
       const personPath = detail.movie?.cast[0]?.imagePath;
+      const personReferenceId = detail.movie?.cast[0]?.personReferenceId;
       expect(personPath).toMatch(new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`));
+      expect(personReferenceId).toMatch(/^media_[A-Za-z0-9_-]{22}$/u);
       expect(detailResponse.body).not.toMatch(/route-private-person|viewer-external/iu);
+
+      const profile = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/people/${personReferenceId}`,
+      });
+      expect(profile.statusCode, profile.body).toBe(200);
+      expect(profile.json()).toMatchObject({ name: "Mara Voss", tmdbId: 12_345 });
+      expect(profile.body).not.toMatch(/route-private-person|viewer-external/iu);
+      expect(readLibraryPerson).toHaveBeenCalledWith(
+        { itemId: "route-private-person", userId: "viewer-external" },
+        expect.any(AbortSignal),
+      );
+
+      readLibraryPerson.mockRejectedValueOnce(new Error("route-private-profile-failure"));
+      const unavailableProfile = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/people/${personReferenceId}`,
+      });
+      expect(unavailableProfile.statusCode, unavailableProfile.body).toBe(503);
+      expect(apiErrorSchema.parse(unavailableProfile.json()).error.code).toBe(
+        "media_library_person_unavailable",
+      );
+      expect(unavailableProfile.body).not.toContain("route-private-profile-failure");
 
       const anonymousImage = await app.inject({
         method: "GET",
@@ -613,6 +653,16 @@ describe("Continue Watching routes", () => {
       expect(apiErrorSchema.parse(tampered.json()).error.code).toBe(
         "media_person_artwork_not_found",
       );
+
+      app.database.sqlite
+        .prepare("update service_identity_links set revision = revision + 1 where id = ?")
+        .run("viewer-link");
+      const staleProfile = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/people/${personReferenceId}`,
+      });
+      expect(staleProfile.statusCode, staleProfile.body).toBe(404);
     } finally {
       await app.close();
     }
@@ -998,6 +1048,7 @@ describe("Continue Watching routes", () => {
       movie: null,
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
+      seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
     });
     readLibrarySeasonEpisodes.mockResolvedValueOnce({
       items: [
@@ -1006,7 +1057,16 @@ describe("Continue Watching routes", () => {
           artwork: series.artwork,
           communityRating: 8.2,
           contentRating: "TV-14",
-          credits: [{ name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" }],
+          credits: [
+            {
+              name: "Mara Voss",
+              person: null,
+              personItemId: null,
+              personReferenceId: null,
+              role: "Dr. Elian Vale",
+              type: "cast",
+            },
+          ],
           creditsTruncated: false,
           criticRating: null,
           episodeNumber: 3,
@@ -1057,6 +1117,7 @@ describe("Continue Watching routes", () => {
       expect(librarySeasonEpisodesResponseSchema.parse(episodesResponse.json())).toMatchObject({
         items: [
           {
+            credits: [{ name: "Mara Voss", personReferenceId: null }],
             media: { id: `media_${"e".repeat(22)}`, kind: "episode", title: "The Long Meridian" },
             playback: { positionSeconds: 900 },
           },

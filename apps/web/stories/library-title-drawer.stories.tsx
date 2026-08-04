@@ -70,6 +70,21 @@ export const MovieDetails: Story = {
   },
 };
 
+export const OwnedSeriesPersonProfile: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    const libraryDialog = await canvas.findByRole("dialog", { name: "Northern Lights details" });
+    await userEvent.click(
+      await within(libraryDialog).findByRole("button", { name: "View Mara Voss profile" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("dialog", { name: /(?:Mara Voss person context|Person context)/u }),
+      ).toBeVisible(),
+    );
+  },
+};
+
 export const Loading: Story = {
   args: {
     client: {

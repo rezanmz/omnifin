@@ -562,6 +562,12 @@ describe("JellyfinUserMediaClient", () => {
         Role: "Elian Vale",
         Type: "Actor",
       },
+      {
+        Id: "person-upstream-2",
+        Name: "Mara Voss",
+        Role: "Alternate Elian Vale",
+        Type: "Actor",
+      },
       { Name: "Jon Bell", Type: "Director" },
       { Name: "Ari Chen", Type: "Writer" },
       { Name: "Nia Rao", Type: "Producer" },
@@ -620,6 +626,22 @@ describe("JellyfinUserMediaClient", () => {
         ProviderIds: { Imdb: "tt1234567", Tmdb: "98765" },
         Studios: [{ Name: "Northlight Pictures" }, { Name: "Northlight Pictures" }],
         Taglines: ["The horizon remembers."],
+      }),
+      jsonResponse({
+        Items: [
+          {
+            Id: "person-upstream-1",
+            Name: "Mara Voss",
+            ProviderIds: { Tmdb: "12345" },
+            Type: "Person",
+          },
+          {
+            Id: "person-upstream-2",
+            Name: "Mara Voss",
+            ProviderIds: { tmdb: "54321" },
+            Type: "Person",
+          },
+        ],
       }),
     ]);
 
@@ -684,12 +706,23 @@ describe("JellyfinUserMediaClient", () => {
       image: { itemId: "person-upstream-1", type: "Primary" },
       imagePath: null,
       name: "Mara Voss",
+      person: { itemId: "person-upstream-1", tmdbId: 12_345 },
+      personItemId: "person-upstream-1",
+      personReferenceId: null,
       role: "Elian Vale",
       type: "cast",
+    });
+    expect(detail.movie?.cast[1]).toMatchObject({
+      name: "Mara Voss",
+      person: { itemId: "person-upstream-2", tmdbId: 54_321 },
+      role: "Alternate Elian Vale",
     });
     expect(JSON.stringify(detail)).not.toMatch(/private\/library|The Far Meridian\.mkv/u);
     expect(requests[0]?.url.searchParams.get("Fields")).toContain("MediaSources");
     expect(requests[0]?.url.searchParams.get("UserId")).toBe("paired-user-id");
+    expect(requests[1]?.url.pathname).toBe("/base/Items");
+    expect(requests[1]?.url.searchParams.get("Ids")).toBe("person-upstream-1,person-upstream-2");
+    expect(requests[1]?.url.searchParams.get("Fields")).toBe("ProviderIds");
   });
 
   it("keeps movie playback available when optional rich metadata is malformed", async () => {
@@ -725,6 +758,39 @@ describe("JellyfinUserMediaClient", () => {
         sizeBytes: null,
       },
     });
+  });
+
+  it("resolves a library person only through an exact Jellyfin ID and reviewed TMDB identity", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Id: "person-upstream-1",
+        Name: "Mara Voss",
+        ProviderIds: { TmDb: "12345" },
+        Type: "Person",
+      }),
+    ]);
+
+    await expect(
+      client.readLibraryPerson({ itemId: "person-upstream-1", userId: "paired-user-id" }),
+    ).resolves.toEqual({ itemId: "person-upstream-1", name: "Mara Voss", tmdbId: 12_345 });
+    expect(requests[0]?.url.pathname).toBe("/base/Items/person-upstream-1");
+    expect(requests[0]?.url.searchParams.get("Fields")).toBe("ProviderIds");
+    expect(requests[0]?.url.searchParams.get("UserId")).toBe("paired-user-id");
+  });
+
+  it("rejects a person response without a trustworthy TMDB bridge", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Id: "person-upstream-1",
+        Name: "Mara Voss",
+        ProviderIds: { Imdb: "nm0000001" },
+        Type: "Person",
+      }),
+    ]);
+
+    await expect(
+      client.readLibraryPerson({ itemId: "person-upstream-1", userId: "paired-user-id" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.library.people" });
   });
 
   it("revalidates and range-streams downloadable originals without exposing source paths", async () => {
@@ -997,7 +1063,27 @@ describe("JellyfinUserMediaClient", () => {
       UserData: { Played: false, PlaybackPositionTicks: 900_000_000 },
     };
     const { client, requests } = clientWithResponses([
-      jsonResponse(series),
+      jsonResponse({
+        ...series,
+        People: [
+          {
+            Id: "series-person-upstream-1",
+            Name: "Mara Voss",
+            Role: "Dr. Elian Vale",
+            Type: "Actor",
+          },
+        ],
+      }),
+      jsonResponse({
+        Items: [
+          {
+            Id: "series-person-upstream-1",
+            Name: "Mara Voss",
+            ProviderIds: { Tmdb: "12345" },
+            Type: "Person",
+          },
+        ],
+      }),
       jsonResponse({
         Items: [
           {
@@ -1035,6 +1121,14 @@ describe("JellyfinUserMediaClient", () => {
       item: { externalId: "series-upstream-1", kind: "series", runtimeSeconds: null },
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
+      seriesCredits: {
+        cast: [
+          expect.objectContaining({
+            name: "Mara Voss",
+            person: { itemId: "series-person-upstream-1", tmdbId: 12_345 },
+          }),
+        ],
+      },
     });
     const episodes = await client.readLibrarySeasonEpisodes({
       limit: 2,
@@ -1059,8 +1153,22 @@ describe("JellyfinUserMediaClient", () => {
     });
     expect(episodes.items[0]?.credits).toHaveLength(24);
     expect(episodes.items[0]?.credits.slice(0, 2)).toEqual([
-      { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
-      { name: "Ari Chen", role: null, type: "writer" },
+      {
+        name: "Mara Voss",
+        person: null,
+        personItemId: null,
+        personReferenceId: null,
+        role: "Dr. Elian Vale",
+        type: "cast",
+      },
+      {
+        name: "Ari Chen",
+        person: null,
+        personItemId: null,
+        personReferenceId: null,
+        role: null,
+        type: "writer",
+      },
     ]);
     expect(episodes.items[1]).toMatchObject({
       communityRating: null,
@@ -1072,16 +1180,17 @@ describe("JellyfinUserMediaClient", () => {
     expect(episodes).toMatchObject({ nextStartIndex: 2, truncated: true });
     expect(requests.map(({ url }) => url.pathname)).toEqual([
       "/base/Items/series-upstream-1",
+      "/base/Items",
       "/base/Shows/series-upstream-1/Seasons",
       "/base/Shows/series-upstream-1/Episodes",
     ]);
-    expect(Object.fromEntries(requests[1]!.url.searchParams)).toMatchObject({
+    expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
       Limit: "101",
       SortBy: "IndexNumber",
       SortOrder: "Ascending",
       UserId: "paired-user-id",
     });
-    expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
+    expect(Object.fromEntries(requests[3]!.url.searchParams)).toMatchObject({
       Fields: expect.stringContaining("People"),
       IsMissing: "false",
       Limit: "3",
