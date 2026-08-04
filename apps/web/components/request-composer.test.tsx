@@ -273,6 +273,7 @@ describe("request composer", () => {
     await user.click(screen.getByRole("button", { name: /Send request/i }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(loadRoutingOptions).toHaveBeenCalledOnce();
     expect(loadRoutingOptions).toHaveBeenCalledWith("series", false, expect.any(AbortSignal));
     expect(create.mock.calls[0]?.[0]).toEqual({
       is4k: false,

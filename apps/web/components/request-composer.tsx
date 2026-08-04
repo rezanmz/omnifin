@@ -263,6 +263,7 @@ export function RequestComposer({
     void client
       .loadRoutingOptions(media.kind, is4k, controller.signal)
       .then((options) => {
+        if (controller.signal.aborted) return;
         const destination = preferredChoice(options.destinations);
         const selection = destination ? defaultRoutingSelection(destination) : null;
         setRoutingSelection(selection);
@@ -270,13 +271,17 @@ export function RequestComposer({
         setRoutingState({ kind: "ready", options });
       })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === "AbortError")
+        )
+          return;
         setRoutingEnabled(false);
         setRoutingSelection(null);
         setRoutingState({ kind: "error" });
       });
     return () => controller.abort();
-  }, [client, eligibility.status, is4k, media, open, routingAttempt, routingOpen]);
+  }, [client, eligibility.status, is4k, media, open, routingAttempt]);
 
   if (!media) return null;
 
@@ -664,11 +669,7 @@ export function RequestComposer({
                 onToggle={(event) => {
                   const nextOpen = event.currentTarget.open;
                   setRoutingOpen(nextOpen);
-                  if (nextOpen) {
-                    setRoutingEnabled(true);
-                    setRoutingSelection(null);
-                    setRoutingState({ kind: "loading" });
-                  }
+                  if (nextOpen) setRoutingEnabled(true);
                 }}
               >
                 <summary>
