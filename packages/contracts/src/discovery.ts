@@ -9,6 +9,7 @@ export const DISCOVERY_DETAIL_MAX_RATINGS = 6;
 export const DISCOVERY_DETAIL_MAX_RECOMMENDATIONS = 12;
 export const DISCOVERY_DETAIL_MAX_TRAILERS = 6;
 export const DISCOVERY_PERSON_MAX_CREDITS = 24;
+export const DISCOVERY_PERSON_MAX_CREDIT_PAGES = 100;
 export const DISCOVERY_FEED_RAIL_COUNT = 4;
 export const DISCOVERY_FEED_MAX_ITEMS_PER_RAIL = 18;
 export const DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE = 40;
@@ -577,7 +578,7 @@ export type DiscoveryPersonDetailParams = z.infer<typeof discoveryPersonDetailPa
 export const discoveryPersonDetailQuerySchema = discoveryMediaDetailQuerySchema;
 export type DiscoveryPersonDetailQuery = z.infer<typeof discoveryPersonDetailQuerySchema>;
 
-const discoveryPersonCreditSchema = z.strictObject({
+export const discoveryPersonCreditSchema = z.strictObject({
   availability: discoveryAvailabilitySchema,
   kind: discoveryMediaKindSchema,
   role: z.string().trim().min(1).max(200),
@@ -586,25 +587,40 @@ const discoveryPersonCreditSchema = z.strictObject({
   voteAverage: z.number().finite().min(0).max(10).nullable(),
   year: yearSchema,
 });
+export type DiscoveryPersonCredit = z.infer<typeof discoveryPersonCreditSchema>;
 
-export const discoveryPersonDetailSchema = z.strictObject({
-  biography: overviewSchema,
-  birthday: z.iso.date().nullable(),
-  birthplace: z.string().trim().min(1).max(300).nullable(),
-  credits: z.array(discoveryPersonCreditSchema).max(DISCOVERY_PERSON_MAX_CREDITS),
-  creditsState: discoveryIntelligenceStateSchema,
-  deathday: z.iso.date().nullable(),
-  department: z.string().trim().min(1).max(160).nullable(),
-  id: z
-    .string()
-    .min(8)
-    .max(64)
-    .regex(/^person:[1-9][0-9]*$/u),
-  name: titleSchema,
-  profilePath: discoveryArtworkPathSchema,
-  source: z.literal("seerr"),
-  tmdbId: tmdbIdentifierSchema,
-});
+export const discoveryPersonDetailSchema = z
+  .strictObject({
+    biography: overviewSchema,
+    birthday: z.iso.date().nullable(),
+    birthplace: z.string().trim().min(1).max(300).nullable(),
+    credits: z.array(discoveryPersonCreditSchema).max(DISCOVERY_PERSON_MAX_CREDITS),
+    creditsState: discoveryIntelligenceStateSchema,
+    creditsTotal: z
+      .int()
+      .nonnegative()
+      .max(DISCOVERY_PERSON_MAX_CREDITS * DISCOVERY_PERSON_MAX_CREDIT_PAGES),
+    deathday: z.iso.date().nullable(),
+    department: z.string().trim().min(1).max(160).nullable(),
+    id: z
+      .string()
+      .min(8)
+      .max(64)
+      .regex(/^person:[1-9][0-9]*$/u),
+    name: titleSchema,
+    profilePath: discoveryArtworkPathSchema,
+    source: z.literal("seerr"),
+    tmdbId: tmdbIdentifierSchema,
+  })
+  .superRefine((value, context) => {
+    if (value.creditsTotal < value.credits.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Credit total cannot be smaller than the included page.",
+        path: ["creditsTotal"],
+      });
+    }
+  });
 export type DiscoveryPersonDetail = z.infer<typeof discoveryPersonDetailSchema>;
 
 export const discoveryPersonDetailResponseSchema = z.strictObject({
@@ -612,6 +628,50 @@ export const discoveryPersonDetailResponseSchema = z.strictObject({
   item: discoveryPersonDetailSchema,
 });
 export type DiscoveryPersonDetailResponse = z.infer<typeof discoveryPersonDetailResponseSchema>;
+
+export const discoveryPersonCreditsQuerySchema = z.strictObject({
+  language: languageSchema.default("en"),
+  page: z.coerce.number().int().min(1).max(DISCOVERY_PERSON_MAX_CREDIT_PAGES).default(1),
+});
+export type DiscoveryPersonCreditsQuery = z.infer<typeof discoveryPersonCreditsQuerySchema>;
+
+export const discoveryPersonCreditsResponseSchema = z
+  .strictObject({
+    generatedAt: z.iso.datetime({ offset: true }),
+    items: z.array(discoveryPersonCreditSchema).max(DISCOVERY_PERSON_MAX_CREDITS),
+    page: z.int().min(1).max(DISCOVERY_PERSON_MAX_CREDIT_PAGES),
+    pageSize: z.literal(DISCOVERY_PERSON_MAX_CREDITS),
+    totalPages: z.int().nonnegative().max(DISCOVERY_PERSON_MAX_CREDIT_PAGES),
+    totalResults: z
+      .int()
+      .nonnegative()
+      .max(DISCOVERY_PERSON_MAX_CREDITS * DISCOVERY_PERSON_MAX_CREDIT_PAGES),
+  })
+  .superRefine((value, context) => {
+    const expectedPages = Math.ceil(value.totalResults / DISCOVERY_PERSON_MAX_CREDITS);
+    const expectedItems =
+      value.page > expectedPages
+        ? 0
+        : Math.min(
+            DISCOVERY_PERSON_MAX_CREDITS,
+            value.totalResults - (value.page - 1) * DISCOVERY_PERSON_MAX_CREDITS,
+          );
+    if (value.totalPages !== expectedPages) {
+      context.addIssue({
+        code: "custom",
+        message: "Credit page count does not match the bounded total.",
+        path: ["totalPages"],
+      });
+    }
+    if (value.items.length !== expectedItems) {
+      context.addIssue({
+        code: "custom",
+        message: "Credit page length does not match its page metadata.",
+        path: ["items"],
+      });
+    }
+  });
+export type DiscoveryPersonCreditsResponse = z.infer<typeof discoveryPersonCreditsResponseSchema>;
 
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
@@ -646,4 +706,10 @@ export const discoveryPersonDetailQueryJsonSchema = withoutSchemaDialect(
 );
 export const discoveryPersonDetailResponseJsonSchema = withoutSchemaDialect(
   discoveryPersonDetailResponseSchema,
+);
+export const discoveryPersonCreditsQueryJsonSchema = withoutSchemaDialect(
+  discoveryPersonCreditsQuerySchema,
+);
+export const discoveryPersonCreditsResponseJsonSchema = withoutSchemaDialect(
+  discoveryPersonCreditsResponseSchema,
 );

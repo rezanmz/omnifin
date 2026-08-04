@@ -6,6 +6,7 @@ import type {
   DiscoveryMediaDetail,
   DiscoveryMediaRecommendation,
   DiscoveryMovieResult,
+  DiscoveryPersonCredit,
   DiscoveryPersonDetail,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
@@ -32,8 +33,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MediaDetailClientError,
   discoveryMediaDetailClient,
+  discoveryPersonCreditsClient,
   discoveryPersonDetailClient,
   type DiscoveryMediaDetailClient,
+  type DiscoveryPersonCreditsClient,
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
@@ -70,6 +73,7 @@ export interface MediaDetailDrawerProperties {
   onRequest?: (media: DetailMedia) => void;
   open: boolean;
   person?: DetailPerson | null;
+  personCreditsClient?: DiscoveryPersonCreditsClient;
   personClient?: DiscoveryPersonDetailClient;
 }
 
@@ -577,13 +581,65 @@ function DetailContent({
 }
 
 function PersonContent({
+  creditsClient,
   detail,
   onInspectMedia,
 }: {
+  creditsClient: DiscoveryPersonCreditsClient;
   detail: DiscoveryPersonDetail;
   onInspectMedia: (media: DetailMedia) => void;
 }) {
   const life = [detail.birthday, detail.deathday].filter(Boolean).join(" — ");
+  const abortReference = useRef<AbortController | null>(null);
+  const [credits, setCredits] = useState<readonly DiscoveryPersonCredit[]>(detail.credits);
+  const [creditsPage, setCreditsPage] = useState(1);
+  const [creditsState, setCreditsState] = useState<"error" | "idle" | "loading">("idle");
+  const [creditsTotal, setCreditsTotal] = useState(
+    Math.max(detail.credits.length, detail.creditsTotal),
+  );
+  const hasMoreCredits = credits.length < creditsTotal;
+
+  useEffect(
+    () => () => {
+      abortReference.current?.abort();
+    },
+    [],
+  );
+
+  async function loadMoreCredits() {
+    if (creditsState === "loading" || !hasMoreCredits) return;
+    abortReference.current?.abort();
+    const controller = new AbortController();
+    abortReference.current = controller;
+    const nextPage = creditsPage + 1;
+    setCreditsState("loading");
+    try {
+      const response = await creditsClient.load(
+        { tmdbId: detail.tmdbId },
+        { language: detailLanguage(), page: nextPage },
+        controller.signal,
+      );
+      if (response.page !== nextPage) throw new Error("Unexpected person-credit page.");
+      setCredits((current) => {
+        const seen = new Set(
+          current.map((credit) => `${credit.kind}:${credit.tmdbId}:${credit.role}`),
+        );
+        return [
+          ...current,
+          ...response.items.filter(
+            (credit) => !seen.has(`${credit.kind}:${credit.tmdbId}:${credit.role}`),
+          ),
+        ];
+      });
+      setCreditsPage(response.page);
+      setCreditsTotal(response.totalResults);
+      setCreditsState("idle");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setCreditsState("error");
+    }
+  }
+
   return (
     <div className="media-detail__content media-detail__person-content">
       <section className="media-detail__person-hero">
@@ -625,9 +681,9 @@ function PersonContent({
             <small>Credits are temporarily offline</small>
           ) : null}
         </div>
-        {detail.credits.length > 0 ? (
+        {credits.length > 0 ? (
           <ul>
-            {detail.credits.map((credit, index) => (
+            {credits.map((credit, index) => (
               <li key={`${credit.kind}:${credit.tmdbId}:${credit.role}`}>
                 <button
                   data-directional-item
@@ -653,6 +709,34 @@ function PersonContent({
               : "No eligible movie or series credits were supplied."}
           </p>
         )}
+        {credits.length > 0 ? (
+          <div className="media-detail__person-pagination">
+            <span aria-live="polite">
+              Showing {credits.length.toLocaleString()} of {creditsTotal.toLocaleString()} credits
+            </span>
+            {hasMoreCredits ? (
+              <button
+                aria-label={
+                  creditsState === "error"
+                    ? `Retry loading credits for ${detail.name}`
+                    : `Load more credits for ${detail.name}`
+                }
+                data-directional-item
+                disabled={creditsState === "loading"}
+                onClick={() => void loadMoreCredits()}
+                type="button"
+              >
+                {creditsState === "loading"
+                  ? "Loading more…"
+                  : creditsState === "error"
+                    ? "Retry credits"
+                    : "Load more work"}
+              </button>
+            ) : (
+              <small>Complete filmography loaded</small>
+            )}
+          </div>
+        ) : null}
       </section>
 
       <div className="media-detail__footer">
@@ -672,6 +756,7 @@ export function MediaDetailDrawer({
   onRequest,
   open,
   person = null,
+  personCreditsClient = discoveryPersonCreditsClient,
   personClient = discoveryPersonDetailClient,
 }: MediaDetailDrawerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
@@ -880,7 +965,12 @@ export function MediaDetailDrawer({
         </div>
         <div aria-live="polite" className="media-detail__scroll" ref={scrollReference}>
           {visiblePersonState?.kind === "ready" ? (
-            <PersonContent detail={visiblePersonState.detail} onInspectMedia={inspectMedia} />
+            <PersonContent
+              creditsClient={personCreditsClient}
+              detail={visiblePersonState.detail}
+              key={visiblePersonState.detail.id}
+              onInspectMedia={inspectMedia}
+            />
           ) : visiblePersonState?.kind === "error" ? (
             <DetailError
               errorKind={visiblePersonState.errorKind}

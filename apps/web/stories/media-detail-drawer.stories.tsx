@@ -1,6 +1,7 @@
 import type {
   DiscoveryMediaDetailResponse,
   DiscoveryMovieResult,
+  DiscoveryPersonCreditsResponse,
   DiscoveryPersonDetailResponse,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
@@ -11,6 +12,7 @@ import { MediaDetailDrawer } from "../components/media-detail-drawer";
 import {
   MediaDetailClientError,
   type DiscoveryMediaDetailClient,
+  type DiscoveryPersonCreditsClient,
   type DiscoveryPersonDetailClient,
 } from "../lib/media-details";
 
@@ -195,6 +197,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
       },
     ],
     creditsState: "ready",
+    creditsTotal: 2,
     deathday: null,
     department: "Acting",
     id: "person:6384",
@@ -203,6 +206,38 @@ const personResponse: DiscoveryPersonDetailResponse = {
     source: "seerr",
     tmdbId: 6384,
   },
+};
+const paginatedPersonResponse: DiscoveryPersonDetailResponse = {
+  ...personResponse,
+  item: {
+    ...personResponse.item,
+    credits: Array.from({ length: 24 }, (_, index) => ({
+      availability: index < 8 ? ("available" as const) : ("unavailable" as const),
+      kind: index % 3 === 0 ? ("series" as const) : ("movie" as const),
+      role: `Role ${index + 1}`,
+      title: `Selected work ${index + 1}`,
+      tmdbId: 10_000 + index,
+      voteAverage: 7.8,
+      year: 2000 + index,
+    })),
+    creditsTotal: 30,
+  },
+};
+const personCreditsResponse: DiscoveryPersonCreditsResponse = {
+  generatedAt: "2026-07-28T20:01:00.000Z",
+  items: Array.from({ length: 6 }, (_, index) => ({
+    availability: "requested",
+    kind: "movie",
+    role: `Role ${index + 25}`,
+    title: `Selected work ${index + 25}`,
+    tmdbId: 20_000 + index,
+    voteAverage: 7.2,
+    year: 2024,
+  })),
+  page: 2,
+  pageSize: 24,
+  totalPages: 2,
+  totalResults: 30,
 };
 const seriesResponse: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
@@ -267,6 +302,12 @@ function personClient(load: DiscoveryPersonDetailClient["load"]): DiscoveryPerso
   return { load };
 }
 
+function personCreditsClient(
+  load: DiscoveryPersonCreditsClient["load"],
+): DiscoveryPersonCreditsClient {
+  return { load };
+}
+
 const meta = {
   args: {
     client: client(async () => movieResponse),
@@ -274,6 +315,7 @@ const meta = {
     onOpenChange: fn(),
     onRequest: fn(),
     open: true,
+    personCreditsClient: personCreditsClient(async () => personCreditsResponse),
     personClient: personClient(async () => personResponse),
   },
   component: MediaDetailDrawer,
@@ -320,6 +362,23 @@ export const PersonContext: Story = {
       expect(canvas.getByRole("heading", { name: "Keanu Reeves" })).toBeVisible(),
     );
     expect(canvas.getByRole("heading", { name: "Biography" })).toBeVisible();
+  },
+};
+
+export const PaginatedFilmography: Story = {
+  args: {
+    media: null,
+    person: { name: "Keanu Reeves", tmdbId: 6384 },
+    personClient: personClient(async () => paginatedPersonResponse),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    await waitFor(() => expect(canvas.getByText("Showing 24 of 30 credits")).toBeVisible());
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Load more credits for Keanu Reeves" }),
+    );
+    await waitFor(() => expect(canvas.getByText("Showing 30 of 30 credits")).toBeVisible());
+    expect(canvas.getByText("Complete filmography loaded")).toBeVisible();
   },
 };
 
