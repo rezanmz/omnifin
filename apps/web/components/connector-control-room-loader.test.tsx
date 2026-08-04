@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConnectorControlRoomLoader } from "./connector-control-room-loader";
 
@@ -10,6 +10,8 @@ const { useIdleRender } = vi.hoisted(() => ({
 vi.mock("../lib/use-idle-render", () => ({ useIdleRender }));
 
 describe("ConnectorControlRoomLoader", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("reserves a paint grace period before mounting the connector workspace", () => {
     render(<ConnectorControlRoomLoader />);
 
@@ -23,6 +25,6 @@ describe("ConnectorControlRoomLoader", () => {
   it("does not hold an already-resolved server fixture behind the paint grace period", () => {
     render(<ConnectorControlRoomLoader initialOutcome={{ status: "forbidden" }} />);
 
-    expect(useIdleRender).toHaveBeenLastCalledWith(0);
+    expect(useIdleRender).not.toHaveBeenCalled();
   });
 });
