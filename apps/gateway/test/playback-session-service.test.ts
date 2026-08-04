@@ -237,6 +237,23 @@ const negotiation = {
 };
 
 describe("PlaybackSessionService", () => {
+  it("uses one injected clock for playback and opaque media-reference resolution", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now.getTime() + 8 * 24 * 60 * 60 * 1_000);
+    const { database, reference, service } = harness();
+    try {
+      await expect(
+        service.negotiate({ principal: principal() }, reference, negotiation),
+      ).resolves.toMatchObject({
+        mediaReferenceId: reference,
+        sessionId: `playback_${"p".repeat(22)}`,
+      });
+    } finally {
+      database.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("negotiates through the exact linked identity and persists only encrypted upstream state", async () => {
     const { createClient, database, negotiate, reference, service } = harness();
     try {

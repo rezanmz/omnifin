@@ -402,7 +402,10 @@ export class PlaybackSessionService {
     this.#createAssetToken = dependencies.createAssetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#createToken = dependencies.createToken ?? (() => randomToken(16));
-    this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
+    this.#references = new MediaReferenceService(database, config, {
+      ...dependencies.mediaReferences,
+      clock: dependencies.mediaReferences?.clock ?? this.#clock,
+    });
   }
 
   public async negotiate(
