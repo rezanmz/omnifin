@@ -165,7 +165,7 @@ const jellyfinLibraryItemSchema = z.object({
       z.object({
         Bitrate: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
         Container: z.string().max(64).nullish(),
-        Id: jellyfinIdentifierSchema,
+        Id: jellyfinIdentifierSchema.nullish().catch(null),
         Name: z.string().max(300).nullish().catch(null),
         MediaStreams: z
           .array(
@@ -949,7 +949,8 @@ function normalizeMovieMediaSource(
   source: JellyfinLibraryMediaSource,
   index: number,
   sourceCount: number,
-): JellyfinLibraryMovieMediaSource {
+): JellyfinLibraryMovieMediaSource | null {
+  if (!source.Id) return null;
   const streams = source.MediaStreams ?? [];
   const video = normalizeVideo(
     streams.find((stream) => stream.Type.toLocaleLowerCase("en-US") === "video"),
@@ -990,8 +991,11 @@ function normalizeMovieDetail(
     genres: uniqueText(item.Genres, LIBRARY_MOVIE_MAX_GENRES, 100),
     mediaSources: mediaSources
       .slice(0, LIBRARY_MOVIE_MAX_MEDIA_SOURCES)
-      .map((source, index) => normalizeMovieMediaSource(source, index, mediaSources.length)),
-    mediaSourcesTruncated: mediaSources.length > LIBRARY_MOVIE_MAX_MEDIA_SOURCES,
+      .map((source, index) => normalizeMovieMediaSource(source, index, mediaSources.length))
+      .filter((source): source is JellyfinLibraryMovieMediaSource => source !== null),
+    mediaSourcesTruncated:
+      mediaSources.length > LIBRARY_MOVIE_MAX_MEDIA_SOURCES ||
+      mediaSources.some((source) => !source.Id),
     premiereDate: dateOnly(item.PremiereDate),
     studios: uniqueText(
       item.Studios?.flatMap(({ Name }) => (Name === null || Name === undefined ? [] : [Name])),

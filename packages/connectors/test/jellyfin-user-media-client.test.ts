@@ -672,7 +672,7 @@ describe("JellyfinUserMediaClient", () => {
     expect(detail.removal).toEqual({
       canDelete: true,
       providerIds: { imdb: "tt1234567", tmdb: 98_765 },
-      sizeBytes: 6_979_321_856,
+      sizeBytes: 11_360_468_992,
     });
     expect(detail.movie).toMatchObject({
       castTruncated: true,
