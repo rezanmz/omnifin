@@ -4,10 +4,13 @@ import { useEffect } from "react";
 
 const GLASS_SELECTOR = "[data-liquid-glass]";
 const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
-// Scroll is intentionally excluded: unlike pointerdown and keydown, it does not finalize
-// the browser's LCP window, so a scroll-triggered material repaint can turn a fast
-// first render into a late LCP candidate.
-const MATERIAL_INTENT_EVENTS = ["pointerdown", "keydown"] as const;
+// Scroll is intentionally excluded: unlike a completed user gesture, it does not finalize the
+// browser's LCP window, so a scroll-triggered material repaint can turn a fast first render into a
+// late LCP candidate.
+// Wait for the gesture to finish before inserting the optical stylesheet. WebKit can otherwise
+// drop focus and scroll a sticky input back to its document-flow position while pointerdown is
+// still handing that input off to a lazy client component.
+const MATERIAL_INTENT_EVENTS = ["pointerup", "keyup"] as const;
 let materialStylesPromise: Promise<unknown> | undefined;
 
 function loadMaterialStyles() {

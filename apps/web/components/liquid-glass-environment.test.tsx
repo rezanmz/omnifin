@@ -26,6 +26,8 @@ describe("LiquidGlassEnvironment", () => {
     vi.mocked(window.requestAnimationFrame).mockClear();
 
     fireEvent.pointerDown(document.body);
+    expect(window.requestAnimationFrame).not.toHaveBeenCalled();
+    fireEvent.pointerUp(document.body);
     expect(window.requestAnimationFrame).toHaveBeenCalledOnce();
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
 
@@ -41,6 +43,8 @@ describe("LiquidGlassEnvironment", () => {
     const view = render(<LiquidGlassEnvironment />);
 
     fireEvent.keyDown(document.body, { key: "Tab" });
+    expect(cancelAnimationFrame).not.toHaveBeenCalled();
+    fireEvent.keyUp(document.body, { key: "Tab" });
     view.unmount();
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(23);
