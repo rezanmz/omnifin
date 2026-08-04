@@ -219,6 +219,8 @@ describe("MediaLibrary", () => {
     expect(screen.getByText("Mara Voss")).toBeVisible();
     await user.click(screen.getByText("Media information"));
     expect(screen.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+    expect(screen.getByRole("radiogroup", { name: "Movie version" })).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: /1080p · H\.264 · MP4/u }));
     expect(await screen.findByRole("heading", { name: "Trailers & extras" })).toBeVisible();
     const onlineTrailer = screen.getByRole("link", {
       name: "Watch external Official online trailer on YouTube",
@@ -249,7 +251,10 @@ describe("MediaLibrary", () => {
         `media_${"a".repeat(22)}`,
         0,
         expect.any(AbortSignal),
-        expect.objectContaining({ mode: "auto" }),
+        expect.objectContaining({
+          mode: "auto",
+          sourceReferenceId: `source_${"b".repeat(22)}`,
+        }),
       ),
     );
     await user.click(screen.getByRole("button", { name: "Close player" }));

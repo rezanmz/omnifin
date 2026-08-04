@@ -1,6 +1,8 @@
 import {
   JellyfinPlaybackClient,
+  type JellyfinPlaybackNegotiationInput,
   type JellyfinPlaybackResult,
+  type JellyfinPlaybackSourceSelection,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTransport } from "@omnifin/connectors/types";
 import { ROLE_PERMISSIONS, sessionPrincipalSchema } from "@omnifin/contracts/auth";
@@ -14,6 +16,7 @@ import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { MediaReferenceService } from "../src/media/media-reference-service.js";
+import { playbackSourceReferenceId } from "../src/media/playback-source-reference.js";
 import {
   PlaybackSessionService,
   type PlaybackSessionError,
@@ -293,6 +296,34 @@ describe("PlaybackSessionService", () => {
       });
       expect(JSON.stringify(row)).not.toMatch(/private-|upstream-query/u);
       expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("binds an opaque selected source to the current user and title reference", async () => {
+    const { config, database, negotiate, reference, service } = harness();
+    const sourceReferenceId = playbackSourceReferenceId(
+      config.encryptionKey,
+      reference,
+      "private-media-source",
+    );
+    try {
+      const response = await service.negotiate({ principal: principal() }, reference, {
+        ...negotiation,
+        sourceReferenceId,
+      });
+
+      expect(response.sourceReferenceId).toBe(sourceReferenceId);
+      const [connectorInput, signal, selection] = negotiate.mock.calls[0] as unknown as [
+        JellyfinPlaybackNegotiationInput,
+        AbortSignal | undefined,
+        JellyfinPlaybackSourceSelection,
+      ];
+      expect(connectorInput).toEqual({ ...negotiation, itemId: privateItemId });
+      expect(signal).toBeUndefined();
+      expect(selection.matchesSourceId("private-media-source")).toBe(true);
+      expect(selection.matchesSourceId("different-private-source")).toBe(false);
     } finally {
       database.close();
     }

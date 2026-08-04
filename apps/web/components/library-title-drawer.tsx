@@ -52,7 +52,9 @@ import { SavedTitleActions } from "./saved-title-actions";
 
 export interface PlayableLibrarySelection {
   media: LibrarySeasonEpisode["media"] | LibraryBrowseItem["media"];
+  mediaSources?: LibraryMovieMediaSource[];
   playback: LibraryPlaybackState;
+  sourceReferenceId?: string;
   startPositionSeconds?: number;
 }
 
@@ -495,14 +497,22 @@ function PersonPortrait({ credit }: { credit: LibraryMovieDetail["cast"][number]
   );
 }
 
-function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
+function MediaSourceCard({
+  onSelect,
+  selected,
+  source,
+}: {
+  onSelect?: () => void;
+  selected: boolean;
+  source: LibraryMovieMediaSource;
+}) {
   const size = formatBytes(source.sizeBytes);
   const bitrate = formatBitrate(source.bitrateKbps);
   const video = source.video;
   const resolution =
     video?.width && video.height ? `${video.width} × ${video.height}` : (video?.height ?? null);
   return (
-    <article className="library-title__source-card">
+    <article className="library-title__source-card" data-selected={selected || undefined}>
       <header>
         <div>
           <span className="library-title__source-icon" aria-hidden="true">
@@ -513,7 +523,23 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
             <p>{[size, bitrate].filter(Boolean).join(" · ") || "Technical details unavailable"}</p>
           </div>
         </div>
-        {source.container ? <span>{source.container}</span> : null}
+        <div className="library-title__source-actions">
+          {source.container ? <span>{source.container}</span> : null}
+          {onSelect ? (
+            <button
+              aria-checked={selected}
+              aria-label={`${source.label}${selected ? ", selected" : ""}`}
+              data-directional-item
+              onClick={onSelect}
+              role="radio"
+              tabIndex={selected ? 0 : -1}
+              type="button"
+            >
+              <Check aria-hidden="true" />
+              {selected ? "Selected" : "Choose"}
+            </button>
+          ) : null}
+        </div>
       </header>
 
       {video ? (
@@ -609,7 +635,15 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
   );
 }
 
-function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
+function MovieInformation({
+  movie,
+  onSelectSource,
+  selectedSourceReferenceId,
+}: {
+  movie: LibraryMovieDetail;
+  onSelectSource: (sourceReferenceId: string) => void;
+  selectedSourceReferenceId: string | null;
+}) {
   const premiereDate = formatAirDate(movie.premiereDate);
   const hasEditorialFacts =
     movie.communityRating !== null ||
@@ -704,10 +738,22 @@ function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
           </span>
           <ChevronDown aria-hidden="true" />
         </summary>
-        <div className="library-title__media-information-body">
+        <div
+          {...(movie.mediaSources.length > 1
+            ? { "aria-label": "Movie version", role: "radiogroup" }
+            : {})}
+          className="library-title__media-information-body"
+        >
           {movie.mediaSources.length > 0 ? (
-            movie.mediaSources.map((source, index) => (
-              <MediaSourceCard key={`${source.label}:${index}`} source={source} />
+            movie.mediaSources.map((source) => (
+              <MediaSourceCard
+                key={source.sourceReferenceId}
+                {...(movie.mediaSources.length > 1
+                  ? { onSelect: () => onSelectSource(source.sourceReferenceId) }
+                  : {})}
+                selected={source.sourceReferenceId === selectedSourceReferenceId}
+                source={source}
+              />
             ))
           ) : (
             <p>Playback is available, but this Jellyfin item has no reviewed media-source facts.</p>
@@ -1227,6 +1273,7 @@ export function LibraryTitleDrawer({
   const [extrasAttempt, setExtrasAttempt] = useState(0);
   const [extrasState, setExtrasState] = useState<ExtrasState | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
+  const [selectedSourceReferenceId, setSelectedSourceReferenceId] = useState<string | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
   const referenceId = item?.media.id ?? "none";
   const requestKey = `${referenceId}:${attempt}`;
@@ -1277,6 +1324,10 @@ export function LibraryTitleDrawer({
     return titleState;
   }, [item, open, requestKey, titleState]);
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
+  const selectedMovieSource =
+    detail?.movie?.mediaSources.find(
+      (source) => source.sourceReferenceId === selectedSourceReferenceId,
+    ) ?? detail?.movie?.mediaSources[0];
 
   useEffect(() => {
     if (!open || !item || detail?.media.id !== item.media.id) return;
@@ -1606,7 +1657,13 @@ export function LibraryTitleDrawer({
                       onPlay={(startPositionSeconds) =>
                         onPlay({
                           media: detail!.media,
+                          ...(detail!.movie?.mediaSources.length
+                            ? { mediaSources: detail!.movie.mediaSources }
+                            : {}),
                           playback: detail!.playback!,
+                          ...(selectedMovieSource === undefined
+                            ? {}
+                            : { sourceReferenceId: selectedMovieSource.sourceReferenceId }),
                           ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
                         })
                       }
@@ -1619,7 +1676,13 @@ export function LibraryTitleDrawer({
                 </div>
               </section>
 
-              {detail!.movie ? <MovieInformation movie={detail!.movie} /> : null}
+              {detail!.movie ? (
+                <MovieInformation
+                  movie={detail!.movie}
+                  onSelectSource={setSelectedSourceReferenceId}
+                  selectedSourceReferenceId={selectedMovieSource?.sourceReferenceId ?? null}
+                />
+              ) : null}
 
               {visibleExtrasState ? (
                 <ExtrasSection

@@ -44,6 +44,7 @@ import {
 } from "../src/library.js";
 
 const referenceId = `media_${"m".repeat(22)}`;
+const sourceReferenceId = `source_${"v".repeat(22)}`;
 const searchId = `library_artwork_search_${"s".repeat(22)}`;
 const resultId = `library_artwork_result_${"r".repeat(22)}`;
 const downloadGrantId = `media_download_${"d".repeat(22)}`;
@@ -552,6 +553,7 @@ describe("library operation contracts", () => {
             container: "MKV",
             label: "4K · HEVC · MKV",
             sizeBytes: 6_979_321_856,
+            sourceReferenceId,
             subtitles: [
               {
                 codec: "SUBRIP",
@@ -584,6 +586,7 @@ describe("library operation contracts", () => {
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
     expect(JSON.stringify(detail)).not.toMatch(/jellyfin|upstream|\/private\//iu);
+    expect(JSON.stringify(detail)).not.toContain("media-source-");
     expect(
       libraryTitleDetailResponseSchema.safeParse({
         ...detail,

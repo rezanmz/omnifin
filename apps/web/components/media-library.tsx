@@ -698,7 +698,11 @@ function SelectedTheater({
             .filter(Boolean)
             .join(" · "),
         id: selection.media.id,
+        ...(selection.mediaSources === undefined ? {} : { mediaSources: selection.mediaSources }),
         positionSeconds: selection.startPositionSeconds ?? selection.playback.positionSeconds,
+        ...(selection.sourceReferenceId === undefined
+          ? {}
+          : { sourceReferenceId: selection.sourceReferenceId }),
         title: selection.media.title,
       }}
       onClose={onClose}

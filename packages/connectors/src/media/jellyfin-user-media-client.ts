@@ -48,6 +48,7 @@ const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
+const jellyfinIdentifierSchema = z.string().trim().min(1).max(256);
 const jellyfinItemIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u);
 
 const imageTagsSchema = z.record(
@@ -164,6 +165,8 @@ const jellyfinLibraryItemSchema = z.object({
       z.object({
         Bitrate: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
         Container: z.string().max(64).nullish(),
+        Id: jellyfinIdentifierSchema,
+        Name: z.string().max(300).nullish().catch(null),
         MediaStreams: z
           .array(
             z.object({
@@ -640,11 +643,18 @@ export interface JellyfinLibraryMovieDetail {
   crewTruncated: boolean;
   criticRating: number | null;
   genres: string[];
-  mediaSources: LibraryMovieMediaSource[];
+  mediaSources: JellyfinLibraryMovieMediaSource[];
   mediaSourcesTruncated: boolean;
   premiereDate: string | null;
   studios: string[];
   tagline: string | null;
+}
+
+export interface JellyfinLibraryMovieMediaSource extends Omit<
+  LibraryMovieMediaSource,
+  "sourceReferenceId"
+> {
+  sourceId: string;
 }
 
 export interface JellyfinLibrarySeasonEpisodesInput {
@@ -922,11 +932,24 @@ function resolutionLabel(video: LibraryMovieVideo | null) {
   return height ? `${height}p` : null;
 }
 
+function editionLabel(value: string | null | undefined) {
+  const label = compactText(value, 80);
+  if (
+    !label ||
+    /[\\/]|%2f|%5c/iu.test(label) ||
+    /^[A-Za-z]:/u.test(label) ||
+    /\.(?:3gp|avi|flv|m2ts|m4v|mkv|mov|mp4|mpeg|mpg|mts|ts|webm|wmv)$/iu.test(label)
+  ) {
+    return null;
+  }
+  return label;
+}
+
 function normalizeMovieMediaSource(
   source: JellyfinLibraryMediaSource,
   index: number,
   sourceCount: number,
-): LibraryMovieMediaSource {
+): JellyfinLibraryMovieMediaSource {
   const streams = source.MediaStreams ?? [];
   const video = normalizeVideo(
     streams.find((stream) => stream.Type.toLocaleLowerCase("en-US") === "video"),
@@ -938,16 +961,18 @@ function normalizeMovieMediaSource(
     .filter((stream) => stream.Type.toLocaleLowerCase("en-US") === "subtitle")
     .map(normalizeSubtitleTrack);
   const container = codecLabel(source.Container);
+  const edition = editionLabel(source.Name);
   const baseLabel =
-    [resolutionLabel(video), video?.codec, container].filter(Boolean).join(" · ") ||
+    [edition, resolutionLabel(video), video?.codec, container].filter(Boolean).join(" · ") ||
     "Media version";
   return {
     audio: audio.slice(0, LIBRARY_MOVIE_MAX_AUDIO_TRACKS),
     audioTruncated: audio.length > LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
     bitrateKbps: bitrateKbps(source.Bitrate),
     container,
-    label: sourceCount > 1 ? `${baseLabel} · Version ${index + 1}` : baseLabel,
+    label: sourceCount > 1 && !edition ? `${baseLabel} · Version ${index + 1}` : baseLabel,
     sizeBytes: source.Size ?? null,
+    sourceId: source.Id,
     subtitles: subtitles.slice(0, LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
     subtitlesTruncated: subtitles.length > LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS,
     video,

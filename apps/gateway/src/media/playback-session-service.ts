@@ -38,6 +38,7 @@ import {
   MediaReferenceService,
   type MediaReferenceDependencies,
 } from "./media-reference-service.js";
+import { matchesPlaybackSourceReference } from "./playback-source-reference.js";
 import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./playback-limits.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -436,10 +437,21 @@ export class PlaybackSessionService {
 
     let result: JellyfinPlaybackResult;
     try {
-      result = await this.#client(source).negotiate(
-        { ...request, itemId: reference.itemId },
-        signal,
-      );
+      const { sourceReferenceId, ...connectorRequest } = request;
+      const client = this.#client(source);
+      const connectorInput = { ...connectorRequest, itemId: reference.itemId };
+      result =
+        sourceReferenceId === undefined || sourceReferenceId === null
+          ? await client.negotiate(connectorInput, signal)
+          : await client.negotiate(connectorInput, signal, {
+              matchesSourceId: (sourceId) =>
+                matchesPlaybackSourceReference(
+                  this.#config.encryptionKey,
+                  mediaReferenceId,
+                  sourceReferenceId,
+                  sourceId,
+                ),
+            });
     } catch (error) {
       if (error instanceof JellyfinPlaybackUnavailableError) {
         throw new PlaybackSessionError("unavailable", {
@@ -466,6 +478,9 @@ export class PlaybackSessionService {
         mediaReferenceId,
         positionSeconds: result.positionSeconds,
         sessionId: session.id,
+        ...(request.sourceReferenceId === undefined
+          ? {}
+          : { sourceReferenceId: request.sourceReferenceId }),
         streamPath: `/v1/playback/${session.id}/${result.delivery === "hls" ? "master.m3u8" : "stream"}`,
         subtitleTracks: result.subtitleTracks,
       });

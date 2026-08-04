@@ -125,6 +125,7 @@ const negotiationInputSchema = z
     audioStreamIndex: z.int().nonnegative().max(MAX_STREAM_INDEX).nullable(),
     itemId: identifierSchema,
     maxStreamingBitrate: z.int().min(64_000).max(MAX_PLAYBACK_BITRATE),
+    mediaSourceId: identifierSchema.optional(),
     mode: z.enum(["auto", "direct", "transcode"]),
     positionSeconds: z.int().nonnegative().max(10_000_000),
     subtitleStreamIndex: z.int().nonnegative().max(MAX_STREAM_INDEX).nullable(),
@@ -198,9 +199,14 @@ export interface JellyfinPlaybackNegotiationInput {
   audioStreamIndex: number | null;
   itemId: string;
   maxStreamingBitrate: number;
+  mediaSourceId?: string;
   mode: "auto" | "direct" | "transcode";
   positionSeconds: number;
   subtitleStreamIndex: number | null;
+}
+
+export interface JellyfinPlaybackSourceSelection {
+  matchesSourceId(sourceId: string): boolean;
 }
 
 export interface JellyfinPlaybackTrack {
@@ -416,6 +422,7 @@ export class JellyfinPlaybackClient {
   public async negotiate(
     rawInput: JellyfinPlaybackNegotiationInput,
     signal?: AbortSignal,
+    sourceSelection?: JellyfinPlaybackSourceSelection,
   ): Promise<JellyfinPlaybackResult> {
     const input = negotiationInputSchema.parse(rawInput);
     const body = {
@@ -428,6 +435,7 @@ export class JellyfinPlaybackClient {
       EnableTranscoding: input.mode !== "direct",
       MaxAudioChannels: 2,
       MaxStreamingBitrate: input.maxStreamingBitrate,
+      ...(input.mediaSourceId === undefined ? {} : { MediaSourceId: input.mediaSourceId }),
       StartTimeTicks: ticksFromSeconds(input.positionSeconds),
       SubtitleStreamIndex: input.subtitleStreamIndex,
     };
@@ -450,7 +458,10 @@ export class JellyfinPlaybackClient {
     }
 
     const candidates = (response.MediaSources ?? []).filter(
-      (source) => !requiresUnsupportedHeaders(source),
+      (source) =>
+        !requiresUnsupportedHeaders(source) &&
+        (input.mediaSourceId === undefined || source.Id === input.mediaSourceId) &&
+        (sourceSelection === undefined || sourceSelection.matchesSourceId(source.Id)),
     );
     const direct = candidates.find((source) => source.SupportsDirectPlay === true);
     const directStream = candidates.find((source) => source.SupportsDirectStream === true);

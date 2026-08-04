@@ -77,6 +77,36 @@ const media: TheaterMedia = {
   positionSeconds: 1_200,
   title: "Northern Lights",
 };
+const versionedMedia: TheaterMedia = {
+  ...media,
+  mediaSources: [
+    {
+      audio: [],
+      audioTruncated: false,
+      bitrateKbps: 18_000,
+      container: "MKV",
+      label: "4K · Director's cut",
+      sizeBytes: 16_000_000_000,
+      sourceReferenceId: `source_${"a".repeat(22)}`,
+      subtitles: [],
+      subtitlesTruncated: false,
+      video: null,
+    },
+    {
+      audio: [],
+      audioTruncated: false,
+      bitrateKbps: 8_000,
+      container: "MP4",
+      label: "1080p · Theatrical cut",
+      sizeBytes: 7_000_000_000,
+      sourceReferenceId: `source_${"b".repeat(22)}`,
+      subtitles: [],
+      subtitlesTruncated: false,
+      video: null,
+    },
+  ],
+  sourceReferenceId: `source_${"a".repeat(22)}`,
+};
 const session: PlaybackNegotiationResponse = {
   audioTracks: [],
   delivery: "direct",
@@ -1251,6 +1281,44 @@ describe("TheaterPlayer", () => {
     expect(await screen.findByText(/current stream is unchanged/u)).toBeVisible();
     expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`);
     expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+  });
+
+  it("switches owned versions transactionally while preserving the playback position", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={versionedMedia} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    expect(client.prepare).toHaveBeenNthCalledWith(
+      1,
+      media.id,
+      media.positionSeconds,
+      expect.any(AbortSignal),
+      expect.objectContaining({ sourceReferenceId: `source_${"a".repeat(22)}` }),
+    );
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_333;
+    fireEvent.play(video);
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Movie version" }),
+      `source_${"b".repeat(22)}`,
+    );
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      1_333,
+      expect.any(AbortSignal),
+      expect.objectContaining({ sourceReferenceId: `source_${"b".repeat(22)}` }),
+    );
     expect(client.report).not.toHaveBeenCalledWith(
       sessionId,
       expect.objectContaining({ event: "stopped" }),
