@@ -313,6 +313,34 @@ describe("media detail drawer", () => {
     );
   });
 
+  it("uses a person as the root context and returns there after inspecting a credit", async () => {
+    const user = userEvent.setup();
+    const loadMedia = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => movieResponse);
+    render(
+      <MediaDetailDrawer
+        client={client(loadMedia)}
+        media={null}
+        onOpenChange={vi.fn()}
+        open
+        person={{ name: "Keanu Reeves", tmdbId: 6384 }}
+        personClient={personClient()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /The Matrix.*Neo/iu }));
+    expect(await screen.findByRole("heading", { name: "The Matrix" })).toBeVisible();
+    expect(loadMedia).toHaveBeenCalledWith(
+      { kind: "movie", tmdbId: 603 },
+      { language: expect.any(String) },
+      expect.any(AbortSignal),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Back to Keanu Reeves" }));
+    expect(await screen.findByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Back to Keanu Reeves" })).not.toBeInTheDocument();
+  });
+
   it("keeps explicit degraded intelligence states calm and useful", async () => {
     render(
       <MediaDetailDrawer
