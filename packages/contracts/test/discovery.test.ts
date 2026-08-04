@@ -121,6 +121,10 @@ describe("discovery contracts", () => {
         items: [{ ...response.items[0], kind: "series" }],
       }).success,
     ).toBe(false);
+    expect(discoveryBrowseQuerySchema.safeParse({ kind: "movie", page: 501 }).success).toBe(false);
+    expect(discoveryBrowseResponseSchema.safeParse({ ...response, totalPages: 501 }).success).toBe(
+      false,
+    );
   });
 
   it("exports closed browse schemas for the HTTP boundary", () => {

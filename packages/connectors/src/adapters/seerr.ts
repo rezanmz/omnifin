@@ -5,6 +5,7 @@ import type {
 } from "@omnifin/contracts/connectors";
 import {
   DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE,
+  DISCOVERY_BROWSE_MAX_PAGES,
   DISCOVERY_DETAIL_MAX_CAST,
   DISCOVERY_DETAIL_MAX_CREW,
   DISCOVERY_DETAIL_MAX_RATINGS,
@@ -239,13 +240,13 @@ const upstreamSeriesRecommendationPageSchema = z.object({
 const upstreamMovieFeedPageSchema = z.object({
   page: z.int().min(1).max(500),
   results: z.array(upstreamMovieRecommendationSchema).max(100).default([]),
-  totalPages: z.int().min(0).max(500),
+  totalPages: z.int().min(0).max(10_000_000),
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 const upstreamSeriesFeedPageSchema = z.object({
   page: z.int().min(1).max(500),
   results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
-  totalPages: z.int().min(0).max(500),
+  totalPages: z.int().min(0).max(10_000_000),
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 
@@ -1278,7 +1279,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       return {
         items: locallyFilteredBrowseItems(items, criteria),
         page: response.page,
-        totalPages: response.totalPages,
+        totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
         totalResults: response.totalResults,
       };
     }
@@ -1327,7 +1328,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       return {
         items: locallyFilteredBrowseItems(response.results.map(feedMovie), criteria),
         page: response.page,
-        totalPages: response.totalPages,
+        totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
         totalResults: response.totalResults,
       };
     }
@@ -1339,7 +1340,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     return {
       items: locallyFilteredBrowseItems(response.results.map(feedSeries), criteria),
       page: response.page,
-      totalPages: response.totalPages,
+      totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
       totalResults: response.totalResults,
     };
   }
