@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,19 +22,26 @@ export function evaluateWorkflowRuns(runs, { repository, sha }) {
     .sort((left, right) => (right.id ?? 0) - (left.id ?? 0));
   const latest = matching[0];
   if (!latest || latest.status !== "completed") return { state: "pending" };
+  const run = { completedAt: latest.updated_at ?? null, runId: latest.id ?? null };
   if (latest.conclusion !== "success") {
-    return { state: "failed", conclusion: latest.conclusion ?? "unknown", url: latest.html_url };
+    return {
+      ...run,
+      state: "failed",
+      conclusion: latest.conclusion ?? "unknown",
+      url: latest.html_url,
+    };
   }
-  return { state: "success", url: latest.html_url };
+  return { ...run, state: "success", url: latest.html_url };
 }
 
 function parseArguments(arguments_) {
-  const options = { requireMainTip: false, sha: null, waitSeconds: 0 };
+  const options = { requireMainTip: false, sha: null, triggerRunId: null, waitSeconds: 0 };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (argument === "--help") return { help: true };
     if (argument === "--require-main-tip") options.requireMainTip = true;
     else if (argument === "--sha") options.sha = arguments_[++index];
+    else if (argument === "--trigger-run-id") options.triggerRunId = Number(arguments_[++index]);
     else if (argument === "--wait-seconds") options.waitSeconds = Number(arguments_[++index]);
     else throw new Error(`Unknown argument: ${argument}`);
   }
@@ -46,6 +54,15 @@ function parseArguments(arguments_) {
     options.waitSeconds > 1_800
   ) {
     throw new Error("--wait-seconds must be an integer from 0 through 1800.");
+  }
+  if (
+    options.triggerRunId !== null &&
+    (!Number.isSafeInteger(options.triggerRunId) || options.triggerRunId <= 0)
+  ) {
+    throw new Error("--trigger-run-id must be a positive workflow run ID.");
+  }
+  if (options.triggerRunId !== null && options.waitSeconds !== 0) {
+    throw new Error("--trigger-run-id cannot be combined with a polling wait.");
   }
   return options;
 }
@@ -164,6 +181,54 @@ async function inspectGates(sha, config) {
   return results;
 }
 
+export function evaluateTriggerReadiness(results, sourceRunId) {
+  if (!Number.isSafeInteger(sourceRunId) || sourceRunId <= 0) {
+    throw new Error("The source workflow run ID is invalid.");
+  }
+  const failed = results.find((result) => result.state === "failed");
+  if (failed) {
+    return {
+      ready: false,
+      reason: `${failed.name} concluded ${failed.conclusion} for the exact source SHA.`,
+    };
+  }
+  const pending = results.filter((result) => result.state !== "success");
+  if (pending.length > 0) {
+    return {
+      ready: false,
+      reason: `Waiting for exact-SHA gates: ${pending.map((result) => result.name).join(", ")}.`,
+    };
+  }
+
+  const completed = results.map((result) => {
+    const completedAt = Date.parse(result.completedAt ?? "");
+    if (!Number.isFinite(completedAt) || !Number.isSafeInteger(result.runId) || result.runId <= 0) {
+      throw new Error(`GitHub returned invalid completion metadata for ${result.name}.`);
+    }
+    return { completedAt, name: result.name, runId: result.runId };
+  });
+  const latestCompletion = Math.max(...completed.map((result) => result.completedAt));
+  const owners = completed.filter((result) => result.completedAt === latestCompletion);
+  const ready = owners.some((result) => result.runId === sourceRunId);
+  return {
+    ready,
+    reason: ready
+      ? "This successful workflow completion owns the exact-SHA publication handoff."
+      : `Publication belongs to the later gate completion: ${owners.map((owner) => owner.name).join(", ")}.`,
+  };
+}
+
+export async function verifyMainGateTrigger(options, environment = process.env, dependencies = {}) {
+  const config = configuration(environment);
+  const inspect = dependencies.inspectGates ?? inspectGates;
+  const verifyTip = dependencies.verifyMainTip ?? verifyMainTip;
+  if (options.requireMainTip) await verifyTip(options.sha, config);
+  const results = await inspect(options.sha, config);
+  const readiness = evaluateTriggerReadiness(results, options.triggerRunId);
+  if (readiness.ready && options.requireMainTip) await verifyTip(options.sha, config);
+  return { ...readiness, results };
+}
+
 export async function verifyMainGates(options, environment = process.env, dependencies = {}) {
   const config = configuration(environment);
   const inspect = dependencies.inspectGates ?? inspectGates;
@@ -197,8 +262,16 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(
-      "Usage: node scripts/ci/verify-main-gates.mjs --sha <full-sha> [--require-main-tip] [--wait-seconds <0-1800>]\n",
+      "Usage: node scripts/ci/verify-main-gates.mjs --sha <full-sha> [--require-main-tip] [--wait-seconds <0-1800> | --trigger-run-id <id>]\n",
     );
+    return;
+  }
+  if (options.triggerRunId !== null) {
+    const outcome = await verifyMainGateTrigger(options);
+    const outputPath = process.env.GITHUB_OUTPUT;
+    if (!outputPath) throw new Error("GITHUB_OUTPUT is required for trigger ownership checks.");
+    appendFileSync(outputPath, `ready=${outcome.ready}\n`, "utf8");
+    process.stdout.write(`${outcome.reason}\n`);
     return;
   }
   const results = await verifyMainGates(options);
