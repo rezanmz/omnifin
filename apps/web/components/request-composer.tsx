@@ -130,6 +130,11 @@ const ERROR_COPY: Record<MediaRequestClientError["kind"], { detail: string; titl
     detail: "The selected destination changed or expired. Fresh routing choices are being loaded.",
     title: "Review the request route",
   },
+  routing_unavailable: {
+    detail:
+      "No healthy default destination matches this format. Choose an available route or ask an operator to configure one.",
+    title: "No route for this request",
+  },
   signed_out: {
     detail: "Your session ended before the request could be confirmed.",
     title: "Session ended",
@@ -253,7 +258,7 @@ export function RequestComposer({
   }, [client, eligibilityAttempt, media, open]);
 
   useEffect(() => {
-    if (!open || !media || eligibility.status !== "ready" || !routingOpen) return;
+    if (!open || !media || eligibility.status !== "ready") return;
     const controller = new AbortController();
     void client
       .loadRoutingOptions(media.kind, is4k, controller.signal)
@@ -326,7 +331,14 @@ export function RequestComposer({
   }
 
   async function submit() {
-    if (!media || eligibility.status !== "ready" || submission.kind === "submitting") return;
+    if (
+      !media ||
+      eligibility.status !== "ready" ||
+      submission.kind === "submitting" ||
+      routingState.kind !== "ready"
+    ) {
+      return;
+    }
     const input: MediaRequestInput =
       media.kind === "movie"
         ? {
@@ -400,10 +412,21 @@ export function RequestComposer({
   const selectedQuality = selectedDestination?.qualityProfiles.find(
     (profile) => profile.id === routingSelection?.qualityProfile,
   );
+  const automaticDestination = currentRoutingOptions?.destinations.find(
+    (destination) => destination.isDefault,
+  );
+  const automaticQuality = automaticDestination?.qualityProfiles.find(
+    (profile) => profile.isDefault,
+  );
   const routingSummary =
     routingEnabled && selectedDestination && selectedQuality
       ? `${selectedDestination.label} · ${selectedQuality.label}`
-      : "Automatic · Seerr defaults";
+      : automaticDestination && automaticQuality
+        ? `Automatic · ${automaticDestination.label} · ${automaticQuality.label}`
+        : "Automatic route unavailable";
+  const routeUnavailable = routingEnabled
+    ? !selectedDestination || !selectedQuality
+    : !automaticDestination || !automaticQuality;
 
   return (
     <dialog
@@ -497,11 +520,13 @@ export function RequestComposer({
                 <Check aria-hidden="true" />
               </span>
               <span>Request {submission.creation.request.status}</span>
-              <h3>The signal is in motion</h3>
+              <h3>Request received</h3>
               <p>
                 {submission.creation.replayed
                   ? "The earlier successful outcome was safely recovered without creating a duplicate."
-                  : "Seerr accepted the request using your paired Jellyfin identity."}
+                  : submission.creation.request.status === "pending"
+                    ? "Seerr received the request using your paired Jellyfin identity and is waiting for approval."
+                    : "Seerr accepted the request and recorded its verified acquisition route."}
               </p>
               <dl>
                 <div>
@@ -671,7 +696,9 @@ export function RequestComposer({
                       <CircleAlert aria-hidden="true" />
                       <span>
                         <strong>Routing controls are unavailable</strong>
-                        <small>You can continue safely with Seerr’s configured defaults.</small>
+                        <small>
+                          Submission is paused until the available routes can be verified.
+                        </small>
                       </span>
                       <button
                         onClick={() => {
@@ -691,7 +718,9 @@ export function RequestComposer({
                       <CircleAlert aria-hidden="true" />
                       <span>
                         <strong>No matching destinations</strong>
-                        <small>Seerr defaults remain available for this format.</small>
+                        <small>
+                          An operator must configure a healthy destination for this format.
+                        </small>
                       </span>
                     </div>
                   ) : selectedDestination ? (
@@ -839,7 +868,10 @@ export function RequestComposer({
                 <button
                   className="request-composer__primary"
                   disabled={
-                    specificSeasonsMissing || routingIsLoading || submission.kind === "submitting"
+                    specificSeasonsMissing ||
+                    routingState.kind !== "ready" ||
+                    routeUnavailable ||
+                    submission.kind === "submitting"
                   }
                   type="submit"
                 >
