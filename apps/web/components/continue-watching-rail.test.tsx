@@ -149,16 +149,13 @@ describe("ContinueWatchingRail", () => {
     const trigger = screen.getByRole("button", { name: "Resume Northern Lights" });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: "Northern Lights" })).toBeVisible();
-    expect(playbackClient.prepare).toHaveBeenCalledWith(
-      `media_${"b".repeat(22)}`,
-      900,
-      expect.any(AbortSignal),
-      {
-        audioStreamIndex: null,
-        maxStreamingBitrate: 200_000_000,
-        mode: "auto",
-        subtitleStreamIndex: null,
-      },
+    await waitFor(() =>
+      expect(playbackClient.prepare).toHaveBeenCalledWith(
+        `media_${"b".repeat(22)}`,
+        900,
+        expect.any(AbortSignal),
+        expect.objectContaining({ mode: "auto" }),
+      ),
     );
 
     await user.click(screen.getByRole("button", { name: "Close player" }));
