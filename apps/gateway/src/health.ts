@@ -16,6 +16,8 @@ const REQUIRED_TABLES = [
   "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
+  "library_removal_operations",
+  "library_removal_previews",
   "media_issue_operations",
   "media_issues",
   "media_references",
@@ -53,6 +55,11 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, user_id, idempotency_key_hash, fingerprint_hash, state, request_json, results_json, response_json, completed_at from download_queue_bulk_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, session_id, service_identity_link_id, link_revision, media_reference_id, preview_id, mode, idempotency_key_hash, fingerprint_hash, state, response_json, encrypted_payload, failure_code, started_at, completed_at from library_removal_operations limit 0",
       )
       .all();
     database.sqlite

@@ -27,6 +27,7 @@ const requiredTables = [
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
+  "library_removal_operations",
   "library_removal_previews",
   "media_issues",
   "media_issue_operations",
@@ -157,6 +158,23 @@ const requiredColumns = {
     "idempotency_key_hash",
     "reference_id",
     "response_json",
+    "state",
+    "user_id",
+  ],
+  library_removal_operations: [
+    "completed_at",
+    "encrypted_payload",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "link_revision",
+    "media_reference_id",
+    "mode",
+    "preview_id",
+    "response_json",
+    "service_identity_link_id",
+    "session_id",
+    "started_at",
     "state",
     "user_id",
   ],
@@ -366,6 +384,12 @@ const requiredIndexes = {
     "library_mutation_operations_state_created_idx",
     "library_mutation_operations_user_key_unique",
   ],
+  library_removal_operations: [
+    "library_removal_operations_preview_unique",
+    "library_removal_operations_reference_idx",
+    "library_removal_operations_state_created_idx",
+    "library_removal_operations_user_key_unique",
+  ],
   library_removal_previews: [
     "library_removal_previews_expiry_idx",
     "library_removal_previews_user_created_idx",
@@ -568,8 +592,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0025_library_removal_previews",
-  "Current migration journal must end at migration 0025_library_removal_previews.",
+    currentMigrationTag === "0026_library_removal_operations",
+  "Current migration journal must end at migration 0026_library_removal_operations.",
 );
 
 try {
@@ -767,6 +791,37 @@ try {
       .map(({ from, to }) => `${from}:${to}`);
     if (removalLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
       throw new Error("Migration is missing the user-bound removal-preview link foreign key.");
+    }
+
+    const removalOperationForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(library_removal_operations)",
+    ) as { from: string; id: number; seq: number; table: string; to: string }[];
+    for (const [column, table] of [
+      ["user_id", "users"],
+      ["media_reference_id", "media_references"],
+    ] as const) {
+      if (
+        !removalOperationForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the removal-operation ${column} foreign key.`);
+      }
+    }
+    const removalOperationLinkForeignKeyId = removalOperationForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const removalOperationLinkForeignKeyColumns = removalOperationForeignKeys
+      .filter(({ id }) => id === removalOperationLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (
+      removalOperationLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error("Migration is missing the user-bound removal-operation link foreign key.");
     }
 
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
@@ -1030,7 +1085,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0025.",
+      "Production migration did not advance the historical fixture exactly through migration 0026.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1195,7 +1250,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0025, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0026, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

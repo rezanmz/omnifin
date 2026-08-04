@@ -183,6 +183,13 @@
       "when": 1785845763123,
       "tag": "0025_library_removal_previews",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1785820384596,
+      "tag": "0026_library_removal_operations",
+      "breakpoints": true
     }
   ]
 }
