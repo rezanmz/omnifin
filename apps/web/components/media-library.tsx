@@ -451,11 +451,13 @@ function MediaLibraryContent({
     : locallyFilteredItems(loadedItems, kind, submittedQuery, sort);
   const accent = items[0] ? itemAccent(items[0]) : "#6f8d84";
   const filtersActive = kind !== "all" || Boolean(submittedQuery);
-  const totalResults = refreshAvailable ? (latestPage.totalResults ?? items.length) : items.length;
+  const totalResults = refreshAvailable ? latestPage.totalResults : items.length;
   const resultCopy =
-    items.length < totalResults
-      ? `${items.length} of ${totalResults} titles loaded`
-      : `${totalResults} ${totalResults === 1 ? "title" : "titles"}`;
+    totalResults === null
+      ? `${items.length} ${items.length === 1 ? "title" : "titles"} loaded`
+      : items.length < totalResults
+        ? `${items.length} of ${totalResults} titles loaded`
+        : `${totalResults} ${totalResults === 1 ? "title" : "titles"}`;
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -507,7 +509,7 @@ function MediaLibraryContent({
         <dl className={styles.heroMetrics} data-liquid-glass>
           <div>
             <dt>Total</dt>
-            <dd>{totalResults}</dd>
+            <dd>{totalResults ?? "—"}</dd>
           </div>
           <div>
             <dt>Loaded</dt>

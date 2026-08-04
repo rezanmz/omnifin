@@ -777,10 +777,10 @@ export const libraryBrowseResponseSchema = z
         path: ["items"],
       });
     }
-    if (healthy !== (response.totalResults !== null)) {
+    if (!healthy && response.totalResults !== null) {
       context.addIssue({
         code: "custom",
-        message: "Only a healthy library source can report an exact result total.",
+        message: "Unavailable library sources cannot report an exact result total.",
         path: ["totalResults"],
       });
     }

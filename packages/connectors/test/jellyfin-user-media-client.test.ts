@@ -498,6 +498,32 @@ describe("JellyfinUserMediaClient", () => {
     expect(requests[0]?.url.searchParams.has("MediaTypes")).toBe(false);
   });
 
+  it("keeps older Jellyfin catalogues usable when an exact total is omitted", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        Items: [movie, series, { ...movie, Id: "overflow-item" }],
+      }),
+    ]);
+
+    await expect(
+      client.readLibrary({
+        kind: "all",
+        limit: 2,
+        sort: "title",
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({ externalId: "movie-upstream-1" }),
+        expect.objectContaining({ externalId: "series-upstream-1" }),
+      ],
+      nextStartIndex: 2,
+      totalResults: null,
+      truncated: true,
+    });
+  });
+
   it("uses exact library type and sorting allowlists and fails closed on version drift", async () => {
     const movieClient = clientWithResponses([
       jsonResponse({
@@ -561,7 +587,6 @@ describe("JellyfinUserMediaClient", () => {
   });
 
   it.each([
-    { response: { Items: [movie] }, title: "a missing total" },
     { response: { Items: [movie], TotalRecordCount: 0 }, title: "a total below the returned page" },
     { response: { Items: [], TotalRecordCount: -1 }, title: "a negative total" },
     { response: { Items: [], TotalRecordCount: 1.5 }, title: "a fractional total" },

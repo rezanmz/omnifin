@@ -186,6 +186,20 @@ describe("MediaLibrary", () => {
     );
   });
 
+  it("keeps browsing compatible sources that cannot report an exact total", async () => {
+    const feed: LibraryBrowseResponse = {
+      ...readyMediaLibraryOutcome.feed,
+      items: [mediaLibraryDemoItems[0]!],
+      nextCursor: "cursor_abcdefghijklmnop",
+      totalResults: null,
+    };
+    render(libraryScreen(<MediaLibrary client={{ load: vi.fn(async () => feed) }} />));
+
+    expect(await screen.findByRole("heading", { name: "1 title loaded" })).toBeVisible();
+    expect(within(screen.getByText("Total").closest("div")!).getByText("—")).toBeVisible();
+    expect(within(screen.getByText("Loaded").closest("div")!).getByText("1")).toBeVisible();
+  });
+
   it("opens title details first, then starts private playback only from an explicit action", async () => {
     const user = userEvent.setup();
     const playbackClient = {

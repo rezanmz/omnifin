@@ -198,7 +198,7 @@ const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
-  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS),
+  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullish(),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -506,7 +506,7 @@ export interface JellyfinLibraryItem {
 export interface JellyfinLibraryResult {
   items: JellyfinLibraryItem[];
   nextStartIndex: number | null;
-  totalResults: number;
+  totalResults: number | null;
   truncated: boolean;
 }
 
@@ -1531,12 +1531,19 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    if (response.TotalRecordCount < input.startIndex + response.Items.length) {
+    const totalResults = response.TotalRecordCount ?? null;
+    if (totalResults !== null && totalResults < input.startIndex + response.Items.length) {
       throw this.#client.invalidResponse("media.library");
     }
     const consumed = Math.min(response.Items.length, input.limit);
     const nextStartIndex =
-      input.startIndex + consumed < response.TotalRecordCount ? input.startIndex + consumed : null;
+      totalResults === null
+        ? response.Items.length > input.limit
+          ? input.startIndex + consumed
+          : null
+        : input.startIndex + consumed < totalResults
+          ? input.startIndex + consumed
+          : null;
     if (nextStartIndex !== null && consumed === 0) {
       throw this.#client.invalidResponse("media.library");
     }
@@ -1545,7 +1552,7 @@ export class JellyfinUserMediaClient {
         .map(normalizeLibraryItem)
         .filter((item): item is JellyfinLibraryItem => item !== null),
       nextStartIndex,
-      totalResults: response.TotalRecordCount,
+      totalResults,
       truncated: nextStartIndex !== null,
     };
   }

@@ -200,6 +200,30 @@ describe("library operation contracts", () => {
     expect(
       libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 10_000_001 }).success,
     ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: null }).success,
+    ).toBe(true);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: "Jellyfin",
+          failure: {
+            code: "unreachable",
+            message: "Jellyfin is temporarily unavailable.",
+            occurredAt: "2026-07-28T05:30:00.000Z",
+            operation: "media.library",
+            retryable: true,
+            service: "jellyfin",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+        totalResults: 46,
+      }).success,
+    ).toBe(false);
   });
 
   it("models explicit, user-scoped playback-state commands", () => {
