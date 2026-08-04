@@ -21,19 +21,25 @@ const radarrLibraryMovieSchema = z.object({
   imdbId: z.string().max(64).nullish(),
   monitored: z.boolean(),
   movieFile: z
-    .object({ size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish() })
+    .object({
+      id: z.int().positive().max(2_147_483_647),
+      size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+    })
     .nullish(),
+  movieFileId: z.int().nonnegative().max(2_147_483_647).nullish(),
   tmdbId: z.int().positive().max(Number.MAX_SAFE_INTEGER).nullish(),
 });
 
 const radarrLibraryMovieResponseSchema = z.array(radarrLibraryMovieSchema).max(10);
 
-export interface RadarrLibraryMovieOwnership {
-  hasFile: boolean;
+interface RadarrLibraryMovieOwnershipBase {
   mediaId: number;
   monitored: boolean;
   sizeBytes: number | null;
 }
+
+export type RadarrLibraryMovieOwnership = RadarrLibraryMovieOwnershipBase &
+  ({ fileId: number; hasFile: true } | { fileId: null; hasFile: false });
 
 export class RadarrAdapter extends ServarrAcquisitionAdapter {
   readonly service = "radarr" as const;
@@ -70,11 +76,50 @@ export class RadarrAdapter extends ServarrAcquisitionAdapter {
     if (matches.length === 0) return null;
     if (matches.length !== 1) throw this.client.invalidResponse("library.removal.preview");
     const match = matches[0]!;
-    return {
-      hasFile: match.hasFile,
+    const nestedFileId = match.movieFile?.id ?? null;
+    const compatibilityFileId =
+      match.movieFileId && match.movieFileId > 0 ? match.movieFileId : null;
+    if (
+      nestedFileId !== null &&
+      compatibilityFileId !== null &&
+      nestedFileId !== compatibilityFileId
+    ) {
+      throw this.client.invalidResponse("library.removal.preview");
+    }
+    const fileId = nestedFileId ?? compatibilityFileId;
+    const common = {
       mediaId: match.id,
       monitored: match.monitored,
       sizeBytes: match.movieFile?.size ?? null,
     };
+    if (match.hasFile) {
+      if (fileId === null) throw this.client.invalidResponse("library.removal.preview");
+      return { ...common, fileId, hasFile: true };
+    }
+    if (fileId !== null) throw this.client.invalidResponse("library.removal.preview");
+    return { ...common, fileId: null, hasFile: false };
+  }
+
+  async deleteLibraryMovieFile(rawFileId: number, signal?: AbortSignal): Promise<void> {
+    const fileId = z.int().positive().max(2_147_483_647).parse(rawFileId);
+    await this.client.requestText(`${this.apiRoot}/moviefile/${fileId}`, {
+      acceptedStatuses: [200, 204],
+      headers: { "X-Api-Key": this.apiKey },
+      method: "DELETE",
+      operation: "library.removal.file_delete",
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async deleteLibraryMovie(rawMediaId: number, signal?: AbortSignal): Promise<void> {
+    const mediaId = z.int().positive().max(2_147_483_647).parse(rawMediaId);
+    await this.client.requestText(`${this.apiRoot}/movie/${mediaId}`, {
+      acceptedStatuses: [200, 204],
+      headers: { "X-Api-Key": this.apiKey },
+      method: "DELETE",
+      operation: "library.removal.manager_delete",
+      query: { addImportExclusion: "false", deleteFiles: "true" },
+      ...(signal ? { signal } : {}),
+    });
   }
 }
