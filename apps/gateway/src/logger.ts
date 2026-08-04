@@ -284,7 +284,10 @@ function sanitizeLogRecord(record: Record<string, unknown>) {
 function pathnameOnly(rawUrl: string | undefined) {
   if (!rawUrl) return undefined;
   try {
-    return new URL(rawUrl, "http://gateway.invalid").pathname;
+    return new URL(rawUrl, "http://gateway.invalid").pathname.replace(
+      /\/media_download_[A-Za-z0-9_-]{22}(?=\/|$)/gu,
+      `/${REDACTED}`,
+    );
   } catch {
     return "[INVALID_URL]";
   }

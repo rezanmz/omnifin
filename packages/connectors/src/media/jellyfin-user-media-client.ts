@@ -181,6 +181,10 @@ const jellyfinLibraryItemSchema = z.object({
     .catch(null),
 });
 
+const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
+  Type: z.enum(["Episode", "Movie"]),
+});
+
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
 });
@@ -1450,7 +1454,7 @@ export class JellyfinUserMediaClient {
     const input = jellyfinLibraryTitleQuerySchema.parse(rawInput);
     const response = await this.#client.requestJson(
       `Items/${input.itemId}`,
-      jellyfinLibraryItemSchema,
+      jellyfinOriginalDownloadItemSchema,
       {
         headers: { authorization: this.#authorization },
         operation: "media.original_download.metadata",
@@ -1458,21 +1462,30 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    const item = normalizeLibraryItem(response);
-    if (!item || item.externalId !== input.itemId || item.kind !== "movie") {
+    if (!response.Name || response.Id !== input.itemId) {
       throw this.#client.invalidResponse("media.original_download.metadata");
     }
     const source = response.MediaSources?.[0];
+    const episodeTitle =
+      response.Type === "Episode"
+        ? [response.SeriesName, episodeLabel(response)].filter(Boolean).join(" - ")
+        : response.Name;
     return {
       canDownload: response.CanDownload === true,
       container:
         compactText(response.Container ?? source?.Container, 64)?.toLocaleLowerCase("en-US") ??
         null,
       etag: response.Etag ?? null,
-      externalId: item.externalId,
+      externalId: response.Id,
       sizeBytes: source?.Size ?? null,
-      title: item.title,
-      year: item.year,
+      title: episodeTitle.slice(0, 600),
+      year:
+        response.ProductionYear !== null &&
+        response.ProductionYear !== undefined &&
+        response.ProductionYear >= 1870 &&
+        response.ProductionYear <= 2200
+          ? response.ProductionYear
+          : null,
     };
   }
 

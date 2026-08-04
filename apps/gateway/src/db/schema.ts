@@ -1403,6 +1403,93 @@ export const sessions = sqliteTable(
   ],
 );
 
+export const mediaDownloadGrants = sqliteTable(
+  "media_download_grants",
+  {
+    id: text("id").primaryKey(),
+    publicTokenHash: text("public_token_hash").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    referenceId: text("reference_id")
+      .notNull()
+      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    state: text("state", {
+      enum: ["prepared", "streaming", "completed", "cancelled", "failed"],
+    })
+      .notNull()
+      .default("prepared"),
+    bytesTransferred: integer("bytes_transferred").notNull().default(0),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("media_download_grants_public_token_unique").on(table.publicTokenHash),
+    index("media_download_grants_user_expiry_idx").on(table.userId, table.expiresAt),
+    index("media_download_grants_session_idx").on(table.sessionId),
+    index("media_download_grants_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "media_download_grants_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "media_download_grants_id_check",
+      sql`length(${table.id}) = 37
+        and substr(${table.id}, 1, 15) = 'download_grant_'
+        and substr(${table.id}, 16) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_download_grants_public_token_hash_check",
+      sql`length(${table.publicTokenHash}) = 43
+        and ${table.publicTokenHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "media_download_grants_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "media_download_grants_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 32768`,
+    ),
+    check("media_download_grants_filename_check", sql`length(${table.filename}) between 1 and 240`),
+    check(
+      "media_download_grants_content_type_check",
+      sql`length(${table.contentType}) between 3 and 128`,
+    ),
+    check(
+      "media_download_grants_size_check",
+      sql`${table.sizeBytes} between 1 and 140737488355328
+        and ${table.bytesTransferred} between 0 and ${table.sizeBytes}`,
+    ),
+    check(
+      "media_download_grants_state_check",
+      sql`${table.state} in ('prepared', 'streaming', 'completed', 'cancelled', 'failed')`,
+    ),
+    check(
+      "media_download_grants_timestamp_order_check",
+      sql`${table.createdAt} < ${table.expiresAt}
+        and ${table.updatedAt} >= ${table.createdAt}
+        and (${table.startedAt} is null or ${table.startedAt} between ${table.createdAt} and ${table.updatedAt})
+        and (${table.completedAt} is null or (
+          ${table.startedAt} is not null
+          and ${table.completedAt} between ${table.startedAt} and ${table.updatedAt}
+        ))`,
+    ),
+  ],
+);
+
 export const sessionSecretReservations = sqliteTable(
   "session_secret_reservations",
   {

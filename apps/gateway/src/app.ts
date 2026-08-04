@@ -88,6 +88,10 @@ import {
 import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./media/playback-limits.js";
 import { playbackRoutes, type PlaybackRoutesOptions } from "./media/playback-routes.js";
 import {
+  originalDownloadRoutes,
+  type OriginalDownloadRoutesOptions,
+} from "./media/original-download-routes.js";
+import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
 } from "./requests/media-request-routes.js";
@@ -145,6 +149,7 @@ export interface CreateAppOptions {
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
   downloadQueueEventDependencies?: DownloadQueueRoutesOptions["eventDependencies"];
   continueWatchingDependencies?: ContinueWatchingRoutesOptions["dependencies"];
+  originalDownloadDependencies?: OriginalDownloadRoutesOptions["dependencies"];
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
   issueWorkbenchDependencies?: IssueWorkbenchRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
@@ -475,6 +480,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.continueWatchingDependencies === undefined
         ? {}
         : { dependencies: options.continueWatchingDependencies }),
+    });
+    await app.register(originalDownloadRoutes, {
+      ...(options.originalDownloadDependencies === undefined
+        ? {}
+        : { dependencies: options.originalDownloadDependencies }),
     });
     await app.register(playbackRoutes, {
       ...(options.playbackDependencies === undefined

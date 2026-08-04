@@ -820,6 +820,40 @@ describe("JellyfinUserMediaClient", () => {
     expect(unsatisfied.requests).toHaveLength(1);
   });
 
+  it("permits original episode files while preserving useful series coordinates", async () => {
+    const episodeDownload = clientWithResponses([
+      jsonResponse({
+        CanDownload: true,
+        Container: "mkv",
+        Etag: "private-episode-version",
+        Id: "episode-upstream-1",
+        IndexNumber: 3,
+        MediaSources: [{ Container: "mkv", Size: 1_250_000_000 }],
+        Name: "The Long Meridian",
+        ParentIndexNumber: 2,
+        ProductionYear: 2026,
+        SeriesName: "Northern Lights",
+        Type: "Episode",
+      }),
+    ]);
+
+    await expect(
+      episodeDownload.client.readOriginalDownloadMetadata({
+        itemId: "episode-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({
+      canDownload: true,
+      container: "mkv",
+      etag: "private-episode-version",
+      externalId: "episode-upstream-1",
+      sizeBytes: 1_250_000_000,
+      title: "Northern Lights - S02E03 · The Long Meridian",
+      year: 2026,
+    });
+    expect(JSON.stringify(episodeDownload.requests)).not.toContain("private-episode-version");
+  });
+
   it("reads normalized series seasons and paged episodes without leaking scope", async () => {
     const episode = {
       CommunityRating: 8.4,
