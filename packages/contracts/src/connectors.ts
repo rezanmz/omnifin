@@ -170,6 +170,31 @@ const connectorBaseUrlSchema = z
     }
   });
 
+export const connectorPublicUiUrlSchema = z
+  .url()
+  .max(2_048)
+  .superRefine((value, context) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return;
+    }
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Browser URLs must be HTTP(S) origins or base paths without credentials, query strings, or fragments.",
+      });
+    }
+  });
+
 const connectorSecretSchema = z.string().min(1).max(4_096);
 const connectorTlsCaCertificatePemSchema = z
   .string()
@@ -271,6 +296,7 @@ export const connectorCreateRequestSchema = z
     service: managedConnectorServiceSchema,
     displayName: z.string().trim().min(1).max(160),
     baseUrl: connectorBaseUrlSchema,
+    publicUiUrl: connectorPublicUiUrlSchema.nullable().optional(),
     credentials: connectorCredentialInputSchema,
     tlsPolicy: connectorTlsPolicySchema.default("strict"),
     tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
@@ -288,6 +314,7 @@ export const connectorUpdateRequestSchema = z
       .regex(/^[A-Za-z0-9_-]+$/u),
     displayName: z.string().trim().min(1).max(160).optional(),
     baseUrl: connectorBaseUrlSchema.optional(),
+    publicUiUrl: connectorPublicUiUrlSchema.nullable().optional(),
     credentials: connectorCredentialInputSchema.optional(),
     tlsPolicy: connectorTlsPolicySchema.optional(),
     tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
@@ -298,6 +325,7 @@ export const connectorUpdateRequestSchema = z
     (value) =>
       value.displayName !== undefined ||
       value.baseUrl !== undefined ||
+      value.publicUiUrl !== undefined ||
       value.credentials !== undefined ||
       value.tlsPolicy !== undefined ||
       value.tlsCaCertificatePem !== undefined ||
@@ -312,6 +340,7 @@ export const connectorAdminSchema = z.strictObject({
   service: managedConnectorServiceSchema,
   displayName: z.string().trim().min(1).max(160),
   baseUrl: connectorBaseUrlSchema,
+  publicUiUrl: connectorPublicUiUrlSchema.nullable(),
   credentialKind: connectorCredentialKindSchema,
   credentialsConfigured: z.boolean(),
   tlsPolicy: connectorTlsPolicySchema,

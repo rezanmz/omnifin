@@ -291,6 +291,7 @@ export const connectorConfigs = sqliteTable(
     }).notNull(),
     displayName: text("display_name").notNull(),
     baseUrl: text("base_url").notNull(),
+    publicUiUrl: text("public_ui_url"),
     encryptedCredentials: text("encrypted_credentials").notNull(),
     tlsPolicy: text("tls_policy", { enum: ["strict", "allow_self_signed"] })
       .notNull()

@@ -161,6 +161,26 @@ describe("connector contracts", () => {
     expect(
       connectorCreateRequestSchema.safeParse({
         ...base,
+        publicUiUrl: "https://radarr.example.test/ui/",
+      }).success,
+    ).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        publicUiUrl: "http://radarr.lan/",
+      }).success,
+    ).toBe(true);
+    for (const publicUiUrl of [
+      "javascript:alert(1)",
+      "https://operator:private@radarr.example.test/",
+      "https://radarr.example.test/?apiKey=private",
+      "https://radarr.example.test/#unexpected",
+    ]) {
+      expect(connectorCreateRequestSchema.safeParse({ ...base, publicUiUrl }).success).toBe(false);
+    }
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
         baseUrl: "",
       }).success,
     ).toBe(false);
@@ -222,6 +242,7 @@ describe("connector contracts", () => {
       service: "radarr",
       displayName: "Radarr",
       baseUrl: "https://radarr.example.test/",
+      publicUiUrl: null,
       credentialKind: "api_key",
       credentialsConfigured: true,
       tlsPolicy: "strict",

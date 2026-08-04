@@ -59,6 +59,7 @@ const jellyfin: ConnectorAdmin = {
     status: "healthy",
     version: "10.10.7",
   },
+  publicUiUrl: null,
   revision: "revision_0123456789abcdef",
   service: "jellyfin",
   tlsCaCertificateConfigured: false,
