@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema } from "./dashboard.js";
+import { idempotencyKeySchema } from "./requests.js";
 
 export const SAVED_CUSTOM_LIST_MAX_COUNT = 50;
 export const SAVED_LIST_MAX_ITEMS = 500;
@@ -27,6 +28,8 @@ export const savedListCursorSchema = z
   .max(1_024)
   .regex(/^[A-Za-z0-9_.-]+$/u);
 export const savedListRevisionSchema = z.int().nonnegative().max(2_147_483_647);
+export const savedListIdempotencyKeySchema = idempotencyKeySchema;
+export type SavedListIdempotencyKey = z.infer<typeof savedListIdempotencyKeySchema>;
 
 export const savedListKindSchema = z.enum(["watch_later", "custom"]);
 export type SavedListKind = z.infer<typeof savedListKindSchema>;
