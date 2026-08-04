@@ -715,6 +715,111 @@ describe("JellyfinUserMediaClient", () => {
     });
   });
 
+  it("revalidates and range-streams downloadable originals without exposing source paths", async () => {
+    const original = new Uint8Array([2, 3, 4, 5]);
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CanDownload: true,
+        Container: "mkv",
+        Etag: "private-source-version",
+        MediaSources: [{ Container: "mkv", Size: 50_000_000_000 }],
+        Path: "/private/library/The Far Meridian.mkv",
+      }),
+      new Response(original, {
+        headers: {
+          "accept-ranges": "bytes",
+          "content-length": String(original.byteLength),
+          "content-range": "bytes 2-5/50000000000",
+          "content-type": "video/x-matroska",
+        },
+        status: 206,
+      }),
+    ]);
+
+    const metadata = await client.readOriginalDownloadMetadata({
+      itemId: "movie-upstream-1",
+      userId: "paired-user-id",
+    });
+    expect(metadata).toEqual({
+      canDownload: true,
+      container: "mkv",
+      etag: "private-source-version",
+      externalId: "movie-upstream-1",
+      sizeBytes: 50_000_000_000,
+      title: "The Far Meridian",
+      year: 2026,
+    });
+    expect(JSON.stringify(metadata)).not.toMatch(/private\/library|\.mkv/iu);
+
+    const transfer = await client.streamOriginalDownload({
+      itemId: "movie-upstream-1",
+      maxResponseBytes: 50_000_000_000,
+      range: "bytes=2-5",
+    });
+    await expect(new Response(transfer.body).arrayBuffer()).resolves.toEqual(original.buffer);
+    expect(transfer).toMatchObject({
+      acceptRanges: true,
+      contentLength: 4,
+      contentRange: "bytes 2-5/50000000000",
+      contentType: "video/x-matroska",
+      status: 206,
+    });
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/Items/movie-upstream-1",
+      "/base/Items/movie-upstream-1/Download",
+    ]);
+    expect(requests[0]?.url.searchParams.get("UserId")).toBe("paired-user-id");
+    expect(requests[1]?.init.headers.get("range")).toBe("bytes=2-5");
+    expect(requests[1]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("keeps download denial and unsatisfied ranges explicit", async () => {
+    const denied = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CanDownload: false,
+        Container: "mp4",
+        Etag: "private-denied-version",
+        MediaSources: [{ Container: "mp4", Size: 9_000 }],
+      }),
+    ]);
+    await expect(
+      denied.client.readOriginalDownloadMetadata({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({ canDownload: false });
+
+    const unsatisfied = clientWithResponses([
+      new Response(null, {
+        headers: { "content-range": "bytes */9000" },
+        status: 416,
+      }),
+    ]);
+    await expect(
+      unsatisfied.client.streamOriginalDownload({
+        itemId: "movie-upstream-1",
+        maxResponseBytes: 9_000,
+        range: "bytes=9000-",
+      }),
+    ).resolves.toMatchObject({
+      contentLength: null,
+      contentRange: "bytes */9000",
+      status: 416,
+    });
+    await expect(
+      unsatisfied.client.streamOriginalDownload({
+        itemId: "movie-upstream-1",
+        maxResponseBytes: 9_000,
+        range: "bytes=4-2",
+      }),
+    ).rejects.toBeDefined();
+    expect(unsatisfied.requests).toHaveLength(1);
+  });
+
   it("reads normalized series seasons and paged episodes without leaking scope", async () => {
     const episode = {
       CommunityRating: 8.4,

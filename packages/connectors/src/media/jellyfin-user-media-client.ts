@@ -93,8 +93,17 @@ const jellyfinViewingHistoryResponseSchema = z.object({
 
 const jellyfinLibraryItemSchema = z.object({
   BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  CanDownload: z.boolean().nullish(),
   CommunityRating: z.number().finite().nullish().catch(null),
+  Container: z.string().trim().min(1).max(64).nullish(),
   CriticRating: z.number().finite().nullish().catch(null),
+  Etag: z
+    .string()
+    .trim()
+    .min(1)
+    .max(512)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
+    .nullish(),
   Genres: z.array(z.string().max(100)).max(128).nullish().catch(null),
   Id: z.string().trim().min(1).max(256),
   ImageBlurHashes: z.unknown().optional(),
@@ -299,6 +308,37 @@ const jellyfinLibraryTitleQuerySchema = z.strictObject({
     .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
 });
 
+export const JELLYFIN_ORIGINAL_DOWNLOAD_MAX_BYTES = 128 * 1_024 * 1_024 * 1_024 * 1_024;
+
+const jellyfinOriginalDownloadInputSchema = z
+  .strictObject({
+    itemId: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+    maxResponseBytes: z.int().positive().max(JELLYFIN_ORIGINAL_DOWNLOAD_MAX_BYTES),
+    range: z
+      .string()
+      .regex(/^bytes=\d*-\d*$/u)
+      .optional(),
+  })
+  .superRefine((input, context) => {
+    if (!input.range) return;
+    const match = /^bytes=(\d*)-(\d*)$/u.exec(input.range);
+    const startText = match?.[1] ?? "";
+    const endText = match?.[2] ?? "";
+    const start = startText ? Number(startText) : null;
+    const end = endText ? Number(endText) : null;
+    if (
+      (start === null && end === null) ||
+      (start !== null && !Number.isSafeInteger(start)) ||
+      (end !== null && !Number.isSafeInteger(end)) ||
+      (start !== null && end !== null && start > end)
+    ) {
+      context.addIssue({ code: "custom", message: "The byte range is invalid.", path: ["range"] });
+    }
+  });
+
 const jellyfinLibrarySeasonEpisodesQuerySchema = z.strictObject({
   limit: z.int().positive().max(JELLYFIN_LIBRARY_EPISODE_LIMIT),
   seasonNumber: z.int().nonnegative().max(100_000),
@@ -432,6 +472,25 @@ export interface JellyfinLibraryTitleResult {
   movie: JellyfinLibraryMovieDetail | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
+}
+
+export interface JellyfinOriginalDownloadMetadata {
+  canDownload: boolean;
+  container: string | null;
+  etag: string | null;
+  externalId: string;
+  sizeBytes: number | null;
+  title: string;
+  year: number | null;
+}
+
+export interface JellyfinOriginalDownloadStream {
+  acceptRanges: boolean;
+  body: ReadableStream<Uint8Array>;
+  contentLength: number | null;
+  contentRange: string | null;
+  contentType: string | null;
+  status: 200 | 206 | 416;
 }
 
 export interface JellyfinLibraryMovieCredit extends LibraryMovieCredit {
@@ -1381,6 +1440,90 @@ export class JellyfinUserMediaClient {
         normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
       ),
       seasonsTruncated: seasonsResponse.Items.length > JELLYFIN_LIBRARY_SEASON_LIMIT,
+    };
+  }
+
+  public async readOriginalDownloadMetadata(
+    rawInput: { itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<JellyfinOriginalDownloadMetadata> {
+    const input = jellyfinLibraryTitleQuerySchema.parse(rawInput);
+    const response = await this.#client.requestJson(
+      `Items/${input.itemId}`,
+      jellyfinLibraryItemSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.original_download.metadata",
+        query: { Fields: "MediaSources", UserId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    const item = normalizeLibraryItem(response);
+    if (!item || item.externalId !== input.itemId || item.kind !== "movie") {
+      throw this.#client.invalidResponse("media.original_download.metadata");
+    }
+    const source = response.MediaSources?.[0];
+    return {
+      canDownload: response.CanDownload === true,
+      container:
+        compactText(response.Container ?? source?.Container, 64)?.toLocaleLowerCase("en-US") ??
+        null,
+      etag: response.Etag ?? null,
+      externalId: item.externalId,
+      sizeBytes: source?.Size ?? null,
+      title: item.title,
+      year: item.year,
+    };
+  }
+
+  public async streamOriginalDownload(
+    rawInput: { itemId: string; maxResponseBytes: number; range?: string },
+    signal?: AbortSignal,
+  ): Promise<JellyfinOriginalDownloadStream> {
+    const input = jellyfinOriginalDownloadInputSchema.parse(rawInput);
+    const response = await this.#client.requestStream(
+      `Items/${input.itemId}/Download`,
+      {
+        acceptedStatuses: [200, 206, 416],
+        headers: {
+          authorization: this.#authorization,
+          ...(input.range === undefined ? {} : { range: input.range }),
+        },
+        operation: "media.original_download.stream",
+        ...(signal === undefined ? {} : { signal }),
+      },
+      input.maxResponseBytes,
+    );
+    if (response.status !== 200 && response.status !== 206 && response.status !== 416) {
+      await response.body.cancel();
+      throw this.#client.invalidResponse("media.original_download.stream");
+    }
+    const contentLengthValue = response.headers.get("content-length");
+    const contentLength = contentLengthValue === null ? null : Number(contentLengthValue);
+    if (contentLength !== null && (!Number.isSafeInteger(contentLength) || contentLength < 0)) {
+      await response.body.cancel();
+      throw this.#client.invalidResponse("media.original_download.stream");
+    }
+    const contentRange = response.headers.get("content-range");
+    if (contentRange !== null && !/^bytes (?:\d+-\d+|\*)\/\d+$/u.test(contentRange)) {
+      await response.body.cancel();
+      throw this.#client.invalidResponse("media.original_download.stream");
+    }
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? null;
+    if (
+      contentType !== null &&
+      !/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(contentType)
+    ) {
+      await response.body.cancel();
+      throw this.#client.invalidResponse("media.original_download.stream");
+    }
+    return {
+      acceptRanges: response.headers.get("accept-ranges")?.toLocaleLowerCase("en-US") === "bytes",
+      body: response.body,
+      contentLength,
+      contentRange,
+      contentType,
+      status: response.status,
     };
   }
 
