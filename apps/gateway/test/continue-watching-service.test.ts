@@ -580,7 +580,12 @@ describe("ContinueWatchingService", () => {
       title: "The Long Meridian",
       year: 2026,
     };
-    readLibrary.mockResolvedValue({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: null,
