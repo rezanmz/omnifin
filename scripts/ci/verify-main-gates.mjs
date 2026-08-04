@@ -208,13 +208,15 @@ export function evaluateTriggerReadiness(results, sourceRunId) {
     return { completedAt, name: result.name, runId: result.runId };
   });
   const latestCompletion = Math.max(...completed.map((result) => result.completedAt));
-  const owners = completed.filter((result) => result.completedAt === latestCompletion);
-  const ready = owners.some((result) => result.runId === sourceRunId);
+  const owner = completed
+    .filter((result) => result.completedAt === latestCompletion)
+    .reduce((latest, result) => (result.runId > latest.runId ? result : latest));
+  const ready = owner.runId === sourceRunId;
   return {
     ready,
     reason: ready
       ? "This successful workflow completion owns the exact-SHA publication handoff."
-      : `Publication belongs to the later gate completion: ${owners.map((owner) => owner.name).join(", ")}.`,
+      : `Publication belongs to the later gate completion: ${owner.name}.`,
   };
 }
 

@@ -120,7 +120,7 @@ test("defers a successful trigger while its exact-SHA peer is pending or failed"
   );
 });
 
-test("allows tied latest completions so publication cannot be lost to timestamp precision", () => {
+test("breaks tied completion timestamps by workflow run ID", () => {
   const results = [
     {
       completedAt: "2026-08-04T20:00:00Z",
@@ -136,7 +136,7 @@ test("allows tied latest completions so publication cannot be lost to timestamp 
     },
   ];
 
-  assert.equal(evaluateTriggerReadiness(results, 10).ready, true);
+  assert.equal(evaluateTriggerReadiness(results, 10).ready, false);
   assert.equal(evaluateTriggerReadiness(results, 20).ready, true);
 });
 
