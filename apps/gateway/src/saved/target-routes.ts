@@ -1,6 +1,8 @@
 import type { Permission } from "@omnifin/contracts/auth";
 import { mediaReferenceIdSchema } from "@omnifin/contracts/dashboard";
 import {
+  savedDiscoveryTargetIssueRequestJsonSchema,
+  savedDiscoveryTargetIssueRequestSchema,
   savedFavoriteMutationRequestJsonSchema,
   savedFavoriteMutationRequestSchema,
   savedFavoriteMutationResponseJsonSchema,
@@ -79,14 +81,24 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
   return payload;
 }
 
-function serviceError(error: SavedTargetServiceError, reply: FastifyReply) {
+function serviceError(
+  error: SavedTargetServiceError,
+  reply: FastifyReply,
+  operation: "favorite" | "target" = "target",
+) {
   switch (error.reason) {
     case "connector_unavailable":
       reply.header("retry-after", "5");
       return new SafeHttpError({
         cause: error,
-        code: "saved_favorite_connector_unavailable",
-        message: "Jellyfin could not confirm the favorite change. Try again shortly.",
+        code:
+          operation === "favorite"
+            ? "saved_favorite_connector_unavailable"
+            : "saved_target_connector_unavailable",
+        message:
+          operation === "favorite"
+            ? "Jellyfin could not confirm the favorite change. Try again shortly."
+            : "The connected catalog could not confirm this title. Try again shortly.",
         statusCode: 503,
       });
     case "not_found":
@@ -168,6 +180,42 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
     },
   );
 
+  app.post(
+    "/v1/saved/targets/discovery",
+    {
+      bodyLimit: 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 60, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: savedDiscoveryTargetIssueRequestJsonSchema,
+        response: { 201: savedMembershipSummaryJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const input = savedDiscoveryTargetIssueRequestSchema.parse(request.body);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const summary = await targets.issueDiscovery(
+          input,
+          operationContext(request, reply, "saved.lists.self.manage"),
+          controller.signal,
+        );
+        reply.status(201);
+        return savedMembershipSummarySchema.parse(summary);
+      } catch (error) {
+        if (error instanceof SavedTargetServiceError) throw serviceError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
   app.put(
     "/v1/saved/favorites/:targetReferenceId",
     {
@@ -198,7 +246,7 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
         );
         return savedFavoriteMutationResponseSchema.parse(result);
       } catch (error) {
-        if (error instanceof SavedTargetServiceError) throw serviceError(error, reply);
+        if (error instanceof SavedTargetServiceError) throw serviceError(error, reply, "favorite");
         throw error;
       } finally {
         request.raw.off("aborted", abort);

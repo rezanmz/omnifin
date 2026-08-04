@@ -3,6 +3,7 @@ import {
   sessionPrincipalSchema,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
+import type { DiscoveryMediaDetail } from "@omnifin/contracts/discovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -13,6 +14,39 @@ import { SavedTargetService, type SavedTargetClient } from "../src/saved/target-
 
 const startedAt = new Date("2026-08-04T10:00:00.000Z");
 const privateItemId = "movie-upstream-private";
+
+function discoveryDetail(
+  overrides: Partial<DiscoveryMediaDetail> = {},
+): DiscoveryMediaDetail {
+  return {
+    artwork: { backdropPath: null, posterPath: null },
+    availability: "unavailable",
+    cast: [],
+    crew: [],
+    genres: ["Science Fiction"],
+    id: "movie:603",
+    intelligence: {
+      ratings: [],
+      ratingsState: "empty",
+      recommendations: [],
+      recommendationsState: "empty",
+      trailers: [],
+    },
+    kind: "movie",
+    originalTitle: null,
+    overview: "A verified catalog title that has not been requested.",
+    productionStatus: "Released",
+    runtimeMinutes: 128,
+    source: "seerr",
+    tagline: null,
+    title: "The Far Meridian",
+    tmdbId: 603,
+    voteAverage: 8.7,
+    voteCount: 4200,
+    year: 2026,
+    ...overrides,
+  } as DiscoveryMediaDetail;
+}
 
 function config(): AppConfig {
   return {
@@ -156,6 +190,7 @@ function harness(favoriteResult: boolean | Error = true) {
     return favorite;
   });
   const client: SavedTargetClient = { readFavoriteState, updateFavoriteState };
+  const resolveDiscovery = vi.fn(async () => discoveryDetail());
   const createClient = vi.fn((input) => {
     expect(input.accessToken).toBe("private-jellyfin-token");
     expect(input.baseUrl).toBe("https://jellyfin.example.test/");
@@ -168,6 +203,7 @@ function harness(favoriteResult: boolean | Error = true) {
     createClient,
     createTargetToken: () => "t".repeat(22),
     mediaReferences: { clock: () => startedAt },
+    resolveDiscovery,
   });
   return {
     advance(milliseconds: number) {
@@ -178,6 +214,7 @@ function harness(favoriteResult: boolean | Error = true) {
     database,
     readFavoriteState,
     referenceId: referenceId!,
+    resolveDiscovery,
     service,
     setTime(milliseconds: number) {
       now = milliseconds;
@@ -258,6 +295,66 @@ describe("SavedTargetService", () => {
     });
     expect(unavailable.favorite).toEqual({ state: "unavailable", value: null });
     expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("issues an encrypted requestable target only after catalog re-resolution", async () => {
+    const { appConfig, database, resolveDiscovery, service } = harness();
+
+    const issued = await service.issueDiscovery(
+      { kind: "movie", language: "en-CA", tmdbId: 603 },
+      { principal: principal() },
+    );
+
+    expect(issued).toMatchObject({
+      catalogReferenceId: null,
+      customListCount: 0,
+      favorite: { state: "not_applicable", value: null },
+      targetReferenceId: `save_target_${"t".repeat(22)}`,
+      watchLater: false,
+    });
+    expect(resolveDiscovery).toHaveBeenCalledWith(
+      { kind: "movie", language: "en-CA", tmdbId: 603 },
+      principal(),
+      undefined,
+    );
+    const resolved = service.resolve(issued.targetReferenceId, { principal: principal() });
+    expect(resolved.payload).toMatchObject({
+      availability: "requestable",
+      kind: "movie",
+      source: "seerr",
+      title: "The Far Meridian",
+      tmdbId: 603,
+    });
+    expect(() => service.resolveOwned(issued.targetReferenceId, { principal: principal() })).toThrow(
+      expect.objectContaining({ reason: "not_found" }),
+    );
+    const row = database.sqlite
+      .prepare("select encrypted_payload as encryptedPayload from saved_targets")
+      .get() as { encryptedPayload: string };
+    expect(row.encryptedPayload).not.toMatch(/The Far Meridian|603/u);
+    expect(
+      privacyHash("saved_catalog_identity", `tmdb\0movie\0${603}`, appConfig.encryptionKey),
+    ).toMatch(/^[A-Za-z0-9_-]{22}$/u);
+  });
+
+  it("rejects mismatched or unavailable catalog resolution", async () => {
+    const first = harness();
+    first.resolveDiscovery.mockResolvedValueOnce(discoveryDetail({ tmdbId: 604 }));
+    await expect(
+      first.service.issueDiscovery(
+        { kind: "movie", language: "en", tmdbId: 603 },
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "connector_unavailable" });
+
+    const second = harness();
+    second.resolveDiscovery.mockRejectedValueOnce(new Error("Seerr unavailable"));
+    await expect(
+      second.service.issueDiscovery(
+        { kind: "movie", language: "en", tmdbId: 603 },
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "connector_unavailable" });
   });
 
   it("round-trips favorite state through Jellyfin and refreshes encrypted list snapshots", async () => {

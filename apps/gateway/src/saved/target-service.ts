@@ -2,13 +2,16 @@ import { JellyfinUserMediaClient } from "@omnifin/connectors/media/jellyfin-user
 import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import { connectorCredentialInputSchema } from "@omnifin/contracts/connectors";
+import type { DiscoveryMediaDetail } from "@omnifin/contracts/discovery";
 import {
+  savedDiscoveryTargetIssueRequestSchema,
   savedFavoriteMutationRequestSchema,
   savedFavoriteMutationResponseSchema,
   savedFavoriteStateSchema,
   savedMembershipSummarySchema,
   type SavedFavoriteMutationResponse,
   type SavedFavoriteState,
+  type SavedDiscoveryTargetIssueRequest,
   type SavedMembershipSummary,
 } from "@omnifin/contracts/saved";
 import { X509Certificate } from "node:crypto";
@@ -18,6 +21,7 @@ import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, privacyHash, randomToken } from "../security/crypto.js";
+import { DiscoverySearchService } from "../discovery/search-service.js";
 import {
   MediaReferenceError,
   MediaReferenceService,
@@ -33,6 +37,7 @@ const MAX_TARGETS_PER_USER = 1_024;
 const MAX_TARGET_CREATION_ATTEMPTS = 8;
 
 export const storedSavedCatalogSnapshotSchema = z.strictObject({
+  availability: z.enum(["owned", "requestable", "requested", "unavailable"]).default("owned"),
   artwork: z.strictObject({ backdrop: z.boolean(), poster: z.boolean() }),
   favorite: savedFavoriteStateSchema,
   kind: z.enum(["movie", "series"]),
@@ -59,7 +64,7 @@ const storedFavoriteStateSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("unavailable"), value: z.boolean().nullable() }),
 ]);
 
-export const storedTargetPayloadSchema = z.strictObject({
+const storedOwnedTargetPayloadSchema = z.strictObject({
   artwork: z.strictObject({
     backdrop: z.boolean(),
     poster: z.boolean(),
@@ -72,6 +77,7 @@ export const storedTargetPayloadSchema = z.strictObject({
   overview: z.null(),
   resolutionState: z.enum(["current", "connector_unavailable"]),
   schemaVersion: z.literal(1),
+  source: z.literal("jellyfin").default("jellyfin"),
   title: z
     .string()
     .trim()
@@ -80,6 +86,41 @@ export const storedTargetPayloadSchema = z.strictObject({
     .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
   year: z.int().min(1870).max(2200).nullable(),
 });
+
+const storedDiscoveryTargetPayloadSchema = z.strictObject({
+  artwork: z.strictObject({
+    backdrop: z.literal(false),
+    poster: z.literal(false),
+  }),
+  availability: z.enum(["requestable", "requested"]),
+  catalogIdentityDigest: z.string().regex(DIGEST_PATTERN),
+  favorite: z.strictObject({ state: z.literal("not_applicable"), value: z.null() }),
+  kind: z.enum(["movie", "series"]),
+  libraryReferenceId: z.null(),
+  overview: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2_000)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
+    .nullable(),
+  resolutionState: z.literal("current"),
+  schemaVersion: z.literal(1),
+  source: z.literal("seerr"),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  tmdbId: z.int().positive().max(2_147_483_647),
+  year: z.int().min(1870).max(2200).nullable(),
+});
+
+export const storedTargetPayloadSchema = z.discriminatedUnion("source", [
+  storedOwnedTargetPayloadSchema,
+  storedDiscoveryTargetPayloadSchema,
+]);
 
 export type StoredSavedTarget = z.infer<typeof storedTargetPayloadSchema>;
 
@@ -167,6 +208,11 @@ export interface SavedTargetServiceDependencies {
   createClient?: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
   createTargetToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
+  resolveDiscovery?: (
+    input: SavedDiscoveryTargetIssueRequest,
+    principal: SessionPrincipal,
+    signal?: AbortSignal,
+  ) => Promise<DiscoveryMediaDetail>;
 }
 
 export type SavedTargetErrorReason =
@@ -258,16 +304,17 @@ function defaultClient(input: SavedTargetClientFactoryInput): SavedTargetClient 
 export class SavedTargetService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
-  readonly #config: Pick<AppConfig, "encryptionKey">;
+  readonly #config: AppConfig;
   readonly #createAuditId: () => string;
   readonly #createClient: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
   readonly #createTargetToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
+  readonly #resolveDiscovery: NonNullable<SavedTargetServiceDependencies["resolveDiscovery"]>;
 
   public constructor(
     database: DatabaseHandle,
-    config: Pick<AppConfig, "encryptionKey">,
+    config: AppConfig,
     dependencies: SavedTargetServiceDependencies = {},
   ) {
     this.#database = database;
@@ -281,6 +328,18 @@ export class SavedTargetService {
       ...dependencies.mediaReferences,
       clock: dependencies.mediaReferences?.clock ?? this.#clock,
     });
+    const discovery = new DiscoverySearchService(database, config);
+    this.#resolveDiscovery =
+      dependencies.resolveDiscovery ??
+      ((input, principal, signal) =>
+        discovery
+          .detail(
+            { kind: input.kind, tmdbId: input.tmdbId },
+            { language: input.language },
+            { principal },
+            signal,
+          )
+          .then(({ item }) => item));
   }
 
   public async issueOwned(
@@ -354,6 +413,7 @@ export class SavedTargetService {
       overview: null,
       resolutionState: favorite.state === "synced" ? "current" : "connector_unavailable",
       schemaVersion: 1,
+      source: "jellyfin",
       title: reference.title,
       year: reference.year,
     });
@@ -396,13 +456,118 @@ export class SavedTargetService {
     }
   }
 
+  public async issueDiscovery(
+    rawInput: unknown,
+    context: SavedTargetContext,
+    signal?: AbortSignal,
+  ): Promise<SavedMembershipSummary> {
+    const principal = requirePermission(context.principal, "saved.lists.self.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new SavedTargetServiceError("principal_unavailable");
+    }
+    const userId = principal.userId;
+    const input = savedDiscoveryTargetIssueRequestSchema.parse(rawInput);
+    const source = this.#source(principal);
+    let detail: DiscoveryMediaDetail;
+    try {
+      detail = await this.#resolveDiscovery(input, principal, signal);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new SavedTargetServiceError("connector_unavailable", { cause: error });
+    }
+    if (detail.kind !== input.kind || detail.tmdbId !== input.tmdbId) {
+      throw new SavedTargetServiceError("connector_unavailable");
+    }
+
+    const availability =
+      detail.availability === "unavailable" || detail.availability === "unknown"
+        ? "requestable"
+        : "requested";
+    const now = this.#now();
+    const expiresAt = now + TARGET_TTL_MS;
+    const catalogIdentityDigest = privacyHash(
+      "saved_catalog_identity",
+      `tmdb\0${detail.kind}\0${detail.tmdbId}`,
+      this.#config.encryptionKey,
+    );
+    const targetIdentityDigest = privacyHash(
+      "saved_target",
+      `tmdb\0${detail.kind}\0${detail.tmdbId}`,
+      this.#config.encryptionKey,
+    );
+    const payload = storedTargetPayloadSchema.parse({
+      artwork: { backdrop: false, poster: false },
+      availability,
+      catalogIdentityDigest,
+      favorite: { state: "not_applicable", value: null },
+      kind: detail.kind,
+      libraryReferenceId: null,
+      overview: detail.overview,
+      resolutionState: "current",
+      schemaVersion: 1,
+      source: "seerr",
+      title: detail.title,
+      tmdbId: detail.tmdbId,
+      year: detail.year,
+    });
+
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          this.#database.sqlite
+            .prepare(
+              `delete from saved_targets
+               where user_id = ? and (
+                 expires_at <= ? or service_identity_link_id <> ? or link_revision <> ?
+               )`,
+            )
+            .run(userId, now, source.linkId, source.linkRevision);
+          const targetId = this.#upsertTarget(
+            userId,
+            source,
+            targetIdentityDigest,
+            payload,
+            now,
+            expiresAt,
+          );
+          this.#enforceTargetLimit(userId, targetId);
+          return savedMembershipSummarySchema.parse(
+            this.#membershipSummary(
+              userId,
+              targetId,
+              catalogIdentityDigest,
+              payload.favorite,
+              now,
+              expiresAt,
+            ),
+          );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof SavedTargetServiceError) throw error;
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
   public resolveOwned(targetReferenceId: string, context: SavedTargetContext): ResolvedSavedTarget {
     const principal = requirePermission(context.principal, "saved.lists.self.manage");
     if (principal.accountState !== "active" || !principal.userId) {
       throw new SavedTargetServiceError("principal_unavailable");
     }
     const source = this.#source(principal);
-    return this.#resolveOwnedTarget(targetReferenceId, principal.userId, source);
+    const resolved = this.#resolveTarget(targetReferenceId, principal.userId, source);
+    if (resolved.payload.source !== "jellyfin") {
+      throw new SavedTargetServiceError("not_found");
+    }
+    return resolved;
+  }
+
+  public resolve(targetReferenceId: string, context: SavedTargetContext): ResolvedSavedTarget {
+    const principal = requirePermission(context.principal, "saved.lists.self.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new SavedTargetServiceError("principal_unavailable");
+    }
+    return this.#resolveTarget(targetReferenceId, principal.userId, this.#source(principal));
   }
 
   public async updateFavorite(
@@ -421,7 +586,10 @@ export class SavedTargetService {
     if (source.linkHealthState !== "linked") {
       throw new SavedTargetServiceError("connector_unavailable");
     }
-    const resolved = this.#resolveOwnedTarget(targetReferenceId, activePrincipal.userId, source);
+    const resolved = this.#resolveTarget(targetReferenceId, activePrincipal.userId, source);
+    if (resolved.payload.source !== "jellyfin") {
+      throw new SavedTargetServiceError("not_found");
+    }
     let observed: boolean;
     try {
       const client = this.#client(source);
@@ -495,7 +663,7 @@ export class SavedTargetService {
     }
   }
 
-  #resolveOwnedTarget(
+  #resolveTarget(
     targetReferenceId: string,
     userId: string,
     source: SavedTargetSourceRow,
@@ -527,16 +695,18 @@ export class SavedTargetService {
           this.#cipher.decrypt(row.encryptedPayload, targetContext(userId, targetReferenceId)),
         ),
       );
-      const reference = this.#references.resolve(
-        { linkId: source.linkId, linkRevision: source.linkRevision, userId },
-        payload.libraryReferenceId,
-      );
-      if (
-        reference.itemId !== payload.itemId ||
-        reference.kind !== payload.kind ||
-        reference.title !== payload.title
-      ) {
-        throw new SavedTargetServiceError("not_found");
+      if (payload.source === "jellyfin") {
+        const reference = this.#references.resolve(
+          { linkId: source.linkId, linkRevision: source.linkRevision, userId },
+          payload.libraryReferenceId,
+        );
+        if (
+          reference.itemId !== payload.itemId ||
+          reference.kind !== payload.kind ||
+          reference.title !== payload.title
+        ) {
+          throw new SavedTargetServiceError("not_found");
+        }
       }
       const touched = this.#database.sqlite
         .prepare(

@@ -188,7 +188,7 @@ export class SavedListService {
 
   public constructor(
     database: DatabaseHandle,
-    config: Pick<AppConfig, "encryptionKey">,
+    config: AppConfig,
     dependencies: SavedListServiceDependencies = {},
   ) {
     this.#database = database;
@@ -608,8 +608,8 @@ export class SavedListService {
           const list = this.#row(id, principal.userId, false);
           if (!list) throw new SavedListServiceError("list_not_found");
           this.#matchRevision(list, ifMatch);
-          const target = this.#resolveOwnedTarget(input.targetReferenceId, principal);
-          const catalog = this.#upsertOwnedCatalog(principal.userId, target, now);
+          const target = this.#resolveTarget(input.targetReferenceId, principal);
+          const catalog = this.#upsertCatalog(principal.userId, target, now);
           if (catalog.changed) {
             this.#refreshCatalogListRevisions(principal.userId, catalog.id, now);
           }
@@ -880,9 +880,9 @@ export class SavedListService {
     return principal as ActivePrincipal;
   }
 
-  #resolveOwnedTarget(targetReferenceId: string, principal: ActivePrincipal) {
+  #resolveTarget(targetReferenceId: string, principal: ActivePrincipal) {
     try {
-      return this.#targets.resolveOwned(targetReferenceId, { principal });
+      return this.#targets.resolve(targetReferenceId, { principal });
     } catch (error) {
       if (error instanceof SavedTargetServiceError) {
         if (error.reason === "not_found") {
@@ -1006,7 +1006,7 @@ export class SavedListService {
     throw new SavedListServiceError("integrity_failure");
   }
 
-  #upsertOwnedCatalog(userId: string, target: ResolvedSavedTarget, now: number) {
+  #upsertCatalog(userId: string, target: ResolvedSavedTarget, now: number) {
     const existing = this.#database.sqlite
       .prepare(
         `select id, encrypted_identity as encryptedIdentity,
@@ -1019,14 +1019,25 @@ export class SavedListService {
       throw new SavedListServiceError("storage_failure");
     }
     const id = existing?.id ?? this.#newCatalogId();
-    const identity = {
-      itemId: target.payload.itemId,
-      kind: target.payload.kind,
-      linkId: target.linkId,
-      linkRevision: target.linkRevision,
-      schemaVersion: 1,
-    };
+    const identity =
+      target.payload.source === "jellyfin"
+        ? {
+            itemId: target.payload.itemId,
+            kind: target.payload.kind,
+            linkId: target.linkId,
+            linkRevision: target.linkRevision,
+            schemaVersion: 1,
+            source: "jellyfin",
+          }
+        : {
+            kind: target.payload.kind,
+            schemaVersion: 1,
+            source: "tmdb",
+            tmdbId: target.payload.tmdbId,
+          };
     const snapshot = {
+      availability:
+        target.payload.source === "jellyfin" ? "owned" : target.payload.availability,
       artwork: target.payload.artwork,
       favorite: target.payload.favorite,
       kind: target.payload.kind,
@@ -1074,7 +1085,7 @@ export class SavedListService {
           this.#cipher.encrypt(identityJson, this.#catalogIdentityContext(userId, id)),
           this.#cipher.encrypt(snapshotJson, this.#catalogSnapshotContext(userId, id)),
           target.payload.libraryReferenceId,
-          userId,
+          target.payload.libraryReferenceId === null ? null : userId,
           now,
           now,
           id,
@@ -1100,7 +1111,7 @@ export class SavedListService {
           this.#cipher.encrypt(identityJson, this.#catalogIdentityContext(userId, id)),
           this.#cipher.encrypt(snapshotJson, this.#catalogSnapshotContext(userId, id)),
           target.payload.libraryReferenceId,
-          userId,
+          target.payload.libraryReferenceId === null ? null : userId,
           now,
           now,
           now,
@@ -1226,7 +1237,8 @@ export class SavedListService {
             blurHash: null,
             posterPath: target.payload.artwork.poster ? `${artworkPrefix}poster` : null,
           },
-          availability: "owned",
+          availability:
+            target.payload.source === "jellyfin" ? "owned" : target.payload.availability,
           favorite: target.payload.favorite,
           id: catalogId,
           kind: target.payload.kind,
@@ -1316,6 +1328,7 @@ export class SavedListService {
       ),
     );
     const owned = row.libraryReferenceId !== null;
+    const removedOwnedTitle = !owned && snapshot.availability === "owned";
     const artworkPrefix = `/v1/saved/catalog/${row.catalogId}/images/`;
     return {
       addedAt: new Date(row.createdAt).toISOString(),
@@ -1326,13 +1339,13 @@ export class SavedListService {
           blurHash: null,
           posterPath: owned && snapshot.artwork.poster ? `${artworkPrefix}poster` : null,
         },
-        availability: owned ? "owned" : "unavailable",
+        availability: owned ? "owned" : removedOwnedTitle ? "unavailable" : snapshot.availability,
         favorite: owned ? snapshot.favorite : { state: "not_applicable", value: null },
         id: row.catalogId,
         kind: snapshot.kind,
         libraryReferenceId: row.libraryReferenceId,
         overview: snapshot.overview,
-        resolutionState: owned ? snapshot.resolutionState : "missing",
+        resolutionState: removedOwnedTitle ? "missing" : snapshot.resolutionState,
         title: snapshot.title,
         year: snapshot.year,
       }),

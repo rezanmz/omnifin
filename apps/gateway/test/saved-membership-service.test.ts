@@ -3,6 +3,7 @@ import {
   sessionPrincipalSchema,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
+import type { DiscoveryMediaDetail } from "@omnifin/contracts/discovery";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
@@ -14,6 +15,34 @@ import { SavedTargetService } from "../src/saved/target-service.js";
 
 const startedAt = new Date("2026-08-04T12:00:00.000Z");
 const privateItemId = "owned-private-movie";
+
+const discoveryDetail = {
+  artwork: { backdropPath: null, posterPath: null },
+  availability: "unavailable",
+  cast: [],
+  crew: [],
+  genres: ["Drama"],
+  id: "movie:603",
+  intelligence: {
+    ratings: [],
+    ratingsState: "empty",
+    recommendations: [],
+    recommendationsState: "empty",
+    trailers: [],
+  },
+  kind: "movie",
+  originalTitle: null,
+  overview: "A requestable title saved without creating a request.",
+  productionStatus: "Released",
+  runtimeMinutes: 128,
+  source: "seerr",
+  tagline: null,
+  title: "The Far Meridian",
+  tmdbId: 603,
+  voteAverage: 8.7,
+  voteCount: 4200,
+  year: 2026,
+} satisfies DiscoveryMediaDetail;
 
 function config(): AppConfig {
   return {
@@ -168,9 +197,14 @@ async function harness(artwork = true) {
     }),
     createTargetToken: () => (++targetToken).toString(36).padStart(22, "t"),
     mediaReferences: { clock: () => new Date(now) },
+    resolveDiscovery: async () => discoveryDetail,
   });
   const issued = await targets.issueOwned(referenceId!, { principal: principal() });
   const secondIssued = await targets.issueOwned(secondReferenceId!, { principal: principal() });
+  const discoveryIssued = await targets.issueDiscovery(
+    { kind: "movie", language: "en", tmdbId: 603 },
+    { principal: principal() },
+  );
   let auditToken = 0;
   let catalogToken = 0;
   let itemToken = 0;
@@ -198,6 +232,7 @@ async function harness(artwork = true) {
       };
     },
     database,
+    discoveryTargetReferenceId: discoveryIssued.targetReferenceId,
     issueTarget: () => targets.issueOwned(referenceId!, { principal: principal() }),
     lists,
     secondTargetReferenceId: secondIssued.targetReferenceId,
@@ -319,6 +354,37 @@ describe("SavedListService membership", () => {
       libraryReferenceId: null,
       resolutionState: "missing",
     });
+  });
+
+  it("adds a verified requestable title without creating a request", async () => {
+    const { context, database, discoveryTargetReferenceId, lists } = await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+
+    const added = lists.addItem(
+      watchLater.id,
+      { targetReferenceId: discoveryTargetReferenceId },
+      "add-requestable-title-0001",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+
+    expect(added.body.item.catalog).toMatchObject({
+      artwork: { backdropPath: null, posterPath: null },
+      availability: "requestable",
+      favorite: { state: "not_applicable", value: null },
+      kind: "movie",
+      libraryReferenceId: null,
+      resolutionState: "current",
+      title: "The Far Meridian",
+      year: 2026,
+    });
+    expect(lists.items(watchLater.id, {}, context()).items[0]?.catalog).toMatchObject({
+      availability: "requestable",
+      title: "The Far Meridian",
+    });
+    expect(
+      database.sqlite.prepare("select count(*) as count from media_request_operations").get(),
+    ).toEqual({ count: 0 });
   });
 
   it("fails closed for stale revisions, expired targets, and cross-user guesses", async () => {

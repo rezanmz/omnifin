@@ -1,4 +1,5 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import type { DiscoveryMediaDetail } from "@omnifin/contracts/discovery";
 import {
   savedFavoriteMutationResponseSchema,
   savedMembershipSummarySchema,
@@ -14,6 +15,34 @@ import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-08-04T10:30:00.000Z");
 const baseUrl = "https://omnifin.example";
+
+const discoveryDetail = {
+  artwork: { backdropPath: null, posterPath: null },
+  availability: "unavailable",
+  cast: [],
+  crew: [],
+  genres: ["Drama"],
+  id: "movie:603",
+  intelligence: {
+    ratings: [],
+    ratingsState: "empty",
+    recommendations: [],
+    recommendationsState: "empty",
+    trailers: [],
+  },
+  kind: "movie",
+  originalTitle: null,
+  overview: "A verified discovery title.",
+  productionStatus: "Released",
+  runtimeMinutes: 128,
+  source: "seerr",
+  tagline: null,
+  title: "The Far Meridian",
+  tmdbId: 603,
+  voteAverage: 8.7,
+  voteCount: 4200,
+  year: 2026,
+} satisfies DiscoveryMediaDetail;
 
 function config(): AppConfig {
   return {
@@ -96,6 +125,7 @@ async function harness() {
   let sessionToken = 0;
   let favorite = true;
   const readFavoriteState = vi.fn(async () => favorite);
+  const resolveDiscovery = vi.fn(async () => discoveryDetail);
   const updateFavoriteState = vi.fn(async (input: { favorite: boolean }) => {
     favorite = input.favorite;
     return favorite;
@@ -112,6 +142,7 @@ async function harness() {
       }),
       createTargetToken: () => "t".repeat(22),
       mediaReferences: { clock: () => now },
+      resolveDiscovery,
     },
     sessionDependencies: {
       clock: () => now,
@@ -154,6 +185,7 @@ async function harness() {
     },
     readFavoriteState,
     referenceId: referenceId!,
+    resolveDiscovery,
     updateFavoriteState,
   };
 }
@@ -226,6 +258,37 @@ describe("saved target routes", () => {
         "saved_target_temporarily_unavailable",
       );
       expect(unavailable.body).not.toMatch(/SQLITE|saved_targets/u);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("issues a no-store discovery target without creating a media request", async () => {
+    const { app, headers, resolveDiscovery } = await harness();
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { kind: "movie", language: "en-CA", tmdbId: 603 },
+        url: "/v1/saved/targets/discovery",
+      });
+
+      expect(response.statusCode, response.body).toBe(201);
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+      expect(savedMembershipSummarySchema.parse(response.json())).toMatchObject({
+        favorite: { state: "not_applicable", value: null },
+        targetReferenceId: `save_target_${"t".repeat(22)}`,
+        watchLater: false,
+      });
+      expect(resolveDiscovery).toHaveBeenCalledWith(
+        { kind: "movie", language: "en-CA", tmdbId: 603 },
+        expect.objectContaining({ userId: "target-viewer" }),
+        expect.any(AbortSignal),
+      );
+      expect(response.body).not.toMatch(/603|The Far Meridian|target-user-private/u);
+      expect(
+        app.database.sqlite.prepare("select count(*) as count from media_request_operations").get(),
+      ).toEqual({ count: 0 });
     } finally {
       await app.close();
     }
