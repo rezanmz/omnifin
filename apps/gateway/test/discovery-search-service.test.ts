@@ -313,6 +313,58 @@ function harness(
 }
 
 describe("discovery search service", () => {
+  it("returns only reviewed trailer metadata without allocating artwork references", async () => {
+    const { database, detail, service } = harness();
+    detail.mockResolvedValueOnce({
+      artwork: { backdropPath: "/private/backdrop.jpg", castProfilePaths: [], posterPath: null },
+      response: {
+        ...normalizedDetailResponse,
+        item: {
+          ...normalizedDetailResponse.item,
+          cast: [],
+          intelligence: {
+            ...normalizedDetailResponse.item.intelligence,
+            trailers: [
+              {
+                id: "youtube:QdBZY2fkU-0",
+                provider: "youtube",
+                resolution: 2160,
+                title: "Official trailer",
+                type: "trailer",
+              },
+            ],
+          },
+        },
+      },
+    });
+    try {
+      await expect(
+        service.trailers({ kind: "movie", tmdbId: 603 }, { principal: principal() }),
+      ).resolves.toEqual({
+        displayName: "Seerr",
+        items: [
+          {
+            id: "youtube:QdBZY2fkU-0",
+            provider: "youtube",
+            resolution: 2160,
+            title: "Official trailer",
+            type: "trailer",
+          },
+        ],
+      });
+      expect(detail).toHaveBeenCalledWith(
+        { kind: "movie", tmdbId: 603 },
+        { language: "en" },
+        undefined,
+      );
+      expect(
+        database.sqlite.prepare("select count(*) as count from discovery_artwork_references").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("normalizes browse criteria and replaces every upstream artwork path", async () => {
     const { browse, database, service } = harness();
     try {

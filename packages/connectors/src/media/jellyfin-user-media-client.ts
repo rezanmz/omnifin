@@ -3,6 +3,7 @@ import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
   LIBRARY_EPISODE_MAX_STUDIOS,
+  LIBRARY_EXTRAS_MAX_ITEMS,
   LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
   LIBRARY_MOVIE_MAX_CAST,
   LIBRARY_MOVIE_MAX_CREW,
@@ -15,6 +16,7 @@ import {
   type ViewingHistoryKind,
   type ViewingHistoryState,
   type LibraryEpisodeCredit,
+  type LibraryExtraType,
   type LibraryMovieAudioTrack,
   type LibraryMovieCredit,
   type LibraryMovieMediaSource,
@@ -33,12 +35,14 @@ import type { ConnectorTargetConfig } from "../types.js";
 export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EPISODE_LIMIT = 50;
+export const JELLYFIN_LIBRARY_EXTRAS_LIMIT = LIBRARY_EXTRAS_MAX_ITEMS;
 export const JELLYFIN_LIBRARY_SEASON_LIMIT = 100;
 export const JELLYFIN_VIEWING_HISTORY_LIMIT = 50;
 const JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE = 100;
 const JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES = 20;
 const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
 const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
+const JELLYFIN_LIBRARY_EXTRAS_UPSTREAM_LIMIT = 256;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
@@ -176,6 +180,34 @@ const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
 });
 
+const jellyfinLibraryExtraItemSchema = z.object({
+  BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
+  ExtraType: z.string().trim().max(64).nullish(),
+  Id: z.string().trim().min(1).max(256),
+  ImageBlurHashes: z.unknown().optional(),
+  ImageTags: imageTagsSchema.nullish(),
+  Name: z.string().trim().min(1).max(300),
+  OfficialRating: z.string().trim().max(32).nullish(),
+  Overview: z.string().max(8_000).nullish(),
+  ProductionYear: z.int().min(0).max(9_999).nullish(),
+  RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
+  Type: z.string().trim().min(1).max(80),
+  UserData: z
+    .object({
+      Played: z.boolean().nullish(),
+      PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
+    })
+    .nullish(),
+});
+
+const jellyfinLibraryExtrasResponseSchema = z
+  .array(jellyfinLibraryExtraItemSchema)
+  .max(JELLYFIN_LIBRARY_EXTRAS_UPSTREAM_LIMIT);
+
+const jellyfinLibraryProviderIdsSchema = z.object({
+  ProviderIds: z.record(z.string(), z.string().max(128)).nullish(),
+});
+
 const jellyfinLibrarySeasonSchema = z.object({
   ChildCount: z.int().nonnegative().max(100_000).nullish(),
   Id: z.string().trim().min(1).max(256),
@@ -297,6 +329,11 @@ const jellyfinLibraryTitleQuerySchema = z.strictObject({
     .string()
     .trim()
     .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
+const jellyfinLibraryExtrasQuerySchema = jellyfinLibraryTitleQuerySchema.extend({
+  limit: z.int().positive().max(JELLYFIN_LIBRARY_EXTRAS_LIMIT),
+  startIndex: z.int().nonnegative().max(1_000_000),
 });
 
 const jellyfinLibrarySeasonEpisodesQuerySchema = z.strictObject({
@@ -432,6 +469,25 @@ export interface JellyfinLibraryTitleResult {
   movie: JellyfinLibraryMovieDetail | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
+}
+
+export interface JellyfinLibraryExtra {
+  artwork: JellyfinContinueWatchingItem["artwork"];
+  contentRating: string | null;
+  externalId: string;
+  extraType: LibraryExtraType;
+  overview: string | null;
+  played: boolean;
+  positionSeconds: number;
+  runtimeSeconds: number;
+  title: string;
+  year: number | null;
+}
+
+export interface JellyfinLibraryExtrasResult {
+  catalogTmdbId: number | null;
+  items: JellyfinLibraryExtra[];
+  nextStartIndex: number | null;
 }
 
 export interface JellyfinLibraryMovieCredit extends LibraryMovieCredit {
@@ -1015,6 +1071,81 @@ function normalizeLibraryItem(
   };
 }
 
+function normalizedExtraType(value: string | null | undefined, localTrailer: boolean) {
+  if (localTrailer) return "trailer" as const;
+  switch (value) {
+    case "Trailer":
+      return "trailer" as const;
+    case "Clip":
+      return "clip" as const;
+    case "BehindTheScenes":
+      return "behind_the_scenes" as const;
+    case "DeletedScene":
+      return "deleted_scene" as const;
+    case "Interview":
+      return "interview" as const;
+    case "Scene":
+      return "scene" as const;
+    case "Sample":
+      return "sample" as const;
+    case "Featurette":
+      return "featurette" as const;
+    case "Short":
+      return "short" as const;
+    default:
+      return "other" as const;
+  }
+}
+
+function normalizeLibraryExtra(
+  item: z.infer<typeof jellyfinLibraryExtraItemSchema>,
+  localTrailer: boolean,
+): JellyfinLibraryExtra | null {
+  if (item.Type !== "Video" && item.Type !== "Movie" && item.Type !== "Episode") return null;
+  const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
+  if (runtimeSeconds < 1) return null;
+  const posterTag = item.ImageTags?.Primary ?? undefined;
+  const backdropTag = item.BackdropImageTags?.[0];
+  return {
+    artwork: {
+      ...artworkPalette(item, posterTag, backdropTag),
+      backdrop: backdropTag ? { itemId: item.Id, type: "Backdrop" } : null,
+      poster: posterTag ? { itemId: item.Id, type: "Primary" } : null,
+    },
+    contentRating: compactText(item.OfficialRating, 32),
+    externalId: item.Id,
+    extraType: normalizedExtraType(item.ExtraType, localTrailer),
+    overview: compactText(item.Overview, 2_000),
+    played: item.UserData?.Played ?? false,
+    positionSeconds: Math.min(
+      runtimeSeconds,
+      secondsFromTicks(item.UserData?.PlaybackPositionTicks ?? 0),
+    ),
+    runtimeSeconds,
+    title: item.Name,
+    year:
+      item.ProductionYear !== null &&
+      item.ProductionYear !== undefined &&
+      item.ProductionYear >= 1870 &&
+      item.ProductionYear <= 2200
+        ? item.ProductionYear
+        : null,
+  };
+}
+
+const EXTRA_TYPE_ORDER: Readonly<Record<LibraryExtraType, number>> = {
+  trailer: 0,
+  clip: 1,
+  featurette: 2,
+  behind_the_scenes: 3,
+  deleted_scene: 4,
+  interview: 5,
+  scene: 6,
+  sample: 7,
+  short: 8,
+  other: 9,
+};
+
 function normalizeLibraryEpisode(
   item: z.infer<typeof jellyfinLibraryEpisodeSchema>,
 ): JellyfinLibraryEpisode | null {
@@ -1424,6 +1555,66 @@ export class JellyfinUserMediaClient {
       playedEpisodeCount: pageIsComplete
         ? response.Items.filter((episode) => episode.UserData?.Played).length
         : null,
+    };
+  }
+
+  public async readLibraryExtras(
+    rawInput: { itemId: string; limit: number; startIndex: number; userId: string },
+    signal?: AbortSignal,
+  ): Promise<JellyfinLibraryExtrasResult> {
+    const input = jellyfinLibraryExtrasQuerySchema.parse(rawInput);
+    const request = (path: string) =>
+      this.#client.requestJson(path, jellyfinLibraryExtrasResponseSchema, {
+        headers: { authorization: this.#authorization },
+        operation: "media.library",
+        query: {
+          Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+          UserId: input.userId,
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+    const [trailers, features, parent] = await Promise.allSettled([
+      request(`Items/${input.itemId}/LocalTrailers`),
+      request(`Items/${input.itemId}/SpecialFeatures`),
+      this.#client.requestJson(`Items/${input.itemId}`, jellyfinLibraryProviderIdsSchema, {
+        headers: { authorization: this.#authorization },
+        operation: "media.library",
+        query: { Fields: "ProviderIds", UserId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      }),
+    ]);
+    if (trailers.status === "rejected" && features.status === "rejected") {
+      throw trailers.reason;
+    }
+
+    const normalized = [
+      ...(trailers.status === "fulfilled"
+        ? trailers.value.map((item) => normalizeLibraryExtra(item, true))
+        : []),
+      ...(features.status === "fulfilled"
+        ? features.value.map((item) => normalizeLibraryExtra(item, false))
+        : []),
+    ].filter((item): item is JellyfinLibraryExtra => item !== null);
+    const unique = new Map<string, JellyfinLibraryExtra>();
+    for (const item of normalized) {
+      if (!unique.has(item.externalId)) unique.set(item.externalId, item);
+    }
+    const ordered = [...unique.values()].toSorted(
+      (left, right) =>
+        EXTRA_TYPE_ORDER[left.extraType] - EXTRA_TYPE_ORDER[right.extraType] ||
+        left.title.localeCompare(right.title, "en"),
+    );
+    const items = ordered.slice(input.startIndex, input.startIndex + input.limit);
+    const rawTmdbId = parent.status === "fulfilled" ? parent.value.ProviderIds?.Tmdb : undefined;
+    const catalogTmdbId = /^\d{1,10}$/u.test(rawTmdbId ?? "") ? Number(rawTmdbId) : null;
+    return {
+      catalogTmdbId:
+        catalogTmdbId !== null && catalogTmdbId > 0 && catalogTmdbId <= 2_147_483_647
+          ? catalogTmdbId
+          : null,
+      items,
+      nextStartIndex:
+        input.startIndex + items.length < ordered.length ? input.startIndex + items.length : null,
     };
   }
 

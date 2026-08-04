@@ -490,6 +490,23 @@ export class DiscoverySearchService {
     return response;
   }
 
+  public async trailers(
+    paramsInput: DiscoveryMediaDetailParams,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ) {
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
+    const params = discoveryMediaDetailParamsSchema.parse(paramsInput);
+    const row = this.#connector();
+    const adapter = this.#adapterFor(row);
+    const detail = await adapter.detail(params, { language: "en" }, signal);
+    return {
+      displayName: row.displayName,
+      items: detail.response.item.intelligence.trailers,
+    };
+  }
+
   public async personDetail(
     paramsInput: DiscoveryPersonDetailParams,
     queryInput: DiscoveryPersonDetailQuery,

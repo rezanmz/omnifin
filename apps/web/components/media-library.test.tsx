@@ -218,7 +218,28 @@ describe("MediaLibrary", () => {
     expect(screen.getByText("Mara Voss")).toBeVisible();
     await user.click(screen.getByText("Media information"));
     expect(screen.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Trailers & extras" })).toBeVisible();
+    const onlineTrailer = screen.getByRole("link", {
+      name: "Watch external Official online trailer on YouTube",
+    });
+    expect(onlineTrailer).toHaveAttribute("href", "https://www.youtube.com/watch?v=QdBZY2fkU-0");
+    expect(onlineTrailer).toHaveAttribute("target", "_blank");
+    expect(onlineTrailer).toHaveAttribute("rel", "noopener noreferrer");
     expect(playbackClient.prepare).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Play local extra Ember Coast — Official trailer" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Ember Coast — Official trailer" }),
+    ).toBeVisible();
+    expect(playbackClient.prepare).toHaveBeenCalledWith(
+      `media_${"x".repeat(22)}`,
+      0,
+      expect.any(AbortSignal),
+      expect.objectContaining({ mode: "auto" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Close player" }));
 
     await user.click(screen.getByRole("button", { name: "Play movie from beginning" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();

@@ -184,7 +184,10 @@ function negotiatedResult(): JellyfinPlaybackResult {
   };
 }
 
-function harness(createClientOverride?: NonNullable<PlaybackSessionDependencies["createClient"]>) {
+function harness(
+  createClientOverride?: NonNullable<PlaybackSessionDependencies["createClient"]>,
+  referenceKind: "extra" | "movie" = "movie",
+) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
@@ -197,7 +200,7 @@ function harness(createClientOverride?: NonNullable<PlaybackSessionDependencies[
       artwork: { backdropItemId: null, posterItemId: null },
       episodeNumber: null,
       itemId: privateItemId,
-      kind: "movie",
+      kind: referenceKind,
       seasonNumber: null,
       title: "The Far Meridian",
       year: 2026,
@@ -426,6 +429,31 @@ describe("PlaybackSessionService", () => {
           )
           .get(playback.sessionId),
       ).toEqual({ positionSeconds: 940, state: "stopped" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("plays and reports a local extra against its own Jellyfin child item", async () => {
+    const { database, negotiate, reference, reportPlaybackEvent, service } = harness(
+      undefined,
+      "extra",
+    );
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 12,
+      });
+
+      expect(negotiate).toHaveBeenCalledWith({ ...negotiation, itemId: privateItemId }, undefined);
+      expect(reportPlaybackEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "started",
+          session: expect.objectContaining({ itemId: privateItemId }),
+        }),
+        undefined,
+      );
     } finally {
       database.close();
     }

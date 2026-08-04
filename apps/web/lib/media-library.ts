@@ -2,6 +2,7 @@ import type {
   LibraryBrowseKind,
   LibraryBrowseResponse,
   LibraryBrowseSort,
+  LibraryExtrasResponse,
   LibraryPlaybackStateMutationRequest,
   LibraryPlaybackStateMutationResponse,
   LibrarySeasonEpisodesResponse,
@@ -132,6 +133,11 @@ export interface MediaLibraryClient {
     input?: { cursor?: string; limit?: number },
     signal?: AbortSignal,
   ): Promise<LibrarySeasonEpisodesResponse>;
+  loadExtras?(
+    referenceId: string,
+    input?: { cursor?: string; limit?: number },
+    signal?: AbortSignal,
+  ): Promise<LibraryExtrasResponse>;
   loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
   updatePlaybackState?(
     referenceId: string,
@@ -204,6 +210,17 @@ export const mediaLibraryClient: MediaLibraryClient = {
     return fetchLibraryJson(
       `/api/media/library/${referenceId}/seasons/${seasonNumber}/episodes?${parameters.toString()}`,
       schemas.librarySeasonEpisodesResponseSchema,
+      signal,
+    );
+  },
+  async loadExtras(referenceId, input = {}, signal) {
+    assertMediaReference(referenceId);
+    const parameters = new URLSearchParams({ limit: String(input.limit ?? 12) });
+    if (input.cursor) parameters.set("cursor", input.cursor);
+    const schemas = (await contractSchemas()).library;
+    return fetchLibraryJson(
+      `/api/media/library/${referenceId}/extras?${parameters.toString()}`,
+      schemas.libraryExtrasResponseSchema,
       signal,
     );
   },

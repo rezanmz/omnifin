@@ -1,5 +1,6 @@
 import type {
   JellyfinContinueWatchingResult,
+  JellyfinLibraryExtrasResult,
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
@@ -14,6 +15,7 @@ import {
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import {
   libraryBrowseResponseSchema,
+  libraryExtrasResponseSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
@@ -23,6 +25,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import { DiscoverySearchError } from "../src/discovery/search-service.js";
 import {
   ContinueWatchingError,
   ContinueWatchingService,
@@ -212,6 +215,41 @@ function harness(options: { withIdentity?: boolean } = {}) {
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
   }));
+  const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    catalogTmdbId: 1_042,
+    items: [
+      {
+        artwork: {
+          accentColor: "#775544",
+          backdrop: { itemId: "private-extra-backdrop", type: "Backdrop" },
+          blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+          poster: { itemId: "private-extra-poster", type: "Primary" },
+        },
+        contentRating: null,
+        externalId: "private-upstream-trailer",
+        extraType: "trailer",
+        overview: "A local theatrical trailer.",
+        played: false,
+        positionSeconds: 15,
+        runtimeSeconds: 142,
+        title: "Official trailer",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 12,
+  }));
+  const readOnlineExtras = vi.fn(async () => ({
+    displayName: "Home Seerr",
+    items: [
+      {
+        id: "youtube:QdBZY2fkU-0",
+        provider: "youtube" as const,
+        resolution: 2160,
+        title: "Official online trailer",
+        type: "trailer" as const,
+      },
+    ],
+  }));
   const readLibrarySeasonEpisodes = vi.fn(
     async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
       items: [
@@ -265,6 +303,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
@@ -275,6 +314,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     clock: () => now,
     createClient,
     createUserMediaStateOperationToken: () => "o".repeat(22),
+    readOnlineExtras,
     mediaReferences: {
       clock: () => now,
       createToken: () => (mediaReferenceIndex++ === 0 ? "m" : "e").repeat(22),
@@ -287,8 +327,10 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readOnlineExtras,
     readViewingHistory,
     service,
     updatePlaybackState,
@@ -668,6 +710,238 @@ describe("ContinueWatchingService", () => {
         ),
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
       expect(readLibrarySeasonEpisodes).toHaveBeenCalledTimes(calls);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("pages parent-scoped local extras without exposing Jellyfin identities", async () => {
+    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const parentReferenceId = catalogue.items[0]!.media.id;
+      const first = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+
+      expect(libraryExtrasResponseSchema.parse(first)).toEqual(first);
+      expect(first).toMatchObject({
+        items: [
+          {
+            extraType: "trailer",
+            media: {
+              artwork: {
+                backdropPath: `/v1/media/media_${"e".repeat(22)}/images/backdrop`,
+                posterPath: `/v1/media/media_${"e".repeat(22)}/images/poster`,
+              },
+              id: `media_${"e".repeat(22)}`,
+              kind: "other",
+              title: "Official trailer",
+            },
+            playback: { durationSeconds: 142, played: false, positionSeconds: 15 },
+            source: "local",
+          },
+        ],
+        parentReferenceId,
+        onlineItems: [
+          {
+            id: "youtube:QdBZY2fkU-0",
+            provider: "youtube",
+            title: "Official online trailer",
+          },
+        ],
+        onlineSource: { displayName: "Home Seerr", failure: null, status: "healthy" },
+        onlineState: "ready",
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      });
+      expect(first.nextCursor).toMatch(/^v2\./u);
+      expect(readOnlineExtras).toHaveBeenCalledWith(
+        { kind: "series", principal: principal(), tmdbId: 1_042 },
+        undefined,
+      );
+      expect(JSON.stringify(first)).not.toMatch(/private-|viewer-external|jellyfin-access/iu);
+      expect(readLibraryExtras).toHaveBeenCalledWith(
+        {
+          itemId: privateSeriesId,
+          limit: 12,
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+
+      await service.readLibraryExtras(
+        parentReferenceId,
+        { cursor: first.nextCursor!, limit: 12 },
+        { principal: principal() },
+      );
+      expect(readLibraryExtras).toHaveBeenLastCalledWith(
+        expect.objectContaining({ startIndex: 12 }),
+        undefined,
+      );
+
+      const calls = readLibraryExtras.mock.calls.length;
+      await expect(
+        service.readLibraryExtras(
+          parentReferenceId,
+          { cursor: `${first.nextCursor!}tampered`, limit: 12 },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+      expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
+
+      readOnlineExtras.mockRejectedValueOnce(new Error("private Seerr detail payload"));
+      const withoutOnline = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(withoutOnline).toMatchObject({
+        items: [{ source: "local" }],
+        onlineItems: [],
+        onlineSource: {
+          failure: {
+            message: "Online trailers are temporarily unavailable.",
+            operation: "discovery.detail",
+            service: "seerr",
+          },
+          status: "unavailable",
+        },
+        onlineState: "unavailable",
+        state: "complete",
+      });
+      expect(JSON.stringify(withoutOnline)).not.toContain("private Seerr");
+
+      readLibraryExtras.mockRejectedValueOnce(
+        new Error(`private ${privateAccessToken} ${privateItemId}`),
+      );
+      const unavailable = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(unavailable).toMatchObject({
+        items: [],
+        nextCursor: null,
+        parentReferenceId,
+        source: {
+          failure: {
+            message: "The Jellyfin library is temporarily unavailable.",
+            operation: "media.library",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
+      expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps optional extra sources explicit across empty, unconfigured, and invalid states", async () => {
+    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const parentReferenceId = catalogue.items[0]!.media.id;
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: null,
+        items: [
+          {
+            artwork: {
+              accentColor: null,
+              backdrop: null,
+              blurHash: null,
+              poster: null,
+            },
+            contentRating: null,
+            externalId: "private-local-featurette",
+            extraType: "featurette",
+            overview: null,
+            played: true,
+            positionSeconds: 0,
+            runtimeSeconds: 45,
+            title: "Behind the signal",
+            year: null,
+          },
+        ],
+        nextStartIndex: null,
+      });
+      const localOnly = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(localOnly).toMatchObject({
+        items: [
+          {
+            media: {
+              artwork: { backdropPath: null, posterPath: null },
+              title: "Behind the signal",
+            },
+          },
+        ],
+        nextCursor: null,
+        onlineItems: [],
+        onlineSource: { status: "unconfigured" },
+        onlineState: "unconfigured",
+        state: "complete",
+      });
+      expect(readOnlineExtras).not.toHaveBeenCalled();
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: 1_042,
+        items: [],
+        nextStartIndex: null,
+      });
+      readOnlineExtras.mockResolvedValueOnce({ displayName: "Home Seerr", items: [] });
+      const empty = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(empty).toMatchObject({
+        items: [],
+        onlineItems: [],
+        onlineSource: { displayName: "Home Seerr", status: "healthy" },
+        onlineState: "empty",
+        state: "empty",
+      });
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: 1_042,
+        items: [],
+        nextStartIndex: null,
+      });
+      readOnlineExtras.mockRejectedValueOnce(new DiscoverySearchError("connector_unconfigured"));
+      const noDiscoveryConnector = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(noDiscoveryConnector).toMatchObject({
+        onlineItems: [],
+        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineState: "unconfigured",
+        state: "empty",
+      });
+
+      const localExtraReferenceId = localOnly.items[0]!.media.id;
+      const calls = readLibraryExtras.mock.calls.length;
+      await expect(
+        service.readLibraryExtras(localExtraReferenceId, { limit: 12 }, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
     } finally {
       database.close();
     }

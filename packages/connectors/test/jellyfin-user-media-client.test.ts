@@ -715,6 +715,104 @@ describe("JellyfinUserMediaClient", () => {
     });
   });
 
+  it("reads parent-scoped local extras and normalizes every reviewed Jellyfin type", async () => {
+    const extra = (id: string, ExtraType: string) => ({
+      BackdropImageTags: [`${id}-backdrop`],
+      ExtraType,
+      Id: id,
+      ImageTags: { Primary: `${id}-poster` },
+      Name: `Extra ${id}`,
+      Overview: `A local ${ExtraType} bonus video.`,
+      ProductionYear: 2026,
+      RunTimeTicks: 600_000_000,
+      Type: "Video",
+      UserData: { Played: false, PlaybackPositionTicks: 120_000_000 },
+    });
+    const { client, requests } = clientWithResponses([
+      jsonResponse([extra("trailer-1", "Unknown")]),
+      jsonResponse([
+        extra("clip-1", "Clip"),
+        extra("behind-1", "BehindTheScenes"),
+        extra("deleted-1", "DeletedScene"),
+        extra("interview-1", "Interview"),
+        extra("scene-1", "Scene"),
+        extra("sample-1", "Sample"),
+        extra("featurette-1", "Featurette"),
+        extra("short-1", "Short"),
+        extra("other-1", "Unknown"),
+        { ...extra("audio-1", "ThemeSong"), Type: "Audio" },
+      ]),
+      jsonResponse({ ProviderIds: { Tmdb: "1042" } }),
+    ]);
+
+    const result = await client.readLibraryExtras({
+      itemId: "movie-upstream-1",
+      limit: 24,
+      startIndex: 0,
+      userId: "paired-user-id",
+    });
+
+    expect(result.items.map(({ extraType }) => extraType)).toEqual([
+      "trailer",
+      "clip",
+      "featurette",
+      "behind_the_scenes",
+      "deleted_scene",
+      "interview",
+      "scene",
+      "sample",
+      "short",
+      "other",
+    ]);
+    expect(result.items[0]).toMatchObject({
+      artwork: {
+        backdrop: { itemId: "trailer-1", type: "Backdrop" },
+        poster: { itemId: "trailer-1", type: "Primary" },
+      },
+      externalId: "trailer-1",
+      positionSeconds: 12,
+      runtimeSeconds: 60,
+      year: 2026,
+    });
+    expect(result.catalogTmdbId).toBe(1_042);
+    expect(result.nextStartIndex).toBeNull();
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/Items/movie-upstream-1/LocalTrailers",
+      "/base/Items/movie-upstream-1/SpecialFeatures",
+      "/base/Items/movie-upstream-1",
+    ]);
+    expect(requests.every(({ url }) => url.searchParams.get("UserId") === "paired-user-id")).toBe(
+      true,
+    );
+  });
+
+  it("keeps available special features when the optional local-trailer endpoint is absent", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({ error: "not found" }, { status: 404 }),
+      jsonResponse([
+        {
+          ExtraType: "Featurette",
+          Id: "featurette-1",
+          Name: "Making the Meridian",
+          RunTimeTicks: 600_000_000,
+          Type: "Video",
+        },
+      ]),
+    ]);
+
+    await expect(
+      client.readLibraryExtras({
+        itemId: "movie-upstream-1",
+        limit: 12,
+        startIndex: 0,
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      items: [{ externalId: "featurette-1", extraType: "featurette" }],
+      nextStartIndex: null,
+    });
+  });
+
   it("reads normalized series seasons and paged episodes without leaking scope", async () => {
     const episode = {
       CommunityRating: 8.4,

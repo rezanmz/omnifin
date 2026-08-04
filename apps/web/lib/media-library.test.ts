@@ -1,4 +1,4 @@
-import type { LibraryBrowseResponse } from "@omnifin/contracts/library";
+import type { LibraryBrowseResponse, LibraryExtrasResponse } from "@omnifin/contracts/library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { libraryDemoPrincipal } from "./library-care-demo";
@@ -77,6 +77,58 @@ describe("Media library client", () => {
       `/api/media/library/${series.media.id}`,
       `/api/media/library/${series.media.id}/seasons/2/episodes?limit=20&cursor=cursor_abcdefghijklmnop`,
     ]);
+  });
+
+  it("loads local extras lazily through the selected opaque parent reference", async () => {
+    const parent = readyMediaLibraryOutcome.feed.items[0]!.media;
+    const extraReferenceId = `media_${"x".repeat(22)}`;
+    const extras: LibraryExtrasResponse = {
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      items: [
+        {
+          extraType: "trailer",
+          media: {
+            artwork: {
+              accentColor: "#775544",
+              backdropPath: null,
+              blurHash: null,
+              posterPath: `/v1/media/${extraReferenceId}/images/poster`,
+            },
+            availability: "available",
+            contentRating: null,
+            id: extraReferenceId,
+            kind: "other",
+            overview: "A local trailer.",
+            runtimeMinutes: 2,
+            subtitle: "Local extra",
+            title: "Official trailer",
+            year: 2026,
+          },
+          playback: { durationSeconds: 118, played: false, positionSeconds: 0 },
+          source: "local",
+        },
+      ],
+      nextCursor: null,
+      onlineItems: [],
+      onlineSource: { displayName: "Online trailers", failure: null, status: "unconfigured" },
+      onlineState: "unconfigured",
+      parentReferenceId: parent.id,
+      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+      state: "complete",
+    };
+    const fetchMock = vi.fn(async () => Response.json(extras));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadExtras!(parent.id, { limit: 12 })).resolves.toEqual(extras);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/library/${parent.id}/extras?limit=12`,
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+
+    await expect(mediaLibraryClient.loadExtras!("private-jellyfin-item")).rejects.toMatchObject({
+      code: "invalid_reference",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("updates playback state with the active session CSRF token and an idempotency key", async () => {
