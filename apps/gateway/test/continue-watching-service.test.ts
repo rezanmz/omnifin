@@ -216,13 +216,15 @@ function harness(
   options: {
     resolveManagedMovie?: (input: {
       providerIds: { imdb: string | null; tmdb: number | null };
-    }) => Promise<{
-      connectorId: string;
-      hasFile: boolean;
-      mediaId: number;
-      monitored: boolean;
-      sizeBytes: number | null;
-    } | null>;
+    }) => Promise<
+      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
+          connectorId: string;
+          mediaId: number;
+          monitored: boolean;
+          sizeBytes: number | null;
+        })
+      | null
+    >;
     withIdentity?: boolean;
   } = {},
 ) {
@@ -417,7 +419,8 @@ describe("ContinueWatchingService", () => {
   it("previews exact Radarr-managed removal effects for an authorized administrator", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
       connectorId: "radarr-main",
-      hasFile: true,
+      fileId: 314,
+      hasFile: true as const,
       mediaId: 42,
       monitored: true,
       sizeBytes: 6_979_321_856,
@@ -522,7 +525,12 @@ describe("ContinueWatchingService", () => {
         linkRevision: 3,
         referenceId,
         schemaVersion: 1,
-        source: { connectorId: "radarr-main", kind: "managed", mediaId: 42 },
+        source: {
+          connectorId: "radarr-main",
+          fileId: 314,
+          kind: "managed",
+          mediaId: 42,
+        },
         title: "The Long Meridian",
         userId: "viewer-user",
       });
@@ -558,7 +566,8 @@ describe("ContinueWatchingService", () => {
   it("fails closed without evicting another active destructive preview at the per-user bound", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
       connectorId: "radarr-main",
-      hasFile: true,
+      fileId: 314,
+      hasFile: true as const,
       mediaId: 42,
       monitored: true,
       sizeBytes: 6_979_321_856,

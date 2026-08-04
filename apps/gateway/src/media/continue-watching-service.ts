@@ -116,6 +116,7 @@ const storedLibraryRemovalPreviewSchema = z.strictObject({
   source: z.discriminatedUnion("kind", [
     z.strictObject({
       connectorId: z.string().regex(IDENTIFIER_PATTERN),
+      fileId: z.int().positive().max(2_147_483_647),
       kind: z.literal("managed"),
       mediaId: z.int().positive().max(2_147_483_647),
       monitored: z.boolean(),
@@ -174,9 +175,7 @@ interface LibraryRemovalRadarrRow {
   tlsPolicy: string;
 }
 
-interface LibraryRemovalManagedMovie extends RadarrLibraryMovieOwnership {
-  connectorId: string;
-}
+type LibraryRemovalManagedMovie = RadarrLibraryMovieOwnership & { connectorId: string };
 
 interface StoredConnectorSecrets {
   credentials: unknown;
@@ -1033,7 +1032,7 @@ export class ContinueWatchingService {
         { providerIds: result.removal.providerIds },
         signal,
       );
-      if (ownership !== null && !ownership.hasFile) {
+      if (ownership !== null && (!ownership.hasFile || ownership.fileId === null)) {
         throw new LibraryRemovalPreviewError("unavailable");
       }
       const commonEffects = {
@@ -1116,6 +1115,7 @@ export class ContinueWatchingService {
               ? { kind: "unmanaged" }
               : {
                   connectorId: ownership.connectorId,
+                  fileId: ownership.fileId,
                   kind: "managed",
                   mediaId: ownership.mediaId,
                   monitored: ownership.monitored,

@@ -71,19 +71,23 @@ async function harness(
     resolveLibraryMovie?: (
       input: { imdb: string | null; tmdb: number | null },
       signal?: AbortSignal,
-    ) => Promise<{
-      hasFile: boolean;
-      mediaId: number;
-      monitored: boolean;
-      sizeBytes: number | null;
-    } | null>;
-    resolveManagedMovie?: () => Promise<{
-      connectorId: string;
-      hasFile: boolean;
-      mediaId: number;
-      monitored: boolean;
-      sizeBytes: number | null;
-    } | null>;
+    ) => Promise<
+      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
+          mediaId: number;
+          monitored: boolean;
+          sizeBytes: number | null;
+        })
+      | null
+    >;
+    resolveManagedMovie?: () => Promise<
+      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
+          connectorId: string;
+          mediaId: number;
+          monitored: boolean;
+          sizeBytes: number | null;
+        })
+      | null
+    >;
     role?: Role;
   } = {},
 ) {
@@ -699,7 +703,8 @@ describe("Continue Watching routes", () => {
 
   it("serves a private read-only removal preview only to a library deletion administrator", async () => {
     const resolveLibraryMovie = vi.fn(async () => ({
-      hasFile: true,
+      fileId: 314,
+      hasFile: true as const,
       mediaId: 42,
       monitored: true,
       sizeBytes: 6_979_321_856,
@@ -800,7 +805,8 @@ describe("Continue Watching routes", () => {
   it("fails closed when Radarr ownership no longer confirms an organized file", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
       connectorId: "radarr-main",
-      hasFile: false,
+      fileId: null,
+      hasFile: false as const,
       mediaId: 42,
       monitored: true,
       sizeBytes: null,
@@ -941,7 +947,8 @@ describe("Continue Watching routes", () => {
 
   it("fails closed when more than one Radarr source claims the exact movie", async () => {
     const resolveLibraryMovie = vi.fn(async () => ({
-      hasFile: true,
+      fileId: 314,
+      hasFile: true as const,
       mediaId: 42,
       monitored: true,
       sizeBytes: 6_979_321_856,
