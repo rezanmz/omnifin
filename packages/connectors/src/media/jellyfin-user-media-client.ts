@@ -98,6 +98,7 @@ const jellyfinViewingHistoryResponseSchema = z.object({
 const jellyfinLibraryItemSchema = z.object({
   BackdropImageTags: z.array(z.string().min(1).max(256)).max(32).nullish(),
   CanDownload: z.boolean().nullish(),
+  CanDelete: z.boolean().nullish().catch(null),
   CommunityRating: z.number().finite().nullish().catch(null),
   Container: z.string().trim().min(1).max(64).nullish(),
   CriticRating: z.number().finite().nullish().catch(null),
@@ -133,6 +134,11 @@ const jellyfinLibraryItemSchema = z.object({
     .nullish()
     .catch(null),
   PremiereDate: z.string().trim().min(1).max(64).nullish().catch(null),
+  ProviderIds: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(256))
+    .refine((ids) => Object.keys(ids).length <= 32)
+    .nullish()
+    .catch(null),
   ProductionYear: z.int().min(0).max(9_999).nullish(),
   RunTimeTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
   SeriesId: z.string().trim().min(1).max(256).nullish(),
@@ -511,6 +517,7 @@ export interface JellyfinLibrarySeason {
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
   movie: JellyfinLibraryMovieDetail | null;
+  removal?: JellyfinLibraryRemovalFacts | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
 }
@@ -551,6 +558,15 @@ export interface JellyfinLibraryExtrasResult {
   catalogTmdbId: number | null;
   items: JellyfinLibraryExtra[];
   nextStartIndex: number | null;
+}
+
+export interface JellyfinLibraryRemovalFacts {
+  canDelete: boolean;
+  providerIds: {
+    imdb: string | null;
+    tmdb: number | null;
+  };
+  sizeBytes: number | null;
 }
 
 export interface JellyfinLibraryMovieCredit extends LibraryMovieCredit {
@@ -865,6 +881,40 @@ function normalizeMovieDetail(
       160,
     ),
     tagline: uniqueText(item.Taglines, 1, 500)[0] ?? null,
+  };
+}
+
+function normalizedProviderId(
+  providerIds: Record<string, string> | null | undefined,
+  provider: "imdb" | "tmdb",
+) {
+  const value = Object.entries(providerIds ?? {}).find(
+    ([key]) => key.toLocaleLowerCase("en-US") === provider,
+  )?.[1];
+  return value?.trim() ?? null;
+}
+
+function normalizeMovieRemovalFacts(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+): JellyfinLibraryRemovalFacts {
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
+  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,15}$/u.test(tmdb) ? Number(tmdb) : null;
+  const sizes = (item.MediaSources ?? []).map(({ Size }) => Size ?? null);
+  const sizeBytes =
+    sizes.length > 0 && sizes.every((size): size is number => size !== null)
+      ? sizes.reduce((total, size) => total + size, 0)
+      : null;
+  return {
+    canDelete: item.CanDelete === true,
+    providerIds: {
+      imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
+      tmdb:
+        parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0
+          ? parsedTmdb
+          : null,
+    },
+    sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : null,
   };
 }
 
@@ -1501,7 +1551,7 @@ export class JellyfinUserMediaClient {
         operation: "media.library",
         query: {
           Fields:
-            "Overview,ProductionYear,OfficialRating,CommunityRating,CriticRating,PremiereDate,Genres,Studios,Taglines,People,MediaSources,ImageBlurHashes",
+            "Overview,ProductionYear,OfficialRating,CommunityRating,CriticRating,PremiereDate,Genres,Studios,Taglines,People,MediaSources,ProviderIds,ImageBlurHashes",
           UserId: input.userId,
         },
         ...(signal === undefined ? {} : { signal }),
@@ -1514,6 +1564,7 @@ export class JellyfinUserMediaClient {
       return {
         item,
         movie: normalizeMovieDetail(itemResponse),
+        removal: normalizeMovieRemovalFacts(itemResponse),
         seasons: [],
         seasonsTruncated: false,
       };

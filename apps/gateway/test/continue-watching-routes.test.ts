@@ -9,9 +9,11 @@ import type {
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import type { Role } from "@omnifin/contracts/auth";
 import {
   libraryBrowseResponseSchema,
   libraryExtrasResponseSchema,
+  libraryRemovalPreviewSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
@@ -60,7 +62,30 @@ function sessionDependencies() {
   };
 }
 
-async function harness() {
+async function harness(
+  options: {
+    canDelete?: boolean;
+    providerIds?: { imdb: string | null; tmdb: number | null };
+    radarrConnectorCount?: number;
+    radarrEnabled?: boolean;
+    resolveLibraryMovie?: (
+      input: { imdb: string | null; tmdb: number | null },
+      signal?: AbortSignal,
+    ) => Promise<{
+      hasFile: boolean;
+      mediaId: number;
+      monitored: boolean;
+      sizeBytes: number | null;
+    } | null>;
+    resolveManagedMovie?: () => Promise<{
+      hasFile: boolean;
+      mediaId: number;
+      monitored: boolean;
+      sizeBytes: number | null;
+    } | null>;
+    role?: Role;
+  } = {},
+) {
   const config = testConfig();
   const result: JellyfinContinueWatchingResult = {
     items: [
@@ -131,6 +156,11 @@ async function harness() {
       studios: [],
       tagline: null,
     },
+    removal: {
+      canDelete: options.canDelete ?? true,
+      providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
+      sizeBytes: 6_979_321_856,
+    },
     seasons: [],
     seasonsTruncated: false,
   }));
@@ -196,11 +226,20 @@ async function harness() {
         readViewingHistory,
         updatePlaybackState,
       }),
+      createRemovalPreviewToken: () => "d".repeat(22),
+      ...(options.resolveLibraryMovie === undefined
+        ? {}
+        : {
+            createRadarrAdapter: () => ({ resolveLibraryMovie: options.resolveLibraryMovie! }),
+          }),
       createUserMediaStateOperationToken: () => String(++stateOperationIndex).padStart(22, "o"),
       mediaReferences: {
         clock: () => now,
         createToken: () => (mediaReferenceIndex++ === 0 ? "r" : "e").repeat(22),
       },
+      ...(options.resolveManagedMovie === undefined
+        ? {}
+        : { resolveManagedMovie: options.resolveManagedMovie }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -222,13 +261,42 @@ async function harness() {
       updatedAt: now,
     })
     .run();
+  if (options.resolveLibraryMovie !== undefined) {
+    const connectorIds = ["radarr-main", "radarr-secondary"].slice(
+      0,
+      options.radarrConnectorCount ?? 1,
+    );
+    for (const connectorId of connectorIds) {
+      app.database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://radarr.example.test/",
+          capabilitySnapshotJson: JSON.stringify({ schemaVersion: 1 }),
+          createdAt: now,
+          displayName: "Home Radarr",
+          enabled: options.radarrEnabled ?? true,
+          encryptedCredentials: new EnvelopeCipher(config.encryptionKey).encrypt(
+            JSON.stringify({
+              credentials: { apiKey: "route-private-radarr-key", kind: "api_key" },
+              schemaVersion: 1,
+            }),
+            `connector_credentials:radarr:${connectorId}`,
+          ),
+          healthState: "healthy",
+          id: connectorId,
+          type: "radarr",
+          updatedAt: now,
+        })
+        .run();
+    }
+  }
   app.database.db
     .insert(users)
     .values({
       createdAt: now,
       displayName: "Viewer",
       id: "viewer-user",
-      role: "viewer",
+      role: options.role ?? "viewer",
       roleSource: "manual",
       status: "active",
       updatedAt: now,
@@ -623,6 +691,280 @@ describe("Continue Watching routes", () => {
       });
       expect(signedOut.statusCode).toBe(401);
       expect(readLibraryExtras).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves a private read-only removal preview only to a library deletion administrator", async () => {
+    const resolveLibraryMovie = vi.fn(async () => ({
+      hasFile: true,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    }));
+    const { app, viewer } = await harness({ resolveLibraryMovie, role: "admin" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(libraryRemovalPreviewSchema.parse(response.json())).toMatchObject({
+        options: [
+          { mode: "delete_files_keep_monitored" },
+          { mode: "delete_files_and_unmonitor" },
+          { mode: "remove_from_radarr_and_delete_files" },
+        ],
+        referenceId,
+        source: { kind: "managed", service: "radarr" },
+      });
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Cookie");
+      expect(response.body).not.toMatch(/route-private|viewer-external|tt1234567|98765/iu);
+      expect(resolveLibraryMovie).toHaveBeenCalledWith(
+        { imdb: "tt1234567", tmdb: 98_765 },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies removal previews before ownership lookup without the destructive permission", async () => {
+    const resolveManagedMovie = vi.fn(async () => null);
+    const { app, viewer } = await harness({ resolveManagedMovie, role: "operator" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("permission_denied");
+      expect(resolveManagedMovie).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when the paired Jellyfin user cannot delete the exact movie", async () => {
+    const resolveManagedMovie = vi.fn(async () => null);
+    const { app, viewer } = await harness({
+      canDelete: false,
+      resolveManagedMovie,
+      role: "admin",
+    });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "library_removal_not_permitted",
+      );
+      expect(resolveManagedMovie).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when Radarr ownership no longer confirms an organized file", async () => {
+    const resolveManagedMovie = vi.fn(async () => ({
+      hasFile: false,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: null,
+    }));
+    const { app, viewer } = await harness({ resolveManagedMovie, role: "admin" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "library_removal_preview_unavailable",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not misclassify a movie while a configured Radarr source is disabled", async () => {
+    const resolveLibraryMovie = vi.fn(async () => null);
+    const { app, viewer } = await harness({
+      radarrEnabled: false,
+      resolveLibraryMovie,
+      role: "admin",
+    });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "library_removal_preview_unavailable",
+      );
+      expect(resolveLibraryMovie).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("previews a Jellyfin-owned movie when no Radarr source is configured", async () => {
+    const { app, viewer } = await harness({ role: "admin" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(libraryRemovalPreviewSchema.parse(response.json())).toMatchObject({
+        options: [{ mode: "delete_unmanaged_files" }],
+        source: { kind: "unmanaged", monitored: null, service: "jellyfin" },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("uses the Jellyfin path only after every configured Radarr confirms no match", async () => {
+    const resolveLibraryMovie = vi.fn(async () => null);
+    const { app, viewer } = await harness({ resolveLibraryMovie, role: "admin" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(libraryRemovalPreviewSchema.parse(response.json()).source.kind).toBe("unmanaged");
+      expect(resolveLibraryMovie).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when configured Radarr ownership cannot be resolved by provider identity", async () => {
+    const resolveLibraryMovie = vi.fn(async () => null);
+    const { app, viewer } = await harness({
+      providerIds: { imdb: null, tmdb: null },
+      resolveLibraryMovie,
+      role: "admin",
+    });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(resolveLibraryMovie).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when more than one Radarr source claims the exact movie", async () => {
+    const resolveLibraryMovie = vi.fn(async () => ({
+      hasFile: true,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    }));
+    const { app, viewer } = await harness({
+      radarrConnectorCount: 2,
+      resolveLibraryMovie,
+      role: "admin",
+    });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(resolveLibraryMovie).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
     }

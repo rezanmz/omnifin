@@ -16,6 +16,7 @@ import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import {
   libraryBrowseResponseSchema,
   libraryExtrasResponseSchema,
+  libraryRemovalPreviewSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
@@ -86,6 +87,15 @@ function principal(): SessionPrincipal {
     role: "viewer",
     sessionId: "viewer-session",
     userId: "viewer-user",
+  });
+}
+
+function adminPrincipal(): SessionPrincipal {
+  return sessionPrincipalSchema.parse({
+    ...principal(),
+    displayName: "Library administrator",
+    permissions: ROLE_PERMISSIONS.admin,
+    role: "admin",
   });
 }
 
@@ -202,7 +212,19 @@ function libraryResult(): JellyfinLibraryResult {
   };
 }
 
-function harness(options: { withIdentity?: boolean } = {}) {
+function harness(
+  options: {
+    resolveManagedMovie?: (input: {
+      providerIds: { imdb: string | null; tmdb: number | null };
+    }) => Promise<{
+      hasFile: boolean;
+      mediaId: number;
+      monitored: boolean;
+      sizeBytes: number | null;
+    } | null>;
+    withIdentity?: boolean;
+  } = {},
+) {
   const config = testConfig();
   const database = openDatabase(":memory:");
   database.migrate();
@@ -313,12 +335,16 @@ function harness(options: { withIdentity?: boolean } = {}) {
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
+    createRemovalPreviewToken: () => "d".repeat(22),
     createUserMediaStateOperationToken: () => "o".repeat(22),
     readOnlineExtras,
     mediaReferences: {
       clock: () => now,
       createToken: () => (mediaReferenceIndex++ === 0 ? "m" : "e").repeat(22),
     },
+    ...(options.resolveManagedMovie === undefined
+      ? {}
+      : { resolveManagedMovie: options.resolveManagedMovie }),
   });
   return {
     config,
@@ -382,6 +408,85 @@ describe("ContinueWatchingService", () => {
           .all(),
       );
       expect(stored).not.toMatch(/private-upstream/u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("previews exact Radarr-managed removal effects for an authorized administrator", async () => {
+    const resolveManagedMovie = vi.fn(async () => ({
+      hasFile: true,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      resolveManagedMovie,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibraryTitle.mockResolvedValueOnce({
+      item: movie,
+      movie: {
+        cast: [],
+        castTruncated: false,
+        communityRating: null,
+        crew: [],
+        crewTruncated: false,
+        criticRating: null,
+        genres: [],
+        mediaSources: [],
+        mediaSourcesTruncated: false,
+        premiereDate: null,
+        studios: [],
+        tagline: null,
+      },
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: 6_979_321_856,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+
+      expect(libraryRemovalPreviewSchema.parse(preview)).toEqual(preview);
+      expect(preview).toMatchObject({
+        confirmation: { expectedTitle: "The Long Meridian" },
+        options: [
+          { mode: "delete_files_keep_monitored" },
+          { mode: "delete_files_and_unmonitor" },
+          { mode: "remove_from_radarr_and_delete_files" },
+        ],
+        previewId: `library_removal_preview_${"d".repeat(22)}`,
+        referenceId,
+        sizeBytes: 6_979_321_856,
+        source: { kind: "managed", monitored: true, service: "radarr" },
+      });
+      expect(resolveManagedMovie).toHaveBeenCalledWith(
+        { providerIds: { imdb: "tt1234567", tmdb: 98_765 } },
+        undefined,
+      );
+      expect(JSON.stringify(preview)).not.toMatch(
+        /private-upstream|viewer-external|tt1234567|98765/iu,
+      );
     } finally {
       database.close();
     }

@@ -17,6 +17,8 @@ import {
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseJsonSchema,
   libraryPlaybackStateMutationResponseSchema,
+  libraryRemovalPreviewJsonSchema,
+  libraryRemovalPreviewSchema,
   librarySeasonEpisodesQueryJsonSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseJsonSchema,
@@ -41,6 +43,7 @@ import {
   MediaArtworkError,
   MediaLibraryError,
   MediaPlaybackStateError,
+  LibraryRemovalPreviewError,
   ViewingHistoryError,
 } from "./continue-watching-service.js";
 
@@ -322,6 +325,63 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
             code: "viewing_history_unavailable",
             message: "Viewing history is temporarily unavailable.",
             statusCode: 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/:referenceId/removal-preview",
+    {
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: libraryTitleParamsJsonSchema,
+        response: { 200: libraryRemovalPreviewJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "library.delete");
+      const { referenceId } = libraryTitleParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return libraryRemovalPreviewSchema.parse(
+          await service.previewLibraryRemoval(referenceId, { principal }, controller.signal),
+        );
+      } catch (error) {
+        if (error instanceof LibraryRemovalPreviewError) {
+          const notFound = error.reason === "not_found";
+          const permissionDenied = error.reason === "paired_user_cannot_delete";
+          throw new SafeHttpError({
+            cause: error,
+            code: notFound
+              ? "library_removal_title_not_found"
+              : permissionDenied
+                ? "library_removal_not_permitted"
+                : "library_removal_preview_unavailable",
+            message: notFound
+              ? "The library title is no longer available."
+              : permissionDenied
+                ? "The paired Jellyfin user cannot remove this title."
+                : "The library removal preview is temporarily unavailable.",
+            statusCode: notFound ? 404 : permissionDenied ? 403 : 503,
           });
         }
         throw error;
