@@ -111,7 +111,7 @@ optimistically claim synchronization.
 
 ## Storage and encryption
 
-The migration creates four user-scoped structures:
+The migration creates five user-scoped structures:
 
 1. `saved_lists` stores a random list ID, user ID, kind, encrypted name/description, revision,
    timestamps, and an optional deletion deadline.
@@ -121,6 +121,8 @@ The migration creates four user-scoped structures:
    and list/position constraints.
 4. `saved_targets` stores short-lived random targets bound to user ID and identity-link revision with
    an encrypted normalized target.
+5. `saved_list_operations` stores bounded idempotency state and encrypted successful responses;
+   fingerprints are deployment-keyed and private fields never appear as plaintext operation data.
 
 Private text and normalized provider coordinates use the deployment master key with record type,
 user ID, and record ID as authenticated additional data. Identity lookup uses a separately derived

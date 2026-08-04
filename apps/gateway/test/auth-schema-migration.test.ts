@@ -1118,6 +1118,11 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("library_removal_operations");
       expect(names).toContain("library_removal_previews");
       expect(names).toContain("user_media_state_operations");
+      expect(names).toContain("saved_catalog_items");
+      expect(names).toContain("saved_list_items");
+      expect(names).toContain("saved_list_operations");
+      expect(names).toContain("saved_lists");
+      expect(names).toContain("saved_targets");
       expect(names).toContain("download_queue_removal_operations");
       expect(names).toContain("download_queue_bulk_operations");
       expect(names).toContain("acquisition_queue_recovery_operations");
