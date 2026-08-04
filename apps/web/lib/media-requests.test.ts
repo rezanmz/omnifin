@@ -192,6 +192,32 @@ describe("media request client", () => {
       kind: "routing",
       retryMode: "new_key",
     });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            error: {
+              code: "request_routing_unavailable",
+              message: "No healthy default destination can route the selected format.",
+              requestId: "routing-unavailable",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+    await expect(
+      mediaRequestClient.create(
+        { is4k: true, kind: "movie", tmdbId: 603 },
+        { csrfToken, idempotencyKey: "media-01234567-89ab-cdef-0123-456789abcdef" },
+      ),
+    ).rejects.toMatchObject({
+      code: "request_routing_unavailable",
+      kind: "routing_unavailable",
+      retryMode: "new_key",
+    });
   });
 
   it("sends a validated, CSRF-bound, idempotent request and reads replay state", async () => {

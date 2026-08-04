@@ -107,6 +107,7 @@ export type MediaRequestFailureCode =
   | "request_denied"
   | "response_invalid"
   | "routing_invalid"
+  | "routing_unavailable"
   | "temporarily_unavailable";
 
 const MEDIA_REQUEST_FAILURE_CODES = new Set<MediaRequestFailureCode>([
@@ -117,6 +118,7 @@ const MEDIA_REQUEST_FAILURE_CODES = new Set<MediaRequestFailureCode>([
   "request_denied",
   "response_invalid",
   "routing_invalid",
+  "routing_unavailable",
   "temporarily_unavailable",
 ]);
 
@@ -289,9 +291,37 @@ function rootFolderLabels(paths: string[]) {
   });
 }
 
+function defaultRequestRouting(catalog: SeerrRequestRoutingCatalog): SeerrRequestRouting {
+  const defaults = catalog.destinations.filter((destination) => destination.isDefault);
+  if (defaults.length !== 1) throw new MediaRequestServiceError("routing_unavailable");
+  const destination = defaults[0]!;
+  const qualityProfile = destination.profiles.find(
+    (profile) => profile.id === destination.activeProfileId,
+  );
+  const rootFolder = destination.rootFolders.find(
+    (folder) => folder.path === destination.activeDirectory,
+  );
+  const languageProfile =
+    destination.activeLanguageProfileId === null
+      ? null
+      : destination.languageProfiles.find(
+          (profile) => profile.id === destination.activeLanguageProfileId,
+        );
+  if (!qualityProfile || !rootFolder || languageProfile === undefined) {
+    throw new MediaRequestServiceError("routing_unavailable");
+  }
+  return {
+    ...(languageProfile === null ? {} : { languageProfileId: languageProfile.id }),
+    profileId: qualityProfile.id,
+    rootFolder: rootFolder.path,
+    serverId: destination.id,
+  };
+}
+
 function knownFailure(error: unknown): MediaRequestFailureCode {
   if (error instanceof MediaRequestServiceError) {
     if (error.reason === "routing_invalid") return "routing_invalid";
+    if (error.reason === "routing_unavailable") return "routing_unavailable";
     if (
       error.reason === "configuration_unavailable" ||
       error.reason === "integrity_failure" ||
@@ -311,6 +341,8 @@ function knownFailure(error: unknown): MediaRequestFailureCode {
         return "request_conflict";
       case "request_denied":
         return "request_denied";
+      case "routing_unavailable":
+        return "routing_unavailable";
     }
   }
   if (error instanceof SafeConnectorError) {
@@ -382,19 +414,24 @@ export class MediaRequestService {
     let seerrUserId: number;
     let routing: SeerrRequestRouting | undefined;
     try {
-      const connection = this.#connection("request.create");
+      const connection = this.#connection("request.create", "request.configure");
       adapter = connection.adapter;
-      routing = input.routing
-        ? this.#resolveRouting(
-            input.routing,
-            principal.userId,
-            principal.sessionId,
-            connection.connectorId,
-            input.kind,
-            input.is4k,
+      const routingPromise = input.routing
+        ? Promise.resolve(
+            this.#resolveRouting(
+              input.routing,
+              principal.userId,
+              principal.sessionId,
+              connection.connectorId,
+              input.kind,
+              input.is4k,
+            ),
           )
-        : undefined;
-      seerrUserId = await adapter.resolveUser(identity, signal);
+        : adapter.listRequestRouting(input.kind, input.is4k, signal).then(defaultRequestRouting);
+      [seerrUserId, routing] = await Promise.all([
+        adapter.resolveUser(identity, signal),
+        routingPromise,
+      ]);
     } catch (error) {
       const failureCode = knownFailure(error);
       this.#completeFailure(reservation.operationId, failureCode, input, context);
@@ -444,7 +481,7 @@ export class MediaRequestService {
     }
   }
 
-  #connection(capability: "request.configure" | "request.create") {
+  #connection(...capabilities: Array<"request.configure" | "request.create">) {
     const row = this.#connector();
     const secrets = connectorSecrets(row, this.#cipher);
     const tlsPolicy =
@@ -457,7 +494,7 @@ export class MediaRequestService {
       !CONNECTOR_IDENTIFIER_PATTERN.test(row.id) ||
       !row.displayName.trim() ||
       row.displayName.length > 160 ||
-      !hasRequestCapability(row, capability)
+      !capabilities.every((capability) => hasRequestCapability(row, capability))
     ) {
       throw new MediaRequestServiceError("integrity_failure");
     }
