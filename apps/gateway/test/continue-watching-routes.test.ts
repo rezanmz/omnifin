@@ -162,7 +162,7 @@ async function harness() {
         year: 2026,
       },
     ],
-    nextStartIndex: null,
+    nextStartIndex: 12,
   }));
   const updatePlaybackState = vi.fn(async () => ({
     durationSeconds: 7_200,
@@ -567,7 +567,8 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(libraryExtrasResponseSchema.parse(response.json())).toMatchObject({
+      const extras = libraryExtrasResponseSchema.parse(response.json());
+      expect(extras).toMatchObject({
         items: [
           {
             extraType: "trailer",
@@ -582,6 +583,7 @@ describe("Continue Watching routes", () => {
         parentReferenceId,
         state: "complete",
       });
+      expect(extras.nextCursor).toMatch(/^v2\./u);
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.vary).toContain("Cookie");
       expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
@@ -593,6 +595,26 @@ describe("Continue Watching routes", () => {
           userId: "viewer-external",
         },
         expect.any(AbortSignal),
+      );
+
+      const invalidCursor = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${parentReferenceId}/extras?limit=12&cursor=${encodeURIComponent(`${extras.nextCursor!}tampered`)}`,
+      });
+      expect(invalidCursor.statusCode, invalidCursor.body).toBe(400);
+      expect(apiErrorSchema.parse(invalidCursor.json()).error.code).toBe(
+        "media_library_cursor_invalid",
+      );
+
+      const missingTitle = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/media_${"z".repeat(22)}/extras`,
+      });
+      expect(missingTitle.statusCode, missingTitle.body).toBe(404);
+      expect(apiErrorSchema.parse(missingTitle.json()).error.code).toBe(
+        "media_library_title_not_found",
       );
 
       const signedOut = await app.inject({

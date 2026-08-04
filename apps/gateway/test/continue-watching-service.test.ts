@@ -25,6 +25,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import { DiscoverySearchError } from "../src/discovery/search-service.js";
 import {
   ContinueWatchingError,
   ContinueWatchingService,
@@ -839,6 +840,108 @@ describe("ContinueWatchingService", () => {
         state: "unavailable",
       });
       expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps optional extra sources explicit across empty, unconfigured, and invalid states", async () => {
+    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const parentReferenceId = catalogue.items[0]!.media.id;
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: null,
+        items: [
+          {
+            artwork: {
+              accentColor: null,
+              backdrop: null,
+              blurHash: null,
+              poster: null,
+            },
+            contentRating: null,
+            externalId: "private-local-featurette",
+            extraType: "featurette",
+            overview: null,
+            played: true,
+            positionSeconds: 0,
+            runtimeSeconds: 45,
+            title: "Behind the signal",
+            year: null,
+          },
+        ],
+        nextStartIndex: null,
+      });
+      const localOnly = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(localOnly).toMatchObject({
+        items: [
+          {
+            media: {
+              artwork: { backdropPath: null, posterPath: null },
+              title: "Behind the signal",
+            },
+          },
+        ],
+        nextCursor: null,
+        onlineItems: [],
+        onlineSource: { status: "unconfigured" },
+        onlineState: "unconfigured",
+        state: "complete",
+      });
+      expect(readOnlineExtras).not.toHaveBeenCalled();
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: 1_042,
+        items: [],
+        nextStartIndex: null,
+      });
+      readOnlineExtras.mockResolvedValueOnce({ displayName: "Home Seerr", items: [] });
+      const empty = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(empty).toMatchObject({
+        items: [],
+        onlineItems: [],
+        onlineSource: { displayName: "Home Seerr", status: "healthy" },
+        onlineState: "empty",
+        state: "empty",
+      });
+
+      readLibraryExtras.mockResolvedValueOnce({
+        catalogTmdbId: 1_042,
+        items: [],
+        nextStartIndex: null,
+      });
+      readOnlineExtras.mockRejectedValueOnce(new DiscoverySearchError("connector_unconfigured"));
+      const noDiscoveryConnector = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(noDiscoveryConnector).toMatchObject({
+        onlineItems: [],
+        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineState: "unconfigured",
+        state: "empty",
+      });
+
+      const localExtraReferenceId = localOnly.items[0]!.media.id;
+      const calls = readLibraryExtras.mock.calls.length;
+      await expect(
+        service.readLibraryExtras(localExtraReferenceId, { limit: 12 }, { principal: principal() }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
     } finally {
       database.close();
     }
