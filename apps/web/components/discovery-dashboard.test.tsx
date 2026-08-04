@@ -72,9 +72,14 @@ describe("DiscoveryDashboard", () => {
       "data-artwork-source",
       "remote",
     );
-    const spotlightArtwork = container.querySelector(".hero-spotlight__art-image");
-    expect(spotlightArtwork).toHaveAttribute("fetchpriority", "high");
-    expect(spotlightArtwork).toHaveAttribute("decoding", "sync");
+    const spotlightArtwork = container.querySelector(".hero-spotlight__art");
+    expect(spotlightArtwork).not.toHaveAttribute("style");
+    const artworkTiles = container.querySelectorAll(".hero-spotlight__art-tile img");
+    expect(artworkTiles).toHaveLength(24);
+    expect(artworkTiles[0]).toHaveAttribute(
+      "src",
+      "/api/discovery/artwork/discovery_art_eeeeeeeeeeeeeeeeeeeeee",
+    );
 
     await user.click(
       screen.getAllByRole("button", { name: "View details for The Far Meridian" })[0]!,

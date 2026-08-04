@@ -12,12 +12,21 @@ import {
   libraryItemRefreshRequestSchema,
   libraryMetadataUpdateRequestSchema,
   libraryMutationResponseSchema,
+  libraryPlaybackStateMutationRequestJsonSchema,
+  libraryPlaybackStateMutationRequestSchema,
+  libraryPlaybackStateMutationResponseJsonSchema,
+  libraryPlaybackStateMutationResponseSchema,
   librarySeasonEpisodesQueryJsonSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseJsonSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseJsonSchema,
   libraryTitleDetailResponseSchema,
+  viewingHistoryCursorSchema,
+  viewingHistoryQueryJsonSchema,
+  viewingHistoryQuerySchema,
+  viewingHistoryResponseJsonSchema,
+  viewingHistoryResponseSchema,
 } from "../src/library.js";
 
 const referenceId = `media_${"m".repeat(22)}`;
@@ -131,6 +140,110 @@ describe("library operation contracts", () => {
       libraryBrowseQuerySchema.parse({ kind: "series", query: "  Meridian  ", sort: "title" }),
     ).toEqual({ kind: "series", limit: 30, query: "Meridian", sort: "title" });
     expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+  });
+
+  it("models explicit, user-scoped playback-state commands", () => {
+    expect(libraryPlaybackStateMutationRequestSchema.parse({ action: "reset_progress" })).toEqual({
+      action: "reset_progress",
+    });
+    expect(
+      libraryPlaybackStateMutationRequestSchema.safeParse({
+        action: "mark_watched",
+        externalUserId: "jellyfin-user-1",
+      }).success,
+    ).toBe(false);
+    const response = {
+      action: "mark_unwatched" as const,
+      playback: { durationSeconds: 2_700, played: false, positionSeconds: 0 },
+      referenceId,
+      updatedAt: catalogue.generatedAt,
+    };
+    expect(libraryPlaybackStateMutationResponseSchema.parse(response)).toEqual(response);
+    for (const invalid of [
+      { action: "mark_watched", playback: { ...response.playback, played: false } },
+      { action: "mark_unwatched", playback: { ...response.playback, positionSeconds: 10 } },
+      { action: "reset_progress", playback: { ...response.playback, positionSeconds: 10 } },
+    ]) {
+      expect(
+        libraryPlaybackStateMutationResponseSchema.safeParse({
+          ...response,
+          ...invalid,
+        }).success,
+      ).toBe(false);
+    }
+    expect(JSON.stringify(response)).not.toMatch(/external|jellyfin\.example|upstream/iu);
+  });
+
+  it("models private, bounded, filterable viewing history with opaque references", () => {
+    const history = {
+      generatedAt: catalogue.generatedAt,
+      items: [
+        {
+          activity: "in_progress" as const,
+          lastPlayedAt: "2026-07-28T13:00:00.000Z",
+          media: catalogue.items[0]!.media,
+          playback: catalogue.items[0]!.playback!,
+        },
+      ],
+      nextCursor: "aGlzdG9yeQ.c2lnbmF0dXJl",
+      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+      state: "complete" as const,
+    };
+    expect(viewingHistoryResponseSchema.parse(history)).toEqual(history);
+    expect(
+      viewingHistoryQuerySchema.parse({ kind: "episodes", limit: "20", range: "90_days" }),
+    ).toEqual({ kind: "episodes", limit: 20, range: "90_days", state: "all" });
+    expect(viewingHistoryQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(viewingHistoryCursorSchema.safeParse("c".repeat(1_024)).success).toBe(true);
+    expect(viewingHistoryCursorSchema.safeParse("c".repeat(1_025)).success).toBe(false);
+    expect(
+      viewingHistoryResponseSchema.safeParse({
+        generatedAt: catalogue.generatedAt,
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: "Home Jellyfin",
+          failure: {
+            code: "upstream_error",
+            message: "Viewing history references are temporarily unavailable.",
+            occurredAt: catalogue.generatedAt,
+            operation: "media.reference",
+            retryable: true,
+            service: "jellyfin",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      }).success,
+    ).toBe(true);
+    expect(JSON.stringify(history)).not.toMatch(/external|jellyfin\.example|upstream/iu);
+  });
+
+  it("rejects viewing activity that disagrees with current Jellyfin state", () => {
+    const base = {
+      activity: "completed" as const,
+      lastPlayedAt: catalogue.generatedAt,
+      media: catalogue.items[0]!.media,
+      playback: { durationSeconds: 2_700, played: true, positionSeconds: 0 },
+    };
+    expect(
+      viewingHistoryResponseSchema.safeParse({
+        generatedAt: catalogue.generatedAt,
+        items: [{ ...base, playback: { ...base.playback, played: false } }],
+        nextCursor: null,
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      }).success,
+    ).toBe(false);
+    expect(
+      viewingHistoryResponseSchema.safeParse({
+        generatedAt: catalogue.generatedAt,
+        items: [{ ...base, media: { ...base.media, kind: "series" } }],
+        nextCursor: null,
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects mismatched playback, cross-reference, or inconsistent catalogue state", () => {
@@ -419,6 +532,10 @@ describe("library operation contracts", () => {
     expect(libraryBrowseQueryJsonSchema).toMatchObject({ type: "object" });
     expect(libraryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryBrowseResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryPlaybackStateMutationRequestJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryPlaybackStateMutationResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(viewingHistoryQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).toMatchObject({ type: "object" });
     expect(librarySeasonEpisodesQueryJsonSchema).not.toHaveProperty("$schema");

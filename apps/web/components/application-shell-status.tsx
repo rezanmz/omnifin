@@ -3,7 +3,7 @@
 import { useLayoutEffect, useState } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
-import { APPLICATION_SHELL_STATUS_ATTRIBUTE } from "./application-shell";
+import { APPLICATION_SHELL_STATUS_ATTRIBUTE } from "./application-shell-contract";
 import { ConnectionPulse } from "./connection-pulse";
 
 export function ApplicationShellStatus() {

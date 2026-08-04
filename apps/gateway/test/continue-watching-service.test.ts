@@ -3,6 +3,7 @@ import type {
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
+  JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
@@ -15,6 +16,7 @@ import {
   libraryBrowseResponseSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
+  viewingHistoryResponseSchema,
 } from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
@@ -238,17 +240,41 @@ function harness(options: { withIdentity?: boolean } = {}) {
     body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
     contentType: "image/jpeg" as const,
   }));
+  const updatePlaybackState = vi.fn(async () => ({
+    durationSeconds: 2_700,
+    played: false,
+    positionSeconds: 0,
+  }));
+  const readViewingHistory = vi.fn(
+    async (input: { afterItemId?: string }): Promise<JellyfinViewingHistoryResult> => ({
+      boundaryFound: true,
+      items:
+        input.afterItemId === undefined
+          ? [
+              {
+                ...resumeResult().items[0]!,
+                kind: "episode",
+                played: false,
+              },
+            ]
+          : [],
+      nextAfterItemId: input.afterItemId === undefined ? privateItemId : null,
+    }),
+  );
   const createClient = vi.fn((_input: ContinueWatchingClientFactoryInput) => ({
     readContinueWatching,
     readImage,
     readLibrary,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readViewingHistory,
+    updatePlaybackState,
   }));
   let mediaReferenceIndex = 0;
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
+    createUserMediaStateOperationToken: () => "o".repeat(22),
     mediaReferences: {
       clock: () => now,
       createToken: () => (mediaReferenceIndex++ === 0 ? "m" : "e").repeat(22),
@@ -263,7 +289,9 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readLibrary,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readViewingHistory,
     service,
+    updatePlaybackState,
   };
 }
 
@@ -397,6 +425,157 @@ describe("ContinueWatchingService", () => {
         expect.objectContaining({ startIndex: 30, userId: "viewer-external" }),
         undefined,
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reads only the paired user's bounded history through filter-bound opaque cursors", async () => {
+    const { database, readViewingHistory, service } = harness();
+    try {
+      const first = await service.readViewingHistory(
+        { kind: "all", limit: 24, range: "30_days", state: "all" },
+        { principal: principal() },
+      );
+      expect(viewingHistoryResponseSchema.parse(first)).toEqual(first);
+      expect(first).toMatchObject({
+        items: [
+          {
+            activity: "in_progress",
+            media: {
+              id: `media_${"m".repeat(22)}`,
+              kind: "episode",
+              title: "Northern Lights",
+            },
+            playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+          },
+        ],
+        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        state: "complete",
+      });
+      expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+      expect(JSON.stringify(first)).not.toMatch(
+        /private-jellyfin|private-upstream|viewer-external/u,
+      );
+      expect(readViewingHistory).toHaveBeenCalledWith(
+        {
+          kind: "all",
+          limit: 24,
+          since: "2026-06-28T05:00:00.000Z",
+          state: "all",
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+
+      const second = await service.readViewingHistory(
+        {
+          cursor: first.nextCursor!,
+          kind: "all",
+          limit: 24,
+          range: "30_days",
+          state: "all",
+        },
+        { principal: principal() },
+      );
+      expect(second).toMatchObject({ items: [], nextCursor: null, state: "empty" });
+      expect(readViewingHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          afterItemId: privateItemId,
+          since: "2026-06-28T05:00:00.000Z",
+          userId: "viewer-external",
+        }),
+        undefined,
+      );
+
+      await expect(
+        service.readViewingHistory(
+          {
+            cursor: first.nextCursor!,
+            kind: "movies",
+            limit: 24,
+            range: "30_days",
+            state: "all",
+          },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "cursor_invalid" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps an encrypted history boundary with a maximum valid Jellyfin item ID routable", async () => {
+    const { database, readViewingHistory, service } = harness();
+    const maximumItemId = "h".repeat(256);
+    readViewingHistory.mockResolvedValueOnce({
+      boundaryFound: true,
+      items: [
+        {
+          ...resumeResult().items[0]!,
+          externalId: maximumItemId,
+          kind: "episode",
+          played: false,
+        },
+      ],
+      nextAfterItemId: maximumItemId,
+    });
+    try {
+      const response = await service.readViewingHistory(
+        { kind: "all", limit: 50, range: "1_year", state: "all" },
+        { principal: principal() },
+      );
+      expect(response.nextCursor?.length).toBeLessThanOrEqual(1_024);
+      expect(viewingHistoryResponseSchema.parse(response)).toEqual(response);
+      expect(JSON.stringify(response)).not.toContain(maximumItemId);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("binds all supported history ranges and degrades connector failures without private detail", async () => {
+    const { database, readViewingHistory, service } = harness();
+    try {
+      for (const [range, since] of [
+        ["all", undefined],
+        ["7_days", "2026-07-21T05:00:00.000Z"],
+        ["90_days", "2026-04-29T05:00:00.000Z"],
+      ] as const) {
+        await service.readViewingHistory(
+          { kind: "episodes", limit: 12, range, state: "in_progress" },
+          { principal: principal() },
+        );
+        expect(readViewingHistory).toHaveBeenLastCalledWith(
+          {
+            kind: "episodes",
+            limit: 12,
+            ...(since === undefined ? {} : { since }),
+            state: "in_progress",
+            userId: "viewer-external",
+          },
+          undefined,
+        );
+      }
+
+      readViewingHistory.mockRejectedValueOnce(
+        new Error(`private ${privateItemId} ${privateAccessToken}`),
+      );
+      const unavailable = await service.readViewingHistory(
+        { kind: "all", limit: 24, range: "30_days", state: "all" },
+        { principal: principal() },
+      );
+      expect(unavailable).toMatchObject({
+        items: [],
+        source: {
+          failure: {
+            message: "Jellyfin viewing history is temporarily unavailable.",
+            operation: "media.viewing_history",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
+      expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
     } finally {
       database.close();
     }
@@ -629,6 +808,157 @@ describe("ContinueWatchingService", () => {
         ),
       ).rejects.toMatchObject({ reason: "not_found" });
       expect(readLibrarySeasonEpisodes).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("updates only the paired user's opaque playback state and replays the result idempotently", async () => {
+    const { database, service, updatePlaybackState } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      const first = await service.updatePlaybackState(
+        referenceId,
+        { action: "reset_progress" },
+        "playback-state-1",
+        { ipAddress: "198.51.100.24", principal: principal(), requestId: "request-state-1" },
+      );
+      const replay = await service.updatePlaybackState(
+        referenceId,
+        { action: "reset_progress" },
+        "playback-state-1",
+        { ipAddress: "198.51.100.24", principal: principal(), requestId: "request-state-1" },
+      );
+
+      expect(first).toEqual({
+        replayed: false,
+        response: {
+          action: "reset_progress",
+          playback: { durationSeconds: 2_700, played: false, positionSeconds: 0 },
+          referenceId,
+          updatedAt: now.toISOString(),
+        },
+      });
+      expect(replay).toEqual({ ...first, replayed: true });
+      expect(updatePlaybackState).toHaveBeenCalledTimes(1);
+      expect(updatePlaybackState).toHaveBeenCalledWith(
+        {
+          action: "reset_progress",
+          itemId: privateItemId,
+          userId: "viewer-external",
+        },
+        undefined,
+      );
+      const stored = JSON.stringify(
+        database.sqlite
+          .prepare(
+            `select id, idempotency_key_hash as keyHash, fingerprint_hash as fingerprintHash,
+                    response_json as responseJson, state
+             from user_media_state_operations`,
+          )
+          .all(),
+      );
+      expect(stored).not.toMatch(/playback-state-1|private-upstream|viewer-external/u);
+      expect(stored).toContain('"state":"succeeded"');
+      const audits = database.sqlite
+        .prepare(
+          `select event_type as eventType, outcome, target_type as targetType,
+                  target_id as targetId, request_id as requestId,
+                  metadata_json as metadataJson, ip_hash as ipHash
+           from audit_events
+           where event_type = 'media.playback_state.changed'`,
+        )
+        .all() as Array<Record<string, unknown>>;
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        eventType: "media.playback_state.changed",
+        ipHash: expect.any(String),
+        metadataJson: '{"action":"reset_progress"}',
+        outcome: "success",
+        requestId: "request-state-1",
+        targetId: expect.stringMatching(/^user_media_state_[A-Za-z0-9_-]{22}$/u),
+        targetType: "user_media_state_operation",
+      });
+      expect(JSON.stringify(audits)).not.toMatch(
+        /198\.51\.100\.24|private-upstream|viewer-external|playback-state-1|Ember Coast/u,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects idempotency conflicts and references owned by another user before mutation", async () => {
+    const { database, service, updatePlaybackState } = harness();
+    updatePlaybackState.mockResolvedValueOnce({
+      durationSeconds: 2_700,
+      played: true,
+      positionSeconds: 0,
+    });
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      await service.updatePlaybackState(
+        referenceId,
+        { action: "mark_watched" },
+        "playback-state-2",
+        { principal: principal() },
+      );
+      await expect(
+        service.updatePlaybackState(referenceId, { action: "mark_unwatched" }, "playback-state-2", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "idempotency_conflict" });
+      await expect(
+        service.updatePlaybackState(
+          `media_${"z".repeat(22)}`,
+          { action: "mark_watched" },
+          "playback-state-3",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(updatePlaybackState).toHaveBeenCalledTimes(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("allows a failed desired-state write to retry safely with the same idempotency key", async () => {
+    const { database, service, updatePlaybackState } = harness();
+    updatePlaybackState
+      .mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "timeout",
+          message: "Jellyfin did not respond before the deadline.",
+          operation: "media.playback_state",
+          retryable: true,
+          service: "jellyfin",
+        }),
+      )
+      .mockResolvedValueOnce({ durationSeconds: 2_700, played: true, positionSeconds: 0 });
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      await expect(
+        service.updatePlaybackState(
+          referenceId,
+          { action: "mark_watched" },
+          "playback-state-retry",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.updatePlaybackState(
+          referenceId,
+          { action: "mark_watched" },
+          "playback-state-retry",
+          { principal: principal() },
+        ),
+      ).resolves.toMatchObject({
+        replayed: false,
+        response: { action: "mark_watched", playback: { played: true, positionSeconds: 0 } },
+      });
+      expect(updatePlaybackState).toHaveBeenCalledTimes(2);
     } finally {
       database.close();
     }

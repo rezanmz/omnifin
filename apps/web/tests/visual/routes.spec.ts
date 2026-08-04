@@ -28,6 +28,12 @@ const lightVisualProjects = new Set(["chromium", "mobile"]);
 
 test.use({ contextOptions: { reducedMotion: "reduce" } });
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("omnifin-test-material", "settled");
+  });
+});
+
 function routeForProject(path: string, projectName: string) {
   if (projectName !== "ten-foot") return path;
   const url = new URL(path, "http://omnifin.test");
@@ -1145,6 +1151,66 @@ test("acquisition calendar event drawer visual baseline", async ({ page }, testI
   await removeDevelopmentIndicator(page);
   await expect(page).toHaveScreenshot("acquisition-calendar-event.png");
 });
+
+test("private viewing history visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !stateVisualProjects.has(testInfo.project.name),
+    "Private viewing history covers representative desktop and phone geometry",
+  );
+  await page.goto("/history?test-view=ready");
+  await page.getByRole("heading", { name: "Your story, in sequence." }).waitFor();
+  if (testInfo.project.name === "mobile") {
+    const firstEntry = page.locator('section[aria-labelledby^="history-day-"] li').first();
+    const poster = firstEntry.locator(":scope > span");
+    const copy = firstEntry.locator(":scope > div");
+    const navigation = page.locator(".mobile-navigation");
+    const metrics = page.locator("dl").first();
+    const [posterBox, copyBox, navigationBox, metricsBox] = await Promise.all([
+      poster.boundingBox(),
+      copy.boundingBox(),
+      navigation.boundingBox(),
+      metrics.boundingBox(),
+    ]);
+    expect(posterBox).not.toBeNull();
+    expect(copyBox).not.toBeNull();
+    expect(navigationBox).not.toBeNull();
+    expect(metricsBox).not.toBeNull();
+    expect(posterBox!.width).toBeLessThanOrEqual(90);
+    expect(posterBox!.x + posterBox!.width).toBeLessThanOrEqual(copyBox!.x);
+    expect(
+      navigationBox!.y + navigationBox!.height,
+      "mobile navigation should not obscure the history summary",
+    ).toBeLessThanOrEqual(metricsBox!.y);
+  }
+  await removeDevelopmentIndicator(page);
+  await expect(page).toHaveScreenshot("viewing-history.png", { fullPage: true });
+});
+
+test("light private viewing history visual baseline", async ({ page }, testInfo) => {
+  test.skip(
+    !lightVisualProjects.has(testInfo.project.name),
+    "Light private viewing history covers representative desktop and phone geometry",
+  );
+  await useLightTheme(page);
+  await page.goto("/history?test-view=ready");
+  await page.getByRole("heading", { name: "Your story, in sequence." }).waitFor();
+  await removeDevelopmentIndicator(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page).toHaveScreenshot("viewing-history-light.png", { fullPage: true });
+});
+
+for (const state of ["empty", "unavailable", "loading"] as const) {
+  test(`${state} private viewing history visual baseline`, async ({ page }, testInfo) => {
+    test.skip(
+      !stateVisualProjects.has(testInfo.project.name),
+      "Private viewing history boundaries cover representative desktop and phone geometry",
+    );
+    await page.goto(`/history?test-view=${state}`);
+    await page.locator("main").waitFor();
+    await removeDevelopmentIndicator(page);
+    await expect(page).toHaveScreenshot(`viewing-history-${state}.png`, { fullPage: true });
+  });
+}
 
 test("viewer library visual baseline", async ({ page }, testInfo) => {
   test.skip(

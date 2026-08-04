@@ -121,6 +121,56 @@
   width: 17px;
 }
 
+.library-title__playback-actions {
+  display: grid;
+  gap: 9px;
+  margin-top: 22px;
+  width: min(100%, 560px);
+}
+
+.library-title__playback-primary,
+.library-title__history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-title__playback-primary .button,
+.library-title__history-controls .button {
+  min-height: 44px;
+}
+
+.library-title__playback-primary svg,
+.library-title__history-controls svg {
+  height: 16px;
+  width: 16px;
+}
+
+.library-title__history-controls {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 9px;
+}
+
+.library-title__history-controls .button {
+  color: var(--paper-1);
+  font-size: 0.72rem;
+}
+
+.library-title__history-status {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  min-height: 1em;
+}
+
+.library-title__history-status[data-state="success"] {
+  color: var(--acid);
+}
+
+.library-title__history-status[data-state="error"] {
+  color: var(--danger);
+}
+
 .library-title__tagline {
   color: var(--paper-0);
   font-family: var(--font-display);
@@ -925,13 +975,8 @@
   font-size: 0.76rem;
 }
 
-.library-title__episode-detail-play {
-  justify-self: start;
-}
-
-.library-title__episode-detail-play svg {
-  height: 16px;
-  width: 16px;
+.library-title__episode-detail .library-title__playback-actions {
+  margin-top: 0;
 }
 
 .library-title__more {

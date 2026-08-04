@@ -695,7 +695,11 @@ describe("authentication contracts", () => {
 
   it("keeps role permissions monotonic", () => {
     expect(ROLE_PERMISSIONS.viewer).toEqual(
-      expect.arrayContaining(["identities.self.manage", "sessions.self.revoke"]),
+      expect.arrayContaining([
+        "identities.self.manage",
+        "playback.history.self.manage",
+        "sessions.self.revoke",
+      ]),
     );
 
     const roleOrder = ["viewer", "requester", "operator", "admin"] as const;

@@ -97,6 +97,7 @@ export type Role = z.infer<typeof roleSchema>;
 export const permissionSchema = z.enum([
   "media.view",
   "playback.use",
+  "playback.history.self.manage",
   "request.create",
   "request.review",
   "acquisition.manage",
@@ -146,10 +147,17 @@ export const RECOVERY_PERMISSIONS = [
 ] as const satisfies readonly Permission[];
 
 export const ROLE_PERMISSIONS = {
-  viewer: ["media.view", "playback.use", "identities.self.manage", "sessions.self.revoke"],
+  viewer: [
+    "media.view",
+    "playback.use",
+    "playback.history.self.manage",
+    "identities.self.manage",
+    "sessions.self.revoke",
+  ],
   requester: [
     "media.view",
     "playback.use",
+    "playback.history.self.manage",
     "identities.self.manage",
     "sessions.self.revoke",
     "request.create",
@@ -157,6 +165,7 @@ export const ROLE_PERMISSIONS = {
   operator: [
     "media.view",
     "playback.use",
+    "playback.history.self.manage",
     "identities.self.manage",
     "sessions.self.revoke",
     "request.create",

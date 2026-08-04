@@ -127,6 +127,12 @@ export const mediaLibraryDemoItems: LibraryBrowseItem[] = [
   }),
 ];
 
+const demoPlaybackStates = new Map(
+  mediaLibraryDemoItems.flatMap((libraryItem) =>
+    libraryItem.playback ? [[libraryItem.media.id, libraryItem.playback] as const] : [],
+  ),
+);
+
 export const readyMediaLibraryOutcome = {
   feed: {
     generatedAt,
@@ -271,6 +277,14 @@ function demoEpisode(
 ): LibrarySeasonEpisode {
   const referenceId = `media_${referenceCharacter.repeat(22)}`;
   const durationSeconds = (42 + episodeNumber) * 60;
+  const playback =
+    demoPlaybackStates.get(referenceId) ??
+    ({
+      durationSeconds,
+      played: episodeNumber <= 3 && seasonNumber === 1,
+      positionSeconds: episodeNumber === 1 && seasonNumber === 2 ? 780 : 0,
+    } as const);
+  demoPlaybackStates.set(referenceId, playback);
   return {
     airDate: `2026-0${Math.min(9, seasonNumber + 2)}-${String(episodeNumber * 3).padStart(2, "0")}`,
     communityRating: 7.4 + episodeNumber / 10,
@@ -303,11 +317,7 @@ function demoEpisode(
         (episodeNumber - 1) % 3
       ]!,
     },
-    playback: {
-      durationSeconds,
-      played: episodeNumber <= 3 && seasonNumber === 1,
-      positionSeconds: episodeNumber === 1 && seasonNumber === 2 ? 780 : 0,
-    },
+    playback,
     studios: ["Northlight Pictures"],
   };
 }
@@ -338,5 +348,17 @@ export const mediaLibraryDemoClient: MediaLibraryClient = {
     const detail = demoDetails.get(referenceId);
     if (!detail) throw new Error("Title unavailable");
     return detail;
+  },
+  async updatePlaybackState(referenceId, request) {
+    const previous = demoPlaybackStates.get(referenceId);
+    if (!previous) throw new Error("Playback state unavailable");
+    const playback =
+      request.action === "mark_watched"
+        ? { ...previous, played: true, positionSeconds: 0 }
+        : request.action === "mark_unwatched"
+          ? { ...previous, played: false, positionSeconds: 0 }
+          : { ...previous, positionSeconds: 0 };
+    demoPlaybackStates.set(referenceId, playback);
+    return { action: request.action, playback, referenceId, updatedAt: generatedAt };
   },
 };

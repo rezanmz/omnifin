@@ -9,6 +9,17 @@ type AccentStyle = CSSProperties & {
   "--hero-accent": string;
 };
 
+const ARTWORK_TILE_COLUMNS = 6;
+const ARTWORK_TILE_ROWS = 4;
+const ARTWORK_TILES = Array.from(
+  { length: ARTWORK_TILE_COLUMNS * ARTWORK_TILE_ROWS },
+  (_, index) => ({
+    column: index % ARTWORK_TILE_COLUMNS,
+    index,
+    row: Math.floor(index / ARTWORK_TILE_COLUMNS),
+  }),
+);
+
 export interface HeroSpotlightProperties {
   actionRegion?: ReactNode;
   artworkPath?: string | null;
@@ -41,19 +52,25 @@ export function HeroSpotlight({ actionRegion, artworkPath, hero }: HeroSpotlight
     >
       <div className="hero-spotlight__art" aria-hidden="true">
         {safeArtworkPath ? (
-          // The gateway already serves a bounded, session-protected image. Browser-native loading
-          // keeps credentials same-origin and avoids routing private artwork through an optimizer.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt=""
-            className="hero-spotlight__art-image"
-            decoding="sync"
-            fetchPriority="high"
-            height={338}
-            loading="eager"
-            src={safeArtworkPath}
-            width={600}
-          />
+          <span className="hero-spotlight__art-tiles">
+            {ARTWORK_TILES.map((tile) => (
+              <span className="hero-spotlight__art-tile" key={tile.index}>
+                {/* Repeated clipped views share one decoded image while keeping
+                    decorative artwork from displacing meaningful hero text as LCP. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  alt=""
+                  decoding="async"
+                  fetchPriority={tile.index === 0 ? "high" : "auto"}
+                  src={safeArtworkPath}
+                  style={{
+                    left: `${-tile.column * 100}%`,
+                    top: `${-tile.row * 100}%`,
+                  }}
+                />
+              </span>
+            ))}
+          </span>
         ) : null}
         <div className="hero-spotlight__planet" />
         <div className="hero-spotlight__signal" />

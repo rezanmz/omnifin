@@ -3,18 +3,21 @@ import type {
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
+  JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   libraryBrowseResponseSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
+  viewingHistoryResponseSchema,
 } from "@omnifin/contracts/library";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
+import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
@@ -136,7 +139,24 @@ async function harness() {
       truncated: false,
     }),
   );
+  const updatePlaybackState = vi.fn(async () => ({
+    durationSeconds: 7_200,
+    played: true,
+    positionSeconds: 0,
+  }));
+  const readViewingHistory = vi.fn(async (): Promise<JellyfinViewingHistoryResult> => ({
+    boundaryFound: true,
+    items: [
+      {
+        ...result.items[0]!,
+        kind: "movie",
+        played: false,
+      },
+    ],
+    nextAfterItemId: null,
+  }));
   let mediaReferenceIndex = 0;
+  let stateOperationIndex = 0;
   const app = await createApp({
     config,
     continueWatchingDependencies: {
@@ -147,7 +167,10 @@ async function harness() {
         readLibrary,
         readLibrarySeasonEpisodes,
         readLibraryTitle,
+        readViewingHistory,
+        updatePlaybackState,
       }),
+      createUserMediaStateOperationToken: () => String(++stateOperationIndex).padStart(22, "o"),
       mediaReferences: {
         clock: () => now,
         createToken: () => (mediaReferenceIndex++ === 0 ? "r" : "e").repeat(22),
@@ -223,6 +246,8 @@ async function harness() {
     readLibrary,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readViewingHistory,
+    updatePlaybackState,
     viewer,
   };
 }
@@ -255,6 +280,91 @@ describe("Continue Watching routes", () => {
       expect(response.body).not.toContain(privateToken);
       expect(response.body).not.toContain(privateItemId);
       expect(readContinueWatching).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves private viewing history through the paired session without upstream identifiers", async () => {
+    const { app, readViewingHistory, viewer } = await harness();
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/history?kind=movies&limit=24&range=30_days&state=in_progress",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const history = viewingHistoryResponseSchema.parse(response.json());
+      expect(history).toMatchObject({
+        items: [
+          {
+            activity: "in_progress",
+            media: { kind: "movie", title: "The Far Meridian" },
+          },
+        ],
+        state: "complete",
+      });
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toContain("Cookie");
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+      expect(readViewingHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "movies",
+          limit: 24,
+          state: "in_progress",
+          userId: "viewer-external",
+        }),
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects stale history boundaries and reports a disabled paired source safely", async () => {
+    const { app, readViewingHistory, viewer } = await harness();
+    const initialHistory = await readViewingHistory();
+    readViewingHistory.mockResolvedValueOnce({
+      ...initialHistory,
+      nextAfterItemId: privateItemId,
+    });
+    try {
+      const first = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/history?kind=all&limit=24&range=all&state=all",
+      });
+      const cursor = viewingHistoryResponseSchema.parse(first.json()).nextCursor!;
+      readViewingHistory.mockResolvedValueOnce({
+        boundaryFound: false,
+        items: [],
+        nextAfterItemId: null,
+      });
+      const stale = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/history?kind=all&limit=24&range=all&state=all&cursor=${encodeURIComponent(cursor)}`,
+      });
+      expect(stale.statusCode).toBe(400);
+      expect(apiErrorSchema.parse(stale.json()).error.code).toBe("viewing_history_cursor_invalid");
+      expect(stale.body).not.toContain(cursor);
+
+      app.database.sqlite
+        .prepare(
+          "update service_identity_links set encrypted_access_token = 'invalid' where id = 'viewer-link'",
+        )
+        .run();
+      const unavailable = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/history",
+      });
+      expect(unavailable.statusCode, unavailable.body).toBe(200);
+      expect(viewingHistoryResponseSchema.parse(unavailable.json())).toMatchObject({
+        items: [],
+        source: { failure: { code: "configuration_invalid" }, status: "unavailable" },
+        state: "unavailable",
+      });
     } finally {
       await app.close();
     }
@@ -507,6 +617,172 @@ describe("Continue Watching routes", () => {
       expect(detailResponse.body + episodesResponse.body).not.toMatch(
         /route-private|viewer-external|jellyfin\.example/iu,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("protects idempotent playback-state writes with origin, CSRF, and opaque identity", async () => {
+    const { app, updatePlaybackState, viewer } = await harness();
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const request = {
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": "route-playback-state-1",
+          origin: "https://omnifin.example",
+          [SESSION_CSRF_HEADER]: viewer.csrfToken,
+        },
+        method: "POST" as const,
+        payload: { action: "mark_watched" },
+        url: `/v1/media/library/${referenceId}/playback-state`,
+      };
+
+      const headersWithoutOrigin: Record<string, string> = { ...request.headers };
+      delete headersWithoutOrigin.origin;
+      const missingOrigin = await app.inject({
+        ...request,
+        headers: headersWithoutOrigin,
+      });
+      expect(missingOrigin.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(missingOrigin.json()).error.code).toBe("origin_denied");
+
+      const headersWithoutCsrf: Record<string, string> = { ...request.headers };
+      delete headersWithoutCsrf[SESSION_CSRF_HEADER];
+      const missingCsrf = await app.inject({
+        ...request,
+        headers: headersWithoutCsrf,
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe("csrf_denied");
+
+      const response = await app.inject(request);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        action: "mark_watched",
+        playback: { durationSeconds: 7_200, played: true, positionSeconds: 0 },
+        referenceId,
+        updatedAt: now.toISOString(),
+      });
+      expect(response.headers["idempotency-replayed"]).toBe("false");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+      expect(updatePlaybackState).toHaveBeenCalledWith(
+        {
+          action: "mark_watched",
+          itemId: privateItemId,
+          userId: "viewer-external",
+        },
+        expect.any(AbortSignal),
+      );
+
+      const replay = await app.inject(request);
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.headers["idempotency-replayed"]).toBe("true");
+      expect(updatePlaybackState).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps playback-state conflicts and upstream outcomes to bounded public errors", async () => {
+    const { app, updatePlaybackState, viewer } = await harness();
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const request = (key: string, action = "mark_watched") => ({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": key,
+          origin: "https://omnifin.example",
+          [SESSION_CSRF_HEADER]: viewer.csrfToken,
+        },
+        method: "POST" as const,
+        payload: { action },
+        url: `/v1/media/library/${referenceId}/playback-state`,
+      });
+
+      expect((await app.inject(request("route-conflict"))).statusCode).toBe(200);
+      const conflict = await app.inject(request("route-conflict", "mark_unwatched"));
+      expect(conflict.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(conflict.json()).error.code).toBe("idempotency_key_conflict");
+
+      const missing = await app.inject({
+        ...request("route-missing"),
+        url: `/v1/media/library/media_${"z".repeat(22)}/playback-state`,
+      });
+      expect(apiErrorSchema.parse(missing.json()).error.code).toBe("media_library_title_not_found");
+      expect(missing.statusCode).toBe(404);
+
+      updatePlaybackState.mockResolvedValueOnce({
+        durationSeconds: 7_200,
+        played: false,
+        positionSeconds: 0,
+      });
+      const invalid = await app.inject(request("route-invalid-response"));
+      expect(invalid.statusCode).toBe(502);
+      expect(apiErrorSchema.parse(invalid.json()).error.code).toBe(
+        "media_playback_state_response_invalid",
+      );
+
+      updatePlaybackState.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "invalid_credentials",
+          message: "private upstream denial",
+          operation: "media.playback_state",
+          retryable: false,
+          service: "jellyfin",
+          status: 403,
+        }),
+      );
+      const denied = await app.inject(request("route-denied"));
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe(
+        "media_playback_state_permission_denied",
+      );
+
+      updatePlaybackState.mockRejectedValueOnce(new Error("private upstream failure"));
+      const unavailable = await app.inject(request("route-unavailable"));
+      expect(unavailable.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
+        "media_playback_state_unavailable",
+      );
+      expect(conflict.body + invalid.body + denied.body + unavailable.body).not.toMatch(
+        /private upstream/iu,
+      );
+
+      let resolvePending!: (playback: {
+        durationSeconds: number;
+        played: boolean;
+        positionSeconds: number;
+      }) => void;
+      updatePlaybackState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePending = resolve;
+          }),
+      );
+      const firstPending = app.inject(request("route-pending"));
+      await vi.waitFor(() => expect(updatePlaybackState).toHaveBeenCalledTimes(5));
+      const pending = await app.inject(request("route-pending"));
+      expect(pending.statusCode).toBe(409);
+      expect(pending.headers["retry-after"]).toBe("2");
+      expect(apiErrorSchema.parse(pending.json()).error.code).toBe(
+        "media_playback_state_outcome_pending",
+      );
+      resolvePending({ durationSeconds: 7_200, played: true, positionSeconds: 0 });
+      expect((await firstPending).statusCode).toBe(200);
     } finally {
       await app.close();
     }

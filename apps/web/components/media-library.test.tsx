@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   emptyMediaLibraryOutcome,
+  mediaLibraryDemoClient,
   mediaLibraryDemoItems,
   readyMediaLibraryOutcome,
   unavailableMediaLibraryOutcome,
@@ -219,6 +220,16 @@ describe("MediaLibrary", () => {
     expect(screen.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
     expect(playbackClient.prepare).not.toHaveBeenCalled();
 
+    await user.click(screen.getByRole("button", { name: "Play movie from beginning" }));
+    expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
+    expect(playbackClient.prepare).toHaveBeenCalledWith(
+      `media_${"a".repeat(22)}`,
+      0,
+      expect.any(AbortSignal),
+      expect.objectContaining({ mode: "auto" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Close player" }));
+
     await user.click(screen.getByRole("button", { name: "Resume movie" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
     expect(playbackClient.prepare).toHaveBeenCalledWith(
@@ -232,6 +243,43 @@ describe("MediaLibrary", () => {
     expect(screen.getByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Close title details" }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("updates saved Jellyfin progress separately from one-time playback position", async () => {
+    const user = userEvent.setup();
+    const referenceId = `media_${"a".repeat(22)}`;
+    const updatePlaybackState = vi.fn(async () => ({
+      action: "reset_progress" as const,
+      playback: { durationSeconds: 7_080, played: false, positionSeconds: 0 },
+      referenceId,
+      updatedAt: "2026-07-30T12:30:00.000Z",
+    }));
+    render(
+      libraryScreen(
+        <MediaLibrary
+          client={{ ...mediaLibraryDemoClient, updatePlaybackState }}
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+        />,
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
+    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
+    expect(within(detail).getByRole("button", { name: "Play movie from beginning" })).toBeVisible();
+    await user.click(within(detail).getByRole("button", { name: "Reset saved progress" }));
+
+    await waitFor(() =>
+      expect(updatePlaybackState).toHaveBeenCalledWith(referenceId, {
+        action: "reset_progress",
+      }),
+    );
+    expect(within(detail).getByText("Saved progress reset in Jellyfin.")).toBeVisible();
+    expect(within(detail).getByRole("button", { name: "Play movie" })).toBeVisible();
+    expect(
+      within(detail).queryByRole("button", { name: "Play movie from beginning" }),
+    ).not.toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Mark watched" })).toBeVisible();
   });
 
   it("keeps a series as one title and exposes its episodes inside a season hierarchy", async () => {

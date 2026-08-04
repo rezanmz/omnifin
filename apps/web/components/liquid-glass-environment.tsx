@@ -4,10 +4,19 @@ import { useEffect } from "react";
 
 const GLASS_SELECTOR = "[data-liquid-glass]";
 const GLASS_READY_ATTRIBUTE = "data-liquid-glass-ready";
-// Scroll is intentionally excluded: unlike pointerdown and keydown, it does not finalize
-// the browser's LCP window, so a scroll-triggered material repaint can turn a fast
-// first render into a late LCP candidate.
-const MATERIAL_INTENT_EVENTS = ["pointerdown", "keydown"] as const;
+// Scroll is intentionally excluded: unlike a completed user gesture, it does not finalize the
+// browser's LCP window, so a scroll-triggered material repaint can turn a fast first render into a
+// late LCP candidate.
+// Wait for the gesture to finish before inserting the optical stylesheet. WebKit can otherwise
+// drop focus and scroll a sticky input back to its document-flow position while pointerdown is
+// still handing that input off to a lazy client component.
+const MATERIAL_INTENT_EVENTS = ["pointerup", "keyup"] as const;
+let materialStylesPromise: Promise<unknown> | undefined;
+
+function loadMaterialStyles() {
+  materialStylesPromise ??= import("../app/(shell)/shell-enhancements.css");
+  return materialStylesPromise;
+}
 
 function percentage(value: number, start: number, size: number) {
   return `${Math.min(100, Math.max(0, ((value - start) / size) * 100)).toFixed(2)}%`;
@@ -32,8 +41,12 @@ export function LiquidGlassEnvironment() {
       if (animationFrame) return;
       animationFrame = window.requestAnimationFrame(() => {
         animationFrame = 0;
-        document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, "");
         stopListening();
+        void loadMaterialStyles()
+          .then(() => document.documentElement.setAttribute(GLASS_READY_ATTRIBUTE, ""))
+          .catch(() => {
+            materialStylesPromise = undefined;
+          });
       });
     };
 
@@ -43,6 +56,10 @@ export function LiquidGlassEnvironment() {
         passive: true,
       });
     }
+    // The visual harness opts into the settled material after hydration. Other fixture consumers,
+    // including performance budgets, retain the production intent boundary so optical repainting
+    // cannot become a late first-paint candidate.
+    if (window.sessionStorage.getItem("omnifin-test-material") === "settled") enableMaterial();
 
     return () => {
       stopListening();

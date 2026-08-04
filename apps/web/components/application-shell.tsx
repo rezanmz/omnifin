@@ -1,11 +1,10 @@
-"use client";
-
-import { type ReactNode, useLayoutEffect } from "react";
+import type { ReactNode } from "react";
 
 import type { ServiceStatus } from "../lib/dashboard-data";
+import { ApplicationShellContentEffect } from "./application-shell-content-effect";
 
 const DEFAULT_ACCENT = "#8de9d5";
-export const APPLICATION_SHELL_STATUS_ATTRIBUTE = "data-connection-status";
+export { APPLICATION_SHELL_STATUS_ATTRIBUTE } from "./application-shell-contract";
 
 export function ApplicationShellContent({
   accent = DEFAULT_ACCENT,
@@ -18,22 +17,14 @@ export function ApplicationShellContent({
   displayProfile?: "standard" | "ten-foot";
   status: ServiceStatus;
 }) {
-  useLayoutEffect(() => {
-    const frame = document.querySelector<HTMLElement>(".application-frame");
-    if (!frame) return;
-
-    if (frame.dataset.displayProfile !== displayProfile) {
-      frame.dataset.displayProfile = displayProfile;
-    }
-    if (frame.getAttribute(APPLICATION_SHELL_STATUS_ATTRIBUTE) !== status) {
-      frame.setAttribute(APPLICATION_SHELL_STATUS_ATTRIBUTE, status);
-    }
-    for (const surface of frame.querySelectorAll<HTMLElement>(
-      ".cinematic-backdrop, .navigation-rail, .mobile-navigation, .top-command-bar",
-    )) {
-      surface.style.setProperty("--ambient-accent", accent);
-    }
-  }, [accent, displayProfile, status]);
-
-  return children;
+  return (
+    <>
+      <ApplicationShellContentEffect
+        accent={accent}
+        displayProfile={displayProfile}
+        status={status}
+      />
+      {children}
+    </>
+  );
 }

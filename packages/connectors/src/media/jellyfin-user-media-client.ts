@@ -10,6 +10,10 @@ import {
   LIBRARY_MOVIE_MAX_MEDIA_SOURCES,
   LIBRARY_MOVIE_MAX_STUDIOS,
   LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS,
+  type LibraryPlaybackState,
+  type LibraryPlaybackStateAction,
+  type ViewingHistoryKind,
+  type ViewingHistoryState,
   type LibraryEpisodeCredit,
   type LibraryMovieAudioTrack,
   type LibraryMovieCredit,
@@ -23,13 +27,16 @@ import {
   jellyfinClientMetadata,
   type JellyfinClientMetadata,
 } from "../auth/jellyfin-authorization.js";
-import { SafeHttpClient } from "../http/safe-http-client.js";
+import { SafeConnectorError, SafeHttpClient } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 
 export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EPISODE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_SEASON_LIMIT = 100;
+export const JELLYFIN_VIEWING_HISTORY_LIMIT = 50;
+const JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE = 100;
+const JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES = 20;
 const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
 const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
@@ -70,6 +77,18 @@ const jellyfinResumeResponseSchema = z.object({
   Items: z.array(jellyfinResumeItemSchema).max(JELLYFIN_CONTINUE_WATCHING_LIMIT + 1),
   StartIndex: z.int().nonnegative().optional(),
   TotalRecordCount: z.int().nonnegative().optional(),
+});
+
+const jellyfinViewingHistoryItemSchema = jellyfinResumeItemSchema.omit({ UserData: true }).extend({
+  UserData: z.object({
+    LastPlayedDate: z.iso.datetime({ offset: true }).nullish(),
+    Played: z.boolean().nullish(),
+    PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
+  }),
+});
+
+const jellyfinViewingHistoryResponseSchema = z.object({
+  Items: z.array(jellyfinViewingHistoryItemSchema).max(JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE),
 });
 
 const jellyfinLibraryItemSchema = z.object({
@@ -241,6 +260,16 @@ const jellyfinLibraryEpisodeCountResponseSchema = z.object({
   TotalRecordCount: z.int().nonnegative().max(100_000).optional(),
 });
 
+const jellyfinPlaybackStateItemSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  RunTimeTicks: z.int().positive().max(MAX_RUNTIME_TICKS),
+  Type: z.enum(["Episode", "Movie"]),
+  UserData: z.object({
+    Played: z.boolean().nullish(),
+    PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
+  }),
+});
+
 const jellyfinLibraryQuerySchema = z.strictObject({
   kind: z.enum(["all", "movies", "series"]),
   limit: z.int().positive().max(JELLYFIN_LIBRARY_BROWSE_LIMIT),
@@ -284,6 +313,34 @@ const jellyfinLibrarySeasonEpisodesQuerySchema = z.strictObject({
     .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
 });
 
+const jellyfinPlaybackStateMutationInputSchema = z.strictObject({
+  action: z.enum(["mark_watched", "mark_unwatched", "reset_progress"]),
+  itemId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
+const jellyfinViewingHistoryInputSchema = z.strictObject({
+  afterItemId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u)
+    .optional(),
+  kind: z.enum(["all", "movies", "episodes"]),
+  limit: z.int().positive().max(JELLYFIN_VIEWING_HISTORY_LIMIT),
+  since: z.iso.datetime({ offset: true }).optional(),
+  state: z.enum(["all", "completed", "in_progress"]),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
 export interface JellyfinArtworkSource {
   itemId: string;
   type: "Backdrop" | "Primary";
@@ -313,6 +370,26 @@ export interface JellyfinContinueWatchingItem {
 export interface JellyfinContinueWatchingResult {
   items: JellyfinContinueWatchingItem[];
   truncated: boolean;
+}
+
+export interface JellyfinViewingHistoryInput {
+  afterItemId?: string;
+  kind: ViewingHistoryKind;
+  limit: number;
+  since?: string;
+  state: ViewingHistoryState;
+  userId: string;
+}
+
+export interface JellyfinViewingHistoryItem extends JellyfinContinueWatchingItem {
+  kind: "episode" | "movie";
+  played: boolean;
+}
+
+export interface JellyfinViewingHistoryResult {
+  boundaryFound: boolean;
+  items: JellyfinViewingHistoryItem[];
+  nextAfterItemId: string | null;
 }
 
 export interface JellyfinLibraryBrowseInput {
@@ -389,6 +466,12 @@ export interface JellyfinLibrarySeasonEpisodesResult {
   items: JellyfinLibraryEpisode[];
   nextStartIndex: number | null;
   truncated: boolean;
+}
+
+export interface JellyfinPlaybackStateMutationInput {
+  action: LibraryPlaybackStateAction;
+  itemId: string;
+  userId: string;
 }
 
 export interface JellyfinLibraryEpisode extends Omit<
@@ -833,6 +916,61 @@ function normalizeResumeItem(
   };
 }
 
+function normalizeViewingHistoryItem(
+  item: z.infer<typeof jellyfinViewingHistoryItemSchema>,
+): JellyfinViewingHistoryItem | null {
+  if ((item.Type !== "Movie" && item.Type !== "Episode") || !item.UserData.LastPlayedDate) {
+    return null;
+  }
+  const runtimeSeconds = secondsFromTicks(item.RunTimeTicks);
+  if (runtimeSeconds < 1) return null;
+  const played = item.UserData.Played ?? false;
+  const positionSeconds = Math.min(
+    runtimeSeconds,
+    secondsFromTicks(item.UserData.PlaybackPositionTicks ?? 0),
+  );
+  if (!played && positionSeconds < 1) return null;
+
+  const isEpisode = item.Type === "Episode";
+  const posterTag =
+    isEpisode && item.SeriesId && item.SeriesPrimaryImageTag
+      ? item.SeriesPrimaryImageTag
+      : (item.ImageTags?.Primary ?? undefined);
+  const poster =
+    isEpisode && item.SeriesId && posterTag
+      ? { itemId: item.SeriesId, type: "Primary" as const }
+      : posterTag
+        ? { itemId: item.Id, type: "Primary" as const }
+        : null;
+  const backdropTag = item.ParentBackdropImageTags?.[0] ?? item.BackdropImageTags?.[0];
+  const backdropItemId = item.ParentBackdropImageTags?.length
+    ? (item.ParentBackdropItemId ?? item.SeriesId)
+    : item.BackdropImageTags?.length
+      ? item.Id
+      : undefined;
+
+  return {
+    artwork: {
+      ...artworkPalette(item, posterTag, backdropTag),
+      backdrop: backdropItemId ? { itemId: backdropItemId, type: "Backdrop" } : null,
+      poster,
+    },
+    contentRating: compactText(item.OfficialRating, 32),
+    episodeNumber: isEpisode ? (item.IndexNumber ?? null) : null,
+    externalId: item.Id,
+    kind: isEpisode ? "episode" : "movie",
+    lastPlayedAt: item.UserData.LastPlayedDate,
+    overview: compactText(item.Overview, 2_000),
+    played,
+    positionSeconds,
+    runtimeSeconds,
+    seasonNumber: isEpisode ? (item.ParentIndexNumber ?? null) : null,
+    subtitle: isEpisode ? episodeLabel(item) : null,
+    title: isEpisode ? (item.SeriesName ?? item.Name) : item.Name,
+    year: item.ProductionYear ?? null,
+  };
+}
+
 function normalizeLibraryItem(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
 ): JellyfinLibraryItem | null {
@@ -964,6 +1102,12 @@ function libraryItemTypes(kind: JellyfinLibraryBrowseInput["kind"]) {
   return "Movie,Series";
 }
 
+function viewingHistoryItemTypes(kind: ViewingHistoryKind) {
+  if (kind === "movies") return "Movie";
+  if (kind === "episodes") return "Episode";
+  return "Movie,Episode";
+}
+
 function librarySort(sort: JellyfinLibraryBrowseInput["sort"]) {
   if (sort === "title") return { SortBy: "SortName", SortOrder: "Ascending" };
   if (sort === "year") {
@@ -1029,6 +1173,85 @@ export class JellyfinUserMediaClient {
       truncated:
         response.Items.length > JELLYFIN_CONTINUE_WATCHING_LIMIT ||
         (response.TotalRecordCount ?? 0) > JELLYFIN_CONTINUE_WATCHING_LIMIT,
+    };
+  }
+
+  public async readViewingHistory(
+    rawInput: JellyfinViewingHistoryInput,
+    signal?: AbortSignal,
+  ): Promise<JellyfinViewingHistoryResult> {
+    const input = jellyfinViewingHistoryInputSchema.parse(rawInput);
+    const collected: JellyfinViewingHistoryItem[] = [];
+    const since = input.since === undefined ? null : Date.parse(input.since);
+    let boundaryFound = input.afterItemId === undefined;
+    let exhausted = false;
+    let startIndex = 0;
+
+    for (let page = 0; page < JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES && !exhausted; page += 1) {
+      const response = await this.#client.requestJson(
+        `Users/${input.userId}/Items`,
+        jellyfinViewingHistoryResponseSchema,
+        {
+          headers: { authorization: this.#authorization },
+          operation: "media.viewing_history",
+          query: {
+            EnableImageTypes: "Primary,Backdrop",
+            EnableTotalRecordCount: "false",
+            EnableUserData: "true",
+            Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
+            ImageTypeLimit: "1",
+            IncludeItemTypes: viewingHistoryItemTypes(input.kind),
+            IsMissing: "false",
+            IsVirtualItem: "false",
+            Limit: String(JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE),
+            Recursive: "true",
+            SortBy: "DatePlayed",
+            SortOrder: "Descending",
+            StartIndex: String(startIndex),
+            ...(input.state === "completed"
+              ? { Filters: "IsPlayed" }
+              : input.state === "in_progress"
+                ? { Filters: "IsResumable" }
+                : {}),
+          },
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+
+      for (const rawItem of response.Items) {
+        if (!boundaryFound) {
+          if (rawItem.Id === input.afterItemId) boundaryFound = true;
+          continue;
+        }
+        const item = normalizeViewingHistoryItem(rawItem);
+        if (!item) continue;
+        if (input.state === "completed" && !item.played) continue;
+        if (input.state === "in_progress" && item.played) continue;
+        if (since !== null && Date.parse(item.lastPlayedAt) < since) {
+          exhausted = true;
+          break;
+        }
+        collected.push(item);
+        if (collected.length > input.limit) break;
+      }
+
+      if (collected.length > input.limit) break;
+      if (response.Items.length < JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE) exhausted = true;
+      startIndex += response.Items.length;
+    }
+
+    if (!exhausted && collected.length <= input.limit) {
+      throw this.#client.invalidResponse("media.viewing_history");
+    }
+    if (!boundaryFound) return { boundaryFound: false, items: [], nextAfterItemId: null };
+    const items = collected.slice(0, input.limit);
+    return {
+      boundaryFound: true,
+      items,
+      nextAfterItemId:
+        collected.length > input.limit && items.length > 0
+          ? items[items.length - 1]!.externalId
+          : null,
     };
   }
 
@@ -1238,6 +1461,83 @@ export class JellyfinUserMediaClient {
         .filter((item): item is JellyfinLibraryEpisode => item !== null),
       nextStartIndex: truncated ? input.startIndex + input.limit : null,
       truncated,
+    };
+  }
+
+  public async updatePlaybackState(
+    rawInput: JellyfinPlaybackStateMutationInput,
+    signal?: AbortSignal,
+  ): Promise<LibraryPlaybackState> {
+    const input = jellyfinPlaybackStateMutationInputSchema.parse(rawInput);
+    let mutationError: unknown;
+    try {
+      if (input.action === "reset_progress") {
+        await this.#client.requestBytes(`UserItems/${input.itemId}/UserData`, {
+          body: JSON.stringify({ PlaybackPositionTicks: 0 }),
+          headers: {
+            authorization: this.#authorization,
+            "content-type": "application/json",
+          },
+          method: "POST",
+          operation: "media.playback_state",
+          query: { userId: input.userId },
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } else {
+        await this.#client.requestBytes(`UserPlayedItems/${input.itemId}`, {
+          headers: { authorization: this.#authorization },
+          method: input.action === "mark_watched" ? "POST" : "DELETE",
+          operation: "media.playback_state",
+          query: { userId: input.userId },
+          ...(signal === undefined ? {} : { signal }),
+        });
+      }
+    } catch (error) {
+      if (!(error instanceof SafeConnectorError) || !error.retryable) throw error;
+      mutationError = error;
+    }
+
+    let playback: LibraryPlaybackState;
+    try {
+      playback = await this.#readPlaybackState(input.itemId, input.userId, signal);
+    } catch (error) {
+      throw mutationError ?? error;
+    }
+    const reconciled =
+      input.action === "mark_watched"
+        ? playback.played && playback.positionSeconds === 0
+        : input.action === "mark_unwatched"
+          ? !playback.played && playback.positionSeconds === 0
+          : playback.positionSeconds === 0;
+    if (!reconciled) throw mutationError ?? this.#client.invalidResponse("media.playback_state");
+    return playback;
+  }
+
+  async #readPlaybackState(
+    itemId: string,
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<LibraryPlaybackState> {
+    const item = await this.#client.requestJson(
+      `Items/${itemId}`,
+      jellyfinPlaybackStateItemSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.playback_state",
+        query: { EnableUserData: "true", UserId: userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    if (item.Id !== itemId) throw this.#client.invalidResponse("media.playback_state");
+    const durationSeconds = secondsFromTicks(item.RunTimeTicks);
+    if (durationSeconds < 1) throw this.#client.invalidResponse("media.playback_state");
+    return {
+      durationSeconds,
+      played: item.UserData.Played ?? false,
+      positionSeconds: Math.min(
+        durationSeconds,
+        secondsFromTicks(item.UserData.PlaybackPositionTicks ?? 0),
+      ),
     };
   }
 

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import IdentityProvidersPage from "./page";
@@ -43,5 +43,27 @@ describe("IdentityProvidersPage", () => {
       await screen.findByText("https://omnifin.example.test/api/auth/oidc/callback/oidc-authentik"),
     ).toBeVisible();
     expect(await screen.findByText(/media-operators/)).toBeVisible();
+  });
+
+  it("defers the administration bundle until the browser is idle", async () => {
+    let idleCallback: IdleRequestCallback | undefined;
+    const requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
+      idleCallback = callback;
+      return 41;
+    });
+    vi.stubGlobal("requestIdleCallback", requestIdleCallback);
+    vi.stubGlobal("cancelIdleCallback", vi.fn());
+    vi.stubEnv("OMNIFIN_TEST_MODE", "true");
+
+    render(
+      await IdentityProvidersPage({
+        searchParams: Promise.resolve({ "test-view": "ready" }),
+      }),
+    );
+
+    expect(requestIdleCallback).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Loading identity provider administration")).toBeVisible();
+    act(() => idleCallback?.({ didTimeout: false, timeRemaining: () => 50 }));
+    expect(await screen.findByRole("heading", { name: "Authentik" })).toBeVisible();
   });
 });

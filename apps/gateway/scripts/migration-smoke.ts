@@ -43,6 +43,7 @@ const requiredTables = [
   "sessions",
   "subtitle_download_operations",
   "subtitle_searches",
+  "user_media_state_operations",
   "users",
 ] as const;
 const requiredColumns = {
@@ -273,6 +274,16 @@ const requiredColumns = {
     "service_identity_link_id",
     "user_id",
   ],
+  user_media_state_operations: [
+    "completed_at",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "reference_id",
+    "response_json",
+    "state",
+    "user_id",
+  ],
   users: ["role_source"],
 } as const;
 const requiredIndexes = {
@@ -377,6 +388,11 @@ const requiredIndexes = {
     "subtitle_searches_expiry_idx",
     "subtitle_searches_media_idx",
     "subtitle_searches_user_created_idx",
+  ],
+  user_media_state_operations: [
+    "user_media_state_operations_reference_idx",
+    "user_media_state_operations_state_created_idx",
+    "user_media_state_operations_user_key_unique",
   ],
 } as const;
 const requiredTriggers = [
@@ -512,8 +528,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0022_playback_asset_handles",
-  "Current migration journal must end at migration 0022_playback_asset_handles.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0023_user_media_state",
+  "Current migration journal must end at migration 0023_user_media_state.",
 );
 
 try {
@@ -629,6 +645,23 @@ try {
       .map(({ from, to }) => `${from}:${to}`);
     if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
       throw new Error("Migration is missing the user-bound media reference foreign key.");
+    }
+
+    const userMediaStateForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(user_media_state_operations)",
+    ) as { from: string; table: string; to: string }[];
+    for (const [column, table] of [
+      ["user_id", "users"],
+      ["reference_id", "media_references"],
+    ] as const) {
+      if (
+        !userMediaStateForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the user-media-state ${column} foreign key.`);
+      }
     }
 
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
@@ -892,7 +925,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0022.",
+      "Production migration did not advance the historical fixture exactly through migration 0023.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1057,7 +1090,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0022, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0023, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -19,6 +19,7 @@ export const LIBRARY_MOVIE_MAX_STUDIOS = 12;
 export const LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS = 64;
 export const LIBRARY_SEASON_EPISODES_MAX_ITEMS = 50;
 export const LIBRARY_TITLE_MAX_SEASONS = 100;
+export const VIEWING_HISTORY_MAX_ITEMS = 50;
 
 const safeTextSchema = z
   .string()
@@ -61,6 +62,184 @@ export const libraryPlaybackStateSchema = z
     path: ["positionSeconds"],
   });
 export type LibraryPlaybackState = z.infer<typeof libraryPlaybackStateSchema>;
+
+export const libraryPlaybackStateActionSchema = z.enum([
+  "mark_watched",
+  "mark_unwatched",
+  "reset_progress",
+]);
+export type LibraryPlaybackStateAction = z.infer<typeof libraryPlaybackStateActionSchema>;
+
+export const libraryPlaybackStateMutationRequestSchema = z.strictObject({
+  action: libraryPlaybackStateActionSchema,
+});
+export type LibraryPlaybackStateMutationRequest = z.infer<
+  typeof libraryPlaybackStateMutationRequestSchema
+>;
+
+export const libraryPlaybackStateMutationResponseSchema = z
+  .strictObject({
+    action: libraryPlaybackStateActionSchema,
+    playback: libraryPlaybackStateSchema,
+    referenceId: mediaReferenceIdSchema,
+    updatedAt: timestampSchema,
+  })
+  .superRefine((response, context) => {
+    const reconciled =
+      response.action === "mark_watched"
+        ? response.playback.played && response.playback.positionSeconds === 0
+        : response.action === "mark_unwatched"
+          ? !response.playback.played && response.playback.positionSeconds === 0
+          : response.playback.positionSeconds === 0;
+    if (!reconciled) {
+      context.addIssue({
+        code: "custom",
+        message: "Playback state must reflect the completed Jellyfin action.",
+        path: ["playback"],
+      });
+    }
+  });
+export type LibraryPlaybackStateMutationResponse = z.infer<
+  typeof libraryPlaybackStateMutationResponseSchema
+>;
+
+export const viewingHistoryKindSchema = z.enum(["all", "movies", "episodes"]);
+export type ViewingHistoryKind = z.infer<typeof viewingHistoryKindSchema>;
+
+export const viewingHistoryStateSchema = z.enum(["all", "completed", "in_progress"]);
+export type ViewingHistoryState = z.infer<typeof viewingHistoryStateSchema>;
+
+export const viewingHistoryRangeSchema = z.enum(["all", "7_days", "30_days", "90_days", "1_year"]);
+export type ViewingHistoryRange = z.infer<typeof viewingHistoryRangeSchema>;
+
+export const viewingHistoryCursorSchema = z
+  .string()
+  .min(16)
+  .max(1_024)
+  .regex(/^[A-Za-z0-9_.-]+$/u);
+
+export const viewingHistoryQuerySchema = z.strictObject({
+  cursor: viewingHistoryCursorSchema.optional(),
+  kind: viewingHistoryKindSchema.default("all"),
+  limit: z.coerce.number().int().positive().max(VIEWING_HISTORY_MAX_ITEMS).default(24),
+  range: viewingHistoryRangeSchema.default("30_days"),
+  state: viewingHistoryStateSchema.default("all"),
+});
+export type ViewingHistoryQuery = z.infer<typeof viewingHistoryQuerySchema>;
+
+export const viewingHistoryEntrySchema = z
+  .strictObject({
+    activity: z.enum(["completed", "in_progress"]),
+    lastPlayedAt: timestampSchema,
+    media: mediaSummarySchema,
+    playback: libraryPlaybackStateSchema,
+  })
+  .superRefine((entry, context) => {
+    if (!mediaReferenceIdSchema.safeParse(entry.media.id).success) {
+      context.addIssue({
+        code: "custom",
+        message: "Viewing history must use opaque media references.",
+        path: ["media", "id"],
+      });
+    }
+    if (
+      (entry.media.kind !== "movie" && entry.media.kind !== "episode") ||
+      entry.media.availability !== "available"
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Viewing history entries must be available movies or episodes.",
+        path: ["media", "kind"],
+      });
+    }
+    const completed = entry.activity === "completed" && entry.playback.played;
+    const inProgress =
+      entry.activity === "in_progress" &&
+      !entry.playback.played &&
+      entry.playback.positionSeconds > 0;
+    if (!completed && !inProgress) {
+      context.addIssue({
+        code: "custom",
+        message: "Viewing activity must match the current Jellyfin playback state.",
+        path: ["activity"],
+      });
+    }
+    validateLibraryMediaArtwork(entry.media, context);
+  });
+export type ViewingHistoryEntry = z.infer<typeof viewingHistoryEntrySchema>;
+
+export const viewingHistorySourceSchema = z
+  .strictObject({
+    displayName: safeTextSchema.max(160),
+    failure: partialFailureSchema.nullable(),
+    status: z.enum(["healthy", "unavailable"]),
+  })
+  .superRefine((source, context) => {
+    if ((source.status === "healthy") !== (source.failure === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "An unavailable viewing-history source must include one safe failure.",
+        path: ["failure"],
+      });
+    }
+    if (
+      source.failure &&
+      (source.failure.service !== "jellyfin" ||
+        (source.failure.operation !== "media.viewing_history" &&
+          source.failure.operation !== "media.reference"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Viewing-history failures must identify Jellyfin history or media references.",
+        path: ["failure"],
+      });
+    }
+  });
+export type ViewingHistorySource = z.infer<typeof viewingHistorySourceSchema>;
+
+export const viewingHistoryResponseSchema = z
+  .strictObject({
+    generatedAt: timestampSchema,
+    items: z.array(viewingHistoryEntrySchema).max(VIEWING_HISTORY_MAX_ITEMS),
+    nextCursor: viewingHistoryCursorSchema.nullable(),
+    source: viewingHistorySourceSchema,
+    state: z.enum(["complete", "empty", "unavailable"]),
+  })
+  .superRefine((response, context) => {
+    const references = new Set<string>();
+    for (const [index, item] of response.items.entries()) {
+      if (references.has(item.media.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Viewing-history references must be unique within a page.",
+          path: ["items", index, "media", "id"],
+        });
+      }
+      references.add(item.media.id);
+    }
+    const complete =
+      response.state === "complete" &&
+      response.items.length > 0 &&
+      response.source.status === "healthy";
+    const empty =
+      response.state === "empty" &&
+      response.items.length === 0 &&
+      response.nextCursor === null &&
+      response.source.status === "healthy";
+    const unavailable =
+      response.state === "unavailable" &&
+      response.items.length === 0 &&
+      response.nextCursor === null &&
+      response.source.status === "unavailable";
+    if (!complete && !empty && !unavailable) {
+      context.addIssue({
+        code: "custom",
+        message: "Viewing-history state must match its items and Jellyfin source.",
+        path: ["state"],
+      });
+    }
+  });
+export type ViewingHistoryResponse = z.infer<typeof viewingHistoryResponseSchema>;
 
 function validateLibraryMediaArtwork(
   media: z.infer<typeof mediaSummarySchema>,
@@ -681,6 +860,14 @@ export const libraryAttentionResponseJsonSchema = withoutSchemaDialect(
 );
 export const libraryBrowseQueryJsonSchema = withoutSchemaDialect(libraryBrowseQuerySchema);
 export const libraryBrowseResponseJsonSchema = withoutSchemaDialect(libraryBrowseResponseSchema);
+export const libraryPlaybackStateMutationRequestJsonSchema = withoutSchemaDialect(
+  libraryPlaybackStateMutationRequestSchema,
+);
+export const libraryPlaybackStateMutationResponseJsonSchema = withoutSchemaDialect(
+  libraryPlaybackStateMutationResponseSchema,
+);
+export const viewingHistoryQueryJsonSchema = withoutSchemaDialect(viewingHistoryQuerySchema);
+export const viewingHistoryResponseJsonSchema = withoutSchemaDialect(viewingHistoryResponseSchema);
 export const libraryTitleDetailResponseJsonSchema = withoutSchemaDialect(
   libraryTitleDetailResponseSchema,
 );
