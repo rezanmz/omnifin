@@ -1,6 +1,7 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   savedListDeleteResponseSchema,
+  savedListItemsResponseSchema,
   savedListMembershipResponseSchema,
   savedListMutationResponseSchema,
   savedListsResponseSchema,
@@ -378,6 +379,20 @@ describe("saved-list routes", () => {
         new RegExp(`^/v1/saved/lists/${watchLater.id}/items/saved_item_`),
       );
       expect(added.body).not.toMatch(/private-owned-movie|private-jellyfin-token/u);
+
+      const page = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/saved/lists/${watchLater.id}/items?availability=owned&sort=title`,
+      });
+      expect(page.statusCode, page.body).toBe(200);
+      expect(page.headers["cache-control"]).toBe("private, no-store");
+      expect(savedListItemsResponseSchema.parse(page.json())).toMatchObject({
+        items: [{ catalog: { availability: "owned", title: "Private owned movie" } }],
+        list: { id: watchLater.id, itemCount: 1, revision: 1 },
+        reconciliation: { state: "current" },
+      });
+      expect(page.body).not.toMatch(/private-owned-movie|private-jellyfin-token/u);
     } finally {
       await app.close();
     }

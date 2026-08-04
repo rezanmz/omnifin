@@ -9,6 +9,10 @@ import {
   savedListMembershipRequestSchema,
   savedListMembershipResponseJsonSchema,
   savedListMembershipResponseSchema,
+  savedListItemsQueryJsonSchema,
+  savedListItemsQuerySchema,
+  savedListItemsResponseJsonSchema,
+  savedListItemsResponseSchema,
   savedListMutationResponseJsonSchema,
   savedListMutationResponseSchema,
   savedListRestoreRequestJsonSchema,
@@ -413,6 +417,36 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
         reply.header("location", `/v1/saved/lists/${listId}/items/${result.body.item.id}`);
         reply.status(201);
         return savedListMembershipResponseSchema.parse(result.body);
+      } catch (error) {
+        handleError(error, reply);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/saved/lists/:listId/items",
+    {
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 60, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: listParamsJsonSchema,
+        querystring: savedListItemsQueryJsonSchema,
+        response: { 200: savedListItemsResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { listId } = listParamsSchema.parse(request.params);
+        return savedListItemsResponseSchema.parse(
+          saved.items(
+            listId,
+            savedListItemsQuerySchema.parse(request.query),
+            operationContext(request, reply),
+          ),
+        );
       } catch (error) {
         handleError(error, reply);
       }

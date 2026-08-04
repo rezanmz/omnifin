@@ -3,10 +3,13 @@ import {
   SAVED_CUSTOM_LIST_MAX_COUNT,
   SAVED_LIST_MAX_ITEMS,
   savedCatalogItemSchema,
+  savedFavoriteStateSchema,
   savedListCreateRequestSchema,
   savedListDeleteResponseSchema,
   savedListMembershipRequestSchema,
   savedListMembershipResponseSchema,
+  savedListItemsQuerySchema,
+  savedListItemsResponseSchema,
   savedListMutationResponseSchema,
   savedListRestoreRequestSchema,
   savedListsQuerySchema,
@@ -15,6 +18,8 @@ import {
   type SavedListCreateRequest,
   type SavedListDeleteResponse,
   type SavedListMembershipResponse,
+  type SavedListItemsQuery,
+  type SavedListItemsResponse,
   type SavedListMutationResponse,
   type SavedListSummary,
   type SavedListsQuery,
@@ -36,6 +41,7 @@ import {
 const LIST_ID_PATTERN = /^saved_list_[A-Za-z0-9_-]{22}$/u;
 const LIST_ITEM_ID_PATTERN = /^saved_item_[A-Za-z0-9_-]{22}$/u;
 const CATALOG_ID_PATTERN = /^catalog_[A-Za-z0-9_-]{22}$/u;
+const MEDIA_REFERENCE_ID_PATTERN = /^media_[A-Za-z0-9_-]{22}$/u;
 const OPERATION_ID_PATTERN = /^saved_operation_[A-Za-z0-9_-]{22}$/u;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const UNDO_WINDOW_MS = 30_000;
@@ -45,6 +51,36 @@ const cursorPayloadSchema = z.strictObject({
   createdAt: z.int().nonnegative(),
   id: z.string().regex(LIST_ID_PATTERN),
   schemaVersion: z.literal(1),
+});
+
+const itemCursorPayloadSchema = z.strictObject({
+  fingerprint: z.string().regex(/^[A-Za-z0-9_-]{22}$/u),
+  listId: z.string().regex(LIST_ID_PATTERN),
+  offset: z.int().nonnegative().max(SAVED_LIST_MAX_ITEMS),
+  revision: z.int().nonnegative().max(2_147_483_647),
+  schemaVersion: z.literal(1),
+});
+
+const savedCatalogSnapshotSchema = z.strictObject({
+  artwork: z.strictObject({ backdrop: z.boolean(), poster: z.boolean() }),
+  favorite: savedFavoriteStateSchema,
+  kind: z.enum(["movie", "series"]),
+  overview: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2_000)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
+    .nullable(),
+  resolutionState: z.enum(["current", "connector_unavailable"]),
+  schemaVersion: z.literal(1),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  year: z.int().min(1870).max(2200).nullable(),
 });
 
 type ActivePrincipal = SessionPrincipal & { userId: string };
@@ -72,13 +108,22 @@ interface OperationRow {
 }
 
 interface SavedCatalogRow {
+  encryptedIdentity: string;
+  encryptedSnapshot: string;
   id: string;
+  libraryReferenceId: string | null;
 }
 
 interface SavedMembershipRow {
   createdAt: number;
   id: string;
   position: number;
+}
+
+interface SavedListItemRow extends SavedMembershipRow {
+  catalogId: string;
+  encryptedSnapshot: string;
+  libraryReferenceId: string | null;
 }
 
 interface PendingOperation {
@@ -210,6 +255,94 @@ export class SavedListService {
       if (!row) throw new SavedListServiceError("list_not_found");
       const body = savedListMutationResponseSchema.parse({ list: this.#summary(row) });
       return { body, etag: this.#etag(principal.userId, id, row.revision) };
+    } catch (error) {
+      throw this.#normalizeError(error);
+    }
+  }
+
+  public items(
+    listId: string,
+    rawQuery: unknown,
+    context: SavedListContext,
+  ): SavedListItemsResponse {
+    const principal = this.#activePrincipal(context);
+    const id = this.#listId(listId);
+    const query = savedListItemsQuerySchema.parse(rawQuery);
+    const now = this.#now();
+    try {
+      const list = this.#row(id, principal.userId, false);
+      if (!list) throw new SavedListServiceError("list_not_found");
+      const fingerprint = privacyHash(
+        "saved_list_items_query",
+        JSON.stringify({
+          availability: query.availability,
+          query: query.query ?? null,
+          sort: query.sort,
+        }),
+        this.#config.encryptionKey,
+      );
+      const cursor = query.cursor
+        ? this.#decodeItemCursor(query.cursor, principal.userId, id)
+        : null;
+      if (
+        cursor &&
+        (cursor.listId !== id ||
+          cursor.revision !== list.revision ||
+          cursor.fingerprint !== fingerprint)
+      ) {
+        throw new SavedListServiceError("cursor_invalid");
+      }
+      const normalizedQuery = query.query?.toLowerCase();
+      const allItems = this.#listItemRows(id, principal.userId).map((row) =>
+        this.#listItem(row, principal.userId),
+      );
+      const filtered = allItems.filter(
+        ({ catalog }) =>
+          (query.availability === "all" || catalog.availability === query.availability) &&
+          (normalizedQuery === undefined || catalog.title.toLowerCase().includes(normalizedQuery)),
+      );
+      filtered.sort((left, right) => this.#compareListItems(left, right, query));
+      const offset = cursor?.offset ?? 0;
+      if (offset > filtered.length) throw new SavedListServiceError("cursor_invalid");
+      const page = filtered.slice(offset, offset + query.limit);
+      const nextOffset = offset + page.length;
+      const degraded = filtered.some(
+        ({ catalog }) => catalog.resolutionState === "connector_unavailable",
+      );
+      return savedListItemsResponseSchema.parse({
+        generatedAt: new Date(now).toISOString(),
+        items: page,
+        list: this.#summary(list),
+        nextCursor:
+          nextOffset < filtered.length
+            ? this.#encodeItemCursor(
+                {
+                  fingerprint,
+                  listId: id,
+                  offset: nextOffset,
+                  revision: list.revision,
+                  schemaVersion: 1,
+                },
+                principal.userId,
+                id,
+              )
+            : null,
+        reconciliation: degraded
+          ? {
+              failures: [
+                {
+                  code: "unreachable",
+                  message: "Some saved titles could not be refreshed from Jellyfin.",
+                  occurredAt: new Date(now).toISOString(),
+                  operation: "saved.list.items.resolve",
+                  retryable: true,
+                  service: "jellyfin",
+                },
+              ],
+              state: "degraded",
+            }
+          : { failures: [], state: "current" },
+      });
     } catch (error) {
       throw this.#normalizeError(error);
     }
@@ -448,21 +581,26 @@ export class SavedListService {
           if (!list) throw new SavedListServiceError("list_not_found");
           this.#matchRevision(list, ifMatch);
           const target = this.#resolveOwnedTarget(input.targetReferenceId, principal);
-          const catalogId = this.#upsertOwnedCatalog(principal.userId, target, now);
-          const existing = this.#membership(id, principal.userId, catalogId);
+          const catalog = this.#upsertOwnedCatalog(principal.userId, target, now);
+          if (catalog.changed) {
+            this.#refreshCatalogListRevisions(principal.userId, catalog.id, now);
+          }
+          const existing = this.#membership(id, principal.userId, catalog.id);
           if (existing) {
+            const currentList = this.#row(id, principal.userId, false);
+            if (!currentList) throw new SavedListServiceError("storage_failure");
             const body = this.#membershipResponse(
               false,
               id,
-              list.revision,
+              currentList.revision,
               existing,
-              catalogId,
+              catalog.id,
               target,
             );
             this.#completeOperation(operation.id, principal.userId, body, now);
             return {
               body,
-              etag: this.#etag(principal.userId, id, list.revision),
+              etag: this.#etag(principal.userId, id, currentList.revision),
               replayed: false,
             };
           }
@@ -472,7 +610,7 @@ export class SavedListService {
           const membership = this.#insertMembership(
             id,
             principal.userId,
-            catalogId,
+            catalog.id,
             list.itemCount,
             now,
           );
@@ -484,12 +622,12 @@ export class SavedListService {
             )
             .run(revision, now, id, principal.userId, list.revision);
           if (updated.changes !== 1) throw new SavedListServiceError("revision_stale");
-          const body = this.#membershipResponse(true, id, revision, membership, catalogId, target);
+          const body = this.#membershipResponse(true, id, revision, membership, catalog.id, target);
           this.#completeOperation(operation.id, principal.userId, body, now);
           this.#audit(
             "saved.list.item.added",
             id,
-            { catalogReferenceId: catalogId, revision },
+            { catalogReferenceId: catalog.id, revision },
             context,
             now,
           );
@@ -641,7 +779,12 @@ export class SavedListService {
 
   #upsertOwnedCatalog(userId: string, target: ResolvedSavedTarget, now: number) {
     const existing = this.#database.sqlite
-      .prepare("select id from saved_catalog_items where user_id = ? and identity_digest = ?")
+      .prepare(
+        `select id, encrypted_identity as encryptedIdentity,
+                encrypted_snapshot as encryptedSnapshot,
+                library_reference_id as libraryReferenceId
+         from saved_catalog_items where user_id = ? and identity_digest = ?`,
+      )
       .get(userId, target.payload.catalogIdentityDigest) as SavedCatalogRow | undefined;
     if (existing && !CATALOG_ID_PATTERN.test(existing.id)) {
       throw new SavedListServiceError("storage_failure");
@@ -664,15 +807,33 @@ export class SavedListService {
       title: target.payload.title,
       year: target.payload.year,
     };
-    const encryptedIdentity = this.#cipher.encrypt(
-      JSON.stringify(identity),
-      this.#catalogIdentityContext(userId, id),
-    );
-    const encryptedSnapshot = this.#cipher.encrypt(
-      JSON.stringify(snapshot),
-      this.#catalogSnapshotContext(userId, id),
-    );
+    const identityJson = JSON.stringify(identity);
+    const snapshotJson = JSON.stringify(snapshot);
     if (existing) {
+      let unchanged: boolean;
+      try {
+        unchanged =
+          this.#cipher.decrypt(
+            existing.encryptedIdentity,
+            this.#catalogIdentityContext(userId, id),
+          ) === identityJson &&
+          this.#cipher.decrypt(
+            existing.encryptedSnapshot,
+            this.#catalogSnapshotContext(userId, id),
+          ) === snapshotJson &&
+          existing.libraryReferenceId === target.payload.libraryReferenceId;
+      } catch (error) {
+        throw new SavedListServiceError("storage_failure", { cause: error });
+      }
+      if (unchanged) {
+        this.#database.sqlite
+          .prepare(
+            `update saved_catalog_items set last_resolved_at = ?, updated_at = ?
+             where id = ? and user_id = ?`,
+          )
+          .run(now, now, id, userId);
+        return { changed: false, id };
+      }
       const updated = this.#database.sqlite
         .prepare(
           `update saved_catalog_items
@@ -681,8 +842,8 @@ export class SavedListService {
            where id = ? and user_id = ? and identity_digest = ?`,
         )
         .run(
-          encryptedIdentity,
-          encryptedSnapshot,
+          this.#cipher.encrypt(identityJson, this.#catalogIdentityContext(userId, id)),
+          this.#cipher.encrypt(snapshotJson, this.#catalogSnapshotContext(userId, id)),
           target.payload.libraryReferenceId,
           userId,
           now,
@@ -692,7 +853,7 @@ export class SavedListService {
           target.payload.catalogIdentityDigest,
         );
       if (updated.changes !== 1) throw new SavedListServiceError("storage_failure");
-      return id;
+      return { changed: true, id };
     }
     try {
       this.#database.sqlite
@@ -707,18 +868,40 @@ export class SavedListService {
           id,
           userId,
           target.payload.catalogIdentityDigest,
-          encryptedIdentity,
-          encryptedSnapshot,
+          this.#cipher.encrypt(identityJson, this.#catalogIdentityContext(userId, id)),
+          this.#cipher.encrypt(snapshotJson, this.#catalogSnapshotContext(userId, id)),
           target.payload.libraryReferenceId,
           userId,
           now,
           now,
           now,
         );
-      return id;
+      return { changed: true, id };
     } catch (error) {
       throw new SavedListServiceError("storage_failure", { cause: error });
     }
+  }
+
+  #refreshCatalogListRevisions(userId: string, catalogId: string, now: number) {
+    const exhausted = this.#database.sqlite
+      .prepare(
+        `select 1
+         from saved_lists
+         join saved_list_items on saved_list_items.list_id = saved_lists.id
+         where saved_lists.user_id = ? and saved_lists.deleted_at is null
+           and saved_list_items.catalog_item_id = ? and saved_lists.revision >= 2147483647
+         limit 1`,
+      )
+      .get(userId, catalogId);
+    if (exhausted) throw new SavedListServiceError("integrity_failure");
+    this.#database.sqlite
+      .prepare(
+        `update saved_lists set revision = revision + 1, updated_at = ?
+         where user_id = ? and deleted_at is null and id in (
+           select list_id from saved_list_items where user_id = ? and catalog_item_id = ?
+         )`,
+      )
+      .run(now, userId, userId, catalogId);
   }
 
   #newCatalogId() {
@@ -832,6 +1015,87 @@ export class SavedListService {
     });
   }
 
+  #listItemRows(listId: string, userId: string) {
+    return this.#database.sqlite
+      .prepare(
+        `select saved_list_items.id as id, saved_list_items.position as position,
+                saved_list_items.created_at as createdAt,
+                saved_catalog_items.id as catalogId,
+                saved_catalog_items.encrypted_snapshot as encryptedSnapshot,
+                saved_catalog_items.library_reference_id as libraryReferenceId
+         from saved_list_items
+         join saved_catalog_items
+           on saved_catalog_items.id = saved_list_items.catalog_item_id
+          and saved_catalog_items.user_id = saved_list_items.user_id
+         where saved_list_items.list_id = ? and saved_list_items.user_id = ?`,
+      )
+      .all(listId, userId) as SavedListItemRow[];
+  }
+
+  #listItem(row: SavedListItemRow, userId: string) {
+    if (
+      !LIST_ITEM_ID_PATTERN.test(row.id) ||
+      !CATALOG_ID_PATTERN.test(row.catalogId) ||
+      (row.libraryReferenceId !== null && !MEDIA_REFERENCE_ID_PATTERN.test(row.libraryReferenceId))
+    ) {
+      throw new SavedListServiceError("storage_failure");
+    }
+    const snapshot = savedCatalogSnapshotSchema.parse(
+      JSON.parse(
+        this.#cipher.decrypt(
+          row.encryptedSnapshot,
+          this.#catalogSnapshotContext(userId, row.catalogId),
+        ),
+      ),
+    );
+    const owned = row.libraryReferenceId !== null;
+    const artworkPrefix = `/v1/saved/catalog/${row.catalogId}/images/`;
+    return {
+      addedAt: new Date(row.createdAt).toISOString(),
+      catalog: savedCatalogItemSchema.parse({
+        artwork: {
+          accentColor: null,
+          backdropPath: owned && snapshot.artwork.backdrop ? `${artworkPrefix}backdrop` : null,
+          blurHash: null,
+          posterPath: owned && snapshot.artwork.poster ? `${artworkPrefix}poster` : null,
+        },
+        availability: owned ? "owned" : "unavailable",
+        favorite: owned ? snapshot.favorite : { state: "not_applicable", value: null },
+        id: row.catalogId,
+        kind: snapshot.kind,
+        libraryReferenceId: row.libraryReferenceId,
+        overview: snapshot.overview,
+        resolutionState: owned ? snapshot.resolutionState : "missing",
+        title: snapshot.title,
+        year: snapshot.year,
+      }),
+      id: row.id,
+      position: row.position,
+    };
+  }
+
+  #compareListItems(
+    left: SavedListItemsResponse["items"][number],
+    right: SavedListItemsResponse["items"][number],
+    query: SavedListItemsQuery,
+  ) {
+    if (query.sort === "added_desc") {
+      return (
+        Date.parse(right.addedAt) - Date.parse(left.addedAt) || right.id.localeCompare(left.id)
+      );
+    }
+    if (query.sort === "title") {
+      const leftTitle = left.catalog.title.toLowerCase();
+      const rightTitle = right.catalog.title.toLowerCase();
+      return leftTitle < rightTitle
+        ? -1
+        : leftTitle > rightTitle
+          ? 1
+          : left.id.localeCompare(right.id);
+    }
+    return left.position - right.position || left.id.localeCompare(right.id);
+  }
+
   #summary(row: SavedListRow): SavedListSummary {
     if (!LIST_ID_PATTERN.test(row.id) || row.userId.length === 0) {
       throw new SavedListServiceError("storage_failure");
@@ -890,6 +1154,10 @@ export class SavedListService {
     return `saved_list_cursor:${userId}`;
   }
 
+  #itemCursorContext(userId: string, listId: string) {
+    return `saved_list_item_cursor:${userId}:${listId}`;
+  }
+
   #encodeCursor(payload: z.infer<typeof cursorPayloadSchema>, userId: string) {
     return this.#cipher.encrypt(JSON.stringify(payload), this.#cursorContext(userId));
   }
@@ -898,6 +1166,24 @@ export class SavedListService {
     try {
       return cursorPayloadSchema.parse(
         JSON.parse(this.#cipher.decrypt(value, this.#cursorContext(userId))),
+      );
+    } catch (error) {
+      throw new SavedListServiceError("cursor_invalid", { cause: error });
+    }
+  }
+
+  #encodeItemCursor(
+    payload: z.infer<typeof itemCursorPayloadSchema>,
+    userId: string,
+    listId: string,
+  ) {
+    return this.#cipher.encrypt(JSON.stringify(payload), this.#itemCursorContext(userId, listId));
+  }
+
+  #decodeItemCursor(value: string, userId: string, listId: string) {
+    try {
+      return itemCursorPayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(value, this.#itemCursorContext(userId, listId))),
       );
     } catch (error) {
       throw new SavedListServiceError("cursor_invalid", { cause: error });

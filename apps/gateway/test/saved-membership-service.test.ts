@@ -127,11 +127,12 @@ async function harness(artwork = true) {
   seedUser(database, appConfig, "saved-user");
   seedUser(database, appConfig, "other-user");
   let now = startedAt.getTime();
+  let referenceToken = 0;
   const references = new MediaReferenceService(database, appConfig, {
     clock: () => new Date(now),
-    createToken: () => "m".repeat(22),
+    createToken: () => (++referenceToken).toString(36).padStart(22, "m"),
   });
-  const [referenceId] = references.createOrRefresh(
+  const [referenceId, secondReferenceId] = references.createOrRefresh(
     { linkId: "saved-user-link", linkRevision: 1, userId: "saved-user" },
     [
       {
@@ -146,26 +147,40 @@ async function harness(artwork = true) {
         title: "Private saved title",
         year: 2026,
       },
+      {
+        artwork: { backdropItemId: null, posterItemId: "second-owned-movie" },
+        episodeNumber: null,
+        itemId: "second-owned-movie",
+        kind: "movie",
+        seasonNumber: null,
+        title: "Another saved title",
+        year: 2025,
+      },
     ],
   );
+  let targetToken = 0;
+  let favorite = true;
   const targets = new SavedTargetService(database, appConfig, {
     clock: () => new Date(now),
     createClient: () => ({
-      readFavoriteState: async () => true,
+      readFavoriteState: async () => favorite,
       updateFavoriteState: async ({ favorite }) => favorite,
     }),
-    createTargetToken: () => "t".repeat(22),
+    createTargetToken: () => (++targetToken).toString(36).padStart(22, "t"),
     mediaReferences: { clock: () => new Date(now) },
   });
   const issued = await targets.issueOwned(referenceId!, { principal: principal() });
+  const secondIssued = await targets.issueOwned(secondReferenceId!, { principal: principal() });
   let auditToken = 0;
+  let catalogToken = 0;
+  let itemToken = 0;
   let listToken = 0;
   let operationToken = 0;
   const lists = new SavedListService(database, appConfig, {
     clock: () => new Date(now),
     createAuditId: () => `saved-membership-audit-${++auditToken}`,
-    createCatalogToken: () => "c".repeat(22),
-    createItemToken: () => "i".repeat(22),
+    createCatalogToken: () => (++catalogToken).toString(36).padStart(22, "c"),
+    createItemToken: () => (++itemToken).toString(36).padStart(22, "i"),
     createListToken: () => (++listToken).toString(36).padStart(22, "l"),
     createOperationToken: () => (++operationToken).toString(36).padStart(22, "o"),
     targetDependencies: { mediaReferences: { clock: () => new Date(now) } },
@@ -183,7 +198,12 @@ async function harness(artwork = true) {
       };
     },
     database,
+    issueTarget: () => targets.issueOwned(referenceId!, { principal: principal() }),
     lists,
+    secondTargetReferenceId: secondIssued.targetReferenceId,
+    setFavorite(value: boolean) {
+      favorite = value;
+    },
     targetReferenceId: issued.targetReferenceId,
   };
 }
@@ -270,6 +290,35 @@ describe("SavedListService membership", () => {
     expect(
       database.sqlite.prepare("select event_type as eventType from audit_events").all(),
     ).toEqual([{ eventType: "saved.list.item.added" }]);
+
+    expect(lists.items(watchLater.id, {}, context())).toMatchObject({
+      items: [
+        {
+          catalog: { availability: "owned", title: "Private saved title" },
+          id: added.body.item.id,
+          position: 0,
+        },
+      ],
+      list: { id: watchLater.id, itemCount: 1, revision: 1 },
+      nextCursor: null,
+      reconciliation: { failures: [], state: "current" },
+    });
+    expect(lists.items(watchLater.id, { availability: "unavailable" }, context()).items).toEqual(
+      [],
+    );
+    expect(
+      lists.items(watchLater.id, { query: "saved TITLE", sort: "title" }, context()).items,
+    ).toHaveLength(1);
+    expect(lists.items(watchLater.id, { query: "not present" }, context()).items).toEqual([]);
+
+    database.sqlite.prepare("delete from media_references where user_id = 'saved-user'").run();
+    expect(lists.items(watchLater.id, {}, context()).items[0]?.catalog).toMatchObject({
+      artwork: { backdropPath: null, posterPath: null },
+      availability: "unavailable",
+      favorite: { state: "not_applicable", value: null },
+      libraryReferenceId: null,
+      resolutionState: "missing",
+    });
   });
 
   it("fails closed for stale revisions, expired targets, and cross-user guesses", async () => {
@@ -303,6 +352,9 @@ describe("SavedListService membership", () => {
         context("other-user"),
       ),
     ).toThrow(expect.objectContaining({ reason: "target_not_found" }));
+    expect(() => lists.items(own.id, {}, context("other-user"))).toThrow(
+      expect.objectContaining({ reason: "list_not_found" }),
+    );
   });
 
   it("represents absent artwork without inventing image routes", async () => {
@@ -318,6 +370,117 @@ describe("SavedListService membership", () => {
     expect(added.body.item.catalog.artwork).toMatchObject({
       backdropPath: null,
       posterPath: null,
+    });
+  });
+
+  it("paginates, filters, sorts, and reports degraded saved-title snapshots", async () => {
+    const {
+      advance,
+      appConfig,
+      context,
+      database,
+      lists,
+      secondTargetReferenceId,
+      targetReferenceId,
+    } = await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+    const first = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-paged-title-0001",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+    advance(1);
+    const second = lists.addItem(
+      watchLater.id,
+      { targetReferenceId: secondTargetReferenceId },
+      "add-paged-title-0002",
+      first.etag,
+      context(),
+    );
+
+    const pageOne = lists.items(watchLater.id, { limit: 1 }, context());
+    const pageTwo = lists.items(watchLater.id, { cursor: pageOne.nextCursor, limit: 1 }, context());
+    expect(pageOne.items.map(({ id }) => id)).toEqual([first.body.item.id]);
+    expect(pageTwo.items.map(({ id }) => id)).toEqual([second.body.item.id]);
+    expect(pageTwo.nextCursor).toBeNull();
+    expect(lists.items(watchLater.id, { sort: "added_desc" }, context()).items[0]?.id).toBe(
+      second.body.item.id,
+    );
+    expect(lists.items(watchLater.id, { sort: "title" }, context()).items[0]?.catalog.title).toBe(
+      "Another saved title",
+    );
+    expect(() =>
+      lists.items(
+        watchLater.id,
+        { cursor: pageOne.nextCursor, limit: 1, sort: "title" },
+        context(),
+      ),
+    ).toThrow(expect.objectContaining({ reason: "cursor_invalid" }));
+
+    const cipher = new EnvelopeCipher(appConfig.encryptionKey);
+    const catalogId = first.body.item.catalog.id;
+    const row = database.sqlite
+      .prepare(
+        "select encrypted_snapshot as encryptedSnapshot from saved_catalog_items where id = ?",
+      )
+      .get(catalogId) as { encryptedSnapshot: string };
+    const snapshot = JSON.parse(
+      cipher.decrypt(row.encryptedSnapshot, `saved_catalog_snapshot:saved-user:${catalogId}`),
+    ) as Record<string, unknown>;
+    database.sqlite
+      .prepare("update saved_catalog_items set encrypted_snapshot = ? where id = ?")
+      .run(
+        cipher.encrypt(
+          JSON.stringify({
+            ...snapshot,
+            favorite: { state: "unavailable", value: null },
+            resolutionState: "connector_unavailable",
+          }),
+          `saved_catalog_snapshot:saved-user:${catalogId}`,
+        ),
+        catalogId,
+      );
+    expect(lists.items(watchLater.id, {}, context()).reconciliation).toMatchObject({
+      failures: [{ code: "unreachable", service: "jellyfin" }],
+      state: "degraded",
+    });
+  });
+
+  it("invalidates list versions when an existing catalog snapshot changes", async () => {
+    const { context, issueTarget, lists, setFavorite, targetReferenceId } = await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+    const added = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-refresh-title-0001",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+
+    setFavorite(false);
+    await issueTarget();
+    const refreshed = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-refresh-title-0002",
+      added.etag,
+      context(),
+    );
+
+    expect(refreshed).toMatchObject({
+      body: {
+        created: false,
+        item: { catalog: { favorite: { state: "synced", value: false } } },
+        revision: 2,
+      },
+      replayed: false,
+    });
+    expect(refreshed.etag).not.toBe(added.etag);
+    expect(lists.items(watchLater.id, {}, context()).items[0]?.catalog.favorite).toEqual({
+      state: "synced",
+      value: false,
     });
   });
 

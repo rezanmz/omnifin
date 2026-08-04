@@ -36,6 +36,7 @@ export type PrivacyHashDomain =
   | "rate_limit_client"
   | "saved_catalog_identity"
   | "saved_list_etag"
+  | "saved_list_items_query"
   | "saved_operation"
   | "saved_target"
   | "system_status_signal"
