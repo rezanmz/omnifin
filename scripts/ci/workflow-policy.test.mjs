@@ -518,6 +518,22 @@ test("release automation allows protected main CI to finish under runner content
   }
 });
 
+test("edge publication retriggers from either protected-main quality gate", () => {
+  const document = workflowDocument("edge.yml");
+  const source = namedStep(
+    document.jobs.prerequisite.steps,
+    "Accept only a successful protected-main quality gate",
+  );
+
+  assert.deepEqual(document.on.workflow_run.workflows, ["CI", "Security"]);
+  assert.equal(source.env.SOURCE_WORKFLOW, "${{ github.event.workflow_run.name }}");
+  assert.match(source.run, /CI\|Security/u);
+  assert.match(source.run, /SOURCE_CONCLUSION.*success/su);
+  assert.match(source.run, /SOURCE_EVENT.*push/su);
+  assert.match(source.run, /SOURCE_BRANCH.*main/su);
+  assert.match(source.run, /SOURCE_REPOSITORY.*GITHUB_REPOSITORY/su);
+});
+
 test("draft-aware release jobs receive narrowly scoped push access", () => {
   const document = workflowDocument("publish.yml");
   const metadata = document.jobs["validate-release-metadata"];

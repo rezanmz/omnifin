@@ -81,7 +81,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Run strict live integration gate
         env:
           OMNIFIN_AUTHENTIK_ISSUER_URL: ${{ matrix.service == 'authentik' && vars.OMNIFIN_AUTHENTIK_ISSUER_URL || '' }}
