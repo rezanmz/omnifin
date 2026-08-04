@@ -2894,6 +2894,7 @@ describe("ContinueWatchingService", () => {
             container: "MKV",
             label: "4K · HEVC · MKV",
             sizeBytes: 6_979_321_856,
+            sourceId: "private-movie-source-upstream-1",
             subtitles: [],
             subtitlesTruncated: false,
             video: {
@@ -2946,7 +2947,13 @@ describe("ContinueWatchingService", () => {
           ],
           communityRating: 8.4,
           genres: ["Drama"],
-          mediaSources: [{ label: "4K · HEVC · MKV", sizeBytes: 6_979_321_856 }],
+          mediaSources: [
+            {
+              label: "4K · HEVC · MKV",
+              sizeBytes: 6_979_321_856,
+              sourceReferenceId: expect.stringMatching(/^source_[A-Za-z0-9_-]{22}$/u),
+            },
+          ],
           premiereDate: "2026-04-18",
         },
         playback: {
@@ -2957,6 +2964,7 @@ describe("ContinueWatchingService", () => {
         seasons: [],
       });
       expect(JSON.stringify(detail)).not.toMatch(/private-person|private-upstream/u);
+      expect(JSON.stringify(detail)).not.toContain("private-movie-source");
       const personPath = detail.movie?.cast[0]?.imagePath;
       expect(personPath).toBeTruthy();
       const token = personPath!.split("/").at(-1)!;

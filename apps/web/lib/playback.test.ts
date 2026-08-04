@@ -8,6 +8,7 @@ import type { PlaybackClientError } from "./playback";
 const csrfToken = "playback_csrf_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 const mediaReferenceId = `media_${"m".repeat(22)}`;
 const sessionId = `playback_${"p".repeat(22)}`;
+const sourceReferenceId = `source_${"s".repeat(22)}`;
 const principal: SessionPrincipal = {
   absoluteExpiresAt: "2026-07-29T12:00:00.000Z",
   accountState: "active",
@@ -149,6 +150,26 @@ describe("playback client", () => {
       positionSeconds: 2_400,
       subtitleStreamIndex: 7,
     });
+  });
+
+  it("rejects a negotiation that does not echo the requested owned source", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(authenticatedSession()))
+      .mockResolvedValueOnce(
+        jsonResponse({ ...playback, sourceReferenceId: `source_${"x".repeat(22)}` }, 201),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      playbackClient.prepare(mediaReferenceId, 1_200, undefined, { sourceReferenceId }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<PlaybackClientError>>({
+        code: "invalid_playback_source_response",
+        kind: "invalid_response",
+      }),
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toMatchObject({ sourceReferenceId });
   });
 
   it("reports progress through the opaque playback session", async () => {

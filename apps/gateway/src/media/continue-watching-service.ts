@@ -84,6 +84,7 @@ import {
   MediaReferenceService,
   type MediaReferenceDependencies,
 } from "./media-reference-service.js";
+import { playbackSourceReferenceId } from "./playback-source-reference.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UPSTREAM_MEDIA_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -946,6 +947,14 @@ export class ContinueWatchingService {
                 ...result.movie,
                 cast: result.movie.cast.map(publicCredit),
                 crew: result.movie.crew.map(publicCredit),
+                mediaSources: result.movie.mediaSources.map(({ sourceId, ...source }) => ({
+                  ...source,
+                  sourceReferenceId: playbackSourceReferenceId(
+                    this.#config.encryptionKey,
+                    referenceId,
+                    sourceId,
+                  ),
+                })),
               },
         playback:
           result.item.kind === "movie" && result.item.runtimeSeconds !== null

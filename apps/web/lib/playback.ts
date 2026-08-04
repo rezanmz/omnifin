@@ -51,6 +51,7 @@ export interface PlaybackPreparationOptions {
   audioStreamIndex?: number | null;
   maxStreamingBitrate?: number;
   mode?: "auto" | "direct" | "transcode";
+  sourceReferenceId?: string | null;
   subtitleStreamIndex?: number | null;
 }
 
@@ -196,6 +197,9 @@ export const playbackClient: PlaybackClient = {
       maxStreamingBitrate: options.maxStreamingBitrate ?? DEFAULT_MAX_STREAMING_BITRATE,
       mode: options.mode ?? "auto",
       positionSeconds,
+      ...(options.sourceReferenceId === undefined
+        ? {}
+        : { sourceReferenceId: options.sourceReferenceId }),
       subtitleStreamIndex: options.subtitleStreamIndex ?? null,
     });
     const response = await fetchSameOrigin(`/api/media/${mediaReferenceId}/playback`, {
@@ -217,6 +221,17 @@ export const playbackClient: PlaybackClient = {
         "invalid_response",
         "invalid_playback_response",
         "The gateway returned playback data outside the public contract.",
+      );
+    }
+    if (
+      options.sourceReferenceId !== undefined &&
+      options.sourceReferenceId !== null &&
+      parsed.data.sourceReferenceId !== options.sourceReferenceId
+    ) {
+      throw new PlaybackClientError(
+        "invalid_response",
+        "invalid_playback_source_response",
+        "The gateway did not honor the selected movie version.",
       );
     }
     browserPlaybackPath(parsed.data.streamPath);

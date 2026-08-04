@@ -8,6 +8,7 @@ export const PLAYBACK_MIN_BITRATE = 64_000;
 export const PLAYBACK_MAX_BITRATE = 200_000_000;
 
 export const playbackSessionIdSchema = z.string().regex(/^playback_[A-Za-z0-9_-]{22}$/u);
+export const playbackSourceReferenceIdSchema = z.string().regex(/^source_[A-Za-z0-9_-]{22}$/u);
 
 const streamIndexSchema = z.int().nonnegative().max(4_095);
 const languageSchema = z
@@ -32,6 +33,7 @@ export const playbackNegotiationRequestSchema = z
     maxStreamingBitrate: z.int().min(PLAYBACK_MIN_BITRATE).max(PLAYBACK_MAX_BITRATE),
     mode: z.enum(["auto", "direct", "transcode"]),
     positionSeconds: z.int().nonnegative().max(10_000_000),
+    sourceReferenceId: playbackSourceReferenceIdSchema.nullable().optional(),
     subtitleStreamIndex: streamIndexSchema.nullable(),
   })
   .superRefine((request, context) => {
@@ -101,6 +103,7 @@ export const playbackNegotiationResponseSchema = z
     mediaReferenceId: mediaReferenceIdSchema,
     positionSeconds: z.int().nonnegative().max(10_000_000),
     sessionId: playbackSessionIdSchema,
+    sourceReferenceId: playbackSourceReferenceIdSchema.nullable().optional(),
     streamPath: streamPathSchema,
     subtitleTracks: z.array(playbackSubtitleTrackSchema).max(PLAYBACK_MAX_SUBTITLE_TRACKS),
   })
@@ -292,6 +295,9 @@ export const playbackNegotiationRequestJsonSchema = {
     },
     mode: { enum: ["auto", "direct", "transcode"] },
     positionSeconds: { type: "integer", minimum: 0, maximum: 10_000_000 },
+    sourceReferenceId: {
+      anyOf: [{ type: "string", pattern: "^source_[A-Za-z0-9_-]{22}$" }, { type: "null" }],
+    },
     subtitleStreamIndex: nullableTrackIndexJsonSchema,
   },
 } as const;
@@ -374,6 +380,9 @@ export const playbackNegotiationResponseJsonSchema = {
     mediaReferenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
     positionSeconds: { type: "integer", minimum: 0, maximum: 10_000_000 },
     sessionId: { type: "string", pattern: playbackSessionJsonPattern },
+    sourceReferenceId: {
+      anyOf: [{ type: "string", pattern: "^source_[A-Za-z0-9_-]{22}$" }, { type: "null" }],
+    },
     streamPath: {
       type: "string",
       pattern: "^/v1/playback/playback_[A-Za-z0-9_-]{22}/(?:master\\.m3u8|stream)$",

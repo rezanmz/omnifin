@@ -3,6 +3,7 @@ import { z } from "zod";
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
 import { discoveryTrailerSchema, titleProviderReferenceSchema } from "./discovery.js";
+import { playbackSourceReferenceIdSchema } from "./playback.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
@@ -375,6 +376,7 @@ export const libraryMovieMediaSourceSchema = z.strictObject({
   container: safeTextSchema.max(64).nullable(),
   label: safeTextSchema.max(160),
   sizeBytes: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+  sourceReferenceId: playbackSourceReferenceIdSchema,
   subtitles: z.array(libraryMovieSubtitleTrackSchema).max(LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
   subtitlesTruncated: z.boolean(),
   video: libraryMovieVideoSchema.nullable(),

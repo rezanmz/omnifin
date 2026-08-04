@@ -1,12 +1,14 @@
 "use client";
 
 import "video.js/dist/video-js.css";
+import type { LibraryMovieMediaSource } from "@omnifin/contracts/library";
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import {
   Bug,
   Captions,
   CheckCircle2,
   CircleAlert,
+  HardDrive,
   Headphones,
   LoaderCircle,
   Maximize2,
@@ -52,7 +54,9 @@ export interface TheaterMedia {
   artworkPath?: string;
   eyebrow: string;
   id: string;
+  mediaSources?: LibraryMovieMediaSource[];
   positionSeconds: number;
+  sourceReferenceId?: string;
   title: string;
 }
 
@@ -136,6 +140,7 @@ function recordMediaFailure(data: MediaFailureData, recovery: MediaFailureRecove
 function preparationOptions(
   preferences: PlaybackPreferences,
   session?: PlaybackNegotiationResponse | null,
+  sourceReferenceId?: string | null,
 ): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
   const customTracks = preferences.audioStreamIndex !== null;
@@ -151,6 +156,7 @@ function preparationOptions(
     maxStreamingBitrate: quality.bitrate,
     mode: customTracks ? "transcode" : quality.mode,
     subtitleStreamIndex: clientRenderedSubtitle ? null : preferences.subtitleStreamIndex,
+    ...(sourceReferenceId === undefined ? {} : { sourceReferenceId }),
   };
 }
 
@@ -223,6 +229,7 @@ export function TheaterPlayer({
     previous: PreparedPlayback;
     previousPosition: number;
     previousPreferences: PlaybackPreferences;
+    previousSourceReferenceId: string | null;
     resume: boolean;
   } | null>(null);
   const restorePositionReference = useRef<number | null>(null);
@@ -244,6 +251,7 @@ export function TheaterPlayer({
     quality: "original",
     subtitleStreamIndex: null,
   });
+  const [sourceReferenceId, setSourceReferenceId] = useState(media.sourceReferenceId ?? null);
   const [prepared, setPrepared] = useState<PreparedPlayback | null>(null);
   const [status, setStatus] = useState<PlayerStatus>("preparing");
   const [message, setMessage] = useState("Opening a private playback session…");
@@ -308,6 +316,7 @@ export function TheaterPlayer({
       preparedReference.current = replacement.previous;
       restorePositionReference.current = replacement.previousPosition;
       setPreferences(replacement.previousPreferences);
+      setSourceReferenceId(replacement.previousSourceReferenceId);
       setPrepared(replacement.previous);
       reportedStateReference.current = replacement.resume ? "paused" : "negotiated";
       startWhenReadyReference.current = replacement.resume;
@@ -366,7 +375,12 @@ export function TheaterPlayer({
   }, [absolutePosition]);
 
   const replacePlayback = useCallback(
-    async (nextPreferences: PlaybackPreferences, nextPosition: number, nextMessage: string) => {
+    async (
+      nextPreferences: PlaybackPreferences,
+      nextPosition: number,
+      nextMessage: string,
+      nextSourceReferenceId = sourceReferenceId,
+    ) => {
       const active = preparedReference.current;
       if (!active) return;
       const previousPosition = absolutePosition();
@@ -384,7 +398,7 @@ export function TheaterPlayer({
           media.id,
           safePosition,
           controller.signal,
-          preparationOptions(nextPreferences, active.session),
+          preparationOptions(nextPreferences, active.session, nextSourceReferenceId),
         );
         if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
           stopSession(result, safePosition);
@@ -395,6 +409,7 @@ export function TheaterPlayer({
           previous: active,
           previousPosition,
           previousPreferences: preferencesReference.current,
+          previousSourceReferenceId: sourceReferenceId,
           resume: playing,
         };
         preferencesReference.current = nextPreferences;
@@ -402,6 +417,7 @@ export function TheaterPlayer({
         reportedStateReference.current = "negotiated";
         startWhenReadyReference.current = playing;
         setPreferences(nextPreferences);
+        setSourceReferenceId(nextSourceReferenceId);
         setPrepared(result);
         setPlaying(false);
         setBuffering(false);
@@ -421,7 +437,7 @@ export function TheaterPlayer({
         setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
       }
     },
-    [absolutePosition, client, duration, media.id, playing, stopSession],
+    [absolutePosition, client, duration, media.id, playing, sourceReferenceId, stopSession],
   );
 
   const revealControls = useCallback(() => {
@@ -526,7 +542,11 @@ export function TheaterPlayer({
         media.id,
         requestedPositionReference.current,
         controller.signal,
-        preparationOptions(preferencesReference.current, preparedReference.current?.session),
+        preparationOptions(
+          preferencesReference.current,
+          preparedReference.current?.session,
+          media.sourceReferenceId,
+        ),
       )
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -542,7 +562,7 @@ export function TheaterPlayer({
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id]);
+  }, [attempt, client, media.id, media.sourceReferenceId]);
 
   useEffect(() => {
     if (!prepared) return;
@@ -1196,6 +1216,34 @@ export function TheaterPlayer({
                 <span>Playback</span>
                 <small>Changes preserve your place</small>
               </div>
+              {media.mediaSources && media.mediaSources.length > 1 ? (
+                <label className={styles.settingField}>
+                  <span>
+                    <HardDrive aria-hidden="true" size={16} /> Movie version
+                  </span>
+                  <select
+                    aria-label="Movie version"
+                    disabled={switching}
+                    onChange={(event) => {
+                      const nextSourceReferenceId = event.currentTarget.value;
+                      if (nextSourceReferenceId === sourceReferenceId) return;
+                      void replacePlayback(
+                        preferences,
+                        absolutePosition(),
+                        "Switching movie version without losing your place…",
+                        nextSourceReferenceId,
+                      );
+                    }}
+                    value={sourceReferenceId ?? media.mediaSources[0]!.sourceReferenceId}
+                  >
+                    {media.mediaSources.map((source) => (
+                      <option key={source.sourceReferenceId} value={source.sourceReferenceId}>
+                        {source.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <label className={styles.settingField}>
                 <span>
                   <Headphones aria-hidden="true" size={16} /> Audio

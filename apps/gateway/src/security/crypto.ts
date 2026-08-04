@@ -34,6 +34,7 @@ export type PrivacyHashDomain =
   | "oidc_failure_audit_user_agent"
   | "oidc_session_id"
   | "playback_asset"
+  | "playback_source"
   | "rate_limit_client"
   | "saved_catalog_identity"
   | "saved_favorite_audit"
