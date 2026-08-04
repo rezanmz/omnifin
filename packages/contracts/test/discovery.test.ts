@@ -313,6 +313,7 @@ describe("discovery contracts", () => {
       item: common,
     });
     expect(response.item.kind).toBe("movie");
+    expect(response.connectedActions).toEqual([]);
 
     const series = discoveryMediaDetailResponseSchema.parse({
       generatedAt: "2026-07-28T20:00:00.000Z",
@@ -334,6 +335,60 @@ describe("discovery contracts", () => {
     });
     expect(series.item.kind).toBe("series");
     if (series.item.kind === "series") expect(series.item.seasons).toHaveLength(2);
+  });
+
+  it("binds connected-service navigation to the exact normalized title", () => {
+    const response = {
+      connectedActions: [
+        {
+          href: "/v1/discovery/details/movie/603/actions/radarr",
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ],
+      generatedAt: "2026-07-28T20:00:00.000Z",
+      item: {
+        artwork: { backdropPath: null, posterPath: null },
+        availability: "available",
+        cast: [],
+        crew: [],
+        genres: [],
+        id: "movie:603",
+        intelligence: {
+          ratings: [],
+          ratingsState: "empty",
+          recommendations: [],
+          recommendationsState: "empty",
+          trailers: [],
+        },
+        kind: "movie",
+        originalTitle: "The Matrix",
+        overview: null,
+        productionStatus: "Released",
+        runtimeMinutes: 136,
+        source: "seerr",
+        tagline: null,
+        title: "The Matrix",
+        tmdbId: 603,
+        voteAverage: 8.2,
+        voteCount: 27_000,
+        year: 1999,
+      },
+    } as const;
+
+    expect(discoveryMediaDetailResponseSchema.parse(response).connectedActions).toEqual(
+      response.connectedActions,
+    );
+    for (const connectedActions of [
+      [{ ...response.connectedActions[0], service: "sonarr" }],
+      [{ ...response.connectedActions[0], href: "/v1/discovery/details/movie/604/actions/radarr" }],
+      [{ ...response.connectedActions[0], href: "https://radarr.example.test/movie/the-matrix" }],
+    ]) {
+      expect(
+        discoveryMediaDetailResponseSchema.safeParse({ ...response, connectedActions }).success,
+      ).toBe(false);
+    }
   });
 
   it("rejects raw upstream fields and unbounded detail collections", () => {

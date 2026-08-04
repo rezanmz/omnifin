@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoveryMediaDetailClient, discoveryPersonDetailClient } from "./media-details";
 
 const response: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },
@@ -115,6 +116,36 @@ describe("media detail client", () => {
       discoveryPersonDetailClient.load({ tmdbId: 6384 }, { language: "en" }),
     ).resolves.toMatchObject({
       item: { profilePath: `/api/discovery/artwork/${reference}` },
+    });
+  });
+
+  it("rewrites validated connected-service actions through the same-origin gateway", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...response,
+          connectedActions: [
+            {
+              href: "/v1/discovery/details/movie/603/actions/radarr",
+              kind: "service_navigation",
+              label: "Open in Radarr",
+              service: "radarr",
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      discoveryMediaDetailClient.load({ kind: "movie", tmdbId: 603 }, { language: "en" }),
+    ).resolves.toMatchObject({
+      connectedActions: [
+        {
+          href: "/api/discovery/details/movie/603/actions/radarr",
+          service: "radarr",
+        },
+      ],
     });
   });
 

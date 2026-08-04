@@ -76,6 +76,10 @@ function browserArtworkPath(path: string | null) {
 function browserMediaDetail(response: DiscoveryMediaDetailResponse): DiscoveryMediaDetailResponse {
   return {
     ...response,
+    connectedActions: response.connectedActions.map((action) => ({
+      ...action,
+      href: action.href.replace(/^\/v1\//u, "/api/"),
+    })),
     item: {
       ...response.item,
       artwork: {

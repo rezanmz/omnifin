@@ -31,6 +31,7 @@ import {
   type DiscoveryFeedResponse,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
+  type DiscoveryConnectedAction,
   type DiscoveryPersonDetailParams,
   type DiscoveryPersonDetailQuery,
   type DiscoverySearchQuery,
@@ -43,6 +44,13 @@ import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { requirePermission } from "../auth/authorization.js";
 import { EnvelopeCipher } from "../security/crypto.js";
+import {
+  ConnectedServiceNavigationService,
+  connectedServiceDestination,
+  type ConnectedService,
+  type ConnectedServiceIdentity,
+  type ConnectedServiceTarget,
+} from "../connectors/service-navigation.js";
 import {
   DiscoveryArtworkReferenceError,
   DiscoveryArtworkReferenceService,
@@ -95,6 +103,10 @@ export interface DiscoverySearchAdapter {
 export interface DiscoverySearchDependencies {
   clock?: () => Date;
   createAdapter?: (config: OptionalApiKeyConnectorConfig) => DiscoverySearchAdapter;
+  resolveConnectedAction?: (
+    identity: ConnectedServiceIdentity,
+    signal?: AbortSignal,
+  ) => Promise<ConnectedServiceTarget | null>;
 }
 
 export type DiscoverySearchErrorReason =
@@ -128,12 +140,23 @@ export class DiscoveryArtworkError extends Error {
   }
 }
 
+export class DiscoveryConnectedActionError extends Error {
+  public readonly reason: "not_found" | "unavailable";
+
+  public constructor(reason: "not_found" | "unavailable", options?: ErrorOptions) {
+    super("The connected discovery action is unavailable.", options);
+    this.name = "DiscoveryConnectedActionError";
+    this.reason = reason;
+  }
+}
+
 const FEED_KINDS = [
   "trending",
   "popular_movies",
   "popular_series",
   "upcoming",
 ] as const satisfies readonly DiscoveryFeedRailKind[];
+const CONNECTED_ACTION_PREVIEW_TIMEOUT_MS = 1_500;
 
 function feedFailure(
   error: unknown,
@@ -220,6 +243,9 @@ export class DiscoverySearchService {
   readonly #createAdapter: (config: OptionalApiKeyConnectorConfig) => DiscoverySearchAdapter;
   readonly #database: DatabaseHandle;
   readonly #references: DiscoveryArtworkReferenceService;
+  readonly #resolveConnectedAction: NonNullable<
+    DiscoverySearchDependencies["resolveConnectedAction"]
+  >;
 
   public constructor(
     database: DatabaseHandle,
@@ -231,6 +257,12 @@ export class DiscoverySearchService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? ((input) => new SeerrAdapter(input));
     this.#references = new DiscoveryArtworkReferenceService(database, config, this.#clock);
+    const navigation = new ConnectedServiceNavigationService(database, config, {
+      clock: this.#clock,
+    });
+    this.#resolveConnectedAction =
+      dependencies.resolveConnectedAction ??
+      ((identity, signal) => navigation.resolve(identity, signal));
   }
 
   public async feed(
@@ -444,7 +476,12 @@ export class DiscoverySearchService {
     const query = discoveryMediaDetailQuerySchema.parse(queryInput);
     const row = this.#connector();
     const adapter = this.#adapterFor(row);
-    const detail = await adapter.detail(params, query, signal);
+    const [detail, connectedActions] = await Promise.all([
+      adapter.detail(params, query, signal),
+      principal.permissions.includes("acquisition.manage")
+        ? this.#availableConnectedActions(params, signal)
+        : Promise.resolve([]),
+    ]);
     if (detail.artwork.castProfilePaths.length !== detail.response.item.cast.length) {
       throw new DiscoverySearchError("connector_integrity_failure");
     }
@@ -474,6 +511,7 @@ export class DiscoverySearchService {
     };
     const response = discoveryMediaDetailResponseSchema.parse({
       ...detail.response,
+      connectedActions,
       item: {
         ...detail.response.item,
         artwork: {
@@ -488,6 +526,26 @@ export class DiscoverySearchService {
     });
     if (referenceIndex !== references.length) throw new DiscoverySearchError("storage_failure");
     return response;
+  }
+
+  public async openConnectedAction(
+    paramsInput: DiscoveryMediaDetailParams,
+    service: ConnectedService,
+    context: DiscoverySearchContext,
+    signal?: AbortSignal,
+  ) {
+    requirePermission(context.principal, "acquisition.manage");
+    const params = discoveryMediaDetailParamsSchema.parse(paramsInput);
+    const expectedService = params.kind === "movie" ? "radarr" : "sonarr";
+    if (service !== expectedService) throw new DiscoveryConnectedActionError("not_found");
+    try {
+      const target = await this.#resolveConnectedAction(this.#connectedIdentity(params), signal);
+      if (target === null) throw new DiscoveryConnectedActionError("not_found");
+      return connectedServiceDestination(target, service);
+    } catch (error) {
+      if (error instanceof DiscoveryConnectedActionError) throw error;
+      throw new DiscoveryConnectedActionError("unavailable", { cause: error });
+    }
   }
 
   public async trailers(
@@ -505,6 +563,39 @@ export class DiscoverySearchService {
       displayName: row.displayName,
       items: detail.response.item.intelligence.trailers,
     };
+  }
+
+  async #availableConnectedActions(
+    params: DiscoveryMediaDetailParams,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryConnectedAction[]> {
+    const service = params.kind === "movie" ? "radarr" : "sonarr";
+    const timeoutSignal = AbortSignal.timeout(CONNECTED_ACTION_PREVIEW_TIMEOUT_MS);
+    const lookupSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    try {
+      const target = await this.#resolveConnectedAction(
+        this.#connectedIdentity(params),
+        lookupSignal,
+      );
+      if (target === null || target.service !== service) return [];
+      return [
+        {
+          href: `/v1/discovery/details/${params.kind}/${params.tmdbId}/actions/${service}`,
+          kind: "service_navigation",
+          label: service === "radarr" ? "Open in Radarr" : "Open in Sonarr",
+          service,
+        },
+      ];
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return [];
+    }
+  }
+
+  #connectedIdentity(params: DiscoveryMediaDetailParams): ConnectedServiceIdentity {
+    return params.kind === "movie"
+      ? { kind: "movie", providerIds: { imdb: null, tmdb: params.tmdbId } }
+      : { kind: "series", providerIds: { tmdb: params.tmdbId, tvdb: null } };
   }
 
   public async personDetail(

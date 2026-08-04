@@ -563,10 +563,38 @@ export const discoveryMediaDetailSchema = z.discriminatedUnion("kind", [
 ]);
 export type DiscoveryMediaDetail = z.infer<typeof discoveryMediaDetailSchema>;
 
-export const discoveryMediaDetailResponseSchema = z.strictObject({
-  generatedAt: z.iso.datetime({ offset: true }),
-  item: discoveryMediaDetailSchema,
+export const discoveryConnectedActionSchema = z.strictObject({
+  href: z
+    .string()
+    .max(256)
+    .regex(
+      /^\/v1\/discovery\/details\/(?:movie|series)\/[1-9][0-9]{0,9}\/actions\/(?:radarr|sonarr)$/u,
+    ),
+  kind: z.literal("service_navigation"),
+  label: z.string().trim().min(1).max(80),
+  service: z.enum(["radarr", "sonarr"]),
 });
+export type DiscoveryConnectedAction = z.infer<typeof discoveryConnectedActionSchema>;
+
+export const discoveryMediaDetailResponseSchema = z
+  .strictObject({
+    connectedActions: z.array(discoveryConnectedActionSchema).max(1).default([]),
+    generatedAt: z.iso.datetime({ offset: true }),
+    item: discoveryMediaDetailSchema,
+  })
+  .superRefine((response, context) => {
+    for (const [index, action] of response.connectedActions.entries()) {
+      const service = response.item.kind === "movie" ? "radarr" : "sonarr";
+      const expectedHref = `/v1/discovery/details/${response.item.kind}/${response.item.tmdbId}/actions/${service}`;
+      if (action.service !== service || action.href !== expectedHref) {
+        context.addIssue({
+          code: "custom",
+          message: "Connected discovery actions must match the exact title and service.",
+          path: ["connectedActions", index],
+        });
+      }
+    }
+  });
 export type DiscoveryMediaDetailResponse = z.infer<typeof discoveryMediaDetailResponseSchema>;
 
 export const discoveryPersonDetailParamsSchema = z.strictObject({

@@ -4,6 +4,7 @@ import "./media-detail-drawer.css";
 
 import type {
   DiscoveryMediaDetail,
+  DiscoveryMediaDetailResponse,
   DiscoveryMediaRecommendation,
   DiscoveryMovieResult,
   DiscoveryPersonDetail,
@@ -42,7 +43,12 @@ export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
 
 type DetailState =
   | { kind: "loading"; requestKey: string }
-  | { detail: DiscoveryMediaDetail; kind: "ready"; requestKey: string }
+  | {
+      connectedActions: DiscoveryMediaDetailResponse["connectedActions"];
+      detail: DiscoveryMediaDetail;
+      kind: "ready";
+      requestKey: string;
+    }
   | { errorKind: MediaDetailClientErrorKind; kind: "error"; requestKey: string };
 
 type PersonState =
@@ -262,12 +268,14 @@ function DetailError({
 }
 
 function DetailContent({
+  connectedActions,
   detail,
   media,
   onInspectMedia,
   onInspectPerson,
   onRequest,
 }: {
+  connectedActions: DiscoveryMediaDetailResponse["connectedActions"];
   detail: DiscoveryMediaDetail;
   media: DetailMedia;
   onInspectMedia: (media: DetailMedia) => void;
@@ -343,6 +351,24 @@ function DetailContent({
             Request title <Sparkles aria-hidden="true" />
           </button>
         </aside>
+      ) : null}
+
+      {connectedActions.length > 0 ? (
+        <nav aria-label="Connected services" className="media-detail__service-actions">
+          {connectedActions.map((action) => (
+            <a
+              aria-label={`${action.label} in a new tab`}
+              data-directional-item
+              href={action.href}
+              key={action.service}
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <ExternalLink aria-hidden="true" />
+              {action.label}
+            </a>
+          ))}
+        </nav>
       ) : null}
 
       <section className="media-detail__overview">
@@ -703,7 +729,14 @@ export function MediaDetailDrawer({
         controller.signal,
       )
       .then((response) => {
-        if (current) setState({ detail: response.item, kind: "ready", requestKey });
+        if (current) {
+          setState({
+            connectedActions: response.connectedActions,
+            detail: response.item,
+            kind: "ready",
+            requestKey,
+          });
+        }
       })
       .catch((error: unknown) => {
         if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
@@ -845,6 +878,7 @@ export function MediaDetailDrawer({
             <DetailSkeleton title="person context" />
           ) : visibleState?.kind === "ready" ? (
             <DetailContent
+              connectedActions={visibleState.connectedActions}
               detail={visibleState.detail}
               media={activeMedia}
               onInspectMedia={inspectMedia}

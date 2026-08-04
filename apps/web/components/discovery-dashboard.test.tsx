@@ -12,6 +12,7 @@ import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import { DiscoveryDashboard } from "./discovery-dashboard";
 
 const detailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-29T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },

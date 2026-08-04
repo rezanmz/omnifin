@@ -39,6 +39,7 @@ const series: DiscoverySeriesResult = {
   year: 2008,
 };
 const movieResponse: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },
@@ -205,6 +206,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
   },
 };
 const seriesResponse: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },
@@ -297,6 +299,28 @@ export const Movie: Story = {
     const canvas = within(canvasElement.ownerDocument.body);
     await waitFor(() => expect(canvas.getByRole("heading", { name: "The Matrix" })).toBeVisible());
     expect(canvas.getByText("Free your mind.")).toBeVisible();
+  },
+};
+
+export const ConnectedService: Story = {
+  args: {
+    client: client(async () => ({
+      ...movieResponse,
+      connectedActions: [
+        {
+          href: "/api/discovery/details/movie/603/actions/radarr",
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ],
+    })),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    await waitFor(() =>
+      expect(canvas.getByRole("link", { name: "Open in Radarr in a new tab" })).toBeVisible(),
+    );
   },
 };
 

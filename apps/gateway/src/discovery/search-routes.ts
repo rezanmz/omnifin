@@ -33,6 +33,7 @@ import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js
 import { SafeHttpError } from "../http-error.js";
 import {
   DiscoveryArtworkError,
+  DiscoveryConnectedActionError,
   DiscoverySearchError,
   DiscoverySearchService,
   type DiscoverySearchDependencies,
@@ -44,6 +45,14 @@ const discoveryArtworkParamsSchema = z.strictObject({
 });
 const discoveryArtworkParamsJsonSchema = z.toJSONSchema(discoveryArtworkParamsSchema);
 delete discoveryArtworkParamsJsonSchema.$schema;
+
+const discoveryConnectedActionParamsSchema = discoveryMediaDetailParamsSchema.extend({
+  service: z.enum(["radarr", "sonarr"]),
+});
+const discoveryConnectedActionParamsJsonSchema = z.toJSONSchema(
+  discoveryConnectedActionParamsSchema,
+);
+delete discoveryConnectedActionParamsJsonSchema.$schema;
 
 function searchError(error: DiscoverySearchError) {
   switch (error.reason) {
@@ -367,6 +376,61 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/discovery/details/:kind/:tmdbId/actions/:service",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: { params: discoveryConnectedActionParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "acquisition.manage");
+      const { kind, service, tmdbId } = discoveryConnectedActionParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const destination = await discovery.openConnectedAction(
+          { kind, tmdbId },
+          service,
+          { principal },
+          controller.signal,
+        );
+        reply.header("referrer-policy", "no-referrer");
+        return reply.redirect(destination.href, 303);
+      } catch (error) {
+        if (error instanceof DiscoveryConnectedActionError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "discovery_connected_action_not_found"
+                : "discovery_connected_action_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "This title is not available in the connected service."
+                : "The connected service is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
         throw error;
       } finally {
         request.raw.off("aborted", abort);

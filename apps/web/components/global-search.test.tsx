@@ -55,6 +55,7 @@ const searchResponse: DiscoverySearchResponse = {
 };
 
 const detailResponse: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },

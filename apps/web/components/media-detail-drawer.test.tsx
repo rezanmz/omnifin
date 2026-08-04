@@ -40,6 +40,7 @@ const series: DiscoverySeriesResult = {
   year: 2008,
 };
 const movieResponse: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },
@@ -172,6 +173,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
   },
 };
 const seriesResponse: DiscoveryMediaDetailResponse = {
+  connectedActions: [],
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: null, posterPath: null },
@@ -239,6 +241,32 @@ describe("media detail drawer", () => {
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("presents an operator's connected-service action as an explicit new-tab link", async () => {
+    render(
+      <MediaDetailDrawer
+        client={client(async () => ({
+          ...movieResponse,
+          connectedActions: [
+            {
+              href: "/api/discovery/details/movie/603/actions/radarr",
+              kind: "service_navigation",
+              label: "Open in Radarr",
+              service: "radarr",
+            },
+          ],
+        }))}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    const action = await screen.findByRole("link", { name: "Open in Radarr in a new tab" });
+    expect(action).toHaveAttribute("href", "/api/discovery/details/movie/603/actions/radarr");
+    expect(action).toHaveAttribute("target", "_blank");
+    expect(action).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("renders proxied artwork and falls back cleanly when an individual image fails", async () => {
