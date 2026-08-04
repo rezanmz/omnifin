@@ -215,6 +215,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     seasonsTruncated: false,
   }));
   const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    catalogTmdbId: 1_042,
     items: [
       {
         artwork: {
@@ -235,6 +236,18 @@ function harness(options: { withIdentity?: boolean } = {}) {
       },
     ],
     nextStartIndex: 12,
+  }));
+  const readOnlineExtras = vi.fn(async () => ({
+    displayName: "Home Seerr",
+    items: [
+      {
+        id: "youtube:QdBZY2fkU-0",
+        provider: "youtube" as const,
+        resolution: 2160,
+        title: "Official online trailer",
+        type: "trailer" as const,
+      },
+    ],
   }));
   const readLibrarySeasonEpisodes = vi.fn(
     async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
@@ -300,6 +313,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     clock: () => now,
     createClient,
     createUserMediaStateOperationToken: () => "o".repeat(22),
+    readOnlineExtras,
     mediaReferences: {
       clock: () => now,
       createToken: () => (mediaReferenceIndex++ === 0 ? "m" : "e").repeat(22),
@@ -315,6 +329,7 @@ function harness(options: { withIdentity?: boolean } = {}) {
     readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
+    readOnlineExtras,
     readViewingHistory,
     service,
     updatePlaybackState,
@@ -700,7 +715,7 @@ describe("ContinueWatchingService", () => {
   });
 
   it("pages parent-scoped local extras without exposing Jellyfin identities", async () => {
-    const { database, readLibraryExtras, service } = harness();
+    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
     try {
       const catalogue = await service.browse(
         { kind: "series", limit: 30, sort: "title" },
@@ -732,10 +747,23 @@ describe("ContinueWatchingService", () => {
           },
         ],
         parentReferenceId,
+        onlineItems: [
+          {
+            id: "youtube:QdBZY2fkU-0",
+            provider: "youtube",
+            title: "Official online trailer",
+          },
+        ],
+        onlineSource: { displayName: "Home Seerr", failure: null, status: "healthy" },
+        onlineState: "ready",
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
         state: "complete",
       });
       expect(first.nextCursor).toMatch(/^v2\./u);
+      expect(readOnlineExtras).toHaveBeenCalledWith(
+        { kind: "series", principal: principal(), tmdbId: 1_042 },
+        undefined,
+      );
       expect(JSON.stringify(first)).not.toMatch(/private-|viewer-external|jellyfin-access/iu);
       expect(readLibraryExtras).toHaveBeenCalledWith(
         {
@@ -766,6 +794,28 @@ describe("ContinueWatchingService", () => {
         ),
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
       expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
+
+      readOnlineExtras.mockRejectedValueOnce(new Error("private Seerr detail payload"));
+      const withoutOnline = await service.readLibraryExtras(
+        parentReferenceId,
+        { limit: 12 },
+        { principal: principal() },
+      );
+      expect(withoutOnline).toMatchObject({
+        items: [{ source: "local" }],
+        onlineItems: [],
+        onlineSource: {
+          failure: {
+            message: "Online trailers are temporarily unavailable.",
+            operation: "discovery.detail",
+            service: "seerr",
+          },
+          status: "unavailable",
+        },
+        onlineState: "unavailable",
+        state: "complete",
+      });
+      expect(JSON.stringify(withoutOnline)).not.toContain("private Seerr");
 
       readLibraryExtras.mockRejectedValueOnce(
         new Error(`private ${privateAccessToken} ${privateItemId}`),

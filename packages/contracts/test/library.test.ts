@@ -395,7 +395,7 @@ describe("library operation contracts", () => {
     );
   });
 
-  it("models bounded local extras without exposing parent or child upstream identity", () => {
+  it("models bounded local and reviewed online extras without exposing upstream identity", () => {
     const extraReferenceId = `media_${"x".repeat(22)}`;
     const response = {
       generatedAt: catalogue.generatedAt,
@@ -419,6 +419,21 @@ describe("library operation contracts", () => {
         },
       ],
       nextCursor: "ZXh0cmFz.c2lnbmF0dXJl",
+      onlineItems: [
+        {
+          id: "youtube:QdBZY2fkU-0",
+          provider: "youtube" as const,
+          resolution: 2160,
+          title: "Official trailer",
+          type: "trailer" as const,
+        },
+      ],
+      onlineSource: {
+        displayName: "Seerr",
+        failure: null,
+        status: "healthy" as const,
+      },
+      onlineState: "ready" as const,
       parentReferenceId: referenceId,
       source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
       state: "complete" as const,
@@ -437,6 +452,12 @@ describe("library operation contracts", () => {
             media: { ...response.items[0]!.media, id: referenceId },
           },
         ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryExtrasResponseSchema.safeParse({
+        ...response,
+        onlineItems: [{ ...response.onlineItems[0], id: "vimeo:unreviewed" }],
       }).success,
     ).toBe(false);
   });

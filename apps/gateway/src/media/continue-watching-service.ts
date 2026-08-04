@@ -40,6 +40,7 @@ import {
   type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
+import type { DiscoveryTrailer } from "@omnifin/contracts/discovery";
 import { createHash, X509Certificate } from "node:crypto";
 import { z, ZodError } from "zod";
 
@@ -47,6 +48,7 @@ import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
+import { DiscoverySearchError, DiscoverySearchService } from "../discovery/search-service.js";
 import {
   MediaReferenceError,
   MediaReferenceService,
@@ -173,6 +175,14 @@ export interface ContinueWatchingDependencies {
       >
     >;
   mediaReferences?: MediaReferenceDependencies;
+  readOnlineExtras?: (
+    input: {
+      kind: "movie" | "series";
+      principal: SessionPrincipal;
+      tmdbId: number;
+    },
+    signal?: AbortSignal,
+  ) => Promise<{ displayName: string; items: readonly DiscoveryTrailer[] }>;
 }
 
 export class ContinueWatchingError extends Error {
@@ -369,6 +379,26 @@ function safeFailure(
   };
 }
 
+function onlineExtrasFailure(error: unknown, occurredAt: Date): PartialFailure {
+  const code =
+    error instanceof SafeConnectorError
+      ? error.code
+      : error instanceof ZodError
+        ? "response_invalid"
+        : "upstream_error";
+  return {
+    code,
+    message: "Online trailers are temporarily unavailable.",
+    occurredAt: occurredAt.toISOString(),
+    operation: "discovery.detail",
+    retryable: code !== "configuration_invalid" && code !== "response_invalid",
+    service: "seerr",
+    ...(error instanceof SafeConnectorError && error.retryAfterSeconds !== undefined
+      ? { retryAfterSeconds: error.retryAfterSeconds }
+      : {}),
+  };
+}
+
 function mediaOperationFailureMessage(error: unknown, operation: UserMediaOperation) {
   if (error instanceof MediaReferenceError) {
     if (operation === "media.library") return "Library references are temporarily unavailable.";
@@ -456,6 +486,7 @@ export class ContinueWatchingService {
   readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
+  readonly #readOnlineExtras: NonNullable<ContinueWatchingDependencies["readOnlineExtras"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -471,6 +502,16 @@ export class ContinueWatchingService {
     this.#createUserMediaStateOperationToken =
       dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
+    if (dependencies.readOnlineExtras) this.#readOnlineExtras = dependencies.readOnlineExtras;
+    else {
+      const discovery = new DiscoverySearchService(database, config);
+      this.#readOnlineExtras = (input, signal) =>
+        discovery.trailers(
+          { kind: input.kind, tmdbId: input.tmdbId },
+          { principal: input.principal },
+          signal,
+        );
+    }
   }
 
   public async read(
@@ -672,6 +713,43 @@ export class ContinueWatchingService {
         },
         signal,
       );
+      let onlineItems: readonly DiscoveryTrailer[] = [];
+      let onlineSource: {
+        displayName: string;
+        failure: PartialFailure | null;
+        status: "healthy" | "unavailable" | "unconfigured";
+      };
+      let onlineState: "empty" | "ready" | "unavailable" | "unconfigured";
+      if (result.catalogTmdbId === null) {
+        onlineSource = { displayName: "Online trailers", failure: null, status: "unconfigured" };
+        onlineState = "unconfigured";
+      } else {
+        try {
+          const online = await this.#readOnlineExtras(
+            { kind: reference.kind, principal, tmdbId: result.catalogTmdbId },
+            signal,
+          );
+          onlineItems = online.items;
+          onlineSource = {
+            displayName: safeDisplayName(online.displayName),
+            failure: null,
+            status: "healthy",
+          };
+          onlineState = onlineItems.length > 0 ? "ready" : "empty";
+        } catch (error) {
+          if (error instanceof DiscoverySearchError && error.reason === "connector_unconfigured") {
+            onlineSource = { displayName: "Seerr", failure: null, status: "unconfigured" };
+            onlineState = "unconfigured";
+          } else {
+            onlineSource = {
+              displayName: "Seerr",
+              failure: onlineExtrasFailure(error, occurredAt),
+              status: "unavailable",
+            };
+            onlineState = "unavailable";
+          }
+        }
+      }
       const referenceIds = this.#references.createOrRefresh(
         this.#referenceContext(row),
         result.items.map((item) => ({
@@ -710,6 +788,9 @@ export class ContinueWatchingService {
                 startIndex: result.nextStartIndex,
                 version: 1,
               }),
+        onlineItems,
+        onlineSource,
+        onlineState,
         parentReferenceId: referenceId,
         source: {
           displayName: safeDisplayName(row.connectorDisplayName),
@@ -724,6 +805,9 @@ export class ContinueWatchingService {
         generatedAt: occurredAt.toISOString(),
         items: [],
         nextCursor: null,
+        onlineItems: [],
+        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineState: "unconfigured",
         parentReferenceId: referenceId,
         source: {
           displayName: safeDisplayName(row.connectorDisplayName),

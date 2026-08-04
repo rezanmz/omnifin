@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
+import { discoveryTrailerSchema } from "./discovery.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
@@ -531,11 +532,37 @@ export const libraryExtrasSourceSchema = z
   });
 export type LibraryExtrasSource = z.infer<typeof libraryExtrasSourceSchema>;
 
+export const libraryOnlineExtrasSourceSchema = z
+  .strictObject({
+    displayName: safeTextSchema.max(160),
+    failure: partialFailureSchema.nullable(),
+    status: z.enum(["healthy", "unavailable", "unconfigured"]),
+  })
+  .superRefine((source, context) => {
+    const healthy = source.status === "healthy" && source.failure === null;
+    const unconfigured = source.status === "unconfigured" && source.failure === null;
+    const unavailable =
+      source.status === "unavailable" &&
+      source.failure?.service === "seerr" &&
+      source.failure.operation === "discovery.detail";
+    if (!healthy && !unconfigured && !unavailable) {
+      context.addIssue({
+        code: "custom",
+        message: "Online-extra source health must match its safe failure.",
+        path: ["failure"],
+      });
+    }
+  });
+export type LibraryOnlineExtrasSource = z.infer<typeof libraryOnlineExtrasSourceSchema>;
+
 export const libraryExtrasResponseSchema = z
   .strictObject({
     generatedAt: timestampSchema,
     items: z.array(libraryExtraSchema).max(LIBRARY_EXTRAS_MAX_ITEMS),
     nextCursor: libraryCursorSchema.nullable(),
+    onlineItems: z.array(discoveryTrailerSchema).max(LIBRARY_EXTRAS_MAX_ITEMS),
+    onlineSource: libraryOnlineExtrasSourceSchema,
+    onlineState: z.enum(["ready", "empty", "unavailable", "unconfigured"]),
     parentReferenceId: mediaReferenceIdSchema,
     source: libraryExtrasSourceSchema,
     state: z.enum(["complete", "empty", "unavailable"]),
@@ -571,6 +598,29 @@ export const libraryExtrasResponseSchema = z
         code: "custom",
         message: "Library-extra state must match its items and Jellyfin source.",
         path: ["state"],
+      });
+    }
+    const onlineReady =
+      response.onlineState === "ready" &&
+      response.onlineItems.length > 0 &&
+      response.onlineSource.status === "healthy";
+    const onlineEmpty =
+      response.onlineState === "empty" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "healthy";
+    const onlineUnavailable =
+      response.onlineState === "unavailable" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "unavailable";
+    const onlineUnconfigured =
+      response.onlineState === "unconfigured" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "unconfigured";
+    if (!onlineReady && !onlineEmpty && !onlineUnavailable && !onlineUnconfigured) {
+      context.addIssue({
+        code: "custom",
+        message: "Online-extra state must match its items and discovery source.",
+        path: ["onlineState"],
       });
     }
   });

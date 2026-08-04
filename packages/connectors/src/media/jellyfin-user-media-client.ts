@@ -204,6 +204,10 @@ const jellyfinLibraryExtrasResponseSchema = z
   .array(jellyfinLibraryExtraItemSchema)
   .max(JELLYFIN_LIBRARY_EXTRAS_UPSTREAM_LIMIT);
 
+const jellyfinLibraryProviderIdsSchema = z.object({
+  ProviderIds: z.record(z.string(), z.string().max(128)).nullish(),
+});
+
 const jellyfinLibrarySeasonSchema = z.object({
   ChildCount: z.int().nonnegative().max(100_000).nullish(),
   Id: z.string().trim().min(1).max(256),
@@ -481,6 +485,7 @@ export interface JellyfinLibraryExtra {
 }
 
 export interface JellyfinLibraryExtrasResult {
+  catalogTmdbId: number | null;
   items: JellyfinLibraryExtra[];
   nextStartIndex: number | null;
 }
@@ -1568,9 +1573,15 @@ export class JellyfinUserMediaClient {
         },
         ...(signal === undefined ? {} : { signal }),
       });
-    const [trailers, features] = await Promise.allSettled([
+    const [trailers, features, parent] = await Promise.allSettled([
       request(`Items/${input.itemId}/LocalTrailers`),
       request(`Items/${input.itemId}/SpecialFeatures`),
+      this.#client.requestJson(`Items/${input.itemId}`, jellyfinLibraryProviderIdsSchema, {
+        headers: { authorization: this.#authorization },
+        operation: "media.library",
+        query: { Fields: "ProviderIds", UserId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      }),
     ]);
     if (trailers.status === "rejected" && features.status === "rejected") {
       throw trailers.reason;
@@ -1594,7 +1605,13 @@ export class JellyfinUserMediaClient {
         left.title.localeCompare(right.title, "en"),
     );
     const items = ordered.slice(input.startIndex, input.startIndex + input.limit);
+    const rawTmdbId = parent.status === "fulfilled" ? parent.value.ProviderIds?.Tmdb : undefined;
+    const catalogTmdbId = /^\d{1,10}$/u.test(rawTmdbId ?? "") ? Number(rawTmdbId) : null;
     return {
+      catalogTmdbId:
+        catalogTmdbId !== null && catalogTmdbId > 0 && catalogTmdbId <= 2_147_483_647
+          ? catalogTmdbId
+          : null,
       items,
       nextStartIndex:
         input.startIndex + items.length < ordered.length ? input.startIndex + items.length : null,

@@ -80,6 +80,9 @@ type ExtrasState =
       kind: "ready";
       loadingMore: boolean;
       nextCursor: string | null;
+      onlineItems: LibraryExtrasResponse["onlineItems"];
+      onlineSource: LibraryExtrasResponse["onlineSource"];
+      onlineState: LibraryExtrasResponse["onlineState"];
       requestKey: string;
     };
 
@@ -589,11 +592,18 @@ const EXTRA_GROUPS = [
   { label: "Other bonus material", types: ["other"] },
 ] as const;
 
-function extraTypeLabel(extraType: LibraryExtra["extraType"]) {
+function extraTypeLabel(
+  extraType: LibraryExtra["extraType"] | LibraryExtrasResponse["onlineItems"][number]["type"],
+) {
   return extraType
     .split("_")
     .map((word) => word[0]!.toLocaleUpperCase("en-US") + word.slice(1))
     .join(" ");
+}
+
+function onlineExtraUrl(id: string) {
+  const match = /^youtube:([A-Za-z0-9_-]{6,32})$/u.exec(id);
+  return match ? `https://www.youtube.com/watch?v=${encodeURIComponent(match[1]!)}` : null;
 }
 
 function ExtrasSkeleton() {
@@ -752,6 +762,49 @@ function ExtrasSection({
           )}
           {state.loadingMore ? "Loading extras…" : "More extras"}
         </button>
+      ) : null}
+      {state.onlineState === "ready" && state.onlineItems.length > 0 ? (
+        <div className="library-title__extra-groups library-title__online-extras">
+          <section aria-label="Online trailers">
+            <h4>Online · opens on YouTube</h4>
+            <ul>
+              {state.onlineItems.map((extra) => {
+                const href = onlineExtraUrl(extra.id);
+                if (!href) return null;
+                return (
+                  <li key={extra.id}>
+                    <a
+                      aria-label={`Watch external ${extra.title} on YouTube`}
+                      data-directional-item
+                      href={href}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      <span className="library-title__extra-artwork">
+                        <Clapperboard aria-hidden="true" />
+                        <span className="library-title__extra-play" aria-hidden="true">
+                          <Play fill="currentColor" />
+                        </span>
+                      </span>
+                      <span className="library-title__extra-copy">
+                        <strong>{extra.title}</strong>
+                        <span>
+                          {extraTypeLabel(extra.type)}
+                          {extra.resolution ? ` · ${extra.resolution}p` : ""}
+                        </span>
+                        <small>External · {state.onlineSource.displayName}</small>
+                      </span>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        </div>
+      ) : state.onlineState === "unavailable" ? (
+        <p className="library-title__online-extras-state" role="status">
+          Online trailers are temporarily unavailable. Local extras remain ready.
+        </p>
       ) : null}
     </section>
   );
@@ -1120,6 +1173,9 @@ export function LibraryTitleDrawer({
           kind: "ready",
           loadingMore: false,
           nextCursor: response.nextCursor,
+          onlineItems: response.onlineItems,
+          onlineSource: response.onlineSource,
+          onlineState: response.onlineState,
           requestKey: extrasRequestKey,
         });
       })

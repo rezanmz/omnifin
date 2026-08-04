@@ -142,6 +142,7 @@ async function harness() {
     }),
   );
   const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    catalogTmdbId: null,
     items: [
       {
         artwork: {

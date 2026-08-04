@@ -742,6 +742,7 @@ describe("JellyfinUserMediaClient", () => {
         extra("other-1", "Unknown"),
         { ...extra("audio-1", "ThemeSong"), Type: "Audio" },
       ]),
+      jsonResponse({ ProviderIds: { Tmdb: "1042" } }),
     ]);
 
     const result = await client.readLibraryExtras({
@@ -773,10 +774,12 @@ describe("JellyfinUserMediaClient", () => {
       runtimeSeconds: 60,
       year: 2026,
     });
+    expect(result.catalogTmdbId).toBe(1_042);
     expect(result.nextStartIndex).toBeNull();
     expect(requests.map(({ url }) => url.pathname)).toEqual([
       "/base/Items/movie-upstream-1/LocalTrailers",
       "/base/Items/movie-upstream-1/SpecialFeatures",
+      "/base/Items/movie-upstream-1",
     ]);
     expect(requests.every(({ url }) => url.searchParams.get("UserId") === "paired-user-id")).toBe(
       true,

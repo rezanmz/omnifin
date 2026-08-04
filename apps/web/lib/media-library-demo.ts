@@ -386,6 +386,17 @@ export const mediaLibraryDemoClient: MediaLibraryClient = {
       generatedAt,
       items,
       nextCursor: null,
+      onlineItems: [
+        {
+          id: "youtube:QdBZY2fkU-0",
+          provider: "youtube",
+          resolution: 2160,
+          title: "Official online trailer",
+          type: "trailer",
+        },
+      ],
+      onlineSource: { displayName: "Demo Seerr", failure: null, status: "healthy" },
+      onlineState: "ready",
       parentReferenceId: referenceId,
       source: { displayName: "Demo Jellyfin", failure: null, status: "healthy" },
       state: items.length === 0 ? "empty" : "complete",
