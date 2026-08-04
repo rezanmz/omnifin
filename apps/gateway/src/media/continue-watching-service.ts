@@ -1,8 +1,12 @@
 import {
+  RadarrAdapter,
+  type RadarrLibraryMovieOwnership,
+} from "@omnifin/connectors/adapters/radarr";
+import {
   JellyfinUserMediaClient,
   type JellyfinContinueWatchingResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
-import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
+import type { ApiKeyConnectorConfig, ConnectorTargetConfig } from "@omnifin/connectors/types";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
@@ -19,6 +23,7 @@ import {
   libraryMutationIdempotencyKeySchema,
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseSchema,
+  libraryRemovalPreviewSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
@@ -33,6 +38,7 @@ import {
   type LibraryExtrasResponse,
   type LibraryPlaybackStateMutationRequest,
   type LibraryPlaybackStateMutationResponse,
+  type LibraryRemovalPreview,
   type LibrarySeasonEpisodesQuery,
   type LibrarySeasonEpisodesResponse,
   type LibraryTitleDetailResponse,
@@ -61,6 +67,7 @@ const MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER = 4_096;
 const STALE_USER_MEDIA_STATE_OPERATION_MS = 5 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_ID_PATTERN = /^user_media_state_[A-Za-z0-9_-]{22}$/u;
+const LIBRARY_REMOVAL_PREVIEW_TTL_MS = 5 * 60 * 1_000;
 const libraryPersonImagePayloadSchema = z.strictObject({
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
   version: z.literal(1),
@@ -130,6 +137,16 @@ interface ContinueWatchingSourceRow {
   tlsPolicy: string;
 }
 
+interface LibraryRemovalRadarrRow {
+  baseUrl: string;
+  displayName: string;
+  enabled: number;
+  encryptedCredentials: string;
+  id: string;
+  insecureHttpApproved: number;
+  tlsPolicy: string;
+}
+
 interface StoredConnectorSecrets {
   credentials: unknown;
   schemaVersion: 1;
@@ -159,6 +176,7 @@ export interface ContinueWatchingClientFactoryInput extends ConnectorTargetConfi
 export interface ContinueWatchingDependencies {
   clock?: () => Date;
   createAuditToken?: () => string;
+  createRemovalPreviewToken?: () => string;
   createUserMediaStateOperationToken?: () => string;
   createClient?: (
     input: ContinueWatchingClientFactoryInput,
@@ -174,6 +192,9 @@ export interface ContinueWatchingDependencies {
         | "updatePlaybackState"
       >
     >;
+  createRadarrAdapter?: (
+    input: ApiKeyConnectorConfig,
+  ) => Pick<RadarrAdapter, "resolveLibraryMovie">;
   mediaReferences?: MediaReferenceDependencies;
   readOnlineExtras?: (
     input: {
@@ -183,6 +204,17 @@ export interface ContinueWatchingDependencies {
     },
     signal?: AbortSignal,
   ) => Promise<{ displayName: string; items: readonly DiscoveryTrailer[] }>;
+  resolveManagedMovie?: (
+    input: {
+      providerIds: { imdb: string | null; tmdb: number | null };
+    },
+    signal?: AbortSignal,
+  ) => Promise<{
+    hasFile: boolean;
+    mediaId: number;
+    monitored: boolean;
+    sizeBytes: number | null;
+  } | null>;
 }
 
 export class ContinueWatchingError extends Error {
@@ -210,6 +242,20 @@ export class MediaLibraryError extends Error {
       options,
     );
     this.name = "MediaLibraryError";
+    this.reason = reason;
+  }
+}
+
+export type LibraryRemovalPreviewErrorReason =
+  "not_found" | "paired_user_cannot_delete" | "unavailable";
+
+export class LibraryRemovalPreviewError extends Error {
+  public readonly code = "library_removal_preview_unavailable";
+  public readonly reason: LibraryRemovalPreviewErrorReason;
+
+  public constructor(reason: LibraryRemovalPreviewErrorReason, options?: ErrorOptions) {
+    super("The library removal preview is unavailable.", options);
+    this.name = "LibraryRemovalPreviewError";
     this.reason = reason;
   }
 }
@@ -483,10 +529,13 @@ export class ContinueWatchingService {
   readonly #config: AppConfig;
   readonly #createAuditToken: () => string;
   readonly #createClient: NonNullable<ContinueWatchingDependencies["createClient"]>;
+  readonly #createRemovalPreviewToken: () => string;
+  readonly #createRadarrAdapter: NonNullable<ContinueWatchingDependencies["createRadarrAdapter"]>;
   readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
   readonly #readOnlineExtras: NonNullable<ContinueWatchingDependencies["readOnlineExtras"]>;
+  readonly #resolveManagedMovie: NonNullable<ContinueWatchingDependencies["resolveManagedMovie"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -499,6 +548,10 @@ export class ContinueWatchingService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAuditToken = dependencies.createAuditToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
+    this.#createRemovalPreviewToken =
+      dependencies.createRemovalPreviewToken ?? (() => randomToken(16));
+    this.#createRadarrAdapter =
+      dependencies.createRadarrAdapter ?? ((input) => new RadarrAdapter(input));
     this.#createUserMediaStateOperationToken =
       dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
@@ -512,6 +565,9 @@ export class ContinueWatchingService {
           signal,
         );
     }
+    this.#resolveManagedMovie =
+      dependencies.resolveManagedMovie ??
+      ((input, signal) => this.#resolveManagedMovieFromConnectors(input.providerIds, signal));
   }
 
   public async read(
@@ -906,6 +962,122 @@ export class ContinueWatchingService {
     } catch (error) {
       if (error instanceof MediaLibraryError) throw error;
       throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
+  public async previewLibraryRemoval(
+    referenceId: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryRemovalPreview> {
+    const principal = requirePermission(context.principal, "library.delete");
+    const row = this.#source(principal);
+    const generatedAt = this.#clock();
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new LibraryRemovalPreviewError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie" || reference.title === null) {
+      throw new LibraryRemovalPreviewError("not_found");
+    }
+
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibraryTitle(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (
+        result.item.externalId !== reference.itemId ||
+        result.item.kind !== "movie" ||
+        result.item.title !== reference.title ||
+        result.item.year !== reference.year ||
+        result.removal === undefined ||
+        result.removal === null
+      ) {
+        throw new MediaReferenceError();
+      }
+      if (!result.removal.canDelete) {
+        throw new LibraryRemovalPreviewError("paired_user_cannot_delete");
+      }
+      const ownership = await this.#resolveManagedMovie(
+        { providerIds: result.removal.providerIds },
+        signal,
+      );
+      if (ownership !== null && !ownership.hasFile) {
+        throw new LibraryRemovalPreviewError("unavailable");
+      }
+      const commonEffects = {
+        organizedFiles: "deleted" as const,
+        requestHistory: "retained" as const,
+        seedingCopies: "unchanged" as const,
+        storageReclamation: "may_be_delayed" as const,
+      };
+      const managed = ownership !== null;
+      return libraryRemovalPreviewSchema.parse({
+        confirmation: {
+          expectedTitle: result.item.title,
+          kind: "exact_title",
+          recentAuthenticationRequired: true,
+        },
+        expiresAt: new Date(generatedAt.valueOf() + LIBRARY_REMOVAL_PREVIEW_TTL_MS).toISOString(),
+        generatedAt: generatedAt.toISOString(),
+        options: managed
+          ? [
+              {
+                effects: {
+                  ...commonEffects,
+                  managerRecord: "retained",
+                  monitoring: "monitored",
+                  reacquisitionRisk: "possible",
+                },
+                mode: "delete_files_keep_monitored",
+              },
+              {
+                effects: {
+                  ...commonEffects,
+                  managerRecord: "retained",
+                  monitoring: "unmonitored",
+                  reacquisitionRisk: "prevented",
+                },
+                mode: "delete_files_and_unmonitor",
+              },
+              {
+                effects: {
+                  ...commonEffects,
+                  managerRecord: "removed",
+                  monitoring: "removed",
+                  reacquisitionRisk: "prevented",
+                },
+                mode: "remove_from_radarr_and_delete_files",
+              },
+            ]
+          : [
+              {
+                effects: {
+                  ...commonEffects,
+                  managerRecord: "not_applicable",
+                  monitoring: "not_applicable",
+                  reacquisitionRisk: "not_managed",
+                },
+                mode: "delete_unmanaged_files",
+              },
+            ],
+        previewId: `library_removal_preview_${this.#createRemovalPreviewToken()}`,
+        referenceId,
+        sizeBytes: ownership?.sizeBytes ?? result.removal.sizeBytes,
+        source: managed
+          ? { kind: "managed", monitored: ownership.monitored, service: "radarr" }
+          : { kind: "unmanaged", monitored: null, service: "jellyfin" },
+        title: result.item.title,
+        year: result.item.year,
+      });
+    } catch (error) {
+      if (error instanceof LibraryRemovalPreviewError) throw error;
+      throw new LibraryRemovalPreviewError("unavailable", { cause: error });
     }
   }
 
@@ -1394,6 +1566,100 @@ export class ContinueWatchingService {
 
   #referenceContext(row: ContinueWatchingSourceRow) {
     return { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId };
+  }
+
+  async #resolveManagedMovieFromConnectors(
+    providerIds: { imdb: string | null; tmdb: number | null },
+    signal?: AbortSignal,
+  ): Promise<RadarrLibraryMovieOwnership | null> {
+    const rows = this.#database.sqlite
+      .prepare(
+        `select id, display_name as displayName, base_url as baseUrl, enabled,
+                encrypted_credentials as encryptedCredentials,
+                tls_policy as tlsPolicy, insecure_http_approved as insecureHttpApproved
+         from connector_configs
+         where type = 'radarr'
+         order by id asc
+         limit 11`,
+      )
+      .all() as LibraryRemovalRadarrRow[];
+    if (rows.length === 0) return null;
+    if (
+      rows.length > 10 ||
+      rows.some(({ enabled }) => enabled !== 1) ||
+      (providerIds.imdb === null && providerIds.tmdb === null)
+    ) {
+      throw new ContinueWatchingConfigurationError("invalid");
+    }
+
+    const matches = await Promise.all(
+      rows.map(async (row) => {
+        const { apiKey, tlsCaCertificatePem } = this.#radarrSecrets(row);
+        if (
+          !IDENTIFIER_PATTERN.test(row.id) ||
+          !row.displayName.trim() ||
+          row.displayName.length > 160 ||
+          ![0, 1].includes(row.insecureHttpApproved) ||
+          (row.tlsPolicy !== "strict" && row.tlsPolicy !== "allow_self_signed")
+        ) {
+          throw new ContinueWatchingConfigurationError("invalid");
+        }
+        const adapter = this.#createRadarrAdapter({
+          apiKey,
+          baseUrl: row.baseUrl,
+          clock: { monotonicNow: () => performance.now(), now: this.#clock },
+          connectorId: row.id,
+          displayName: row.displayName,
+          insecureHttpApproved: row.insecureHttpApproved === 1,
+          tlsPolicy: row.tlsPolicy,
+          ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
+        });
+        return adapter.resolveLibraryMovie(providerIds, signal);
+      }),
+    );
+    const owned = matches.filter((match): match is RadarrLibraryMovieOwnership => match !== null);
+    if (owned.length > 1) throw new ContinueWatchingConfigurationError("invalid");
+    return owned[0] ?? null;
+  }
+
+  #radarrSecrets(row: LibraryRemovalRadarrRow) {
+    try {
+      const decoded = JSON.parse(
+        this.#cipher.decrypt(row.encryptedCredentials, `connector_credentials:radarr:${row.id}`),
+      ) as unknown;
+      if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+        throw new Error("invalid");
+      }
+      const record = decoded as Record<string, unknown>;
+      const versioned = record.schemaVersion === 1;
+      if (
+        versioned &&
+        Object.keys(record).some(
+          (key) => !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(key),
+        )
+      ) {
+        throw new Error("invalid");
+      }
+      const stored = versioned
+        ? (record as unknown as StoredConnectorSecrets)
+        : ({ credentials: decoded, schemaVersion: 1 } satisfies StoredConnectorSecrets);
+      const credentials = connectorCredentialInputSchema.parse(stored.credentials);
+      if (credentials.kind !== "api_key") throw new Error("invalid");
+      const tlsCaCertificatePem = stored.tlsCaCertificatePem;
+      if (tlsCaCertificatePem !== undefined) {
+        if (typeof tlsCaCertificatePem !== "string" || row.tlsPolicy !== "allow_self_signed") {
+          throw new Error("invalid");
+        }
+        const certificate = new X509Certificate(tlsCaCertificatePem);
+        if (!certificate.ca) throw new Error("invalid");
+      }
+      return {
+        apiKey: credentials.apiKey,
+        ...(typeof tlsCaCertificatePem === "string" ? { tlsCaCertificatePem } : {}),
+      };
+    } catch (error) {
+      throw new ContinueWatchingConfigurationError("invalid", { cause: error });
+    }
   }
 
   #encodeLibraryCursor(value: LibraryCursorPayload) {

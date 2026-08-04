@@ -574,6 +574,7 @@ describe("JellyfinUserMediaClient", () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({
         ...movie,
+        CanDelete: true,
         CommunityRating: 8.4,
         CriticRating: 91,
         Genres: ["Drama", "Science fiction", "Drama"],
@@ -616,6 +617,7 @@ describe("JellyfinUserMediaClient", () => {
         ],
         People: people,
         PremiereDate: "2026-04-18T00:00:00.0000000Z",
+        ProviderIds: { Imdb: "tt1234567", Tmdb: "98765" },
         Studios: [{ Name: "Northlight Pictures" }, { Name: "Northlight Pictures" }],
         Taglines: ["The horizon remembers."],
       }),
@@ -627,6 +629,11 @@ describe("JellyfinUserMediaClient", () => {
     });
 
     expect(detail.item).toMatchObject({ externalId: "movie-upstream-1", kind: "movie" });
+    expect(detail.removal).toEqual({
+      canDelete: true,
+      providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      sizeBytes: 6_979_321_856,
+    });
     expect(detail.movie).toMatchObject({
       castTruncated: true,
       communityRating: 8.4,
@@ -711,6 +718,11 @@ describe("JellyfinUserMediaClient", () => {
         premiereDate: null,
         studios: [],
         tagline: null,
+      },
+      removal: {
+        canDelete: false,
+        providerIds: { imdb: null, tmdb: null },
+        sizeBytes: null,
       },
     });
   });
