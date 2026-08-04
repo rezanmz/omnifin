@@ -524,6 +524,7 @@ function unavailableLibraryResponse(
       status: "unavailable",
     },
     state: "unavailable",
+    totalResults: null,
   });
 }
 
@@ -1501,6 +1502,7 @@ export class ContinueWatchingService {
         status: "healthy",
       },
       state: items.length === 0 ? "empty" : "complete",
+      totalResults: result.totalResults,
     });
   }
 

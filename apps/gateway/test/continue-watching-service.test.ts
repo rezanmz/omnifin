@@ -208,6 +208,7 @@ function libraryResult(): JellyfinLibraryResult {
       },
     ],
     nextStartIndex: 30,
+    totalResults: 46,
     truncated: true,
   };
 }
@@ -449,7 +450,12 @@ describe("ContinueWatchingService", () => {
       title: "The Long Meridian",
       year: 2026,
     };
-    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: {
@@ -592,7 +598,12 @@ describe("ContinueWatchingService", () => {
       title: "The Long Meridian",
       year: 2026,
     };
-    readLibrary.mockResolvedValue({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: null,
@@ -678,6 +689,7 @@ describe("ContinueWatchingService", () => {
         ],
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
         state: "complete",
+        totalResults: 46,
       });
       expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
       expect(first.nextCursor).not.toContain("viewer-link");
@@ -705,9 +717,10 @@ describe("ContinueWatchingService", () => {
         { principal: principal() },
       );
       expect(longestQuery.nextCursor?.length).toBeLessThanOrEqual(512);
+      expect(longestQuery.totalResults).toBe(46);
       expect(libraryBrowseResponseSchema.parse(longestQuery)).toEqual(longestQuery);
 
-      await service.browse(
+      const nextPage = await service.browse(
         {
           cursor: first.nextCursor!,
           kind: "all",
@@ -717,6 +730,7 @@ describe("ContinueWatchingService", () => {
         },
         { principal: principal() },
       );
+      expect(nextPage.totalResults).toBe(first.totalResults);
       expect(readLibrary).toHaveBeenLastCalledWith(
         expect.objectContaining({ startIndex: 30, userId: "viewer-external" }),
         undefined,
@@ -1220,7 +1234,12 @@ describe("ContinueWatchingService", () => {
       runtimeSeconds: 7_080,
       title: "The Far Meridian",
     };
-    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValueOnce({
       item: movie,
       movie: {
@@ -1569,7 +1588,12 @@ describe("ContinueWatchingService", () => {
 
   it("distinguishes a healthy empty paired-user catalogue from an unavailable source", async () => {
     const { database, readLibrary, service } = harness();
-    readLibrary.mockResolvedValueOnce({ items: [], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [],
+      nextStartIndex: null,
+      totalResults: 0,
+      truncated: false,
+    });
     try {
       await expect(
         service.browse({ kind: "all", limit: 30, sort: "recent" }, { principal: principal() }),
@@ -1578,6 +1602,7 @@ describe("ContinueWatchingService", () => {
         nextCursor: null,
         source: { failure: null, status: "healthy" },
         state: "empty",
+        totalResults: 0,
       });
     } finally {
       database.close();

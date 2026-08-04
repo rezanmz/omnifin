@@ -135,6 +135,7 @@ async function harness(
       },
     ],
     nextStartIndex: 1,
+    totalResults: 46,
     truncated: true,
   }));
   const readImage = vi.fn(async () => ({
@@ -508,6 +509,7 @@ describe("Continue Watching routes", () => {
         ],
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
         state: "complete",
+        totalResults: 46,
       });
       expect(body.nextCursor).toMatch(/^v2\./u);
       expect(response.headers["cache-control"]).toBe("no-store");
@@ -1051,7 +1053,12 @@ describe("Continue Watching routes", () => {
       title: "Northern Lights",
       year: 2026,
     };
-    readLibrary.mockResolvedValueOnce({ items: [series], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [series],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValueOnce({
       item: series,
       movie: null,
