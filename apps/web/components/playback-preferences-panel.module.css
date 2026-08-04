@@ -424,6 +424,13 @@
   border-color: color-mix(in srgb, var(--panel-accent) 46%, var(--line-soft));
 }
 
+.saveBar:not([data-dirty]) {
+  bottom: auto;
+  left: auto;
+  position: static;
+  right: auto;
+}
+
 .saveBar > div:first-child {
   display: grid;
   gap: 3px;
@@ -512,7 +519,11 @@
 
 @media (max-width: 720px) {
   .page {
-    padding-bottom: 220px;
+    padding-bottom: 120px;
+  }
+
+  .page:has(.saveBar[data-dirty]) {
+    padding-bottom: 320px;
   }
 
   .hero {
@@ -541,15 +552,16 @@
 
   .saveBar {
     align-items: stretch;
-    bottom: calc(var(--mobile-navigation-height) + 12px + env(safe-area-inset-bottom));
+    bottom: calc(var(--mobile-navigation-height, 74px) + 12px + env(safe-area-inset-bottom));
     flex-direction: column;
+    gap: 12px;
     left: 12px;
     right: 12px;
   }
 
   .saveBar > div:last-child {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .saveBar button {
