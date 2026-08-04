@@ -35,6 +35,7 @@ export type PrivacyHashDomain =
   | "playback_asset"
   | "rate_limit_client"
   | "saved_catalog_identity"
+  | "saved_favorite_audit"
   | "saved_list_etag"
   | "saved_list_items_query"
   | "saved_operation"

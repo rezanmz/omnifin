@@ -127,6 +127,7 @@ function harness(favoriteResult: boolean | Error = true) {
   database.migrate();
   seed(database, appConfig);
   let now = startedAt.getTime();
+  let auditId = 0;
   const references = new MediaReferenceService(database, appConfig, {
     clock: () => new Date(now),
     createToken: () => "m".repeat(22),
@@ -145,11 +146,15 @@ function harness(favoriteResult: boolean | Error = true) {
       },
     ],
   );
+  let currentFavorite = favoriteResult instanceof Error ? true : favoriteResult;
   const readFavoriteState = vi.fn(async () => {
     if (favoriteResult instanceof Error) throw favoriteResult;
-    return favoriteResult;
+    return currentFavorite;
   });
-  const updateFavoriteState = vi.fn(async ({ favorite }: { favorite: boolean }) => favorite);
+  const updateFavoriteState = vi.fn(async ({ favorite }: { favorite: boolean }) => {
+    currentFavorite = favorite;
+    return favorite;
+  });
   const client: SavedTargetClient = { readFavoriteState, updateFavoriteState };
   const createClient = vi.fn((input) => {
     expect(input.accessToken).toBe("private-jellyfin-token");
@@ -159,6 +164,7 @@ function harness(favoriteResult: boolean | Error = true) {
   });
   const service = new SavedTargetService(database, appConfig, {
     clock: () => new Date(now),
+    createAuditId: () => `saved-favorite-audit-${++auditId}`,
     createClient,
     createTargetToken: () => "t".repeat(22),
     mediaReferences: { clock: () => startedAt },
@@ -176,6 +182,7 @@ function harness(favoriteResult: boolean | Error = true) {
     setTime(milliseconds: number) {
       now = milliseconds;
     },
+    updateFavoriteState,
   };
 }
 
@@ -250,6 +257,147 @@ describe("SavedTargetService", () => {
     });
     expect(unavailable.favorite).toEqual({ state: "unavailable", value: null });
     expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("round-trips favorite state through Jellyfin and refreshes encrypted list snapshots", async () => {
+    const { appConfig, database, readFavoriteState, referenceId, service, updateFavoriteState } =
+      harness(true);
+    const issued = await service.issueOwned(referenceId, { principal: principal() });
+    const cipher = new EnvelopeCipher(appConfig.encryptionKey);
+    const identityDigest = privacyHash(
+      "saved_catalog_identity",
+      `jellyfin\0saved-viewer-link\0movie\0${privateItemId}`,
+      appConfig.encryptionKey,
+    );
+    const catalogId = `catalog_${"f".repeat(22)}`;
+    const listId = `saved_list_${"f".repeat(22)}`;
+    const snapshotContext = `saved_catalog_snapshot:saved-viewer:${catalogId}`;
+    database.sqlite
+      .prepare(
+        `insert into saved_catalog_items (
+           id, user_id, identity_digest, encrypted_identity, encrypted_snapshot,
+           library_reference_id, library_reference_user_id, last_resolved_at,
+           created_at, updated_at
+         ) values (?, 'saved-viewer', ?, 'encrypted', ?, ?, 'saved-viewer', ?, ?, ?)`,
+      )
+      .run(
+        catalogId,
+        identityDigest,
+        cipher.encrypt(
+          JSON.stringify({
+            artwork: { backdrop: true, poster: true },
+            favorite: { state: "synced", value: true },
+            kind: "movie",
+            overview: null,
+            resolutionState: "current",
+            schemaVersion: 1,
+            title: "Private title",
+            year: 2026,
+          }),
+          snapshotContext,
+        ),
+        referenceId,
+        startedAt.getTime(),
+        startedAt.getTime(),
+        startedAt.getTime(),
+      );
+    database.sqlite
+      .prepare(
+        `insert into saved_lists (
+           id, user_id, kind, encrypted_name, revision, created_at, updated_at
+         ) values (?, 'saved-viewer', 'watch_later', 'encrypted', 0, ?, ?)`,
+      )
+      .run(listId, startedAt.getTime(), startedAt.getTime());
+    database.sqlite
+      .prepare(
+        `insert into saved_list_items (
+           id, user_id, list_id, catalog_item_id, position, created_at, updated_at
+         ) values (?, 'saved-viewer', ?, ?, 0, ?, ?)`,
+      )
+      .run(
+        `saved_item_${"f".repeat(22)}`,
+        listId,
+        catalogId,
+        startedAt.getTime(),
+        startedAt.getTime(),
+      );
+
+    const changed = await service.updateFavorite(
+      issued.targetReferenceId,
+      { favorite: false },
+      {
+        ipAddress: "203.0.113.91",
+        principal: principal(),
+        requestId: "favorite-request-1",
+      },
+    );
+    expect(changed).toEqual({
+      favorite: false,
+      synchronizedAt: startedAt.toISOString(),
+      targetReferenceId: issued.targetReferenceId,
+    });
+    expect(updateFavoriteState).toHaveBeenCalledWith(
+      { favorite: false, itemId: privateItemId, userId: "jellyfin-user-private" },
+      undefined,
+    );
+    expect(readFavoriteState).toHaveBeenCalledTimes(2);
+    expect(
+      service.resolveOwned(issued.targetReferenceId, { principal: principal() }).payload.favorite,
+    ).toEqual({ state: "synced", value: false });
+    const stored = database.sqlite
+      .prepare(
+        `select encrypted_snapshot as encryptedSnapshot
+         from saved_catalog_items where id = ?`,
+      )
+      .get(catalogId) as { encryptedSnapshot: string };
+    expect(JSON.parse(cipher.decrypt(stored.encryptedSnapshot, snapshotContext))).toMatchObject({
+      favorite: { state: "synced", value: false },
+      resolutionState: "current",
+    });
+    expect(
+      database.sqlite.prepare("select revision from saved_lists where id = ?").get(listId),
+    ).toEqual({ revision: 1 });
+    const audit = database.sqlite
+      .prepare(
+        `select event_type as eventType, target_id as targetId, metadata_json as metadataJson
+         from audit_events`,
+      )
+      .get() as { eventType: string; metadataJson: string; targetId: string };
+    expect(audit).toMatchObject({ eventType: "saved.favorite.changed", targetId: catalogId });
+    expect(JSON.parse(audit.metadataJson)).toEqual({ catalogLinked: true, favorite: false });
+    expect(JSON.stringify(audit)).not.toContain(privateItemId);
+    expect(JSON.stringify(audit)).not.toContain(issued.targetReferenceId);
+
+    await service.updateFavorite(
+      issued.targetReferenceId,
+      { favorite: false },
+      { principal: principal() },
+    );
+    expect(
+      database.sqlite.prepare("select revision from saved_lists where id = ?").get(listId),
+    ).toEqual({ revision: 1 });
+  });
+
+  it("fails closed when Jellyfin cannot confirm the requested favorite state", async () => {
+    const { readFavoriteState, referenceId, service, updateFavoriteState } = harness(true);
+    const issued = await service.issueOwned(referenceId, { principal: principal() });
+    updateFavoriteState.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "connector_unavailable" });
+
+    readFavoriteState.mockResolvedValueOnce(true);
+    await expect(
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "synchronization_failed" });
   });
 
   it("accepts legacy no-credential storage and normalizes an empty connector label", async () => {

@@ -4,7 +4,6 @@ import {
   SAVED_LIST_MAX_ITEMS,
   savedCatalogReferenceIdSchema,
   savedCatalogItemSchema,
-  savedFavoriteStateSchema,
   savedListCreateRequestSchema,
   savedListDeleteResponseSchema,
   savedListMembershipRequestSchema,
@@ -40,6 +39,7 @@ import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security
 import {
   SavedTargetService,
   SavedTargetServiceError,
+  storedSavedCatalogSnapshotSchema,
   type ResolvedSavedTarget,
   type SavedTargetServiceDependencies,
 } from "./target-service.js";
@@ -65,28 +65,6 @@ const itemCursorPayloadSchema = z.strictObject({
   offset: z.int().nonnegative().max(SAVED_LIST_MAX_ITEMS),
   revision: z.int().nonnegative().max(2_147_483_647),
   schemaVersion: z.literal(1),
-});
-
-const savedCatalogSnapshotSchema = z.strictObject({
-  artwork: z.strictObject({ backdrop: z.boolean(), poster: z.boolean() }),
-  favorite: savedFavoriteStateSchema,
-  kind: z.enum(["movie", "series"]),
-  overview: z
-    .string()
-    .trim()
-    .min(1)
-    .max(2_000)
-    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
-    .nullable(),
-  resolutionState: z.enum(["current", "connector_unavailable"]),
-  schemaVersion: z.literal(1),
-  title: z
-    .string()
-    .trim()
-    .min(1)
-    .max(300)
-    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
-  year: z.int().min(1870).max(2200).nullable(),
 });
 
 type ActivePrincipal = SessionPrincipal & { userId: string };
@@ -1299,7 +1277,7 @@ export class SavedListService {
     ) {
       throw new SavedListServiceError("storage_failure");
     }
-    const snapshot = savedCatalogSnapshotSchema.parse(
+    const snapshot = storedSavedCatalogSnapshotSchema.parse(
       JSON.parse(
         this.#cipher.decrypt(
           row.encryptedSnapshot,

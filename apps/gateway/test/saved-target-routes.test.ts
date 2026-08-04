@@ -1,5 +1,8 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { savedMembershipSummarySchema } from "@omnifin/contracts/saved";
+import {
+  savedFavoriteMutationResponseSchema,
+  savedMembershipSummarySchema,
+} from "@omnifin/contracts/saved";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -91,15 +94,21 @@ function seed(database: DatabaseHandle, appConfig: AppConfig) {
 async function harness() {
   let sessionId = 0;
   let sessionToken = 0;
-  const readFavoriteState = vi.fn(async () => true);
+  let favorite = true;
+  const readFavoriteState = vi.fn(async () => favorite);
+  const updateFavoriteState = vi.fn(async (input: { favorite: boolean }) => {
+    favorite = input.favorite;
+    return favorite;
+  });
   const appConfig = config();
   const app = await createApp({
     config: appConfig,
     savedTargetDependencies: {
       clock: () => now,
+      createAuditId: () => "saved-route-favorite-audit",
       createClient: () => ({
         readFavoriteState,
-        updateFavoriteState: async ({ favorite }) => favorite,
+        updateFavoriteState,
       }),
       createTargetToken: () => "t".repeat(22),
       mediaReferences: { clock: () => now },
@@ -145,6 +154,7 @@ async function harness() {
     },
     readFavoriteState,
     referenceId: referenceId!,
+    updateFavoriteState,
   };
 }
 
@@ -216,6 +226,57 @@ describe("saved target routes", () => {
         "saved_target_temporarily_unavailable",
       );
       expect(unavailable.body).not.toMatch(/SQLITE|saved_targets/u);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("changes favorite state only through a confirmed no-store Jellyfin round trip", async () => {
+    const { app, headers, referenceId, updateFavoriteState } = await harness();
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+      const missingCsrf = await app.inject({
+        headers: { cookie: headers.cookie, origin: headers.origin },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(missingCsrf.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe("csrf_denied");
+
+      const changed = await app.inject({
+        headers,
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(changed.headers["cache-control"]).toBe("private, no-store");
+      expect(savedFavoriteMutationResponseSchema.parse(changed.json())).toEqual({
+        favorite: false,
+        synchronizedAt: now.toISOString(),
+        targetReferenceId: issued.targetReferenceId,
+      });
+      expect(updateFavoriteState).toHaveBeenCalledWith(
+        { favorite: false, itemId: "private-movie", userId: "target-user-private" },
+        expect.any(AbortSignal),
+      );
+      expect(changed.body).not.toMatch(/private-movie|target-user-private|target-private-token/u);
+
+      const missing = await app.inject({
+        headers,
+        method: "PUT",
+        payload: { favorite: true },
+        url: `/v1/saved/favorites/save_target_${"z".repeat(22)}`,
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(missing.json()).error.code).toBe("saved_target_not_found");
     } finally {
       await app.close();
     }

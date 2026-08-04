@@ -3,7 +3,11 @@ import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import { connectorCredentialInputSchema } from "@omnifin/contracts/connectors";
 import {
+  savedFavoriteMutationRequestSchema,
+  savedFavoriteMutationResponseSchema,
+  savedFavoriteStateSchema,
   savedMembershipSummarySchema,
+  type SavedFavoriteMutationResponse,
   type SavedFavoriteState,
   type SavedMembershipSummary,
 } from "@omnifin/contracts/saved";
@@ -27,6 +31,28 @@ const DIGEST_PATTERN = /^[A-Za-z0-9_-]{22}$/u;
 const TARGET_TTL_MS = 15 * 60 * 1_000;
 const MAX_TARGETS_PER_USER = 1_024;
 const MAX_TARGET_CREATION_ATTEMPTS = 8;
+
+export const storedSavedCatalogSnapshotSchema = z.strictObject({
+  artwork: z.strictObject({ backdrop: z.boolean(), poster: z.boolean() }),
+  favorite: savedFavoriteStateSchema,
+  kind: z.enum(["movie", "series"]),
+  overview: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2_000)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
+    .nullable(),
+  resolutionState: z.enum(["current", "connector_unavailable"]),
+  schemaVersion: z.literal(1),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  year: z.int().min(1870).max(2200).nullable(),
+});
 
 const storedFavoriteStateSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("synced"), value: z.boolean() }),
@@ -99,8 +125,15 @@ interface CatalogMembershipRow {
   watchLater: number;
 }
 
+interface FavoriteCatalogRow {
+  encryptedSnapshot: string;
+  id: string;
+}
+
 export interface SavedTargetContext {
+  ipAddress?: string;
   principal: SessionPrincipal;
+  requestId?: string;
 }
 
 export interface ResolvedSavedTarget {
@@ -127,12 +160,18 @@ export interface SavedTargetClient {
 
 export interface SavedTargetServiceDependencies {
   clock?: () => Date;
+  createAuditId?: () => string;
   createClient?: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
   createTargetToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
 }
 
-export type SavedTargetErrorReason = "not_found" | "principal_unavailable" | "storage_failure";
+export type SavedTargetErrorReason =
+  | "connector_unavailable"
+  | "not_found"
+  | "principal_unavailable"
+  | "storage_failure"
+  | "synchronization_failed";
 
 export class SavedTargetServiceError extends Error {
   public readonly reason: SavedTargetErrorReason;
@@ -217,6 +256,7 @@ export class SavedTargetService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: Pick<AppConfig, "encryptionKey">;
+  readonly #createAuditId: () => string;
   readonly #createClient: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
   readonly #createTargetToken: () => string;
   readonly #database: DatabaseHandle;
@@ -231,6 +271,7 @@ export class SavedTargetService {
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
+    this.#createAuditId = dependencies.createAuditId ?? (() => `saved-audit-${randomToken(16)}`);
     this.#createTargetToken = dependencies.createTargetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#references = new MediaReferenceService(database, config, {
@@ -357,11 +398,108 @@ export class SavedTargetService {
     if (principal.accountState !== "active" || !principal.userId) {
       throw new SavedTargetServiceError("principal_unavailable");
     }
+    const source = this.#source(principal);
+    return this.#resolveOwnedTarget(targetReferenceId, principal.userId, source);
+  }
+
+  public async updateFavorite(
+    targetReferenceId: string,
+    rawInput: unknown,
+    context: SavedTargetContext,
+    signal?: AbortSignal,
+  ): Promise<SavedFavoriteMutationResponse> {
+    const principal = requirePermission(context.principal, "favorites.self.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new SavedTargetServiceError("principal_unavailable");
+    }
+    const activePrincipal = principal as SessionPrincipal & { userId: string };
+    const input = savedFavoriteMutationRequestSchema.parse(rawInput);
+    const source = this.#source(activePrincipal);
+    if (source.linkHealthState !== "linked") {
+      throw new SavedTargetServiceError("connector_unavailable");
+    }
+    const resolved = this.#resolveOwnedTarget(targetReferenceId, activePrincipal.userId, source);
+    let observed: boolean;
+    try {
+      const client = this.#client(source);
+      await client.updateFavoriteState(
+        {
+          favorite: input.favorite,
+          itemId: resolved.payload.itemId,
+          userId: source.externalUserId,
+        },
+        signal,
+      );
+      observed = await client.readFavoriteState(
+        { itemId: resolved.payload.itemId, userId: source.externalUserId },
+        signal,
+      );
+    } catch (error) {
+      throw new SavedTargetServiceError("connector_unavailable", { cause: error });
+    }
+    if (observed !== input.favorite) {
+      throw new SavedTargetServiceError("synchronization_failed");
+    }
+    const now = this.#now();
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          const payload = storedTargetPayloadSchema.parse({
+            ...resolved.payload,
+            favorite: { state: "synced", value: observed },
+            resolutionState: "current",
+          });
+          const updatedTarget = this.#database.sqlite
+            .prepare(
+              `update saved_targets set encrypted_payload = ?, updated_at = ?
+               where id = ? and user_id = ? and expires_at > ?`,
+            )
+            .run(
+              this.#cipher.encrypt(
+                JSON.stringify(payload),
+                targetContext(activePrincipal.userId, targetReferenceId),
+              ),
+              now,
+              targetReferenceId,
+              activePrincipal.userId,
+              now,
+            );
+          if (updatedTarget.changes !== 1) throw new SavedTargetServiceError("not_found");
+          const catalog = this.#refreshCatalogFavorite(
+            activePrincipal.userId,
+            payload.catalogIdentityDigest,
+            observed,
+            now,
+          );
+          this.#auditFavorite(
+            activePrincipal,
+            payload.catalogIdentityDigest,
+            catalog?.id ?? null,
+            observed,
+            context,
+            now,
+          );
+        })
+        .immediate();
+      return savedFavoriteMutationResponseSchema.parse({
+        favorite: observed,
+        synchronizedAt: new Date(now).toISOString(),
+        targetReferenceId,
+      });
+    } catch (error) {
+      if (error instanceof SavedTargetServiceError) throw error;
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #resolveOwnedTarget(
+    targetReferenceId: string,
+    userId: string,
+    source: SavedTargetSourceRow,
+  ): ResolvedSavedTarget {
     if (!TARGET_ID_PATTERN.test(targetReferenceId)) {
       throw new SavedTargetServiceError("not_found");
     }
-    const userId = principal.userId;
-    const source = this.#source(principal);
     const now = this.#now();
     try {
       const row = this.#database.sqlite
@@ -412,6 +550,125 @@ export class SavedTargetService {
       }
       throw new SavedTargetServiceError("storage_failure", { cause: error });
     }
+  }
+
+  #refreshCatalogFavorite(userId: string, identityDigest: string, favorite: boolean, now: number) {
+    const catalog = this.#database.sqlite
+      .prepare(
+        `select id, encrypted_snapshot as encryptedSnapshot
+         from saved_catalog_items where user_id = ? and identity_digest = ?`,
+      )
+      .get(userId, identityDigest) as FavoriteCatalogRow | undefined;
+    if (!catalog) return null;
+    if (!CATALOG_ID_PATTERN.test(catalog.id)) throw new SavedTargetServiceError("storage_failure");
+    let snapshot: z.infer<typeof storedSavedCatalogSnapshotSchema>;
+    try {
+      snapshot = storedSavedCatalogSnapshotSchema.parse(
+        JSON.parse(
+          this.#cipher.decrypt(
+            catalog.encryptedSnapshot,
+            `saved_catalog_snapshot:${userId}:${catalog.id}`,
+          ),
+        ),
+      );
+    } catch (error) {
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+    const snapshotChanged =
+      snapshot.resolutionState !== "current" ||
+      snapshot.favorite.state !== "synced" ||
+      snapshot.favorite.value !== favorite;
+    if (!snapshotChanged) {
+      const touched = this.#database.sqlite
+        .prepare(
+          `update saved_catalog_items set last_resolved_at = ?, updated_at = ?
+           where id = ? and user_id = ? and identity_digest = ?`,
+        )
+        .run(now, now, catalog.id, userId, identityDigest);
+      if (touched.changes !== 1) throw new SavedTargetServiceError("storage_failure");
+      return catalog;
+    }
+    const exhausted = this.#database.sqlite
+      .prepare(
+        `select 1
+         from saved_lists
+         join saved_list_items on saved_list_items.list_id = saved_lists.id
+         where saved_lists.user_id = ? and saved_lists.deleted_at is null
+           and saved_list_items.catalog_item_id = ? and saved_lists.revision >= 2147483647
+         limit 1`,
+      )
+      .get(userId, catalog.id);
+    if (exhausted) throw new SavedTargetServiceError("storage_failure");
+    const updated = this.#database.sqlite
+      .prepare(
+        `update saved_catalog_items set encrypted_snapshot = ?, last_resolved_at = ?, updated_at = ?
+         where id = ? and user_id = ? and identity_digest = ?`,
+      )
+      .run(
+        this.#cipher.encrypt(
+          JSON.stringify({
+            ...snapshot,
+            favorite: { state: "synced", value: favorite },
+            resolutionState: "current",
+          }),
+          `saved_catalog_snapshot:${userId}:${catalog.id}`,
+        ),
+        now,
+        now,
+        catalog.id,
+        userId,
+        identityDigest,
+      );
+    if (updated.changes !== 1) throw new SavedTargetServiceError("storage_failure");
+    this.#database.sqlite
+      .prepare(
+        `update saved_lists set revision = revision + 1, updated_at = ?
+         where user_id = ? and deleted_at is null and id in (
+           select list_id from saved_list_items where user_id = ? and catalog_item_id = ?
+         )`,
+      )
+      .run(now, userId, userId, catalog.id);
+    return catalog;
+  }
+
+  #auditFavorite(
+    principal: SessionPrincipal & { userId: string },
+    identityDigest: string,
+    catalogId: string | null,
+    favorite: boolean,
+    context: SavedTargetContext,
+    createdAt: number,
+  ) {
+    const id = this.#createAuditId();
+    if (!IDENTIFIER_PATTERN.test(id)) throw new SavedTargetServiceError("storage_failure");
+    const targetId =
+      catalogId ??
+      `saved-favorite-${privacyHash(
+        "saved_favorite_audit",
+        identityDigest,
+        this.#config.encryptionKey,
+      )}`;
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method,
+           event_type, outcome, target_type, target_id, request_id,
+           metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, 'saved.favorite.changed', 'success', 'saved_favorite', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        principal.userId,
+        principal.sessionId,
+        principal.authenticationMethod.kind,
+        targetId,
+        context.requestId ?? null,
+        JSON.stringify({ catalogLinked: catalogId !== null, favorite }),
+        context.ipAddress
+          ? privacyHash("rate_limit_client", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        createdAt,
+      );
   }
 
   #upsertTarget(
