@@ -623,7 +623,11 @@ describe("JellyfinUserMediaClient", () => {
         ],
         People: people,
         PremiereDate: "2026-04-18T00:00:00.0000000Z",
-        ProviderIds: { Imdb: "tt1234567", Tmdb: "98765" },
+        ProviderIds: {
+          Imdb: "tt1234567",
+          RottenTomatoes: "https://www.rottentomatoes.com/m/the_far_meridian",
+          Tmdb: "98765",
+        },
         Studios: [{ Name: "Northlight Pictures" }, { Name: "Northlight Pictures" }],
         Taglines: ["The horizon remembers."],
       }),
@@ -702,6 +706,15 @@ describe("JellyfinUserMediaClient", () => {
       tagline: "The horizon remembers.",
     });
     expect(detail.movie?.cast).toHaveLength(24);
+    expect(detail.providerReferences).toEqual([
+      { identifier: "tt1234567", mediaKind: "movie", provider: "imdb" },
+      { identifier: 98_765, mediaKind: "movie", provider: "tmdb" },
+      {
+        identifier: "the_far_meridian",
+        mediaKind: "movie",
+        provider: "rotten_tomatoes",
+      },
+    ]);
     expect(detail.movie?.cast[0]).toMatchObject({
       image: { itemId: "person-upstream-1", type: "Primary" },
       imagePath: null,
@@ -734,6 +747,11 @@ describe("JellyfinUserMediaClient", () => {
         MediaSources: [{ MediaStreams: "invalid" }],
         People: 42,
         PremiereDate: { invalid: true },
+        ProviderIds: {
+          Imdb: "https://private.invalid/title/tt1234567",
+          RottenTomatoes: "https://www.rottentomatoes.com.evil.invalid/m/private",
+          Tmdb: "../../private",
+        },
         Studios: ["invalid"],
         Taglines: "invalid",
       }),
@@ -752,6 +770,7 @@ describe("JellyfinUserMediaClient", () => {
         studios: [],
         tagline: null,
       },
+      providerReferences: [],
       removal: {
         canDelete: false,
         providerIds: { imdb: null, tmdb: null },
@@ -1073,6 +1092,11 @@ describe("JellyfinUserMediaClient", () => {
             Type: "Actor",
           },
         ],
+        ProviderIds: {
+          Imdb: "tt0903747",
+          RottenTomatoes: "breaking_bad",
+          Tmdb: "1396",
+        },
       }),
       jsonResponse({
         Items: [
@@ -1119,6 +1143,15 @@ describe("JellyfinUserMediaClient", () => {
       client.readLibraryTitle({ itemId: "series-upstream-1", userId: "paired-user-id" }),
     ).resolves.toMatchObject({
       item: { externalId: "series-upstream-1", kind: "series", runtimeSeconds: null },
+      providerReferences: [
+        { identifier: "tt0903747", mediaKind: "series", provider: "imdb" },
+        { identifier: 1396, mediaKind: "series", provider: "tmdb" },
+        {
+          identifier: "breaking_bad",
+          mediaKind: "series",
+          provider: "rotten_tomatoes",
+        },
+      ],
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
       seriesCredits: {

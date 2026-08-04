@@ -274,6 +274,13 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
     media: item.media,
     movie,
     playback: item.playback,
+    providerReferences:
+      item.media.kind === "movie"
+        ? [
+            { identifier: "tt0133093", mediaKind: "movie", provider: "imdb" },
+            { identifier: 603, mediaKind: "movie", provider: "tmdb" },
+          ]
+        : [{ identifier: 1396, mediaKind: "series", provider: "tmdb" }],
     seasons:
       item.media.kind === "series"
         ? [

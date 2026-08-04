@@ -52,6 +52,7 @@ describe("Media library client", () => {
       media: series.media,
       movie: null,
       playback: null,
+      providerReferences: [],
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
       seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },

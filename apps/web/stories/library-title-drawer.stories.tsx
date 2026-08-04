@@ -62,6 +62,18 @@ export const MovieDetails: Story = {
     expect(canvas.getByRole("button", { name: "Resume movie" })).toBeVisible();
     expect(canvas.getByText("The horizon remembers.")).toBeVisible();
     expect(canvas.getByText("Mara Voss")).toBeVisible();
+    expect(canvas.getByRole("link", { name: /IMDb/iu })).toHaveAttribute(
+      "href",
+      "https://www.imdb.com/title/tt0133093/",
+    );
+    expect(canvas.getByRole("link", { name: /TMDB/iu })).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org/movie/603",
+    );
+    expect(canvas.getByRole("link", { name: /IMDb/iu })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
     await userEvent.click(canvas.getByText("Media information"));
     await waitFor(() =>
       expect(canvas.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible(),

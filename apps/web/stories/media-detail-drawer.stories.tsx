@@ -75,6 +75,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "community",
           label: "TMDB",
+          providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
           scale: 10,
           sentiment: null,
           source: "tmdb",
@@ -84,6 +85,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "community",
           label: "IMDb",
+          providerReference: { identifier: "tt0133093", mediaKind: "movie", provider: "imdb" },
           scale: 10,
           sentiment: null,
           source: "imdb",
@@ -93,6 +95,11 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "critics",
           label: "Tomatometer",
+          providerReference: {
+            identifier: "the_matrix",
+            mediaKind: "movie",
+            provider: "rotten_tomatoes",
+          },
           scale: 100,
           sentiment: "Certified Fresh",
           source: "rotten_tomatoes",
@@ -102,6 +109,11 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "audience",
           label: "RT audience",
+          providerReference: {
+            identifier: "the_matrix",
+            mediaKind: "movie",
+            provider: "rotten_tomatoes",
+          },
           scale: 100,
           sentiment: "Upright",
           source: "rotten_tomatoes",

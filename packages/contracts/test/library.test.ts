@@ -399,11 +399,24 @@ describe("library operation contracts", () => {
       media: seriesMedia,
       movie: null,
       playback: null,
+      providerReferences: [
+        { identifier: "tt1234567", mediaKind: "series" as const, provider: "imdb" as const },
+        { identifier: 1396, mediaKind: "series" as const, provider: "tmdb" as const },
+      ],
       seasons: [season],
       seasonsTruncated: false,
       seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        providerReferences: [
+          { identifier: 1396, mediaKind: "movie", provider: "tmdb" },
+          { identifier: 1397, mediaKind: "series", provider: "tmdb" },
+        ],
+      }).success,
+    ).toBe(false);
 
     const episodes = {
       generatedAt: catalogue.generatedAt,
@@ -589,6 +602,10 @@ describe("library operation contracts", () => {
         tagline: "The horizon remembers.",
       },
       playback: catalogue.items[0]!.playback,
+      providerReferences: [
+        { identifier: "tt1234567", mediaKind: "movie" as const, provider: "imdb" as const },
+        { identifier: 98_765, mediaKind: "movie" as const, provider: "tmdb" as const },
+      ],
       seasons: [],
       seasonsTruncated: false,
       seriesCredits: null,

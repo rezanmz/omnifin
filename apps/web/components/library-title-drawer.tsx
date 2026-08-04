@@ -28,6 +28,7 @@ import {
   Clapperboard,
   Clock3,
   Download,
+  ExternalLink,
   Film,
   Gauge,
   HardDrive,
@@ -51,6 +52,7 @@ import {
   type MediaDownloadEligibility,
   type MediaLibraryClient,
 } from "../lib/media-library";
+import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
 
 const MediaDetailDrawer = dynamic(() =>
   import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
@@ -1779,6 +1781,25 @@ export function LibraryTitleDrawer({
                         <span key={fact}>{fact}</span>
                       ))}
                     </div>
+                    {detail!.providerReferences.length > 0 ? (
+                      <nav
+                        aria-label="External title pages"
+                        className="library-title__provider-links"
+                      >
+                        {detail!.providerReferences.map((reference) => (
+                          <a
+                            aria-label={`${titleProviderLabel(reference)} — open canonical title page in a new tab`}
+                            data-directional-item
+                            href={titleProviderHref(reference)}
+                            key={reference.provider}
+                            rel="noopener noreferrer"
+                            target="_blank"
+                          >
+                            {titleProviderLabel(reference)} <ExternalLink aria-hidden="true" />
+                          </a>
+                        ))}
+                      </nav>
+                    ) : null}
                     {detail!.movie?.tagline ? (
                       <blockquote className="library-title__tagline">
                         {detail!.movie.tagline}
