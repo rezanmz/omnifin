@@ -16,6 +16,7 @@ function storyClient(watchLater = false): SavedListsClient {
   const issued: SavedMembershipSummary = {
     catalogReferenceId: watchLater ? catalogReferenceId : null,
     customListCount: 0,
+    customListIds: [],
     expiresAt: "2026-08-04T11:15:00.000Z",
     favorite: { state: "synced", value: true },
     issuedAt: now,

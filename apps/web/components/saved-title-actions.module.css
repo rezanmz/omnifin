@@ -31,6 +31,108 @@
   color: var(--danger);
 }
 
+.status[data-state="ready"]:not(:empty) {
+  color: var(--acid);
+}
+
+.listPicker {
+  background: color-mix(in srgb, var(--glass-fill) 58%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.listPicker summary {
+  align-items: center;
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.74rem;
+  font-weight: 650;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+
+.listPicker summary::-webkit-details-marker {
+  display: none;
+}
+
+.listPicker summary > svg {
+  height: 16px;
+  width: 16px;
+}
+
+.listPicker summary > span {
+  align-items: center;
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  display: flex;
+  font-variant-numeric: tabular-nums;
+  height: 22px;
+  justify-content: center;
+  margin-left: auto;
+  min-width: 22px;
+}
+
+.listPicker[open] summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.listOptions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 8px;
+}
+
+.listOptions button {
+  align-items: center;
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 0.72rem;
+  gap: 7px;
+  min-height: 44px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.listOptions button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--acid) 45%, var(--line-soft));
+  color: var(--acid);
+}
+
+.listOptions button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--acid) 58%, transparent);
+  outline-offset: 2px;
+}
+
+.listOptions button svg {
+  flex: 0 0 auto;
+  height: 15px;
+  width: 15px;
+}
+
+.listOptions p {
+  color: var(--paper-2);
+  font-size: 0.72rem;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+  padding: 6px;
+}
+
+.listOptions a {
+  color: var(--paper-0);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .compact {
   align-items: center;
   -webkit-backdrop-filter: blur(24px) saturate(180%);
@@ -101,6 +203,12 @@
 
   .spin {
     animation: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .listOptions {
+    grid-template-columns: 1fr;
   }
 }
 

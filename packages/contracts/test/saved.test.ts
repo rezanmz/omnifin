@@ -301,6 +301,7 @@ describe("saved-list contracts", () => {
       savedMembershipSummarySchema.parse({
         catalogReferenceId: catalogId,
         customListCount: 2,
+        customListIds: [listId, `saved_list_${"u".repeat(22)}`],
         expiresAt: "2026-08-04T08:15:00.000Z",
         favorite: { state: "synced", value: false },
         issuedAt: generatedAt,
@@ -308,6 +309,18 @@ describe("saved-list contracts", () => {
         watchLater: true,
       }).watchLater,
     ).toBe(true);
+    expect(
+      savedMembershipSummarySchema.safeParse({
+        catalogReferenceId: catalogId,
+        customListCount: 1,
+        customListIds: [],
+        expiresAt: "2026-08-04T08:15:00.000Z",
+        favorite: { state: "synced", value: false },
+        issuedAt: generatedAt,
+        targetReferenceId: targetId,
+        watchLater: false,
+      }).success,
+    ).toBe(false);
   });
 
   it("exports closed HTTP schemas", () => {

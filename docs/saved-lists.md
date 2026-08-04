@@ -156,10 +156,12 @@ is allowed until reconciliation produces a current owned association.
 ## Interface states and accessibility
 
 Cards and details receive a `savedMembershipSummary` containing a short-lived save target, Watch
-Later state, custom-list count, and favorite state. The quick Watch Later control is available without
+Later state, the count and opaque identifiers of the user's current custom-list memberships, and
+favorite state. The identifiers are limited to the authenticated user's own list summaries and do
+not expose list names or provider identities. The quick Watch Later control is available without
 opening details and announces “Added to Watch Later” or “Removed from Watch Later” through a polite
-live region. Favorite uses a separately labelled star control. List selection is an accessible menu
-or drawer, not a nested click target inside the card link.
+live region. Favorite uses a separately labelled heart control. Personal-list selection is an
+accessible disclosure in the detail view, not a nested click target inside the card's primary action.
 
 The Saved destination supports manual, recently added, and title sorting plus owned, requestable,
 requested, and unavailable filters. It deliberately renders loading geometry, empty lists, no search

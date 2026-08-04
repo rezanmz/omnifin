@@ -120,9 +120,12 @@ interface ResolvedTargetRow {
 }
 
 interface CatalogMembershipRow {
-  customListCount: number;
   id: string;
   watchLater: number;
+}
+
+interface CustomListMembershipRow {
+  id: string;
 }
 
 interface FavoriteCatalogRow {
@@ -754,8 +757,7 @@ export class SavedTargetService {
       .prepare(
         `select
            saved_catalog_items.id as id,
-           coalesce(max(case when saved_lists.kind = 'watch_later' then 1 else 0 end), 0) as watchLater,
-           count(distinct case when saved_lists.kind = 'custom' then saved_lists.id end) as customListCount
+           coalesce(max(case when saved_lists.kind = 'watch_later' then 1 else 0 end), 0) as watchLater
          from saved_catalog_items
          left join saved_list_items
            on saved_list_items.catalog_item_id = saved_catalog_items.id
@@ -768,9 +770,25 @@ export class SavedTargetService {
     if (catalog && !CATALOG_ID_PATTERN.test(catalog.id)) {
       throw new SavedTargetServiceError("storage_failure");
     }
+    const customListIds = catalog
+      ? (
+          this.#database.sqlite
+            .prepare(
+              `select saved_lists.id as id
+               from saved_lists
+               join saved_list_items on saved_list_items.list_id = saved_lists.id
+               where saved_lists.user_id = ? and saved_lists.deleted_at is null
+                 and saved_lists.kind = 'custom' and saved_list_items.catalog_item_id = ?
+               order by saved_lists.created_at asc, saved_lists.id asc
+               limit ?`,
+            )
+            .all(userId, catalog.id, 50) as CustomListMembershipRow[]
+        ).map(({ id }) => id)
+      : [];
     return {
       catalogReferenceId: catalog?.id ?? null,
-      customListCount: catalog?.customListCount ?? 0,
+      customListCount: customListIds.length,
+      customListIds,
       expiresAt: new Date(expiresAt).toISOString(),
       favorite,
       issuedAt: new Date(issuedAt).toISOString(),

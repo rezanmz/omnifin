@@ -1,7 +1,8 @@
 "use client";
 
 import type { SavedMembershipSummary } from "@omnifin/contracts/saved";
-import { Bookmark, BookmarkCheck, Heart, LoaderCircle } from "lucide-react";
+import { Bookmark, BookmarkCheck, Check, Heart, ListPlus, LoaderCircle } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -22,8 +23,8 @@ interface ResolvedTitle {
 type ActionState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { action: "favorite" | "watch_later"; kind: "pending" }
-  | { kind: "ready" }
+  | { action: "custom_list" | "favorite" | "watch_later"; kind: "pending"; listId?: string }
+  | { kind: "ready"; message?: string }
   | { kind: "error"; message: string };
 
 export interface SavedTitleActionsProperties {
@@ -169,7 +170,65 @@ export function SavedTitleActions({
       }
       if (mounted.current) {
         setResolved({ ...current, etag, summary });
-        setState({ kind: "ready" });
+        setState({
+          kind: "ready",
+          message: summary.watchLater ? "Added to Watch Later." : "Removed from Watch Later.",
+        });
+      }
+    } catch (error) {
+      if (mounted.current) setState({ kind: "error", message: actionError(error) });
+    }
+  }
+
+  async function toggleCustomList(listId: string, listName: string) {
+    if (pending) return;
+    setState({ action: "custom_list", kind: "pending", listId });
+    try {
+      const current = resolved ?? (await resolveTitle(client, referenceId));
+      const list = await client.readList(listId);
+      const included = current.summary.customListIds.includes(listId);
+      let catalogId = current.summary.catalogReferenceId;
+      if (included) {
+        if (!catalogId) {
+          throw new SavedListsClientError(
+            "invalid_response",
+            "saved_catalog_reference_missing",
+            "The saved title is missing its private catalog reference.",
+          );
+        }
+        await client.removeItem(listId, catalogId, {
+          csrfToken: current.snapshot.csrfToken,
+          etag: list.etag,
+        });
+      } else {
+        const result = await client.addItem(
+          listId,
+          { targetReferenceId: current.summary.targetReferenceId },
+          {
+            csrfToken: current.snapshot.csrfToken,
+            etag: list.etag,
+            idempotencyKey: createSavedListIdempotencyKey(),
+          },
+        );
+        catalogId = result.data.item.catalog.id;
+      }
+      const customListIds = included
+        ? current.summary.customListIds.filter((id) => id !== listId)
+        : [...current.summary.customListIds, listId];
+      if (mounted.current) {
+        setResolved({
+          ...current,
+          summary: {
+            ...current.summary,
+            catalogReferenceId: catalogId,
+            customListCount: customListIds.length,
+            customListIds,
+          },
+        });
+        setState({
+          kind: "ready",
+          message: `${included ? "Removed from" : "Added to"} ${listName}.`,
+        });
       }
     } catch (error) {
       if (mounted.current) setState({ kind: "error", message: actionError(error) });
@@ -191,7 +250,10 @@ export function SavedTitleActions({
           ...resolved,
           summary: { ...resolved.summary, favorite: { state: "synced", value: favorite } },
         });
-        setState({ kind: "ready" });
+        setState({
+          kind: "ready",
+          message: favorite ? "Added to Jellyfin Favorites." : "Removed from Jellyfin Favorites.",
+        });
       }
     } catch (error) {
       if (mounted.current) setState({ kind: "error", message: actionError(error) });
@@ -208,25 +270,44 @@ export function SavedTitleActions({
       : watchLater
         ? BookmarkCheck
         : Bookmark;
+  const statusCopy =
+    state.kind === "loading"
+      ? "Checking private saved state…"
+      : state.kind === "pending"
+        ? state.action === "favorite"
+          ? "Synchronizing with Jellyfin…"
+          : state.action === "custom_list"
+            ? "Updating personal list…"
+            : "Updating Watch Later…"
+        : state.kind === "error"
+          ? state.message
+          : state.kind === "ready"
+            ? (state.message ?? "")
+            : "";
 
   if (compact) {
     return (
-      <button
-        aria-label={`Toggle ${title} in Watch Later`}
-        aria-pressed={resolved ? watchLater : undefined}
-        className={styles.compact}
-        data-active={watchLater || undefined}
-        data-directional-item
-        disabled={pending}
-        onClick={(event) => {
-          event.stopPropagation();
-          void toggleWatchLater();
-        }}
-        title={watchLater ? "Remove from Watch Later" : "Save to Watch Later"}
-        type="button"
-      >
-        <WatchIcon aria-hidden="true" className={pending ? styles.spin : undefined} />
-      </button>
+      <>
+        <button
+          aria-label={`Toggle ${title} in Watch Later`}
+          aria-pressed={resolved ? watchLater : undefined}
+          className={styles.compact}
+          data-active={watchLater || undefined}
+          data-directional-item
+          disabled={pending}
+          onClick={(event) => {
+            event.stopPropagation();
+            void toggleWatchLater();
+          }}
+          title={watchLater ? "Remove from Watch Later" : "Save to Watch Later"}
+          type="button"
+        >
+          <WatchIcon aria-hidden="true" className={pending ? styles.spin : undefined} />
+        </button>
+        <span aria-live="polite" className="sr-only" role="status">
+          {statusCopy}
+        </span>
+      </>
     );
   }
 
@@ -259,16 +340,51 @@ export function SavedTitleActions({
           {favorite ? "Jellyfin Favorite" : "Favorite"}
         </button>
       </div>
+      {resolved ? (
+        <details className={styles.listPicker}>
+          <summary>
+            <ListPlus aria-hidden="true" />
+            Personal lists
+            <span>{resolved.summary.customListCount}</span>
+          </summary>
+          <div className={styles.listOptions}>
+            {resolved.snapshot.lists.lists.length > 0 ? (
+              resolved.snapshot.lists.lists.map((list) => {
+                const included = resolved.summary.customListIds.includes(list.id);
+                const listPending =
+                  state.kind === "pending" &&
+                  state.action === "custom_list" &&
+                  state.listId === list.id;
+                return (
+                  <button
+                    aria-label={`${included ? "Remove" : "Add"} ${title} ${included ? "from" : "to"} ${list.name}`}
+                    aria-pressed={included}
+                    disabled={pending}
+                    key={list.id}
+                    onClick={() => void toggleCustomList(list.id, list.name)}
+                    type="button"
+                  >
+                    {listPending ? (
+                      <LoaderCircle aria-hidden="true" className={styles.spin} />
+                    ) : included ? (
+                      <Check aria-hidden="true" />
+                    ) : (
+                      <ListPlus aria-hidden="true" />
+                    )}
+                    <span>{list.name}</span>
+                  </button>
+                );
+              })
+            ) : (
+              <p>
+                No personal lists yet. <Link href="/saved">Create one in Saved</Link>.
+              </p>
+            )}
+          </div>
+        </details>
+      ) : null}
       <p aria-live="polite" className={styles.status} data-state={state.kind} role="status">
-        {state.kind === "loading"
-          ? "Checking private saved state…"
-          : state.kind === "pending"
-            ? state.action === "favorite"
-              ? "Synchronizing with Jellyfin…"
-              : "Updating Watch Later…"
-            : state.kind === "error"
-              ? state.message
-              : ""}
+        {statusCopy}
       </p>
     </div>
   );

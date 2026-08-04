@@ -426,6 +426,12 @@ export const savedMembershipSummarySchema = z
   .strictObject({
     catalogReferenceId: savedCatalogReferenceIdSchema.nullable(),
     customListCount: z.int().nonnegative().max(SAVED_CUSTOM_LIST_MAX_COUNT),
+    customListIds: z
+      .array(savedListIdSchema)
+      .max(SAVED_CUSTOM_LIST_MAX_COUNT)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "Saved custom-list memberships must be unique.",
+      }),
     expiresAt: timestampSchema,
     favorite: savedFavoriteStateSchema,
     issuedAt: timestampSchema,
@@ -448,6 +454,13 @@ export const savedMembershipSummarySchema = z
         code: "custom",
         message: "Saved memberships require a stable opaque catalog reference.",
         path: ["catalogReferenceId"],
+      });
+    }
+    if (summary.customListCount !== summary.customListIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Saved custom-list membership count must match its opaque references.",
+        path: ["customListCount"],
       });
     }
   });

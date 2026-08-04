@@ -14,10 +14,11 @@ const etag = `"saved_${"e".repeat(22)}"`;
 const nextEtag = `"saved_${"n".repeat(22)}"`;
 const now = "2026-08-04T11:00:00.000Z";
 
-function summary(watchLater = false): SavedMembershipSummary {
+function summary(watchLater = false, customListIds: string[] = []): SavedMembershipSummary {
   return {
-    catalogReferenceId: watchLater ? catalogReferenceId : null,
-    customListCount: 0,
+    catalogReferenceId: watchLater || customListIds.length > 0 ? catalogReferenceId : null,
+    customListCount: customListIds.length,
+    customListIds,
     expiresAt: "2026-08-04T11:15:00.000Z",
     favorite: { state: "synced", value: false },
     issuedAt: now,
@@ -26,8 +27,8 @@ function summary(watchLater = false): SavedMembershipSummary {
   };
 }
 
-function client(input: { watchLater?: boolean } = {}) {
-  const issued = summary(input.watchLater);
+function client(input: { customListIds?: string[]; watchLater?: boolean } = {}) {
+  const issued = summary(input.watchLater, input.customListIds);
   return {
     ...savedListsDemoClient,
     addItem: vi.fn(async (listId) => ({
@@ -88,6 +89,7 @@ describe("SavedTitleActions", () => {
     await user.click(toggle);
 
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByRole("status")).toHaveTextContent("Added to Watch Later.");
     expect(actions.issueLibraryTarget).toHaveBeenCalledWith(referenceId, {
       csrfToken: readySavedOutcome.snapshot.csrfToken,
     });
@@ -113,6 +115,7 @@ describe("SavedTitleActions", () => {
     await user.click(toggle);
 
     await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    expect(screen.getByRole("status")).toHaveTextContent("Removed from Watch Later.");
     expect(actions.removeItem).toHaveBeenCalledWith(
       readySavedOutcome.snapshot.lists.watchLater.id,
       catalogReferenceId,
@@ -142,6 +145,50 @@ describe("SavedTitleActions", () => {
       { favorite: true },
       { csrfToken: readySavedOutcome.snapshot.csrfToken },
     );
+  });
+
+  it("adds and removes the title from a named personal list", async () => {
+    const user = userEvent.setup();
+    const customList = readySavedOutcome.snapshot.lists.lists[0]!;
+    const actions = client();
+    const view = render(
+      <SavedTitleActions client={actions} eager referenceId={referenceId} title="Ember Coast" />,
+    );
+
+    await screen.findByRole("button", { name: "Favorite" });
+    await user.click(screen.getByText("Personal lists"));
+    const add = screen.getByRole("button", { name: `Add Ember Coast to ${customList.name}` });
+    await user.click(add);
+
+    await waitFor(() => expect(add).toHaveAttribute("aria-pressed", "true"));
+    expect(actions.addItem).toHaveBeenLastCalledWith(
+      customList.id,
+      { targetReferenceId },
+      expect.objectContaining({ csrfToken: readySavedOutcome.snapshot.csrfToken, etag }),
+    );
+
+    view.unmount();
+    const removalActions = client({ customListIds: [customList.id] });
+    render(
+      <SavedTitleActions
+        client={removalActions}
+        eager
+        referenceId={referenceId}
+        title="Ember Coast"
+      />,
+    );
+    await screen.findByRole("button", { name: "Favorite" });
+    await user.click(screen.getByText("Personal lists"));
+    const remove = screen.getByRole("button", {
+      name: `Remove Ember Coast from ${customList.name}`,
+    });
+    await user.click(remove);
+
+    await waitFor(() => expect(remove).toHaveAttribute("aria-pressed", "false"));
+    expect(removalActions.removeItem).toHaveBeenCalledWith(customList.id, catalogReferenceId, {
+      csrfToken: readySavedOutcome.snapshot.csrfToken,
+      etag,
+    });
   });
 
   it("keeps a recoverable message when saved services are unavailable", async () => {

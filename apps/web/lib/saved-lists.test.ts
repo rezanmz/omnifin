@@ -120,6 +120,7 @@ const savedItems: SavedListItemsResponse = {
 const target: SavedMembershipSummary = {
   catalogReferenceId: catalogId,
   customListCount: 0,
+  customListIds: [],
   expiresAt: "2026-08-04T11:15:00.000Z",
   favorite: { state: "synced", value: true },
   issuedAt: now,

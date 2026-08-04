@@ -200,6 +200,7 @@ describe("SavedTargetService", () => {
     expect(issued).toMatchObject({
       catalogReferenceId: null,
       customListCount: 0,
+      customListIds: [],
       favorite: { state: "synced", value: true },
       targetReferenceId: `save_target_${"t".repeat(22)}`,
       watchLater: false,
@@ -480,6 +481,7 @@ describe("SavedTargetService", () => {
     expect(issued).toMatchObject({
       catalogReferenceId: catalogId,
       customListCount: 2,
+      customListIds: [lists[1].id, lists[2].id],
       favorite: { state: "synced", value: false },
       watchLater: true,
     });
