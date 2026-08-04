@@ -74,6 +74,7 @@ interface GrantRow {
   referenceId: string;
   sessionId: string;
   sizeBytes: number;
+  state: string;
   userId: string;
 }
 
@@ -411,7 +412,8 @@ export class OriginalDownloadService {
           id, user_id as userId, session_id as sessionId,
           service_identity_link_id as linkId, link_revision as linkRevision,
           reference_id as referenceId, encrypted_payload as encryptedPayload,
-          filename, content_type as contentType, size_bytes as sizeBytes, expires_at as expiresAt
+          filename, content_type as contentType, size_bytes as sizeBytes, state,
+          expires_at as expiresAt
          from media_download_grants
          where public_token_hash = ?`,
       )
@@ -426,6 +428,7 @@ export class OriginalDownloadService {
       throw new OriginalDownloadError("grant_invalid");
     }
     if (row.expiresAt <= now.value) throw new OriginalDownloadError("grant_expired");
+    if (row.state !== "prepared") throw new OriginalDownloadError("grant_invalid");
     const normalized = normalizedRange(range, row.sizeBytes);
 
     let payload: StoredGrantPayload;
@@ -473,7 +476,7 @@ export class OriginalDownloadService {
       throw new OriginalDownloadError("unavailable", { cause: error });
     }
     if (stream.status === 416) {
-      await stream.body.cancel();
+      await stream.body.cancel().catch(() => undefined);
       release();
       this.#markFailed(row, context, 0);
       throw new OriginalDownloadError("range_invalid", { sizeBytes: row.sizeBytes });
@@ -482,14 +485,15 @@ export class OriginalDownloadService {
     try {
       this.#database.sqlite
         .transaction(() => {
-          this.#database.sqlite
+          const claimed = this.#database.sqlite
             .prepare(
               `update media_download_grants
                set state = 'streaming', bytes_transferred = 0, started_at = ?,
                    completed_at = null, updated_at = ?
-               where id = ? and expires_at > ?`,
+               where id = ? and state = 'prepared' and expires_at > ?`,
             )
             .run(now.value, now.value, row.id, now.value);
+          if (claimed.changes !== 1) throw new OriginalDownloadError("grant_invalid");
           this.#audit(
             "media.original_download.started",
             "success",
@@ -504,8 +508,9 @@ export class OriginalDownloadService {
         })
         .immediate();
     } catch (error) {
-      await stream.body.cancel();
+      await stream.body.cancel().catch(() => undefined);
       release();
+      if (error instanceof OriginalDownloadError) throw error;
       throw new OriginalDownloadError("storage_failure", { cause: error });
     }
 

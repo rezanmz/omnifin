@@ -173,11 +173,13 @@ async function harness() {
     streamOriginalDownload,
   }));
   let auditToken = 0;
+  let grantToken = 0;
+  let internalToken = 0;
   const service = new OriginalDownloadService(app.database, config, {
     clock: () => now,
     createAuditToken: () => String(++auditToken).padStart(22, "a"),
-    createGrantToken: () => "g".repeat(22),
-    createInternalToken: () => "i".repeat(22),
+    createGrantToken: () => String(++grantToken).padStart(22, "g"),
+    createInternalToken: () => String(++internalToken).padStart(22, "i"),
     createClient,
   });
   return {
@@ -206,8 +208,8 @@ describe("OriginalDownloadService", () => {
       expect(prepared).toMatchObject({
         contentType: "video/x-matroska",
         filename: "Northern Lights (2026).mkv",
-        grantId: `media_download_${"g".repeat(22)}`,
-        path: `/v1/media/library/downloads/media_download_${"g".repeat(22)}`,
+        grantId: `media_download_${"g".repeat(21)}1`,
+        path: `/v1/media/library/downloads/media_download_${"g".repeat(21)}1`,
         referenceId,
         sizeBytes: 50 * 1_024 * 1_024 * 1_024,
       });
@@ -301,6 +303,184 @@ describe("OriginalDownloadService", () => {
       ).rejects.toMatchObject({ reason: "source_changed" });
     } finally {
       await app.close();
+    }
+  });
+
+  it("claims grants once and keeps per-user download concurrency bounded", async () => {
+    const { app, referenceId, service, session, streamOriginalDownload } = await harness();
+    try {
+      const first = await service.prepare(referenceId, { principal: session.principal });
+      const second = await service.prepare(referenceId, { principal: session.principal });
+      const transfer = await service.open(first.grantId, undefined, {
+        principal: session.principal,
+      });
+
+      await expect(
+        service.open(first.grantId, undefined, { principal: session.principal }),
+      ).rejects.toMatchObject({ reason: "grant_invalid" });
+      await expect(
+        service.open(second.grantId, undefined, { principal: session.principal }),
+      ).rejects.toMatchObject({ reason: "busy" });
+
+      await transfer.finish("cancelled", Number.NaN);
+      await transfer.finish("success", 4);
+      await expect(
+        service.open(first.grantId, undefined, { principal: session.principal }),
+      ).rejects.toMatchObject({ reason: "grant_invalid" });
+      expect(streamOriginalDownload).toHaveBeenCalledOnce();
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select state, bytes_transferred as bytesTransferred from media_download_grants order by created_at, id",
+          )
+          .all(),
+      ).toEqual([
+        { bytesTransferred: 0, state: "cancelled" },
+        { bytesTransferred: 0, state: "prepared" },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails a claimed grant safely when Jellyfin rejects or cannot satisfy the stream", async () => {
+    const failed = await harness();
+    try {
+      const prepared = await failed.service.prepare(failed.referenceId, {
+        principal: failed.session.principal,
+      });
+      failed.streamOriginalDownload.mockRejectedValueOnce(new Error("private upstream failure"));
+
+      await expect(
+        failed.service.open(prepared.grantId, undefined, {
+          principal: failed.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(
+        failed.app.database.sqlite.prepare("select state from media_download_grants").get(),
+      ).toEqual({ state: "failed" });
+      await expect(
+        failed.service.open(prepared.grantId, undefined, {
+          principal: failed.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "grant_invalid" });
+    } finally {
+      await failed.app.close();
+    }
+
+    const unsatisfied = await harness();
+    const cancel = vi.fn(async () => {});
+    try {
+      const prepared = await unsatisfied.service.prepare(unsatisfied.referenceId, {
+        principal: unsatisfied.session.principal,
+      });
+      unsatisfied.streamOriginalDownload.mockResolvedValueOnce({
+        acceptRanges: true,
+        body: new ReadableStream<Uint8Array>({ cancel }),
+        contentLength: 0,
+        contentRange: null,
+        contentType: null,
+        status: 416,
+      });
+
+      await expect(
+        unsatisfied.service.open(prepared.grantId, "bytes=0-3", {
+          principal: unsatisfied.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "range_invalid" });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(
+        unsatisfied.app.database.sqlite.prepare("select state from media_download_grants").get(),
+      ).toEqual({ state: "failed" });
+    } finally {
+      await unsatisfied.app.close();
+    }
+  });
+
+  it("cancels the upstream stream when another gateway process wins the grant claim", async () => {
+    const test = await harness();
+    const cancel = vi.fn(async () => {
+      throw new Error("private cancellation failure");
+    });
+    try {
+      const prepared = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      test.streamOriginalDownload.mockImplementationOnce(async () => {
+        test.app.database.sqlite.prepare("update media_download_grants set state = 'failed'").run();
+        return {
+          acceptRanges: true,
+          body: new ReadableStream<Uint8Array>({ cancel }),
+          contentLength: 4,
+          contentRange: null,
+          contentType: "video/x-matroska",
+          status: 200,
+        };
+      });
+
+      await expect(
+        test.service.open(prepared.grantId, undefined, {
+          principal: test.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "grant_invalid" });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(
+        test.app.database.sqlite.prepare("select state from media_download_grants").get(),
+      ).toEqual({ state: "failed" });
+    } finally {
+      await test.app.close();
+    }
+  });
+
+  it("rejects unavailable metadata, denied sources, expired grants, and corrupt payloads", async () => {
+    const test = await harness();
+    try {
+      test.readOriginalDownloadMetadata.mockRejectedValueOnce(new Error("private metadata error"));
+      await expect(
+        test.service.prepare(test.referenceId, { principal: test.session.principal }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      test.readOriginalDownloadMetadata.mockResolvedValueOnce({
+        ...test.metadata,
+        canDownload: false,
+      });
+      await expect(
+        test.service.prepare(test.referenceId, { principal: test.session.principal }),
+      ).rejects.toMatchObject({ reason: "permission_denied" });
+
+      test.readOriginalDownloadMetadata.mockResolvedValueOnce({
+        ...test.metadata,
+        sizeBytes: null,
+      });
+      await expect(
+        test.service.prepare(test.referenceId, { principal: test.session.principal }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      const expired = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      test.app.database.sqlite
+        .prepare(
+          "update media_download_grants set created_at = ?, updated_at = ?, expires_at = ? where public_token_hash is not null",
+        )
+        .run(now.getTime() - 2, now.getTime() - 2, now.getTime() - 1);
+      await expect(
+        test.service.open(expired.grantId, undefined, { principal: test.session.principal }),
+      ).rejects.toMatchObject({ reason: "grant_expired" });
+
+      const corrupt = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      test.app.database.sqlite
+        .prepare(
+          "update media_download_grants set encrypted_payload = 'corrupt' where expires_at > ?",
+        )
+        .run(now.getTime());
+      await expect(
+        test.service.open(corrupt.grantId, undefined, { principal: test.session.principal }),
+      ).rejects.toMatchObject({ reason: "storage_failure" });
+    } finally {
+      await test.app.close();
     }
   });
 });

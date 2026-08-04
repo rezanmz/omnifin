@@ -66,6 +66,8 @@ async function harness() {
     status: 206,
   }));
   let auditToken = 0;
+  let grantToken = 0;
+  let internalToken = 0;
   let sessionId = 0;
   let sessionToken = 0;
   const app = await createApp({
@@ -74,8 +76,8 @@ async function harness() {
       clock: () => now,
       createAuditToken: () => String(++auditToken).padStart(22, "a"),
       createClient: () => ({ readOriginalDownloadMetadata, streamOriginalDownload }),
-      createGrantToken: () => "g".repeat(22),
-      createInternalToken: () => "i".repeat(22),
+      createGrantToken: () => String(++grantToken).padStart(22, "g"),
+      createInternalToken: () => String(++internalToken).padStart(22, "i"),
     },
     sessionDependencies: {
       clock: () => now,
@@ -178,6 +180,7 @@ async function harness() {
       cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
       origin: config.baseUrl.origin,
     },
+    metadata,
     otherSession,
     readOriginalDownloadMetadata,
     referenceId,
@@ -294,6 +297,96 @@ describe("original download routes", () => {
       expect(test.streamOriginalDownload).not.toHaveBeenCalled();
     } finally {
       await test.app.close();
+    }
+  });
+
+  it("maps denied, unavailable, changed, and expired sources to stable public errors", async () => {
+    const denied = await harness();
+    try {
+      denied.readOriginalDownloadMetadata.mockResolvedValueOnce({
+        ...denied.metadata,
+        canDownload: false,
+      });
+      const response = await denied.app.inject({
+        headers: denied.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${denied.referenceId}/downloads`,
+      });
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "original_download_permission_denied",
+      );
+    } finally {
+      await denied.app.close();
+    }
+
+    const unavailable = await harness();
+    try {
+      unavailable.readOriginalDownloadMetadata.mockRejectedValueOnce(
+        new Error("private upstream error"),
+      );
+      const response = await unavailable.app.inject({
+        headers: unavailable.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${unavailable.referenceId}/downloads`,
+      });
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "original_download_unavailable",
+      );
+    } finally {
+      await unavailable.app.close();
+    }
+
+    const changed = await harness();
+    try {
+      const preparedResponse = await changed.app.inject({
+        headers: changed.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${changed.referenceId}/downloads`,
+      });
+      const prepared = libraryDownloadPrepareResponseSchema.parse(preparedResponse.json());
+      changed.readOriginalDownloadMetadata.mockResolvedValueOnce({
+        ...changed.metadata,
+        etag: "changed-private-etag",
+      });
+      const response = await changed.app.inject({
+        headers: { cookie: changed.headers.cookie },
+        method: "GET",
+        url: prepared.path,
+      });
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "original_download_source_changed",
+      );
+    } finally {
+      await changed.app.close();
+    }
+
+    const expired = await harness();
+    try {
+      const preparedResponse = await expired.app.inject({
+        headers: expired.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${expired.referenceId}/downloads`,
+      });
+      const prepared = libraryDownloadPrepareResponseSchema.parse(preparedResponse.json());
+      expired.app.database.sqlite
+        .prepare("update media_download_grants set created_at = ?, updated_at = ?, expires_at = ?")
+        .run(now.getTime() - 2, now.getTime() - 2, now.getTime() - 1);
+      const response = await expired.app.inject({
+        headers: { cookie: expired.headers.cookie },
+        method: "GET",
+        url: prepared.path,
+      });
+      expect(response.statusCode).toBe(410);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("original_download_expired");
+    } finally {
+      await expired.app.close();
     }
   });
 
