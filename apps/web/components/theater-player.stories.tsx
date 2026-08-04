@@ -1,4 +1,7 @@
-import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
+import {
+  DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackNegotiationResponse,
+} from "@omnifin/contracts/playback";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { expect, userEvent, within } from "storybook/test";
 
@@ -101,6 +104,17 @@ const meta = {
     client: clientFor(directSession),
     media,
     onClose: () => undefined,
+    preferenceClient: {
+      load: async () => ({
+        networkClass: "home",
+        preferences: DEFAULT_PLAYBACK_PREFERENCES,
+        revision: 0,
+        updatedAt: null,
+      }),
+      save: async () => {
+        throw new Error("The theater story does not save account preferences.");
+      },
+    },
   },
   component: TheaterPlayer,
   parameters: { layout: "fullscreen" },

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_PLAYBACK_PREFERENCES,
   playbackNegotiationRequestSchema,
   playbackNegotiationResponseSchema,
   playbackProgressRequestSchema,
   playbackProgressResponseSchema,
+  playbackPreferencesResponseJsonSchema,
+  playbackPreferencesResponseSchema,
+  playbackPreferencesUpdateRequestJsonSchema,
+  playbackPreferencesUpdateRequestSchema,
 } from "../src/playback.js";
 
 const mediaReferenceId = "media_AAAAAAAAAAAAAAAAAAAAAA";
@@ -16,9 +21,11 @@ function response() {
       {
         channels: 6,
         codec: "eac3",
+        commentary: false,
         default: true,
         index: 1,
         language: "en-CA",
+        original: true,
         selected: true,
         title: "English · 5.1",
       },
@@ -41,9 +48,11 @@ function response() {
     subtitleTracks: [
       {
         codec: "webvtt",
+        commentary: false,
         default: false,
         delivery: "hls",
         forced: false,
+        hearingImpaired: true,
         index: 4,
         language: "fr",
         selected: false,
@@ -175,5 +184,76 @@ describe("playback contracts", () => {
         state: "paused",
       }),
     ).toMatchObject({ sessionId, state: "paused" });
+  });
+
+  it("accepts versioned semantic playback preferences without stream identities", () => {
+    const preferences = {
+      ...DEFAULT_PLAYBACK_PREFERENCES,
+      audio: { languages: ["fa", "en-CA"], preferOriginalLanguage: false },
+      subtitles: {
+        ...DEFAULT_PLAYBACK_PREFERENCES.subtitles,
+        languages: ["en", "fa"],
+        mode: "always" as const,
+      },
+    };
+    expect(
+      playbackPreferencesUpdateRequestSchema.parse({ expectedRevision: 3, preferences }),
+    ).toEqual({ expectedRevision: 3, preferences });
+    expect(
+      playbackPreferencesResponseSchema.parse({
+        networkClass: "home",
+        preferences,
+        revision: 4,
+        updatedAt: "2026-08-03T20:00:00.000Z",
+      }),
+    ).toMatchObject({ networkClass: "home", revision: 4 });
+  });
+
+  it("rejects duplicate, non-canonical, excessive, and raw track preferences", () => {
+    expect(
+      playbackPreferencesUpdateRequestSchema.safeParse({
+        expectedRevision: 0,
+        preferences: {
+          ...DEFAULT_PLAYBACK_PREFERENCES,
+          audio: { languages: ["en", "en"], preferOriginalLanguage: true },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      playbackPreferencesUpdateRequestSchema.safeParse({
+        expectedRevision: 0,
+        preferences: {
+          ...DEFAULT_PLAYBACK_PREFERENCES,
+          subtitles: {
+            ...DEFAULT_PLAYBACK_PREFERENCES.subtitles,
+            languages: ["EN-us"],
+            streamIndex: 4,
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      playbackPreferencesUpdateRequestSchema.safeParse({
+        expectedRevision: 0,
+        preferences: {
+          ...DEFAULT_PLAYBACK_PREFERENCES,
+          quality: {
+            ...DEFAULT_PLAYBACK_PREFERENCES.quality,
+            remoteMaxBitrate: 1_000_000,
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("publishes strict route schemas for preference reads and writes", () => {
+    expect(playbackPreferencesResponseJsonSchema).toMatchObject({
+      additionalProperties: false,
+      type: "object",
+    });
+    expect(playbackPreferencesUpdateRequestJsonSchema).toMatchObject({
+      additionalProperties: false,
+      type: "object",
+    });
   });
 });
