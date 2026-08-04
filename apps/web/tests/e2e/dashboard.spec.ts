@@ -686,7 +686,17 @@ test("request composer delegates a bounded request through the verified session"
   expect(await page.evaluate(() => document.documentElement.scrollTop)).toBe(
     rootScrollBeforeSubmission,
   );
-  expect(capture.body).toEqual({ is4k: false, kind: "movie", tmdbId: 603 });
+  expect(capture.body).toEqual({
+    is4k: false,
+    kind: "movie",
+    routing: {
+      destination: mediaRequestRoutingReference("radarr-primary"),
+      languageProfile: null,
+      qualityProfile: mediaRequestRoutingReference("quality-balanced"),
+      rootFolder: mediaRequestRoutingReference("root-cinema"),
+    },
+    tmdbId: 603,
+  });
   expect(capture.csrfToken).toBe(mediaRequestCsrfToken);
   expect(capture.idempotencyKey).toMatch(/^media-[0-9a-f-]{36}$/u);
   expect(JSON.stringify(capture.body)).not.toContain("userId");
@@ -708,13 +718,13 @@ test("request composer delegates opaque advanced routing without exposing storag
   await page.getByRole("combobox").fill("matrix");
   await page.getByRole("button", { name: "Request The Matrix" }).click();
   const composer = page.getByRole("dialog", { name: "Compose request" });
+  await composer
+    .getByRole("combobox", { name: "Quality profile", exact: true })
+    .selectOption(mediaRequestRoutingReference("quality-remux"));
   await composer.getByText("Advanced routing").click();
   await expect(composer.getByRole("combobox", { name: /Destination/i })).toHaveValue(
     mediaRequestRoutingReference("radarr-primary"),
   );
-  await composer
-    .getByRole("combobox", { name: /Quality profile/i })
-    .selectOption(mediaRequestRoutingReference("quality-remux"));
   await composer
     .getByRole("combobox", { name: /Root folder/i })
     .selectOption(mediaRequestRoutingReference("root-archive"));

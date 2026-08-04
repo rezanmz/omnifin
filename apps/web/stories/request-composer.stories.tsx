@@ -126,15 +126,31 @@ function client(
       tmdbId: input.tmdbId,
     },
   }),
-  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) => ({
-    ...seriesRoutingOptions,
-    destinations: seriesRoutingOptions.destinations.map((destination) => ({
-      ...destination,
-      service: kind === "movie" ? "radarr" : "sonarr",
-    })),
-    is4k,
-    kind,
-  }),
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) => {
+    const dimension = is4k ? "-4k" : "";
+    return {
+      ...seriesRoutingOptions,
+      destinations: seriesRoutingOptions.destinations.map((destination) => ({
+        ...destination,
+        id: routingReference(`destination${dimension}`),
+        languageProfiles: destination.languageProfiles.map((profile, index) => ({
+          ...profile,
+          id: routingReference(`language-${index + 1}${dimension}`),
+        })),
+        qualityProfiles: destination.qualityProfiles.map((profile, index) => ({
+          ...profile,
+          id: routingReference(`quality-${index + 1}${dimension}`),
+        })),
+        rootFolders: destination.rootFolders.map((folder, index) => ({
+          ...folder,
+          id: routingReference(`root-${index + 1}${dimension}`),
+        })),
+        service: kind === "movie" ? "radarr" : "sonarr",
+      })),
+      is4k,
+      kind,
+    };
+  },
 ): MediaRequestClient {
   return { create, loadEligibility, loadRoutingOptions };
 }
@@ -178,16 +194,19 @@ export const AdvancedRouting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => expect(canvas.getByText("Mina’s Jellyfin")).toBeVisible());
+    await waitFor(() =>
+      expect(canvas.getByRole("combobox", { name: "Quality profile" })).toBeEnabled(),
+    );
+    await userEvent.selectOptions(canvas.getByRole("combobox", { name: "Quality profile" }), [
+      routingReference("quality-2"),
+    ]);
     await userEvent.click(canvas.getByText("Advanced routing"));
     await waitFor(() =>
       expect(canvas.getByRole("combobox", { name: /Destination/i })).toHaveValue(
-        routingReference("sonarr-main"),
+        routingReference("destination"),
       ),
     );
-    await userEvent.selectOptions(canvas.getByRole("combobox", { name: /Quality profile/i }), [
-      routingReference("quality-remux"),
-    ]);
-    await expect(canvas.getByText("Series archive · Remux")).toBeVisible();
+    await expect(canvas.getByText("Remux · Series archive")).toBeVisible();
   },
 };
 

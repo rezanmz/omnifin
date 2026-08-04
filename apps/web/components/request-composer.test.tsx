@@ -119,6 +119,35 @@ const routingOptions: MediaRequestRoutingOptionsResponse = {
   kind: "series",
 };
 
+function routingOptionsFor(
+  kind: "movie" | "series",
+  is4k: boolean,
+): MediaRequestRoutingOptionsResponse {
+  const dimension = is4k ? "-4k" : "";
+  return {
+    ...routingOptions,
+    destinations: routingOptions.destinations.map((destination) => ({
+      ...destination,
+      id: routingReference(`destination${dimension}`),
+      languageProfiles: destination.languageProfiles.map((profile, index) => ({
+        ...profile,
+        id: routingReference(`language-${index + 1}${dimension}`),
+      })),
+      qualityProfiles: destination.qualityProfiles.map((profile, index) => ({
+        ...profile,
+        id: routingReference(`quality-${index + 1}${dimension}`),
+      })),
+      rootFolders: destination.rootFolders.map((folder, index) => ({
+        ...folder,
+        id: routingReference(`root-${index + 1}${dimension}`),
+      })),
+      service: kind === "movie" ? "radarr" : "sonarr",
+    })),
+    is4k,
+    kind,
+  };
+}
+
 function response(input: {
   is4k: boolean;
   kind: "movie" | "series";
@@ -145,15 +174,8 @@ function client(
     }),
   }),
   loadEligibility: MediaRequestClient["loadEligibility"] = async () => eligibility,
-  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) => ({
-    ...routingOptions,
-    destinations: routingOptions.destinations.map((destination) => ({
-      ...destination,
-      service: kind === "movie" ? "radarr" : "sonarr",
-    })),
-    is4k,
-    kind,
-  }),
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) =>
+    routingOptionsFor(kind, is4k),
 ): MediaRequestClient {
   return { create, loadEligibility, loadRoutingOptions };
 }
@@ -205,7 +227,10 @@ describe("request composer", () => {
     );
 
     expect(await screen.findByText("Mina Jellyfin")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /4K/i }));
+    await screen.findByRole("option", { name: /Balanced.*4K route/i });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Quality profile" }), [
+      routingReference("quality-1-4k"),
+    ]);
     await user.click(screen.getByRole("button", { name: /Specific/i }));
     const seasonInput = screen.getByRole("spinbutton", { name: "Season number" });
     await user.clear(seasonInput);
@@ -218,7 +243,18 @@ describe("request composer", () => {
 
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(
-        { is4k: true, kind: "series", seasons: [2, 4], tmdbId: 1396 },
+        {
+          is4k: true,
+          kind: "series",
+          routing: {
+            destination: routingReference("destination-4k"),
+            languageProfile: routingReference("language-1-4k"),
+            qualityProfile: routingReference("quality-1-4k"),
+            rootFolder: routingReference("root-1-4k"),
+          },
+          seasons: [2, 4],
+          tmdbId: 1396,
+        },
         expect.objectContaining({
           csrfToken,
           idempotencyKey: expect.stringMatching(/^media-/u),
@@ -243,8 +279,8 @@ describe("request composer", () => {
         tmdbId: input.tmdbId,
       }),
     }));
-    const loadRoutingOptions = vi.fn<MediaRequestClient["loadRoutingOptions"]>(
-      async () => routingOptions,
+    const loadRoutingOptions = vi.fn<MediaRequestClient["loadRoutingOptions"]>(async (kind, is4k) =>
+      routingOptionsFor(kind, is4k),
     );
     const user = userEvent.setup();
     render(
@@ -257,36 +293,117 @@ describe("request composer", () => {
     );
 
     await screen.findByText("Mina Jellyfin");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Quality profile" }), [
+      routingReference("quality-2"),
+    ]);
     await user.click(screen.getByText("Advanced routing"));
     expect(await screen.findByRole("combobox", { name: /Destination/i })).toHaveValue(
-      routingReference("sonarr-main"),
+      routingReference("destination"),
     );
-    await user.selectOptions(screen.getByRole("combobox", { name: /Quality profile/i }), [
-      routingReference("quality-remux"),
-    ]);
     await user.selectOptions(screen.getByRole("combobox", { name: /Root folder/i }), [
-      routingReference("root-archive"),
+      routingReference("root-2"),
     ]);
     await user.selectOptions(screen.getByRole("combobox", { name: /Language profile/i }), [
-      routingReference("language-english"),
+      routingReference("language-2"),
     ]);
     await user.click(screen.getByRole("button", { name: /Send request/i }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(loadRoutingOptions).toHaveBeenCalledWith("series", false, expect.any(AbortSignal));
+    expect(loadRoutingOptions).toHaveBeenCalledWith("series", true, expect.any(AbortSignal));
     expect(create.mock.calls[0]?.[0]).toEqual({
       is4k: false,
       kind: "series",
       routing: {
-        destination: routingReference("sonarr-main"),
-        languageProfile: routingReference("language-english"),
-        qualityProfile: routingReference("quality-remux"),
-        rootFolder: routingReference("root-archive"),
+        destination: routingReference("destination"),
+        languageProfile: routingReference("language-2"),
+        qualityProfile: routingReference("quality-2"),
+        rootFolder: routingReference("root-2"),
       },
       seasons: "all",
       tmdbId: 1396,
     });
     expect(JSON.stringify(create.mock.calls[0]?.[0])).not.toContain("/srv/");
+  });
+
+  it("keeps healthy profiles usable when one routing dimension is unavailable", async () => {
+    const create = vi.fn<MediaRequestClient["create"]>(async (input) => ({
+      replayed: false,
+      request: response({
+        is4k: input.is4k,
+        kind: input.kind,
+        seasons: null,
+        tmdbId: input.tmdbId,
+      }),
+    }));
+    const loadRoutingOptions = vi.fn<MediaRequestClient["loadRoutingOptions"]>(
+      async (kind, is4k) => {
+        if (is4k) throw new Error("4K destination unavailable");
+        return routingOptionsFor(kind, false);
+      },
+    );
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(create, undefined, loadRoutingOptions)}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    expect(await screen.findByRole("option", { name: /Balanced.*Series archive/i })).toBeVisible();
+    expect(screen.queryByRole("option", { name: /4K route/i })).not.toBeInTheDocument();
+    await user.click(screen.getByText("Advanced routing"));
+    expect(screen.getByText(/4K profiles could not be read/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Send request/i }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      is4k: false,
+      routing: { qualityProfile: routingReference("quality-1") },
+    });
+  });
+
+  it("disambiguates duplicate profile and destination labels without changing opaque values", async () => {
+    const duplicateOptions = routingOptionsFor("movie", false);
+    const first = duplicateOptions.destinations[0];
+    if (!first) throw new Error("The routing fixture needs a destination.");
+    const duplicateDestination = {
+      ...first,
+      id: routingReference("destination-secondary"),
+      languageProfiles: first.languageProfiles.map((profile, index) => ({
+        ...profile,
+        id: routingReference(`language-secondary-${index + 1}`),
+      })),
+      qualityProfiles: first.qualityProfiles.map((profile, index) => ({
+        ...profile,
+        id: routingReference(`quality-secondary-${index + 1}`),
+      })),
+      rootFolders: first.rootFolders.map((folder, index) => ({
+        ...folder,
+        id: routingReference(`root-secondary-${index + 1}`),
+      })),
+    };
+    render(
+      <RequestComposer
+        client={client(undefined, undefined, async (kind, is4k) =>
+          is4k
+            ? { ...routingOptionsFor(kind, true), destinations: [] }
+            : { ...duplicateOptions, destinations: [first, duplicateDestination] },
+        )}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    expect(
+      await screen.findByRole("option", { name: /Balanced.*Series archive.*option 1/i }),
+    ).toHaveValue(routingReference("quality-1"));
+    expect(screen.getByRole("option", { name: /Balanced.*Series archive.*option 2/i })).toHaveValue(
+      routingReference("quality-secondary-1"),
+    );
   });
 
   it("preserves the idempotency key when a network outcome is ambiguous", async () => {
@@ -347,7 +464,7 @@ describe("request composer", () => {
       />,
     );
 
-    expect(await screen.findByText("Automatic route unavailable")).toBeVisible();
+    expect(await screen.findByText("Profile route unavailable")).toBeVisible();
     expect(screen.getByRole("button", { name: /Send request/i })).toBeDisabled();
     expect(create).not.toHaveBeenCalled();
   });

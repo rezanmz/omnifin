@@ -363,6 +363,79 @@
   text-transform: uppercase;
 }
 
+.request-composer__profile-choice {
+  align-items: center;
+  background:
+    radial-gradient(ellipse at 9% 0%, var(--glass-specular), transparent 46%),
+    color-mix(in srgb, var(--glass-strong) 70%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 20px;
+  box-shadow:
+    inset 1px 1px 0 var(--glass-specular),
+    inset -1px -1px 0 var(--glass-edge-shadow);
+  display: grid;
+  gap: 6px 11px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 74px;
+  padding: 10px 12px;
+}
+
+.request-composer__profile-choice > svg {
+  color: var(--acid);
+  height: 19px;
+  width: 19px;
+}
+
+.request-composer__profile-choice label {
+  min-width: 0;
+}
+
+.request-composer__profile-choice select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--paper-3) 50%) calc(100% - 16px) 50% / 5px 5px
+      no-repeat,
+    linear-gradient(135deg, var(--paper-3) 50%, transparent 50%) calc(100% - 11px) 50% / 5px 5px
+      no-repeat,
+    color-mix(in srgb, var(--ink-0) 24%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  color: var(--paper-0);
+  font: inherit;
+  font-size: 0.73rem;
+  font-weight: 620;
+  min-height: 44px;
+  padding: 0 34px 0 11px;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    box-shadow 180ms ease-out;
+  width: 100%;
+}
+
+.request-composer__profile-choice select:hover:not(:disabled) {
+  background-color: var(--fill-hover);
+  border-color: color-mix(in srgb, var(--acid) 24%, var(--line-soft));
+}
+
+.request-composer__profile-choice select:focus-visible {
+  border-color: color-mix(in srgb, var(--acid) 58%, var(--line-soft));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acid) 17%, transparent);
+  outline: none;
+}
+
+.request-composer__profile-choice select:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.request-composer__profile-choice > small {
+  color: var(--paper-3);
+  font-size: 0.59rem;
+  grid-column: 2;
+  line-height: 1.45;
+}
+
 .request-composer__segments {
   background: color-mix(in srgb, var(--ink-0) 15%, transparent);
   border: 1px solid var(--line-soft);

@@ -110,8 +110,30 @@ export async function mockMediaRequestSession(page: Page) {
 
 export async function mockMediaRequestRouting(page: Page) {
   await page.route("**/api/requests/routing-options?*", async (route) => {
+    const is4k = new URL(route.request().url()).searchParams.get("is4k") === "true";
+    const dimension = is4k ? "-4k" : "";
     await route.fulfill({
-      body: JSON.stringify(mediaRequestRoutingOptions),
+      body: JSON.stringify({
+        ...mediaRequestRoutingOptions,
+        destinations: mediaRequestRoutingOptions.destinations.map((destination) => ({
+          ...destination,
+          id: mediaRequestRoutingReference(`radarr-primary${dimension}`),
+          languageProfiles: [],
+          qualityProfiles: destination.qualityProfiles.map((profile, index) => ({
+            ...profile,
+            id: mediaRequestRoutingReference(
+              `${index === 0 ? "quality-balanced" : "quality-remux"}${dimension}`,
+            ),
+          })),
+          rootFolders: destination.rootFolders.map((folder, index) => ({
+            ...folder,
+            id: mediaRequestRoutingReference(
+              `${index === 0 ? "root-cinema" : "root-archive"}${dimension}`,
+            ),
+          })),
+        })),
+        is4k,
+      }),
       contentType: "application/json",
       status: 200,
     });
