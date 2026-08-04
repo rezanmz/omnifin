@@ -18,6 +18,10 @@ import {
   secretLeakDetected,
   selectPrivateHost,
 } from "./authentik/fixture.mjs";
+import {
+  forwardedRequestHeaders,
+  forwardedResponseHeaders,
+} from "./authentik/tls-proxy-headers.mjs";
 
 const composeSource = readFileSync(new URL("./authentik/compose.yaml", import.meta.url), "utf8");
 const blueprintSource = readFileSync(
@@ -166,13 +170,59 @@ test("detects generated secrets before runtime logs can be retained", () => {
   assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
 });
 
-test("forwards only allowlisted headers through the Authentik TLS fixture", () => {
-  assert.match(proxySource, /forwardedRequestHeaders/u);
-  assert.match(proxySource, /forwardResponseHeaders/u);
-  assert.match(proxySource, /headers\["x-csrftoken"\]/u);
+test("forwards end-to-end Authentik headers without trusting proxy metadata", () => {
+  const headers = forwardedRequestHeaders(
+    {
+      connection: "keep-alive, x-remove-me",
+      cookie: "authentik_session=fixture",
+      forwarded: "for=203.0.113.10",
+      host: "attacker.invalid",
+      "sec-ch-ua": '"Chromium";v="124"',
+      "x-authentik-csrf": "fixture-csrf",
+      "x-forwarded-for": "203.0.113.10",
+      "x-remove-me": "connection-scoped",
+    },
+    "192.168.20.5:9443",
+    "9443",
+    "192.168.20.7",
+  );
+
+  assert.equal(headers instanceof Map, true);
+  assert.equal(headers.get("cookie"), "authentik_session=fixture");
+  assert.equal(headers.get("sec-ch-ua"), '"Chromium";v="124"');
+  assert.equal(headers.get("x-authentik-csrf"), "fixture-csrf");
+  assert.equal(headers.get("host"), "192.168.20.5:9443");
+  assert.equal(headers.get("x-forwarded-for"), "192.168.20.7");
+  assert.equal(headers.get("x-forwarded-host"), "192.168.20.5:9443");
+  assert.equal(headers.get("x-forwarded-port"), "9443");
+  assert.equal(headers.get("x-forwarded-proto"), "https");
+  assert.equal(headers.has("connection"), false);
+  assert.equal(headers.has("forwarded"), false);
+  assert.equal(headers.has("x-remove-me"), false);
+});
+
+test("forwards arbitrary upstream response headers without hop-by-hop state", () => {
+  const headers = forwardedResponseHeaders({
+    connection: "x-remove-me",
+    "content-security-policy": "default-src 'self'",
+    "set-cookie": ["authentik_session=fixture; Secure"],
+    "x-authentik-meta": "fixture",
+    "x-remove-me": "connection-scoped",
+  });
+
+  assert.equal(headers instanceof Map, true);
+  assert.equal(headers.get("content-security-policy"), "default-src 'self'");
+  assert.deepEqual(headers.get("set-cookie"), ["authentik_session=fixture; Secure"]);
+  assert.equal(headers.get("x-authentik-meta"), "fixture");
+  assert.equal(headers.has("connection"), false);
+  assert.equal(headers.has("x-remove-me"), false);
+});
+
+test("uses Map-based proxy headers without forwarding upstream reason phrases", () => {
+  assert.match(proxySource, /upstream\.setHeaders/u);
+  assert.match(proxySource, /response\.setHeaders/u);
   assert.match(proxySource, /response\.statusCode/u);
   assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
-  assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|filtered\[name\]/u);
 });
 
 test("browser failure diagnostics are restricted to allowlisted stage identifiers", () => {
