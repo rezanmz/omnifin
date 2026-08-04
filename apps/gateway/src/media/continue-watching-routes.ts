@@ -363,7 +363,11 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       request.raw.once("aborted", abort);
       try {
         return libraryRemovalPreviewSchema.parse(
-          await service.previewLibraryRemoval(referenceId, { principal }, controller.signal),
+          await service.previewLibraryRemoval(
+            referenceId,
+            { ipAddress: request.ip, principal, requestId: request.id },
+            controller.signal,
+          ),
         );
       } catch (error) {
         if (error instanceof LibraryRemovalPreviewError) {

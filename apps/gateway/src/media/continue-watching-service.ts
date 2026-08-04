@@ -68,6 +68,8 @@ const STALE_USER_MEDIA_STATE_OPERATION_MS = 5 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_ID_PATTERN = /^user_media_state_[A-Za-z0-9_-]{22}$/u;
 const LIBRARY_REMOVAL_PREVIEW_TTL_MS = 5 * 60 * 1_000;
+const MAX_LIBRARY_REMOVAL_PREVIEWS_PER_USER = 20;
+const MAX_LIBRARY_REMOVAL_PREVIEW_BYTES = 65_536;
 const libraryPersonImagePayloadSchema = z.strictObject({
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
   version: z.literal(1),
@@ -104,6 +106,31 @@ const librarySeasonCursorPayloadSchema = z.strictObject({
   version: z.literal(1),
 });
 type LibrarySeasonCursorPayload = z.infer<typeof librarySeasonCursorPayloadSchema>;
+
+const storedLibraryRemovalPreviewSchema = z.strictObject({
+  itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
+  linkId: z.string().regex(IDENTIFIER_PATTERN),
+  linkRevision: z.int().nonnegative().max(2_147_483_647),
+  referenceId: z.string().regex(/^media_[A-Za-z0-9_-]{22}$/u),
+  schemaVersion: z.literal(1),
+  source: z.discriminatedUnion("kind", [
+    z.strictObject({
+      connectorId: z.string().regex(IDENTIFIER_PATTERN),
+      kind: z.literal("managed"),
+      mediaId: z.int().positive().max(2_147_483_647),
+      monitored: z.boolean(),
+    }),
+    z.strictObject({ kind: z.literal("unmanaged") }),
+  ]),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  userId: z.string().regex(IDENTIFIER_PATTERN),
+  year: z.int().min(1870).max(2200).nullable(),
+});
 
 const viewingHistoryCursorPayloadSchema = z.strictObject({
   afterItemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
@@ -145,6 +172,10 @@ interface LibraryRemovalRadarrRow {
   id: string;
   insecureHttpApproved: number;
   tlsPolicy: string;
+}
+
+interface LibraryRemovalManagedMovie extends RadarrLibraryMovieOwnership {
+  connectorId: string;
 }
 
 interface StoredConnectorSecrets {
@@ -209,12 +240,7 @@ export interface ContinueWatchingDependencies {
       providerIds: { imdb: string | null; tmdb: number | null };
     },
     signal?: AbortSignal,
-  ) => Promise<{
-    hasFile: boolean;
-    mediaId: number;
-    monitored: boolean;
-    sizeBytes: number | null;
-  } | null>;
+  ) => Promise<LibraryRemovalManagedMovie | null>;
 }
 
 export class ContinueWatchingError extends Error {
@@ -1017,7 +1043,9 @@ export class ContinueWatchingService {
         storageReclamation: "may_be_delayed" as const,
       };
       const managed = ownership !== null;
-      return libraryRemovalPreviewSchema.parse({
+      if (principal.userId === null) throw new LibraryRemovalPreviewError("unavailable");
+      const previewId = this.#libraryRemovalPreviewId();
+      const preview = libraryRemovalPreviewSchema.parse({
         confirmation: {
           expectedTitle: result.item.title,
           kind: "exact_title",
@@ -1066,7 +1094,7 @@ export class ContinueWatchingService {
                 mode: "delete_unmanaged_files",
               },
             ],
-        previewId: `library_removal_preview_${this.#createRemovalPreviewToken()}`,
+        previewId,
         referenceId,
         sizeBytes: ownership?.sizeBytes ?? result.removal.sizeBytes,
         source: managed
@@ -1075,6 +1103,32 @@ export class ContinueWatchingService {
         title: result.item.title,
         year: result.item.year,
       });
+      this.#storeLibraryRemovalPreview(
+        preview,
+        {
+          itemId: result.item.externalId,
+          linkId: row.linkId,
+          linkRevision: row.linkRevision,
+          referenceId,
+          schemaVersion: 1,
+          source:
+            ownership === null
+              ? { kind: "unmanaged" }
+              : {
+                  connectorId: ownership.connectorId,
+                  kind: "managed",
+                  mediaId: ownership.mediaId,
+                  monitored: ownership.monitored,
+                },
+          title: result.item.title,
+          userId: principal.userId,
+          year: result.item.year,
+        },
+        row,
+        context,
+        generatedAt.getTime(),
+      );
+      return preview;
     } catch (error) {
       if (error instanceof LibraryRemovalPreviewError) throw error;
       throw new LibraryRemovalPreviewError("unavailable", { cause: error });
@@ -1571,7 +1625,7 @@ export class ContinueWatchingService {
   async #resolveManagedMovieFromConnectors(
     providerIds: { imdb: string | null; tmdb: number | null },
     signal?: AbortSignal,
-  ): Promise<RadarrLibraryMovieOwnership | null> {
+  ): Promise<LibraryRemovalManagedMovie | null> {
     const rows = this.#database.sqlite
       .prepare(
         `select id, display_name as displayName, base_url as baseUrl, enabled,
@@ -1614,12 +1668,113 @@ export class ContinueWatchingService {
           tlsPolicy: row.tlsPolicy,
           ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
         });
-        return adapter.resolveLibraryMovie(providerIds, signal);
+        const ownership = await adapter.resolveLibraryMovie(providerIds, signal);
+        return ownership === null ? null : { ...ownership, connectorId: row.id };
       }),
     );
-    const owned = matches.filter((match): match is RadarrLibraryMovieOwnership => match !== null);
+    const owned = matches.filter((match): match is LibraryRemovalManagedMovie => match !== null);
     if (owned.length > 1) throw new ContinueWatchingConfigurationError("invalid");
     return owned[0] ?? null;
+  }
+
+  #libraryRemovalPreviewId() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `library_removal_preview_${this.#createRemovalPreviewToken()}`;
+      if (!/^library_removal_preview_[A-Za-z0-9_-]{22}$/u.test(candidate)) {
+        throw new LibraryRemovalPreviewError("unavailable");
+      }
+      const exists = this.#database.sqlite
+        .prepare("select 1 from library_removal_previews where id = ? limit 1")
+        .get(candidate);
+      if (!exists) return candidate;
+    }
+    throw new LibraryRemovalPreviewError("unavailable");
+  }
+
+  #storeLibraryRemovalPreview(
+    preview: LibraryRemovalPreview,
+    rawPayload: z.input<typeof storedLibraryRemovalPreviewSchema>,
+    row: ContinueWatchingSourceRow,
+    context: ContinueWatchingContext,
+    now: number,
+  ) {
+    const payload = storedLibraryRemovalPreviewSchema.parse(rawPayload);
+    if (context.principal.userId !== payload.userId) {
+      throw new LibraryRemovalPreviewError("unavailable");
+    }
+    const encryptedPayload = this.#cipher.encrypt(
+      JSON.stringify(payload),
+      `library_removal_preview:${preview.previewId}`,
+    );
+    if (Buffer.byteLength(encryptedPayload, "utf8") > MAX_LIBRARY_REMOVAL_PREVIEW_BYTES) {
+      throw new LibraryRemovalPreviewError("unavailable");
+    }
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          this.#database.sqlite
+            .prepare("delete from library_removal_previews where expires_at <= ?")
+            .run(now);
+          const { count } = this.#database.sqlite
+            .prepare(
+              `select count(*) as count
+                 from library_removal_previews
+                where user_id = ? and consumed_at is null`,
+            )
+            .get(payload.userId) as { count: number };
+          if (count >= MAX_LIBRARY_REMOVAL_PREVIEWS_PER_USER) {
+            throw new LibraryRemovalPreviewError("unavailable");
+          }
+          this.#database.sqlite
+            .prepare(
+              `insert into library_removal_previews (
+                 id, user_id, session_id, service_identity_link_id, link_revision,
+                 media_reference_id, encrypted_payload, expires_at, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              preview.previewId,
+              payload.userId,
+              context.principal.sessionId,
+              row.linkId,
+              row.linkRevision,
+              preview.referenceId,
+              encryptedPayload,
+              Date.parse(preview.expiresAt),
+              now,
+              now,
+            );
+          this.#database.sqlite
+            .prepare(
+              `insert into audit_events (
+                 id, actor_user_id, actor_session_id, actor_auth_method,
+                 event_type, outcome, target_type, target_id, request_id,
+                 metadata_json, ip_hash, created_at
+               ) values (?, ?, ?, ?, 'library.removal.preview.created', 'success',
+                         'library_removal_preview', ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              this.#userMediaStateAuditId(),
+              payload.userId,
+              context.principal.sessionId,
+              context.principal.authenticationMethod.kind,
+              preview.previewId,
+              context.requestId ?? null,
+              JSON.stringify({
+                optionCount: preview.options.length,
+                source: preview.source.service,
+              }),
+              context.ipAddress
+                ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+                : null,
+              now,
+            );
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof LibraryRemovalPreviewError) throw error;
+      throw new LibraryRemovalPreviewError("unavailable", { cause: error });
+    }
   }
 
   #radarrSecrets(row: LibraryRemovalRadarrRow) {
