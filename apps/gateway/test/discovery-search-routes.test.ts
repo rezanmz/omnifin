@@ -8,6 +8,7 @@ import {
   discoveryBrowseResponseSchema,
   discoveryFeedResponseSchema,
   type DiscoveryFeedRailKind,
+  discoveryConnectedActionsResponseSchema,
   discoveryMediaDetailResponseSchema,
   type DiscoveryMediaDetailResponse,
   discoveryPersonDetailResponseSchema,
@@ -22,6 +23,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
+import type { DiscoverySearchDependencies } from "../src/discovery/search-service.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
@@ -217,6 +219,7 @@ async function harness(
     }),
   ),
   personCreditsImplementation = vi.fn(async () => normalizedPersonCreditsResponse),
+  resolveConnectedAction?: NonNullable<DiscoverySearchDependencies["resolveConnectedAction"]>,
 ) {
   const config = testConfig();
   const detailImplementation = vi.fn(async () => ({
@@ -236,6 +239,7 @@ async function harness(
         readDiscoveryArtwork: artworkImplementation,
         search: searchImplementation,
       }),
+      ...(resolveConnectedAction ? { resolveConnectedAction } : {}),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -295,6 +299,15 @@ async function harness(
         status: "active",
         updatedAt: now,
       },
+      {
+        createdAt: now,
+        displayName: "Operator",
+        id: "operator-user",
+        role: "operator",
+        roleSource: "manual",
+        status: "active",
+        updatedAt: now,
+      },
     ])
     .run();
   app.database.db
@@ -334,6 +347,23 @@ async function harness(
         updatedAt: now,
         userId: "other-user",
       },
+      {
+        connectorId: "jellyfin-main",
+        createdAt: now,
+        deviceId: "operator-device",
+        encryptedAccessToken: "v2.fixture-operator-access-token",
+        externalDisplayName: "Operator",
+        externalServerId: "jellyfin-server",
+        externalUserId: "operator-external",
+        externalUsername: "operator",
+        healthState: "linked",
+        id: "operator-link",
+        lastVerifiedAt: now,
+        service: "jellyfin",
+        tokenCreatedAt: now,
+        updatedAt: now,
+        userId: "operator-user",
+      },
     ])
     .run();
   const session = app.sessionService.createSession({
@@ -345,6 +375,13 @@ async function harness(
   });
   const recovery = app.sessionService.createSession({
     attribution: { authMethod: "recovery" },
+  });
+  const operatorSession = app.sessionService.createSession({
+    attribution: {
+      authMethod: "jellyfin",
+      serviceIdentityLinkId: "operator-link",
+      userId: "operator-user",
+    },
   });
   const otherSession = app.sessionService.createSession({
     attribution: {
@@ -359,6 +396,7 @@ async function harness(
     browseImplementation,
     detailImplementation,
     discoverImplementation,
+    operatorSession,
     otherSession,
     personDetailImplementation,
     personCreditsImplementation,
@@ -541,6 +579,163 @@ describe("discovery search routes", () => {
       });
       expect(response.statusCode).toBe(400);
       expect(detailImplementation).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reauthorizes connected-service navigation and redirects without a referrer", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://television.example.test/sonarr/",
+      service: "sonarr" as const,
+      titleSlug: "breaking-bad",
+    }));
+    const { app, operatorSession, session } = await harness(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      resolveConnectedAction,
+    );
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions/sonarr",
+      });
+      expect(anonymous.statusCode).toBe(401);
+
+      const viewer = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions/sonarr",
+      });
+      expect(viewer.statusCode).toBe(403);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+
+      const wrongService = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions/radarr",
+      });
+      expect(wrongService.statusCode).toBe(404);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+
+      const detail = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396",
+      });
+      expect(detail.statusCode, detail.body).toBe(200);
+      expect(discoveryMediaDetailResponseSchema.parse(detail.json())).toMatchObject({
+        item: { kind: "series", tmdbId: 1396 },
+      });
+
+      const actions = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions",
+      });
+      expect(actions.statusCode, actions.body).toBe(200);
+      expect(discoveryConnectedActionsResponseSchema.parse(actions.json())).toEqual({
+        actions: [
+          {
+            href: "/v1/discovery/details/series/1396/actions/sonarr",
+            kind: "service_navigation",
+            label: "Open in Sonarr",
+            service: "sonarr",
+          },
+        ],
+        generatedAt: now.toISOString(),
+        kind: "series",
+        tmdbId: 1396,
+      });
+      expect(actions.body).not.toContain("television.example.test");
+      expect(detail.body).not.toContain("television.example.test");
+      resolveConnectedAction.mockClear();
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions/sonarr",
+      });
+      expect(response.statusCode, response.body).toBe(303);
+      expect(response.headers.location).toBe(
+        "https://television.example.test/sonarr/series/breaking-bad",
+      );
+      expect(response.headers["referrer-policy"]).toBe("no-referrer");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(resolveConnectedAction).toHaveBeenCalledWith(
+        { kind: "series", providerIds: { tmdb: 1396, tvdb: null } },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a sanitized failure when connected-service navigation is unavailable", async () => {
+    const { app, operatorSession } = await harness(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        throw new Error("private connector diagnostic");
+      },
+    );
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions/sonarr",
+      });
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error).toMatchObject({
+        code: "discovery_connected_action_unavailable",
+        message: "The connected service is temporarily unavailable.",
+      });
+      expect(response.body).not.toContain("private connector diagnostic");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps details available when connected-service resolution degrades", async () => {
+    const { app, operatorSession } = await harness(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        throw new Error("private connector diagnostic");
+      },
+    );
+    try {
+      const detail = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396",
+      });
+      expect(detail.statusCode, detail.body).toBe(200);
+
+      const actions = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operatorSession.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/details/series/1396/actions",
+      });
+      expect(actions.statusCode, actions.body).toBe(200);
+      expect(discoveryConnectedActionsResponseSchema.parse(actions.json())).toMatchObject({
+        actions: [],
+        kind: "series",
+        tmdbId: 1396,
+      });
+      expect(actions.body).not.toContain("private connector diagnostic");
     } finally {
       await app.close();
     }

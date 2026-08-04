@@ -441,6 +441,11 @@ export const discoveryMediaDetailParamsSchema = z.strictObject({
 });
 export type DiscoveryMediaDetailParams = z.infer<typeof discoveryMediaDetailParamsSchema>;
 
+export const discoveryConnectedActionParamsSchema = discoveryMediaDetailParamsSchema.extend({
+  service: z.enum(["radarr", "sonarr"]),
+});
+export type DiscoveryConnectedActionParams = z.infer<typeof discoveryConnectedActionParamsSchema>;
+
 export const discoveryMediaDetailQuerySchema = z.strictObject({
   language: languageSchema.default("en"),
 });
@@ -600,6 +605,41 @@ export const discoveryMediaDetailSchema = z.discriminatedUnion("kind", [
   discoverySeriesDetailSchema,
 ]);
 export type DiscoveryMediaDetail = z.infer<typeof discoveryMediaDetailSchema>;
+
+export const discoveryConnectedActionSchema = z.strictObject({
+  href: z
+    .string()
+    .max(256)
+    .regex(
+      /^\/v1\/discovery\/details\/(?:movie|series)\/[1-9][0-9]{0,9}\/actions\/(?:radarr|sonarr)$/u,
+    ),
+  kind: z.literal("service_navigation"),
+  label: z.string().trim().min(1).max(80),
+  service: z.enum(["radarr", "sonarr"]),
+});
+export type DiscoveryConnectedAction = z.infer<typeof discoveryConnectedActionSchema>;
+
+export const discoveryConnectedActionsResponseSchema = z
+  .strictObject({
+    actions: z.array(discoveryConnectedActionSchema).max(1),
+    generatedAt: z.iso.datetime({ offset: true }),
+    kind: z.enum(["movie", "series"]),
+    tmdbId: z.number().int().positive().max(2_147_483_647),
+  })
+  .superRefine((response, context) => {
+    for (const [index, action] of response.actions.entries()) {
+      const expectedService = response.kind === "movie" ? "radarr" : "sonarr";
+      const expectedHref = `/v1/discovery/details/${response.kind}/${response.tmdbId}/actions/${expectedService}`;
+      if (action.service !== expectedService || action.href !== expectedHref) {
+        context.addIssue({
+          code: "custom",
+          message: "Connected discovery actions must match the exact title and service.",
+          path: ["actions", index],
+        });
+      }
+    }
+  });
+export type DiscoveryConnectedActionsResponse = z.infer<typeof discoveryConnectedActionsResponseSchema>;
 
 export const discoveryMediaDetailResponseSchema = z
   .strictObject({
@@ -770,4 +810,10 @@ export const discoveryPersonCreditsQueryJsonSchema = withoutSchemaDialect(
 );
 export const discoveryPersonCreditsResponseJsonSchema = withoutSchemaDialect(
   discoveryPersonCreditsResponseSchema,
+);
+export const discoveryConnectedActionParamsJsonSchema = withoutSchemaDialect(
+  discoveryConnectedActionParamsSchema,
+);
+export const discoveryConnectedActionsResponseJsonSchema = withoutSchemaDialect(
+  discoveryConnectedActionsResponseSchema,
 );

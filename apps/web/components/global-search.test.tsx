@@ -356,7 +356,17 @@ describe("global search", () => {
       <GlobalSearch
         client={client()}
         debounceMs={0}
-        detailClient={{ load }}
+        detailClient={{
+          load,
+          loadConnectedActions: vi.fn<DiscoveryMediaDetailClient["loadConnectedActions"]>(
+            async () => ({
+              actions: [],
+              generatedAt: "2026-07-28T20:00:00.000Z",
+              kind: "movie",
+              tmdbId: 603,
+            }),
+          ),
+        }}
         initialOpen
         initialQuery="matrix"
       />,

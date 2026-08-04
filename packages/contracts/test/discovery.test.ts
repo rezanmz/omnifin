@@ -5,6 +5,8 @@ import {
   discoveryBrowseQuerySchema,
   discoveryBrowseResponseJsonSchema,
   discoveryBrowseResponseSchema,
+  discoveryConnectedActionsResponseJsonSchema,
+  discoveryConnectedActionsResponseSchema,
   discoveryFeedQueryJsonSchema,
   discoveryFeedQuerySchema,
   discoveryFeedResponseJsonSchema,
@@ -406,6 +408,52 @@ describe("discovery contracts", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("binds connected-service navigation to the exact normalized title", () => {
+    const response = {
+      actions: [
+        {
+          href: "/v1/discovery/details/movie/603/actions/radarr",
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ],
+      generatedAt: "2026-07-28T20:00:00.000Z",
+      kind: "movie",
+      tmdbId: 603,
+    } as const;
+
+    expect(discoveryConnectedActionsResponseSchema.parse(response)).toEqual(response);
+    for (const actions of [
+      [{ ...response.actions[0], service: "sonarr" }],
+      [{ ...response.actions[0], href: "/v1/discovery/details/movie/604/actions/radarr" }],
+      [{ ...response.actions[0], href: "https://radarr.example.test/movie/the-matrix" }],
+      [response.actions[0], response.actions[0]],
+    ]) {
+      expect(
+        discoveryConnectedActionsResponseSchema.safeParse({ ...response, actions }).success,
+      ).toBe(false);
+    }
+    expect(
+      discoveryConnectedActionsResponseSchema.parse({
+        ...response,
+        kind: "series",
+        actions: [
+          {
+            ...response.actions[0],
+            href: "/v1/discovery/details/series/603/actions/sonarr",
+            service: "sonarr",
+          },
+        ],
+      }),
+    ).toMatchObject({ actions: [{ service: "sonarr" }] });
+    expect(discoveryConnectedActionsResponseJsonSchema).toMatchObject({
+      additionalProperties: false,
+      properties: { actions: { maxItems: 1 }, kind: { enum: ["movie", "series"] } },
+      type: "object",
+    });
   });
 
   it("rejects raw upstream fields and unbounded detail collections", () => {

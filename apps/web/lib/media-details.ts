@@ -1,4 +1,5 @@
 import type {
+  DiscoveryConnectedActionsResponse,
   DiscoveryMediaDetailParams,
   DiscoveryMediaDetailQuery,
   DiscoveryMediaDetailResponse,
@@ -92,6 +93,18 @@ function browserMediaDetail(response: DiscoveryMediaDetailResponse): DiscoveryMe
   };
 }
 
+function browserConnectedActions(
+  response: DiscoveryConnectedActionsResponse,
+): DiscoveryConnectedActionsResponse {
+  return {
+    ...response,
+    actions: response.actions.map((action) => ({
+      ...action,
+      href: action.href.replace(/^\/v1\//u, "/api/"),
+    })),
+  };
+}
+
 function browserPersonDetail(
   response: DiscoveryPersonDetailResponse,
 ): DiscoveryPersonDetailResponse {
@@ -124,6 +137,10 @@ export interface DiscoveryMediaDetailClient {
     query: DiscoveryMediaDetailQuery,
     signal?: AbortSignal,
   ): Promise<DiscoveryMediaDetailResponse>;
+  loadConnectedActions(
+    params: DiscoveryMediaDetailParams,
+    signal?: AbortSignal,
+  ): Promise<DiscoveryConnectedActionsResponse>;
 }
 
 export interface DiscoveryPersonDetailClient {
@@ -187,6 +204,55 @@ export const discoveryMediaDetailClient: DiscoveryMediaDetailClient = {
       );
     }
     return browserMediaDetail(parsed.data);
+  },
+  async loadConnectedActions(paramsInput, signal) {
+    const schemas = await contractSchemas();
+    const params = schemas.discovery.discoveryMediaDetailParamsSchema.parse(paramsInput);
+    let response: Response;
+    try {
+      response = await fetch(
+        `/api/discovery/details/${params.kind}/${params.tmdbId}/actions`,
+        {
+          cache: "no-store",
+          credentials: "same-origin",
+          ...(signal ? { signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new MediaDetailClientError(
+        "unavailable",
+        "service_unavailable",
+        "Connected service actions could not reach the gateway.",
+      );
+    }
+    if (!response.ok) throw await responseError(response);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new MediaDetailClientError(
+        "invalid_response",
+        "invalid_response",
+        "Connected service actions returned an unreadable response.",
+      );
+    }
+    const parsed = schemas.discovery.discoveryConnectedActionsResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new MediaDetailClientError(
+        "invalid_response",
+        "invalid_response",
+        "Connected service actions did not match the public contract.",
+      );
+    }
+    if (parsed.data.kind !== params.kind || parsed.data.tmdbId !== params.tmdbId) {
+      throw new MediaDetailClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned actions for a different discovery title.",
+      );
+    }
+    return browserConnectedActions(parsed.data);
   },
 };
 
