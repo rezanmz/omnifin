@@ -105,6 +105,9 @@ matrix.
 - Paired-user Jellyfin movie and series catalogue with bounded search, filters, sorting,
   encrypted pagination, protected artwork, responsive viewer states, and lazy theater playback
   (implemented; protected browser and live compatibility evidence pending)
+- Private Watch Later and personal lists for owned or requestable titles, plus paired-user Jellyfin
+  favorite synchronization (contract, privacy, and concurrency boundary designed; storage,
+  reconciliation, and interface implementation pending)
 - Player issue reporting plus a unified local/Seerr resolve and reopen workbench
   (implemented; protected live evidence pending)
 - Bazarr subtitle search and download (implemented with an isolated real-service embedded-subtitle

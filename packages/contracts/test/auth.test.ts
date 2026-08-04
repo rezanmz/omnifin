@@ -696,8 +696,10 @@ describe("authentication contracts", () => {
   it("keeps role permissions monotonic", () => {
     expect(ROLE_PERMISSIONS.viewer).toEqual(
       expect.arrayContaining([
+        "favorites.self.manage",
         "identities.self.manage",
         "playback.history.self.manage",
+        "saved.lists.self.manage",
         "sessions.self.revoke",
       ]),
     );
