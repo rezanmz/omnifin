@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/rezanmz/omnifin/compare/v0.9.0...v0.9.1) (2026-08-04)
+
+
+### Fixes
+
+* **gateway:** share media reference clock ([#276](https://github.com/rezanmz/omnifin/issues/276)) ([35cb375](https://github.com/rezanmz/omnifin/commit/35cb375bcb973fa4f4f89dcbd6942230e827d998))
+
 ## [0.9.0](https://github.com/rezanmz/omnifin/compare/v0.8.0...v0.9.0) (2026-08-04)
 
 
