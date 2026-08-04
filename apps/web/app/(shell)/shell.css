@@ -327,7 +327,7 @@
 .navigation-preview--mobile .mobile-navigation__item {
   align-items: center;
   border-radius: var(--radius-sm);
-  color: var(--paper-2);
+  color: var(--paper-1);
   display: flex;
   flex-direction: column;
   font-size: 0.65rem;
@@ -415,7 +415,7 @@
   .mobile-navigation__item {
     align-items: center;
     border-radius: var(--radius-sm);
-    color: var(--paper-2);
+    color: var(--paper-1);
     display: flex;
     flex-direction: column;
     font-size: 0.59rem;
