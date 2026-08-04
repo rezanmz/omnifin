@@ -39,6 +39,7 @@ const requiredTables = [
   "oidc_providers",
   "operational_failures",
   "playback_asset_handles",
+  "playback_preferences",
   "playback_sessions",
   "role_mappings",
   "saved_catalog_items",
@@ -272,6 +273,14 @@ const requiredColumns = {
     "last_used_at",
     "playback_session_id",
     "target_digest",
+  ],
+  playback_preferences: [
+    "created_at",
+    "preferences_json",
+    "revision",
+    "schema_version",
+    "updated_at",
+    "user_id",
   ],
   playback_sessions: [
     "encrypted_payload",
