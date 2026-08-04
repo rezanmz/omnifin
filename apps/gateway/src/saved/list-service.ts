@@ -1036,8 +1036,7 @@ export class SavedListService {
             tmdbId: target.payload.tmdbId,
           };
     const snapshot = {
-      availability:
-        target.payload.source === "jellyfin" ? "owned" : target.payload.availability,
+      availability: target.payload.source === "jellyfin" ? "owned" : target.payload.availability,
       artwork: target.payload.artwork,
       favorite: target.payload.favorite,
       kind: target.payload.kind,

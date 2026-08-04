@@ -15,9 +15,7 @@ import { SavedTargetService, type SavedTargetClient } from "../src/saved/target-
 const startedAt = new Date("2026-08-04T10:00:00.000Z");
 const privateItemId = "movie-upstream-private";
 
-function discoveryDetail(
-  overrides: Partial<DiscoveryMediaDetail> = {},
-): DiscoveryMediaDetail {
+function discoveryDetail(overrides: Partial<DiscoveryMediaDetail> = {}): DiscoveryMediaDetail {
   return {
     artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable",
@@ -325,9 +323,9 @@ describe("SavedTargetService", () => {
       title: "The Far Meridian",
       tmdbId: 603,
     });
-    expect(() => service.resolveOwned(issued.targetReferenceId, { principal: principal() })).toThrow(
-      expect.objectContaining({ reason: "not_found" }),
-    );
+    expect(() =>
+      service.resolveOwned(issued.targetReferenceId, { principal: principal() }),
+    ).toThrow(expect.objectContaining({ reason: "not_found" }));
     const row = database.sqlite
       .prepare("select encrypted_payload as encryptedPayload from saved_targets")
       .get() as { encryptedPayload: string };

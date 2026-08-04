@@ -241,9 +241,11 @@ describe("saved-list contracts", () => {
   });
 
   it("accepts only bounded discovery identities for request-free saving", () => {
-    expect(
-      savedDiscoveryTargetIssueRequestSchema.parse({ kind: "movie", tmdbId: 603 }),
-    ).toEqual({ kind: "movie", language: "en", tmdbId: 603 });
+    expect(savedDiscoveryTargetIssueRequestSchema.parse({ kind: "movie", tmdbId: 603 })).toEqual({
+      kind: "movie",
+      language: "en",
+      tmdbId: 603,
+    });
     expect(
       savedDiscoveryTargetIssueRequestSchema.parse({
         kind: "series",

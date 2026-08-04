@@ -496,9 +496,7 @@ function DiscoveryDashboardContent({
             <MediaRail
               emptyCopy={RAIL_EMPTY_COPY[rail.kind]}
               emptyTitle="No titles in this rail"
-              items={rail.items.map((item) =>
-                cardFor(item, requestedIds.has(item.id), language),
-              )}
+              items={rail.items.map((item) => cardFor(item, requestedIds.has(item.id), language))}
               key={rail.kind}
               onSelect={(card) => {
                 const item = itemById.get(card.id);
