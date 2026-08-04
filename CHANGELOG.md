@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/rezanmz/omnifin/compare/v0.8.0...v0.9.0) (2026-08-04)
+
+
+### Features
+
+* **web:** add private viewing history ([#264](https://github.com/rezanmz/omnifin/issues/264)) ([e0719f6](https://github.com/rezanmz/omnifin/commit/e0719f68da13091ac31a7241ec300426e6d3af7d))
+
+
+### Performance
+
+* **web:** remove duplicate identity provider styles ([#273](https://github.com/rezanmz/omnifin/issues/273)) ([175b413](https://github.com/rezanmz/omnifin/commit/175b413df572b3ee912f45a8b5c82c84a51d905b))
+
 ## [0.8.0](https://github.com/rezanmz/omnifin/compare/v0.7.2...v0.8.0) (2026-08-03)
 
 

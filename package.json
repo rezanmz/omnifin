@@ -1,6 +1,6 @@
 {
   "name": "omnifin",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "A cinematic, secure control plane for the self-hosted media stack.",
   "license": "AGPL-3.0-only",
