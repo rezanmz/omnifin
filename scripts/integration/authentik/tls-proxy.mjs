@@ -60,6 +60,9 @@ function forwardedRequestHeaders(headers, host, remote) {
   if (headers["x-omnifin-csrf"] !== undefined) {
     forwarded["x-omnifin-csrf"] = headers["x-omnifin-csrf"];
   }
+  if (headers["x-csrftoken"] !== undefined) {
+    forwarded["x-csrftoken"] = headers["x-csrftoken"];
+  }
   return forwarded;
 }
 

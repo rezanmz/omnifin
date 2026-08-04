@@ -169,6 +169,7 @@ test("detects generated secrets before runtime logs can be retained", () => {
 test("forwards only allowlisted headers through the Authentik TLS fixture", () => {
   assert.match(proxySource, /forwardedRequestHeaders/u);
   assert.match(proxySource, /forwardResponseHeaders/u);
+  assert.match(proxySource, /headers\["x-csrftoken"\]/u);
   assert.match(proxySource, /response\.statusCode/u);
   assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
   assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|filtered\[name\]/u);
