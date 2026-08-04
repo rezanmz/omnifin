@@ -12,6 +12,7 @@ import {
   readyMediaLibraryOutcome,
   unavailableMediaLibraryOutcome,
 } from "../lib/media-library-demo";
+import { MediaLibraryClientError } from "../lib/media-library";
 import { MediaLibrary } from "./media-library";
 import StandaloneApplicationShell from "./standalone-application-shell";
 
@@ -351,6 +352,82 @@ describe("MediaLibrary", () => {
     const link = click.mock.instances[0] as HTMLAnchorElement;
     expect(new URL(link.href).pathname).toBe(`/api/media/library/downloads/${grantId}`);
     expect(detail.innerHTML).not.toContain("jellyfin-user");
+  });
+
+  it("keeps original-download failures bounded and supports a clean retry", async () => {
+    const user = userEvent.setup();
+    const referenceId = `media_${"a".repeat(22)}`;
+    const grantId = `media_download_${"r".repeat(22)}`;
+    const prepareDownload = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new MediaLibraryClientError(
+          "unavailable",
+          "original_download_busy",
+          "Private upstream detail",
+        ),
+      )
+      .mockRejectedValueOnce(
+        new MediaLibraryClientError(
+          "unavailable",
+          "original_download_source_changed",
+          "Private upstream detail",
+        ),
+      )
+      .mockRejectedValueOnce(new Error("private transport detail"))
+      .mockResolvedValueOnce({
+        archiveRetrieval: "possible" as const,
+        contentType: "video/x-matroska",
+        expiresAt: "2026-07-30T12:05:00.000Z",
+        filename: "Ember Coast archival.mkv",
+        generatedAt: "2026-07-30T12:00:00.000Z",
+        grantId,
+        path: `/v1/media/library/downloads/${grantId}`,
+        referenceId,
+        sizeBytes: 6_979_321_856,
+      });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      libraryScreen(
+        <MediaLibrary
+          client={{
+            ...mediaLibraryDemoClient,
+            loadDownloadEligibility: async () => ({
+              snapshot: { csrfToken: "original-download-csrf" },
+              status: "ready",
+            }),
+            prepareDownload,
+          }}
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+        />,
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
+    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
+    const download = await within(detail).findByRole("button", { name: "Download" });
+
+    await user.click(download);
+    expect(
+      await within(detail).findByText(/Another original-file download is active/u),
+    ).toBeVisible();
+    expect(detail).not.toHaveTextContent("Private upstream detail");
+
+    await user.click(download);
+    expect(await within(detail).findByText(/Jellyfin reported a newer source file/u)).toBeVisible();
+
+    await user.click(download);
+    expect(
+      await within(detail).findByText(/The original file could not be prepared/u),
+    ).toBeVisible();
+    expect(detail).not.toHaveTextContent("private transport detail");
+
+    await user.click(download);
+    expect(
+      await within(detail).findByText(/Archived storage may take a moment to respond/u),
+    ).toBeVisible();
+    expect(within(detail).getByRole("button", { name: "Download again" })).toBeVisible();
   });
 
   it("keeps a series as one title and exposes its episodes inside a season hierarchy", async () => {

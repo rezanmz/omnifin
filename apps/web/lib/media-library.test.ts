@@ -190,6 +190,36 @@ describe("Media library client", () => {
     });
   });
 
+  it("fails original-file eligibility closed across session and transport boundaries", async () => {
+    const abortError = new DOMException("Stopped", "AbortError");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ csrfToken: null, principal: null }))
+      .mockResolvedValueOnce(Response.json({ csrfToken: "invalid", principal: { role: "admin" } }))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(abortError);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "signed_out",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "signed_out",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).rejects.toBe(abortError);
+  });
+
   it("prepares an opaque same-origin original-file grant with CSRF", async () => {
     const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
     const grantId = `media_download_${"d".repeat(22)}`;
@@ -221,6 +251,34 @@ describe("Media library client", () => {
     );
   });
 
+  it("rejects a prepared grant that does not belong to the selected title", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const otherReferenceId = readyMediaLibraryOutcome.feed.items[1]!.media.id;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            archiveRetrieval: "unknown",
+            contentType: "video/x-matroska",
+            expiresAt: "2026-07-30T12:05:00.000Z",
+            filename: "Unexpected.mkv",
+            generatedAt: "2026-07-30T12:00:00.000Z",
+            grantId: `media_download_${"e".repeat(22)}`,
+            path: `/v1/media/library/downloads/media_download_${"e".repeat(22)}`,
+            referenceId: otherReferenceId,
+            sizeBytes: 1_024,
+          },
+          { status: 201 },
+        ),
+      ),
+    );
+
+    await expect(
+      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+  });
+
   it("starts a browser download through the web proxy without retaining the grant in the DOM", () => {
     const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
     const grantId = `media_download_${"d".repeat(22)}`;
@@ -241,6 +299,24 @@ describe("Media library client", () => {
     expect(new URL(link.href).pathname).toBe(`/api/media/library/downloads/${grantId}`);
     expect(link.download).toBe("Ember Coast (2026).mkv");
     expect(document.body.contains(link)).toBe(false);
+  });
+
+  it("refuses to navigate when a prepared download path leaves the media proxy", () => {
+    expect(() =>
+      startOriginalMediaDownload({
+        archiveRetrieval: "unknown",
+        contentType: "video/x-matroska",
+        expiresAt: "2026-07-30T12:05:00.000Z",
+        filename: "Unsafe.mkv",
+        generatedAt: "2026-07-30T12:00:00.000Z",
+        grantId: `media_download_${"f".repeat(22)}`,
+        path: "https://jellyfin.internal/Videos/private/stream",
+        referenceId: readyMediaLibraryOutcome.feed.items[0]!.media.id,
+        sizeBytes: 1_024,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "invalid_download_path", kind: "invalid_response" }),
+    );
   });
 
   it("fails playback-state writes closed when the session is absent or lacks permission", async () => {
