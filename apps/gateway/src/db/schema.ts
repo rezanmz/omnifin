@@ -48,6 +48,34 @@ export const users = sqliteTable(
   ],
 );
 
+export const playbackPreferences = sqliteTable(
+  "playback_preferences",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    preferencesJson: text("preferences_json").notNull(),
+    revision: integer("revision").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    check("playback_preferences_schema_version_check", sql`${table.schemaVersion} = 1`),
+    check(
+      "playback_preferences_json_check",
+      sql`length(${table.preferencesJson}) between 2 and 8192
+        and json_valid(${table.preferencesJson})
+        and json_type(${table.preferencesJson}) = 'object'`,
+    ),
+    check("playback_preferences_revision_check", sql`${table.revision} between 1 and 2147483647`),
+    check(
+      "playback_preferences_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}`,
+    ),
+  ],
+);
+
 export const oidcProviders = sqliteTable(
   "oidc_providers",
   {

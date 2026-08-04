@@ -601,6 +601,53 @@
   font-size: 0.64rem;
 }
 
+.preferenceContext {
+  align-items: center;
+  background: color-mix(in srgb, var(--player-accent) 10%, rgb(255 255 255 / 6%));
+  border: 1px solid color-mix(in srgb, var(--player-accent) 20%, rgb(255 255 255 / 10%));
+  border-radius: 16px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 10px 10px 13px;
+}
+
+.preferenceContext > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferenceContext strong {
+  font-size: 0.68rem;
+}
+
+.preferenceContext span {
+  color: rgb(241 247 243 / 54%);
+  font-size: 0.6rem;
+  line-height: 1.45;
+}
+
+.preferenceContext a {
+  align-items: center;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 12px;
+  color: color-mix(in srgb, var(--player-accent) 54%, white);
+  display: inline-flex;
+  font-size: 0.6rem;
+  font-weight: 680;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 11px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.preferenceContext a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--player-accent) 78%, white);
+  outline-offset: 3px;
+}
+
 .settingField {
   align-items: center;
   background: rgb(255 255 255 / 7%);
@@ -893,6 +940,14 @@
 
   .settingField {
     grid-template-columns: 84px minmax(0, 1fr);
+  }
+
+  .preferenceContext {
+    grid-template-columns: 1fr;
+  }
+
+  .preferenceContext a {
+    width: 100%;
   }
 }
 

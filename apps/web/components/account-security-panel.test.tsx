@@ -54,6 +54,10 @@ describe("AccountSecurityPanel", () => {
       "href",
       "/link/jellyfin",
     );
+    expect(screen.getByRole("link", { name: "Playback defaults" })).toHaveAttribute(
+      "href",
+      "/settings/playback",
+    );
   });
 
   it("routes direct Jellyfin users through direct proof when relinking", () => {

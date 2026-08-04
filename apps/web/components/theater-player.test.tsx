@@ -1,11 +1,21 @@
-import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
+import {
+  DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackNegotiationResponse,
+} from "@omnifin/contracts/playback";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlaybackClient } from "../lib/playback";
+import type { PlaybackPreferenceClient } from "../lib/playback-preferences";
 import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
+
+const playbackPreferenceHarness = vi.hoisted(() => ({ load: vi.fn() }));
+
+vi.mock("../lib/playback-preferences", () => ({
+  playbackPreferenceClient: { load: playbackPreferenceHarness.load },
+}));
 
 interface HlsErrorFixture {
   details?: string;
@@ -119,6 +129,12 @@ describe("TheaterPlayer", () => {
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    playbackPreferenceHarness.load.mockResolvedValue({
+      networkClass: "home",
+      preferences: DEFAULT_PLAYBACK_PREFERENCES,
+      revision: 0,
+      updatedAt: null,
+    });
   });
 
   it("shows a deliberate preparation state while the private session opens", () => {
@@ -175,6 +191,120 @@ describe("TheaterPlayer", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Playback settings" }));
     expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("original");
     expect(screen.getByRole("option", { name: "Original quality" })).toBeVisible();
+  });
+
+  it("resolves account languages and remote quality against each title before playback", async () => {
+    const firstSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 8,
+          language: "fas",
+          selected: false,
+          title: "Persian",
+        },
+      ],
+      subtitleTracks: [
+        {
+          codec: "subrip",
+          default: false,
+          delivery: "video",
+          forced: false,
+          index: 14,
+          language: "eng",
+          selected: false,
+          title: "English SDH",
+        },
+      ],
+    };
+    const replacementSessionId = `playback_${"q".repeat(22)}`;
+    const resolvedSession: PlaybackNegotiationResponse = {
+      ...firstSession,
+      audioTracks: firstSession.audioTracks.map((track) => ({
+        ...track,
+        selected: track.index === 8,
+      })),
+      delivery: "hls",
+      sessionId: replacementSessionId,
+      streamPath: `/v1/playback/${replacementSessionId}/master.m3u8`,
+      subtitleTracks: firstSession.subtitleTracks.map((track) => ({ ...track, selected: true })),
+    };
+    const client = readyClient(firstSession);
+    client.prepare
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session: firstSession })
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session: resolvedSession });
+    const preferenceClient: PlaybackPreferenceClient = {
+      load: vi.fn(async () => ({
+        networkClass: "remote" as const,
+        preferences: {
+          ...DEFAULT_PLAYBACK_PREFERENCES,
+          audio: { languages: ["fa"], preferOriginalLanguage: false },
+          quality: {
+            ...DEFAULT_PLAYBACK_PREFERENCES.quality,
+            remoteMaxBitrate: 4_000_000 as const,
+          },
+          subtitles: {
+            ...DEFAULT_PLAYBACK_PREFERENCES.subtitles,
+            languages: ["en"],
+            mode: "always" as const,
+            preferHearingImpaired: true,
+          },
+        },
+        revision: 5,
+        updatedAt: "2026-08-03T20:00:00.000Z",
+      })),
+      save: vi.fn(),
+    };
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={preferenceClient}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    expect(client.prepare).toHaveBeenNthCalledWith(1, media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: null,
+      maxStreamingBitrate: 4_000_000,
+      mode: "auto",
+      subtitleStreamIndex: null,
+    });
+    expect(client.prepare).toHaveBeenNthCalledWith(2, media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: 8,
+      maxStreamingBitrate: 4_000_000,
+      mode: "transcode",
+      subtitleStreamIndex: 14,
+    });
+    await waitFor(() =>
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        { event: "stopped", positionSeconds: 1_200 },
+        csrfToken,
+        { keepalive: false },
+      ),
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByText("Effective account profile")).toBeVisible();
+    expect(screen.getByText(/4 Mbps remote ceiling applied/iu)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Edit account defaults" })).toHaveAttribute(
+      "href",
+      "/settings/playback",
+    );
   });
 
   it("carries a deliberate Play action through preparation with an autoplay fallback", async () => {
@@ -404,6 +534,8 @@ describe("TheaterPlayer", () => {
 
     await screen.findByRole("button", { name: "Playback settings" });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByText("This play only")).toBeVisible();
+    expect(screen.getByText(/without changing other sessions/iu)).toBeVisible();
     await user.selectOptions(screen.getByRole("combobox", { name: "Subtitle track" }), "7");
     await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
     expect(client.prepare).toHaveBeenLastCalledWith(

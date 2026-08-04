@@ -35,6 +35,7 @@ const requiredTables = [
   "oidc_providers",
   "operational_failures",
   "playback_asset_handles",
+  "playback_preferences",
   "playback_sessions",
   "role_mappings",
   "service_identity_links",
@@ -199,6 +200,14 @@ const requiredColumns = {
     "idempotency_key_hash",
     "response_json",
     "state",
+    "user_id",
+  ],
+  playback_preferences: [
+    "created_at",
+    "preferences_json",
+    "revision",
+    "schema_version",
+    "updated_at",
     "user_id",
   ],
   playback_asset_handles: [
@@ -528,8 +537,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0023_user_media_state",
-  "Current migration journal must end at migration 0023_user_media_state.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0024_playback_preferences",
+  "Current migration journal must end at migration 0024_playback_preferences.",
 );
 
 try {
@@ -925,7 +934,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0023.",
+      "Production migration did not advance the historical fixture exactly through migration 0024.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1090,7 +1099,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0023, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0024, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
