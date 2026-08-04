@@ -102,6 +102,9 @@ matrix.
 - Jellyfin playback negotiation, direct play and HLS, range proxying, tracks,
   subtitles, bitrate control, progress, and Continue Watching (implemented;
   protected live evidence pending)
+- Versioned self-only audio, subtitle, accessibility, and home/remote quality preferences with
+  deterministic track resolution and one-play overrides (implemented; Up Next autoplay/skip/binge
+  enforcement remains in development)
 - Paired-user Jellyfin movie and series catalogue with bounded search, filters, sorting,
   encrypted pagination, protected artwork, responsive viewer states, and lazy theater playback
   (implemented; protected browser and live compatibility evidence pending)

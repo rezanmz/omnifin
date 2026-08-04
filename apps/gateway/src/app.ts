@@ -94,6 +94,10 @@ import {
   type OriginalDownloadRoutesOptions,
 } from "./media/original-download-routes.js";
 import {
+  playbackPreferenceRoutes,
+  type PlaybackPreferenceRoutesOptions,
+} from "./media/playback-preference-routes.js";
+import {
   mediaRequestRoutes,
   type MediaRequestRoutesOptions,
 } from "./requests/media-request-routes.js";

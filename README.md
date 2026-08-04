@@ -240,6 +240,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
   playback references, and privacy boundaries
 - [Saved titles and private lists](docs/saved-lists.md) — Watch Later, Jellyfin favorites,
   personal lists, reconciliation, concurrency, and privacy boundaries
+- [Playback preferences](docs/playback-preferences.md) — private semantic language, subtitle,
+  accessibility, and network-quality defaults
 - [Acquisition provenance](docs/acquisition-provenance.md) — live normalized Radarr
   and Sonarr title history, bounded fallback, partial failure, and operator access
 - [Acquisition monitoring](docs/acquisition-monitoring.md) — exact-title Radarr and

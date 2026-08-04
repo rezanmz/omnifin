@@ -20,8 +20,14 @@ import {
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { resolvePlaybackPreferences } from "../lib/playback-preference-resolution";
+import {
+  playbackPreferenceClient,
+  type PlaybackPreferenceClient,
+} from "../lib/playback-preferences";
 import {
   browserPlaybackPath,
   playbackClient,
@@ -58,13 +64,15 @@ export interface TheaterPlayerProperties {
   client?: PlaybackClient;
   media: TheaterMedia;
   onClose: () => void;
+  preferenceClient?: PlaybackPreferenceClient;
   startWhenReady?: boolean;
   subtitleClient?: SubtitleClient;
 }
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
-type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
+type QualityPreset =
+  "auto" | "balanced" | "cinema" | "constrained" | "data-saver" | "high" | "original";
 type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "video_quality";
 type IssueStatus = "error" | "idle" | "submitting" | "success";
 type HlsFailureRecovery = "media_recovery" | "network_retry" | "stopped";
@@ -86,9 +94,11 @@ interface PlaybackPreferences {
 const QUALITY_PRESETS = {
   auto: { bitrate: 80_000_000, label: "Auto", mode: "auto" },
   original: { bitrate: 200_000_000, label: "Original quality", mode: "auto" },
+  cinema: { bitrate: 40_000_000, label: "Cinema · 40 Mbps", mode: "transcode" },
   high: { bitrate: 20_000_000, label: "High · 20 Mbps", mode: "transcode" },
   balanced: { bitrate: 10_000_000, label: "Balanced · 10 Mbps", mode: "transcode" },
   "data-saver": { bitrate: 4_000_000, label: "Data saver · 4 Mbps", mode: "transcode" },
+  constrained: { bitrate: 2_000_000, label: "Constrained · 2 Mbps", mode: "transcode" },
 } as const satisfies Record<
   QualityPreset,
   { bitrate: number; label: string; mode: "auto" | "direct" | "transcode" }
@@ -143,16 +153,34 @@ function recordHlsFailure(data: HlsFailureData, recovery: HlsFailureRecovery) {
   );
 }
 
-function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
+function preparationOptions(
+  preferences: PlaybackPreferences,
+  { accountCeiling = false }: { accountCeiling?: boolean } = {},
+): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
   const customTracks =
     preferences.audioStreamIndex !== null || preferences.subtitleStreamIndex !== null;
   return {
     audioStreamIndex: preferences.audioStreamIndex,
     maxStreamingBitrate: quality.bitrate,
-    mode: customTracks ? "transcode" : quality.mode,
+    mode: customTracks ? "transcode" : accountCeiling ? "auto" : quality.mode,
     subtitleStreamIndex: preferences.subtitleStreamIndex,
   };
+}
+
+function qualityPresetForBitrate(bitrate: number): QualityPreset {
+  const exact = (
+    Object.entries(QUALITY_PRESETS) as Array<
+      [QualityPreset, (typeof QUALITY_PRESETS)[QualityPreset]]
+    >
+  ).find(([, preset]) => preset.bitrate === bitrate)?.[0];
+  if (exact) return exact;
+  if (bitrate >= QUALITY_PRESETS.original.bitrate) return "original";
+  if (bitrate >= QUALITY_PRESETS.auto.bitrate) return "auto";
+  if (bitrate >= QUALITY_PRESETS.cinema.bitrate) return "cinema";
+  if (bitrate >= QUALITY_PRESETS.high.bitrate) return "high";
+  if (bitrate >= QUALITY_PRESETS.balanced.bitrate) return "balanced";
+  return bitrate >= QUALITY_PRESETS["data-saver"].bitrate ? "data-saver" : "constrained";
 }
 
 function trackLabel(track: {
@@ -190,6 +218,7 @@ export function TheaterPlayer({
   client = playbackClient,
   media,
   onClose,
+  preferenceClient = playbackPreferenceClient,
   startWhenReady = false,
   subtitleClient,
 }: TheaterPlayerProperties) {
@@ -209,6 +238,7 @@ export function TheaterPlayer({
   const replacementReference = useRef<{
     generation: number;
     previous: PreparedPlayback;
+    previousOnePlayOverride: boolean;
     previousPosition: number;
     previousPreferences: PlaybackPreferences;
     resume: boolean;
@@ -251,6 +281,12 @@ export function TheaterPlayer({
   const [syncInterrupted, setSyncInterrupted] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [transitionMessage, setTransitionMessage] = useState("");
+  const [effectiveDefaults, setEffectiveDefaults] = useState<{
+    audio: string;
+    quality: string;
+    subtitles: string;
+  } | null>(null);
+  const [onePlayOverride, setOnePlayOverride] = useState(false);
 
   const close = useCallback(() => {
     const dialog = dialogReference.current;
@@ -293,6 +329,7 @@ export function TheaterPlayer({
       preparedReference.current = replacement.previous;
       restorePositionReference.current = replacement.previousPosition;
       setPreferences(replacement.previousPreferences);
+      setOnePlayOverride(replacement.previousOnePlayOverride);
       setPrepared(replacement.previous);
       reportedStateReference.current = replacement.resume ? "paused" : "negotiated";
       startWhenReadyReference.current = replacement.resume;
@@ -383,15 +420,107 @@ export function TheaterPlayer({
   useEffect(() => {
     const controller = new AbortController();
     reportedStateReference.current = "negotiated";
-    void client
-      .prepare(
+    const prepare = async () => {
+      let profile;
+      try {
+        profile = await preferenceClient.load(controller.signal);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        const contracts = await import("@omnifin/contracts/playback");
+        profile = {
+          networkClass: "remote" as const,
+          preferences: contracts.DEFAULT_PLAYBACK_PREFERENCES,
+          revision: 0,
+          updatedAt: null,
+        };
+        setTransitionMessage(
+          "Account defaults were unavailable; conservative playback defaults are in use.",
+        );
+      }
+      if (controller.signal.aborted) return;
+      const networkClass =
+        profile.preferences.quality.defaultNetworkPolicy === "auto"
+          ? profile.networkClass
+          : profile.preferences.quality.defaultNetworkPolicy;
+      const initialBitrate =
+        networkClass === "home"
+          ? (profile.preferences.quality.homeMaxBitrate ?? 200_000_000)
+          : profile.preferences.quality.remoteMaxBitrate;
+      const initialPreferences = {
+        audioStreamIndex: null,
+        quality: qualityPresetForBitrate(initialBitrate),
+        subtitleStreamIndex: null,
+      } satisfies PlaybackPreferences;
+      preferencesReference.current = initialPreferences;
+      setPreferences(initialPreferences);
+      const first = await client.prepare(
         media.id,
         requestedPositionReference.current,
         controller.signal,
-        preparationOptions(preferencesReference.current),
-      )
+        preparationOptions(initialPreferences, { accountCeiling: true }),
+      );
+      if (controller.signal.aborted) {
+        stopSession(first, first.session.positionSeconds, true);
+        return;
+      }
+      let firstStopped = false;
+      try {
+        const resolved = resolvePlaybackPreferences(
+          profile.preferences,
+          profile.networkClass,
+          first.session,
+        );
+        const resolvedPreferences = {
+          audioStreamIndex: resolved.audioStreamIndex,
+          quality: qualityPresetForBitrate(resolved.maxStreamingBitrate),
+          subtitleStreamIndex: resolved.subtitleStreamIndex,
+        } satisfies PlaybackPreferences;
+        const currentAudioIndex =
+          first.session.audioTracks.find((track) => track.selected)?.index ??
+          first.session.audioTracks.find((track) => track.default)?.index ??
+          first.session.audioTracks[0]?.index ??
+          null;
+        const currentSubtitleIndex =
+          first.session.subtitleTracks.find((track) => track.selected)?.index ?? null;
+        const needsTrackResolution =
+          (resolved.effectiveAudioStreamIndex !== null &&
+            resolved.effectiveAudioStreamIndex !== currentAudioIndex) ||
+          resolved.subtitleStreamIndex !== currentSubtitleIndex;
+        let result = first;
+        if (needsTrackResolution) {
+          result = await client.prepare(
+            media.id,
+            requestedPositionReference.current,
+            controller.signal,
+            preparationOptions(resolvedPreferences, { accountCeiling: true }),
+          );
+          if (controller.signal.aborted) {
+            stopSession(first, first.session.positionSeconds, true);
+            stopSession(result, result.session.positionSeconds, true);
+            return;
+          }
+          stopSession(first, first.session.positionSeconds);
+          firstStopped = true;
+        }
+        preferencesReference.current = resolvedPreferences;
+        setPreferences(resolvedPreferences);
+        setEffectiveDefaults(resolved.explanations);
+        setOnePlayOverride(false);
+        return result;
+      } catch (error) {
+        if (!firstStopped) {
+          stopSession(first, first.session.positionSeconds, controller.signal.aborted);
+        }
+        throw error;
+      }
+    };
+    void prepare()
       .then((result) => {
-        if (controller.signal.aborted) return;
+        if (!result) return;
+        if (controller.signal.aborted) {
+          stopSession(result, result.session.positionSeconds, true);
+          return;
+        }
         preparedReference.current = result;
         setPrepared(result);
         setDuration(result.session.media.durationSeconds);
@@ -404,7 +533,7 @@ export function TheaterPlayer({
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id]);
+  }, [attempt, client, media.id, preferenceClient, stopSession]);
 
   useEffect(() => {
     if (!prepared) return;
@@ -576,6 +705,7 @@ export function TheaterPlayer({
       replacementReference.current = {
         generation,
         previous: active,
+        previousOnePlayOverride: onePlayOverride,
         previousPosition,
         previousPreferences: preferencesReference.current,
         resume: playing,
@@ -585,6 +715,7 @@ export function TheaterPlayer({
       reportedStateReference.current = "negotiated";
       startWhenReadyReference.current = playing;
       setPreferences(nextPreferences);
+      setOnePlayOverride(true);
       setPrepared(result);
       setPlaying(false);
       setBuffering(false);
@@ -1000,7 +1131,26 @@ export function TheaterPlayer({
             >
               <div className={styles.settingsHeading}>
                 <span>Playback</span>
-                <small>Changes preserve your place</small>
+                <small>{onePlayOverride ? "One-play override" : "Account defaults applied"}</small>
+              </div>
+              <div className={styles.preferenceContext} role="status">
+                <div>
+                  <strong>
+                    {onePlayOverride ? "This play only" : "Effective account profile"}
+                  </strong>
+                  <span>
+                    {onePlayOverride
+                      ? "Track and quality changes here preserve your place without changing other sessions."
+                      : [
+                          effectiveDefaults?.audio,
+                          effectiveDefaults?.subtitles,
+                          effectiveDefaults?.quality,
+                        ]
+                          .filter(Boolean)
+                          .join(" ") || "Resolving account defaults against this source…"}
+                  </span>
+                </div>
+                <Link href="/settings/playback">Edit account defaults</Link>
               </div>
               <label className={styles.settingField}>
                 <span>

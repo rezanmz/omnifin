@@ -83,6 +83,10 @@ export function ProfileMenu({ initialOpen = false }: { initialOpen?: boolean }) 
             Account &amp; access
             <ArrowUpRight aria-hidden="true" size={16} />
           </Link>
+          <Link className="profile-popover__account" href="/settings/playback">
+            Playback preferences
+            <ArrowUpRight aria-hidden="true" size={16} />
+          </Link>
           <Link className="profile-popover__account" href="/about">
             About Omnifin
             <ArrowUpRight aria-hidden="true" size={16} />

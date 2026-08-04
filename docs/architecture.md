@@ -86,6 +86,9 @@ A viewer-accessible
 acquisition calendar combines bounded Radarr and Sonarr timing through opaque identifiers and remains
 read-only. Jellyfin playback, progress, and Continue Watching use the
 paired user's permissions through server-held tokens and normalized, opaque media targets.
+Per-user playback profiles remain in the gateway's SQLite boundary and retain only semantic
+language, accessibility, and quality intent. The theater resolves that intent against each fresh,
+validated Jellyfin track list; title-specific stream indexes never become durable profile data.
 Continue Watching also normalizes Jellyfin's image-tag-keyed BlurHash metadata into a browser-safe
 placeholder and tone-bounded artwork accent; exact tag matching prevents unrelated artwork colour
 from crossing into a card, while malformed aesthetic metadata degrades to the local palette without

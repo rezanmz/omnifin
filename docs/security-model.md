@@ -174,6 +174,11 @@ application boundary; operators must still patch and isolate the host.
   fields. Redirects, oversized manifests, excessive line counts, unsafe content types, malformed
   ranges, and response-size overruns fail closed. Media responses are private, non-cacheable, and
   vary on the authenticated session cookie.
+- Playback preferences are self-only, versioned operational data updated through session-bound CSRF
+  and revision compare-and-swap. They retain semantic languages, accessibility roles, and bounded
+  quality ceilings but no IP address, device fingerprint, media identifier, track index, path, or
+  connector secret. A configured proxy chain that omits trusted client attribution always receives
+  the conservative remote network classification.
 
 ## Media-request mutation controls
 
