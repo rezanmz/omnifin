@@ -21,6 +21,8 @@ import {
   discoveryPersonDetailParamsSchema,
   discoveryPersonDetailQuerySchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryAvailability,
@@ -33,6 +35,8 @@ import {
   type DiscoveryPersonDetailParams,
   type DiscoveryPersonDetailQuery,
   type DiscoveryPersonDetailResponse,
+  type DiscoveryPersonCreditsQuery,
+  type DiscoveryPersonCreditsResponse,
   type DiscoveryRating,
   type DiscoveryTrailer,
   type DiscoverySearchQuery,
@@ -771,6 +775,8 @@ export interface SeerrDiscoveryPersonDetail {
   response: DiscoveryPersonDetailResponse;
 }
 
+export type SeerrDiscoveryPersonCredits = DiscoveryPersonCreditsResponse;
+
 function feedMovie(
   result: z.infer<typeof upstreamMovieRecommendationSchema>,
 ): SeerrDiscoveryFeedItem {
@@ -967,8 +973,7 @@ function normalizedPersonCredits(response: z.infer<typeof upstreamPersonCreditsS
           ),
         },
       ];
-    })
-    .slice(0, DISCOVERY_PERSON_MAX_CREDITS);
+    });
 }
 
 function runtimeMinutes(values: readonly number[]) {
@@ -1626,7 +1631,8 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     if (creditsResult.value && creditsResult.value.id !== params.tmdbId) {
       throw invalidDetailResponse();
     }
-    const credits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
+    const allCredits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
+    const credits = allCredits.slice(0, DISCOVERY_PERSON_MAX_CREDITS);
     const normalized = discoveryPersonDetailResponseSchema.parse({
       generatedAt: this.clock.now().toISOString(),
       item: {
@@ -1635,6 +1641,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         birthplace: optionalText(response.placeOfBirth),
         credits,
         creditsState: intelligenceState(creditsResult.state, credits),
+        creditsTotal: allCredits.length,
         deathday: normalizedDate(response.deathday),
         department: optionalText(response.knownForDepartment),
         id: `person:${response.id}`,
@@ -1645,6 +1652,45 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       },
     });
     return { profilePath: response.profilePath ?? null, response: normalized };
+  }
+
+  async personCredits(
+    paramsInput: DiscoveryPersonDetailParams,
+    queryInput: DiscoveryPersonCreditsQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryPersonCredits> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr person credits require configured credentials.",
+        operation: "discovery.person.credits",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = discoveryPersonCreditsQuerySchema.parse(queryInput);
+    const response = await this.client.requestJson(
+      `api/v1/person/${params.tmdbId}/combined_credits`,
+      upstreamPersonCreditsSchema,
+      {
+        headers: { "X-Api-Key": this.#apiKey },
+        operation: "discovery.person.credits",
+        query: new URLSearchParams({ language: query.language }),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (response.id !== params.tmdbId) throw invalidDetailResponse();
+    const allCredits = normalizedPersonCredits(response);
+    const offset = (query.page - 1) * DISCOVERY_PERSON_MAX_CREDITS;
+    return discoveryPersonCreditsResponseSchema.parse({
+      generatedAt: this.clock.now().toISOString(),
+      items: allCredits.slice(offset, offset + DISCOVERY_PERSON_MAX_CREDITS),
+      page: query.page,
+      pageSize: DISCOVERY_PERSON_MAX_CREDITS,
+      totalPages: Math.ceil(allCredits.length / DISCOVERY_PERSON_MAX_CREDITS),
+      totalResults: allCredits.length,
+    });
   }
 
   async resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number> {

@@ -20,6 +20,10 @@ import {
   discoveryPersonDetailQueryJsonSchema,
   discoveryPersonDetailResponseJsonSchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQueryJsonSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseJsonSchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -441,6 +445,7 @@ describe("discovery contracts", () => {
             },
           ],
           creditsState: "ready",
+          creditsTotal: 1,
           deathday: null,
           department: "Acting",
           id: "person:6384",
@@ -460,6 +465,7 @@ describe("discovery contracts", () => {
           birthplace: null,
           credits: [],
           creditsState: "empty",
+          creditsTotal: 0,
           deathday: null,
           department: null,
           id: "person:6384",
@@ -468,6 +474,52 @@ describe("discovery contracts", () => {
           source: "seerr",
           tmdbId: 6384,
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("normalizes bounded person-credit pages", () => {
+    expect(discoveryPersonCreditsQuerySchema.parse({ page: "2" })).toEqual({
+      language: "en",
+      page: 2,
+    });
+    expect(
+      discoveryPersonCreditsResponseSchema.parse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        items: [
+          {
+            availability: "available",
+            kind: "movie",
+            role: "Neo",
+            title: "The Matrix",
+            tmdbId: 603,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        ],
+        page: 3,
+        pageSize: 24,
+        totalPages: 3,
+        totalResults: 49,
+      }).totalPages,
+    ).toBe(3);
+    expect(discoveryPersonCreditsQuerySchema.safeParse({ page: 101 }).success).toBe(false);
+    expect(
+      discoveryPersonCreditsResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        items: Array.from({ length: 25 }, () => ({
+          availability: "unknown",
+          kind: "movie",
+          role: "Cast",
+          title: "Bounded work",
+          tmdbId: 1,
+          voteAverage: null,
+          year: null,
+        })),
+        page: 1,
+        pageSize: 24,
+        totalPages: 2,
+        totalResults: 25,
       }).success,
     ).toBe(false);
   });
@@ -550,6 +602,8 @@ describe("discovery contracts", () => {
     expect(discoveryPersonDetailParamsJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryPersonDetailQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryPersonDetailResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonCreditsQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonCreditsResponseJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchResponseJsonSchema).not.toHaveProperty("$schema");
   });
