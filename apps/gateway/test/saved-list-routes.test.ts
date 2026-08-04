@@ -8,7 +8,7 @@ import {
   savedListsResponseSchema,
   savedMembershipSummarySchema,
 } from "@omnifin/contracts/saved";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
@@ -48,10 +48,22 @@ async function harness() {
   let listToken = 0;
   let operationToken = 0;
   let auditId = 0;
+  const readImage = vi.fn(async () => ({
+    body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+    contentType: "image/png" as const,
+  }));
   const appConfig = config();
   const cipher = new EnvelopeCipher(appConfig.encryptionKey);
   const app = await createApp({
     config: appConfig,
+    continueWatchingDependencies: {
+      clock: () => now,
+      createClient: () => ({
+        readContinueWatching: async () => ({ items: [], truncated: false }),
+        readImage,
+      }),
+      mediaReferences: { clock: () => now },
+    },
     savedListDependencies: {
       clock: () => now,
       createAuditId: () => `saved-route-audit-${++auditId}`,
@@ -160,6 +172,7 @@ async function harness() {
       cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
       origin: baseUrl,
     },
+    readImage,
     referenceId: referenceId!,
   };
 }
@@ -420,6 +433,86 @@ describe("saved-list routes", () => {
         revision: 2,
       });
       expect(repeated.headers.etag).toBe(removed.headers.etag);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("proxies saved artwork only while the owned title remains in a private list", async () => {
+    const { app, headers, readImage, referenceId } = await harness();
+    try {
+      const listsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/saved/lists",
+      });
+      const watchLater = savedListsResponseSchema.parse(listsResponse.json()).watchLater;
+      const listResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/saved/lists/${watchLater.id}`,
+      });
+      const targetResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const target = savedMembershipSummarySchema.parse(targetResponse.json());
+      const added = await app.inject({
+        headers: {
+          ...headers,
+          "idempotency-key": "saved-route-artwork-0001",
+          "if-match": String(listResponse.headers.etag),
+        },
+        method: "POST",
+        payload: { targetReferenceId: target.targetReferenceId },
+        url: `/v1/saved/lists/${watchLater.id}/items`,
+      });
+      const item = savedListMembershipResponseSchema.parse(added.json()).item;
+      const artworkUrl = `/v1/saved/catalog/${item.catalog.id}/images/poster`;
+
+      const anonymous = await app.inject({ method: "GET", url: artworkUrl });
+      expect(anonymous.statusCode).toBe(401);
+
+      const artwork = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: artworkUrl,
+      });
+      expect(artwork.statusCode, artwork.body).toBe(200);
+      expect(artwork.headers["content-type"]).toBe("image/png");
+      expect(artwork.headers["content-disposition"]).toBe("inline");
+      expect(artwork.headers["cache-control"]).toBe(
+        "private, max-age=3600, stale-while-revalidate=86400",
+      );
+      expect(artwork.headers.vary).toBe("Cookie, Accept");
+      expect(artwork.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      expect(readImage).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: "private-owned-movie", type: "Primary" }),
+      );
+
+      const unchanged = await app.inject({
+        headers: { cookie: headers.cookie, "if-none-match": String(artwork.headers.etag) },
+        method: "GET",
+        url: artworkUrl,
+      });
+      expect(unchanged.statusCode).toBe(304);
+      expect(unchanged.body).toBe("");
+
+      const removed = await app.inject({
+        headers: { ...headers, "if-match": String(added.headers.etag) },
+        method: "DELETE",
+        url: `/v1/saved/lists/${watchLater.id}/items/${item.catalog.id}`,
+      });
+      expect(removed.statusCode, removed.body).toBe(200);
+      const staleArtwork = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: artworkUrl,
+      });
+      expect(staleArtwork.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(staleArtwork.json()).error.code).toBe("saved_artwork_not_found");
     } finally {
       await app.close();
     }

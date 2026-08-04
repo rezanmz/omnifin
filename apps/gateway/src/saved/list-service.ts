@@ -249,6 +249,36 @@ export class SavedListService {
     }
   }
 
+  public resolveOwnedArtworkReference(
+    rawCatalogReferenceId: string,
+    context: SavedListContext,
+  ): string {
+    const principal = this.#activePrincipal(context);
+    const catalogReferenceId = savedCatalogReferenceIdSchema.parse(rawCatalogReferenceId);
+    const row = this.#database.sqlite
+      .prepare(
+        `select saved_catalog_items.library_reference_id as libraryReferenceId
+         from saved_catalog_items
+         where saved_catalog_items.id = ?
+           and saved_catalog_items.user_id = ?
+           and saved_catalog_items.library_reference_id is not null
+           and exists (
+             select 1
+             from saved_list_items
+             join saved_lists on saved_lists.id = saved_list_items.list_id
+             where saved_list_items.catalog_item_id = saved_catalog_items.id
+               and saved_list_items.user_id = saved_catalog_items.user_id
+               and saved_lists.user_id = saved_catalog_items.user_id
+               and saved_lists.deleted_at is null
+           )`,
+      )
+      .get(catalogReferenceId, principal.userId) as { libraryReferenceId: string } | undefined;
+    if (!row || !MEDIA_REFERENCE_ID_PATTERN.test(row.libraryReferenceId)) {
+      throw new SavedListServiceError("target_not_found");
+    }
+    return row.libraryReferenceId;
+  }
+
   public items(
     listId: string,
     rawQuery: unknown,

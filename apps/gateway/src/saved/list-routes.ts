@@ -38,6 +38,12 @@ import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import {
+  ContinueWatchingError,
+  ContinueWatchingService,
+  type ContinueWatchingDependencies,
+  MediaArtworkError,
+} from "../media/continue-watching-service.js";
+import {
   SavedListService,
   SavedListServiceError,
   type SavedListContext,
@@ -48,6 +54,10 @@ const listParamsSchema = z.strictObject({ listId: savedListIdSchema });
 const membershipParamsSchema = z.strictObject({
   catalogReferenceId: savedCatalogReferenceIdSchema,
   listId: savedListIdSchema,
+});
+const artworkParamsSchema = z.strictObject({
+  catalogReferenceId: savedCatalogReferenceIdSchema,
+  kind: z.enum(["backdrop", "poster"]),
 });
 const listParamsJsonSchema = {
   additionalProperties: false,
@@ -65,6 +75,18 @@ const membershipParamsJsonSchema = {
     listId: { pattern: "^saved_list_[A-Za-z0-9_-]{22}$", type: "string" },
   },
   required: ["listId", "catalogReferenceId"],
+  type: "object",
+} as const;
+const artworkParamsJsonSchema = {
+  additionalProperties: false,
+  properties: {
+    catalogReferenceId: {
+      pattern: "^catalog_[A-Za-z0-9_-]{22}$",
+      type: "string",
+    },
+    kind: { enum: ["backdrop", "poster"] },
+  },
+  required: ["catalogReferenceId", "kind"],
   type: "object",
 } as const;
 const STRONG_ETAG_PATTERN = /^"saved_[A-Za-z0-9_-]{22}"$/u;
@@ -239,11 +261,17 @@ function handleError(error: unknown, reply: FastifyReply): never {
 }
 
 export interface SavedListRoutesOptions {
+  artworkDependencies?: ContinueWatchingDependencies;
   dependencies?: SavedListServiceDependencies;
 }
 
 export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async (app, options) => {
   const saved = new SavedListService(app.database, app.appConfig, options.dependencies);
+  const media = new ContinueWatchingService(
+    app.database,
+    app.appConfig,
+    options.artworkDependencies,
+  );
 
   app.get(
     "/v1/saved/lists",
@@ -543,6 +571,78 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
         return savedListReorderResponseSchema.parse(result.body);
       } catch (error) {
         handleError(error, reply);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/saved/catalog/:catalogReferenceId/images/:kind",
+    {
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 120, timeWindow: "1 minute" },
+      },
+      schema: { params: artworkParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const context = operationContext(request, reply);
+      const params = artworkParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const referenceId = saved.resolveOwnedArtworkReference(params.catalogReferenceId, context);
+        const artwork = await media.readArtwork(
+          { principal: context.principal },
+          referenceId,
+          params.kind,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
+        reply.header("content-disposition", "inline");
+        reply.header("etag", artwork.etag);
+        reply.header("vary", "Cookie, Accept");
+        if (request.headers["if-none-match"] === artwork.etag) {
+          return reply.status(304).send();
+        }
+        return reply.type(artwork.contentType).send(Buffer.from(artwork.body));
+      } catch (error) {
+        if (error instanceof SavedListServiceError) {
+          if (error.reason === "target_not_found") {
+            throw new SafeHttpError({
+              cause: error,
+              code: "saved_artwork_not_found",
+              message: "The requested saved-title artwork is not available.",
+              statusCode: 404,
+            });
+          }
+          handleError(error, reply);
+        }
+        if (error instanceof MediaArtworkError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "saved_artwork_not_found"
+                : "saved_artwork_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "The requested saved-title artwork is not available."
+                : "Saved-title artwork is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        if (error instanceof ContinueWatchingError) {
+          throw new SafeHttpError({
+            cause: error,
+            code: "saved_artwork_unavailable",
+            message: "Saved-title artwork is temporarily unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
       }
     },
   );

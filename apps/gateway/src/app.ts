@@ -516,6 +516,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         : { dependencies: options.libraryOperationDependencies }),
     });
     await app.register(savedListRoutes, {
+      ...(options.continueWatchingDependencies === undefined
+        ? {}
+        : { artworkDependencies: options.continueWatchingDependencies }),
       ...(options.savedListDependencies === undefined
         ? {}
         : { dependencies: options.savedListDependencies }),
