@@ -78,6 +78,7 @@ async function harness(
       sizeBytes: number | null;
     } | null>;
     resolveManagedMovie?: () => Promise<{
+      connectorId: string;
       hasFile: boolean;
       mediaId: number;
       monitored: boolean;
@@ -798,6 +799,7 @@ describe("Continue Watching routes", () => {
 
   it("fails closed when Radarr ownership no longer confirms an organized file", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
+      connectorId: "radarr-main",
       hasFile: false,
       mediaId: 42,
       monitored: true,

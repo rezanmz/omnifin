@@ -27,6 +27,7 @@ const requiredTables = [
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
+  "library_removal_previews",
   "media_issues",
   "media_issue_operations",
   "media_references",
@@ -157,6 +158,16 @@ const requiredColumns = {
     "reference_id",
     "response_json",
     "state",
+    "user_id",
+  ],
+  library_removal_previews: [
+    "consumed_at",
+    "encrypted_payload",
+    "expires_at",
+    "link_revision",
+    "media_reference_id",
+    "service_identity_link_id",
+    "session_id",
     "user_id",
   ],
   media_references: [
@@ -354,6 +365,10 @@ const requiredIndexes = {
     "library_mutation_operations_reference_idx",
     "library_mutation_operations_state_created_idx",
     "library_mutation_operations_user_key_unique",
+  ],
+  library_removal_previews: [
+    "library_removal_previews_expiry_idx",
+    "library_removal_previews_user_created_idx",
   ],
   media_references: [
     "media_references_expiry_idx",
@@ -553,8 +568,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0024_original_media_downloads",
-  "Current migration journal must end at migration 0024_original_media_downloads.",
+    currentMigrationTag === "0025_library_removal_previews",
+  "Current migration journal must end at migration 0025_library_removal_previews.",
 );
 
 try {
@@ -724,6 +739,34 @@ try {
       ) {
         throw new Error(`Migration is missing the user-media-state ${column} foreign key.`);
       }
+    }
+
+    const removalPreviewForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(library_removal_previews)",
+    ) as { from: string; id: number; seq: number; table: string; to: string }[];
+    for (const [column, table] of [
+      ["user_id", "users"],
+      ["media_reference_id", "media_references"],
+    ] as const) {
+      if (
+        !removalPreviewForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the library-removal ${column} foreign key.`);
+      }
+    }
+    const removalLinkForeignKeyId = removalPreviewForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const removalLinkForeignKeyColumns = removalPreviewForeignKeys
+      .filter(({ id }) => id === removalLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (removalLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
+      throw new Error("Migration is missing the user-bound removal-preview link foreign key.");
     }
 
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
@@ -987,7 +1030,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0024.",
+      "Production migration did not advance the historical fixture exactly through migration 0025.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1152,7 +1195,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0024, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0025, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
