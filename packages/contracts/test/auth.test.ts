@@ -717,6 +717,13 @@ describe("authentication contracts", () => {
     expect(ROLE_PERMISSIONS.admin).toContain("media.download");
   });
 
+  it("reserves destructive library removal for administrators", () => {
+    expect(ROLE_PERMISSIONS.admin).toContain("library.delete");
+    expect(ROLE_PERMISSIONS.operator).not.toContain("library.delete");
+    expect(ROLE_PERMISSIONS.requester).not.toContain("library.delete");
+    expect(ROLE_PERMISSIONS.viewer).not.toContain("library.delete");
+  });
+
   it("retains explicit active account and session identities", () => {
     expect(sessionPrincipalSchema.parse(activePrincipal)).toMatchObject({
       sessionId: "session_1",

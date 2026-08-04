@@ -104,6 +104,7 @@ export const permissionSchema = z.enum([
   "acquisition.manage",
   "downloads.manage",
   "library.manage",
+  "library.delete",
   "issue.manage",
   "connectors.manage",
   "identities.manage",
