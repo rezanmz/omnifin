@@ -539,6 +539,7 @@ export function PlaybackPreferencesPanel({
         </div>
         <div>
           <button
+            aria-label="Restore defaults"
             className="button button--glass"
             disabled={state === "saving"}
             onClick={() => {
@@ -547,9 +548,10 @@ export function PlaybackPreferencesPanel({
             }}
             type="button"
           >
-            <RotateCcw aria-hidden="true" /> Restore defaults
+            <RotateCcw aria-hidden="true" /> Reset
           </button>
           <button
+            aria-label="Save playback profile"
             className="button button--primary"
             disabled={!dirty || state === "saving"}
             onClick={() => void save()}
@@ -560,7 +562,7 @@ export function PlaybackPreferencesPanel({
             ) : (
               <Save aria-hidden="true" />
             )}
-            {state === "saving" ? "Saving…" : "Save playback profile"}
+            {state === "saving" ? "Saving…" : "Save"}
           </button>
         </div>
       </footer>
