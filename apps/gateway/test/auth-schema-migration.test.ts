@@ -1083,6 +1083,7 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.externalIssueReferences).toBeDefined();
     expect(authenticationSchema.mediaIssueOperations).toBeDefined();
     expect(authenticationSchema.playbackAssetHandles).toBeDefined();
+    expect(authenticationSchema.playbackPreferences).toBeDefined();
     expect(authenticationSchema.playbackSessions).toBeDefined();
     expect(authenticationSchema.libraryArtworkSearches).toBeDefined();
     expect(authenticationSchema.libraryMutationOperations).toBeDefined();
@@ -1112,6 +1113,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("external_issue_references");
       expect(names).toContain("media_issue_operations");
       expect(names).toContain("playback_asset_handles");
+      expect(names).toContain("playback_preferences");
       expect(names).toContain("playback_sessions");
       expect(names).toContain("library_artwork_searches");
       expect(names).toContain("library_mutation_operations");
