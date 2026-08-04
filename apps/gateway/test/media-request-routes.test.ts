@@ -70,7 +70,25 @@ async function harness(
   const listRequestRouting =
     options.listRequestRouting ??
     vi.fn<MediaRequestAdapter["listRequestRouting"]>(async (kind, is4k) => ({
-      destinations: [],
+      destinations: [
+        {
+          activeDirectory: "/srv/media/default",
+          activeLanguageProfileId: null,
+          activeProfileId: 4,
+          id: 1,
+          isDefault: true,
+          label: "Default",
+          languageProfiles: [],
+          profiles: [{ id: 4, label: "Balanced" }],
+          rootFolders: [
+            {
+              availableBytes: null,
+              capacityBytes: null,
+              path: "/srv/media/default",
+            },
+          ],
+        },
+      ],
       failures: [],
       is4k,
       kind,
@@ -377,6 +395,26 @@ describe("media request routes", () => {
         "request_temporarily_unavailable",
       );
       expect(response.body).not.toContain(privateMessage);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns an actionable conflict before writing when no default route exists", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({ destinations: [], failures: [], is4k, kind }),
+    );
+    const { app, createMediaRequest, headers } = await harness({ listRequestRouting });
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { is4k: true, kind: "movie", tmdbId: 278 },
+        url: "/v1/requests",
+      });
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_routing_unavailable");
+      expect(createMediaRequest).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }
