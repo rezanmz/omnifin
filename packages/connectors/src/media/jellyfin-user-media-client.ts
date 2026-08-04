@@ -3,6 +3,7 @@ import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
   LIBRARY_EPISODE_MAX_STUDIOS,
+  LIBRARY_BROWSE_MAX_TOTAL_RESULTS,
   LIBRARY_EXTRAS_MAX_ITEMS,
   LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
   LIBRARY_MOVIE_MAX_CAST,
@@ -197,6 +198,7 @@ const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
+  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -504,6 +506,7 @@ export interface JellyfinLibraryItem {
 export interface JellyfinLibraryResult {
   items: JellyfinLibraryItem[];
   nextStartIndex: number | null;
+  totalResults: number;
   truncated: boolean;
 }
 
@@ -1512,7 +1515,7 @@ export class JellyfinUserMediaClient {
         operation: "media.library",
         query: {
           EnableImageTypes: "Primary,Backdrop",
-          EnableTotalRecordCount: "false",
+          EnableTotalRecordCount: "true",
           EnableUserData: "true",
           Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
           ImageTypeLimit: "1",
@@ -1528,13 +1531,22 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    const truncated = response.Items.length > input.limit;
+    if (response.TotalRecordCount < input.startIndex + response.Items.length) {
+      throw this.#client.invalidResponse("media.library");
+    }
+    const consumed = Math.min(response.Items.length, input.limit);
+    const nextStartIndex =
+      input.startIndex + consumed < response.TotalRecordCount ? input.startIndex + consumed : null;
+    if (nextStartIndex !== null && consumed === 0) {
+      throw this.#client.invalidResponse("media.library");
+    }
     return {
       items: response.Items.slice(0, input.limit)
         .map(normalizeLibraryItem)
         .filter((item): item is JellyfinLibraryItem => item !== null),
-      nextStartIndex: truncated ? input.startIndex + input.limit : null,
-      truncated,
+      nextStartIndex,
+      totalResults: response.TotalRecordCount,
+      truncated: nextStartIndex !== null,
     };
   }
 

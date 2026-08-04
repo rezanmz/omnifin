@@ -8,6 +8,7 @@ import { idempotencyKeySchema } from "./requests.js";
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
 export const LIBRARY_ARTWORK_MAX_RESULTS = 40;
 export const LIBRARY_BROWSE_MAX_ITEMS = 50;
+export const LIBRARY_BROWSE_MAX_TOTAL_RESULTS = 10_000_000;
 export const LIBRARY_EPISODE_MAX_CREDITS = 24;
 export const LIBRARY_EPISODE_MAX_GENRES = 20;
 export const LIBRARY_EPISODE_MAX_STUDIOS = 12;
@@ -742,6 +743,7 @@ export const libraryBrowseResponseSchema = z
     nextCursor: libraryCursorSchema.nullable(),
     source: libraryBrowseSourceSchema,
     state: z.enum(["complete", "empty", "unavailable"]),
+    totalResults: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullable(),
   })
   .superRefine((response, context) => {
     const references = new Set<string>();
@@ -773,6 +775,24 @@ export const libraryBrowseResponseSchema = z
         code: "custom",
         message: "Unavailable library sources cannot return media or pagination.",
         path: ["items"],
+      });
+    }
+    if (healthy !== (response.totalResults !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Only a healthy library source can report an exact result total.",
+        path: ["totalResults"],
+      });
+    }
+    if (
+      response.totalResults !== null &&
+      (response.totalResults < response.items.length ||
+        (response.items.length === 0) !== (response.totalResults === 0))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library result totals must agree with the returned catalogue state.",
+        path: ["totalResults"],
       });
     }
     if (response.items.length === 0 && response.nextCursor !== null) {

@@ -155,11 +155,13 @@ describe("MediaLibrary", () => {
       ...readyMediaLibraryOutcome.feed,
       items: [mediaLibraryDemoItems[0]!],
       nextCursor: cursor,
+      totalResults: 46,
     };
     const second: LibraryBrowseResponse = {
       ...readyMediaLibraryOutcome.feed,
       items: [mediaLibraryDemoItems[0]!, mediaLibraryDemoItems[1]!],
       nextCursor: null,
+      totalResults: 46,
     };
     const load = vi.fn(async ({ cursor: requestedCursor }: { cursor?: string }) =>
       requestedCursor ? second : first,
@@ -169,11 +171,15 @@ describe("MediaLibrary", () => {
     expect(
       await screen.findByRole("button", { name: /View details for Ember Coast/u }),
     ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "1 of 46 titles loaded" })).toBeVisible();
+    expect(within(screen.getByText("Total").closest("div")!).getByText("46")).toBeVisible();
+    expect(within(screen.getByText("Loaded").closest("div")!).getByText("1")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Reveal more" }));
     expect(
       await screen.findByRole("button", { name: /View details for Northern Lights/u }),
     ).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "2 of 46 titles loaded" })).toBeVisible();
     expect(load).toHaveBeenLastCalledWith(
       expect.objectContaining({ cursor }),
       expect.any(AbortSignal),

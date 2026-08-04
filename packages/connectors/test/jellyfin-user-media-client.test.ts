@@ -419,6 +419,7 @@ describe("JellyfinUserMediaClient", () => {
           series,
           { ...movie, Id: "hidden-overflow-item" },
         ],
+        TotalRecordCount: 46,
       }),
     ]);
 
@@ -450,11 +451,12 @@ describe("JellyfinUserMediaClient", () => {
         }),
       ],
       nextStartIndex: 32,
+      totalResults: 46,
       truncated: true,
     });
     expect(requests[0]?.url.pathname).toBe("/base/Users/paired-user-id/Items");
     expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
-      EnableTotalRecordCount: "false",
+      EnableTotalRecordCount: "true",
       EnableUserData: "true",
       IncludeItemTypes: "Movie,Series",
       IsMissing: "false",
@@ -474,7 +476,9 @@ describe("JellyfinUserMediaClient", () => {
   });
 
   it("keeps Jellyfin series catalogue items whose media type is Unknown", async () => {
-    const { client, requests } = clientWithResponses([jsonResponse({ Items: [series] })]);
+    const { client, requests } = clientWithResponses([
+      jsonResponse({ Items: [series], TotalRecordCount: 1 }),
+    ]);
 
     await expect(
       client.readLibrary({
@@ -487,6 +491,7 @@ describe("JellyfinUserMediaClient", () => {
     ).resolves.toMatchObject({
       items: [{ externalId: "series-upstream-1", kind: "series", title: "Northern Lights" }],
       nextStartIndex: null,
+      totalResults: 1,
       truncated: false,
     });
     expect(requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Series");
@@ -504,6 +509,7 @@ describe("JellyfinUserMediaClient", () => {
           },
           { ...movie, Id: "runtime-missing", RunTimeTicks: null },
         ],
+        TotalRecordCount: 2,
       }),
     ]);
     await expect(
@@ -523,6 +529,7 @@ describe("JellyfinUserMediaClient", () => {
         }),
       ],
       nextStartIndex: null,
+      totalResults: 2,
       truncated: false,
     });
     expect(movieClient.requests[0]?.url.searchParams.get("IncludeItemTypes")).toBe("Movie");
@@ -531,7 +538,7 @@ describe("JellyfinUserMediaClient", () => {
     expect(movieClient.requests[0]?.url.searchParams.get("SortOrder")).toBe("Ascending");
 
     const malformed = clientWithResponses([
-      jsonResponse({ Items: [{ ...movie, Type: "Episode" }] }),
+      jsonResponse({ Items: [{ ...movie, Type: "Episode" }], TotalRecordCount: 1 }),
     ]);
     await expect(
       malformed.client.readLibrary({
@@ -551,6 +558,34 @@ describe("JellyfinUserMediaClient", () => {
         userId: "paired-user-id",
       }),
     ).rejects.toBeDefined();
+  });
+
+  it.each([
+    { response: { Items: [movie] }, title: "a missing total" },
+    { response: { Items: [movie], TotalRecordCount: 0 }, title: "a total below the returned page" },
+    { response: { Items: [], TotalRecordCount: -1 }, title: "a negative total" },
+    { response: { Items: [], TotalRecordCount: 1.5 }, title: "a fractional total" },
+    {
+      response: { Items: [], TotalRecordCount: 10_000_001 },
+      title: "an implausibly large total",
+    },
+    {
+      response: { Items: [], TotalRecordCount: 29 },
+      startIndex: 30,
+      title: "a total behind the requested cursor",
+    },
+  ])("rejects $title", async ({ response, startIndex = 0 }) => {
+    const { client } = clientWithResponses([jsonResponse(response)]);
+
+    await expect(
+      client.readLibrary({
+        kind: "all",
+        limit: 30,
+        sort: "recent",
+        startIndex,
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.library" });
   });
 
   it("normalizes bounded movie metadata and owned media without exposing filenames or paths", async () => {

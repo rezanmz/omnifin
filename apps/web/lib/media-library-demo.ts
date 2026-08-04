@@ -141,6 +141,7 @@ export const readyMediaLibraryOutcome = {
     nextCursor: null,
     source: { displayName: "Living Room Jellyfin", failure: null, status: "healthy" },
     state: "complete",
+    totalResults: mediaLibraryDemoItems.length,
   } satisfies LibraryBrowseResponse,
   status: "ready",
 } as const;
@@ -152,6 +153,7 @@ export const emptyMediaLibraryOutcome = {
     nextCursor: null,
     source: { displayName: "Living Room Jellyfin", failure: null, status: "healthy" },
     state: "empty",
+    totalResults: 0,
   } satisfies LibraryBrowseResponse,
   status: "ready",
 } as const;
@@ -174,6 +176,7 @@ export const unavailableMediaLibraryOutcome = {
       status: "unavailable",
     },
     state: "unavailable",
+    totalResults: null,
   } satisfies LibraryBrowseResponse,
   status: "ready",
 } as const;
