@@ -1170,11 +1170,6 @@ const managedRemovalModes = [
   "remove_from_radarr_and_delete_files",
 ] as const satisfies readonly LibraryRemovalMode[];
 
-const unmonitoredManagedRemovalModes = [
-  "delete_files_and_unmonitor",
-  "remove_from_radarr_and_delete_files",
-] as const satisfies readonly LibraryRemovalMode[];
-
 export const libraryRemovalPreviewSchema = z
   .strictObject({
     confirmation: z.strictObject({
