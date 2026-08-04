@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "305dcab7-2c4c-43a1-a92b-ad053fa6e4a6",
-  "prevId": "cbf9d2eb-f553-4db8-81b4-dbe3a6693e9f",
+  "id": "f34a47c8-b244-4533-b0b5-6b2e939a3db6",
+  "prevId": "bd20e3cc-6409-421d-923b-24ef018ca7c1",
   "tables": {
     "acquisition_grab_operations": {
       "name": "acquisition_grab_operations",
@@ -2172,6 +2172,627 @@
         "library_mutation_operations_timestamp_order_check": {
           "name": "library_mutation_operations_timestamp_order_check",
           "value": "\"library_mutation_operations\".\"completed_at\" is null or \"library_mutation_operations\".\"completed_at\" >= \"library_mutation_operations\".\"created_at\""
+        }
+      }
+    },
+    "library_removal_operations": {
+      "name": "library_removal_operations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "link_revision": {
+          "name": "link_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_reference_id": {
+          "name": "media_reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preview_id": {
+          "name": "preview_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key_hash": {
+          "name": "idempotency_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint_hash": {
+          "name": "fingerprint_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'running'"
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "library_removal_operations_user_key_unique": {
+          "name": "library_removal_operations_user_key_unique",
+          "columns": ["user_id", "idempotency_key_hash"],
+          "isUnique": true
+        },
+        "library_removal_operations_preview_unique": {
+          "name": "library_removal_operations_preview_unique",
+          "columns": ["preview_id"],
+          "isUnique": true
+        },
+        "library_removal_operations_state_created_idx": {
+          "name": "library_removal_operations_state_created_idx",
+          "columns": ["state", "created_at"],
+          "isUnique": false
+        },
+        "library_removal_operations_reference_idx": {
+          "name": "library_removal_operations_reference_idx",
+          "columns": ["media_reference_id", "created_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "library_removal_operations_user_id_users_id_fk": {
+          "name": "library_removal_operations_user_id_users_id_fk",
+          "tableFrom": "library_removal_operations",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "library_removal_operations_media_reference_id_media_references_id_fk": {
+          "name": "library_removal_operations_media_reference_id_media_references_id_fk",
+          "tableFrom": "library_removal_operations",
+          "tableTo": "media_references",
+          "columnsFrom": ["media_reference_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "library_removal_operations_service_identity_link_fk": {
+          "name": "library_removal_operations_service_identity_link_fk",
+          "tableFrom": "library_removal_operations",
+          "tableTo": "service_identity_links",
+          "columnsFrom": ["service_identity_link_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "library_removal_operations_id_check": {
+          "name": "library_removal_operations_id_check",
+          "value": "length(\"library_removal_operations\".\"id\") = 48\n        and substr(\"library_removal_operations\".\"id\", 1, 26) = 'library_removal_operation_'\n        and substr(\"library_removal_operations\".\"id\", 27) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_preview_id_check": {
+          "name": "library_removal_operations_preview_id_check",
+          "value": "length(\"library_removal_operations\".\"preview_id\") = 46\n        and substr(\"library_removal_operations\".\"preview_id\", 1, 24) = 'library_removal_preview_'\n        and substr(\"library_removal_operations\".\"preview_id\", 25) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_session_id_check": {
+          "name": "library_removal_operations_session_id_check",
+          "value": "length(\"library_removal_operations\".\"session_id\") between 1 and 128\n        and \"library_removal_operations\".\"session_id\" not glob '*[^A-Za-z0-9._:-]*'"
+        },
+        "library_removal_operations_link_revision_check": {
+          "name": "library_removal_operations_link_revision_check",
+          "value": "\"library_removal_operations\".\"link_revision\" between 0 and 2147483647"
+        },
+        "library_removal_operations_mode_check": {
+          "name": "library_removal_operations_mode_check",
+          "value": "\"library_removal_operations\".\"mode\" in (\n        'delete_files_keep_monitored',\n        'delete_files_and_unmonitor',\n        'remove_from_radarr_and_delete_files',\n        'delete_unmanaged_files'\n      )"
+        },
+        "library_removal_operations_key_hash_check": {
+          "name": "library_removal_operations_key_hash_check",
+          "value": "length(\"library_removal_operations\".\"idempotency_key_hash\") = 43\n        and \"library_removal_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_fingerprint_hash_check": {
+          "name": "library_removal_operations_fingerprint_hash_check",
+          "value": "length(\"library_removal_operations\".\"fingerprint_hash\") = 43\n        and \"library_removal_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_state_check": {
+          "name": "library_removal_operations_state_check",
+          "value": "\"library_removal_operations\".\"state\" in ('running', 'succeeded', 'reconcile_required', 'failed')"
+        },
+        "library_removal_operations_response_check": {
+          "name": "library_removal_operations_response_check",
+          "value": "length(\"library_removal_operations\".\"response_json\") between 2 and 16384\n        and json_valid(\"library_removal_operations\".\"response_json\")\n        and json_type(\"library_removal_operations\".\"response_json\") = 'object'"
+        },
+        "library_removal_operations_payload_check": {
+          "name": "library_removal_operations_payload_check",
+          "value": "length(\"library_removal_operations\".\"encrypted_payload\") between 1 and 65536"
+        },
+        "library_removal_operations_outcome_check": {
+          "name": "library_removal_operations_outcome_check",
+          "value": "(\n          \"library_removal_operations\".\"state\" = 'running'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is null\n        ) or (\n          \"library_removal_operations\".\"state\" = 'succeeded'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is not null\n        ) or (\n          \"library_removal_operations\".\"state\" in ('reconcile_required', 'failed')\n          and length(\"library_removal_operations\".\"failure_code\") between 1 and 64\n          and \"library_removal_operations\".\"completed_at\" is not null\n        )"
+        },
+        "library_removal_operations_timestamp_order_check": {
+          "name": "library_removal_operations_timestamp_order_check",
+          "value": "\"library_removal_operations\".\"created_at\" >= 0\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"updated_at\"\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"started_at\"\n        and (\"library_removal_operations\".\"completed_at\" is null\n          or (\"library_removal_operations\".\"completed_at\" >= \"library_removal_operations\".\"started_at\"\n            and \"library_removal_operations\".\"completed_at\" <= \"library_removal_operations\".\"updated_at\"))"
+        }
+      }
+    },
+    "library_removal_previews": {
+      "name": "library_removal_previews",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "link_revision": {
+          "name": "link_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_reference_id": {
+          "name": "media_reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "library_removal_previews_expiry_idx": {
+          "name": "library_removal_previews_expiry_idx",
+          "columns": ["expires_at"],
+          "isUnique": false
+        },
+        "library_removal_previews_user_created_idx": {
+          "name": "library_removal_previews_user_created_idx",
+          "columns": ["user_id", "created_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "library_removal_previews_user_id_users_id_fk": {
+          "name": "library_removal_previews_user_id_users_id_fk",
+          "tableFrom": "library_removal_previews",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "library_removal_previews_media_reference_id_media_references_id_fk": {
+          "name": "library_removal_previews_media_reference_id_media_references_id_fk",
+          "tableFrom": "library_removal_previews",
+          "tableTo": "media_references",
+          "columnsFrom": ["media_reference_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "library_removal_previews_service_identity_link_fk": {
+          "name": "library_removal_previews_service_identity_link_fk",
+          "tableFrom": "library_removal_previews",
+          "tableTo": "service_identity_links",
+          "columnsFrom": ["service_identity_link_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "library_removal_previews_id_check": {
+          "name": "library_removal_previews_id_check",
+          "value": "length(\"library_removal_previews\".\"id\") = 46\n        and substr(\"library_removal_previews\".\"id\", 1, 24) = 'library_removal_preview_'\n        and substr(\"library_removal_previews\".\"id\", 25) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_previews_session_id_check": {
+          "name": "library_removal_previews_session_id_check",
+          "value": "length(\"library_removal_previews\".\"session_id\") between 1 and 128\n        and \"library_removal_previews\".\"session_id\" not glob '*[^A-Za-z0-9._:-]*'"
+        },
+        "library_removal_previews_link_revision_check": {
+          "name": "library_removal_previews_link_revision_check",
+          "value": "\"library_removal_previews\".\"link_revision\" between 0 and 2147483647"
+        },
+        "library_removal_previews_payload_check": {
+          "name": "library_removal_previews_payload_check",
+          "value": "length(\"library_removal_previews\".\"encrypted_payload\") between 1 and 65536"
+        },
+        "library_removal_previews_timestamp_order_check": {
+          "name": "library_removal_previews_timestamp_order_check",
+          "value": "\"library_removal_previews\".\"created_at\" >= 0\n        and \"library_removal_previews\".\"created_at\" <= \"library_removal_previews\".\"updated_at\"\n        and \"library_removal_previews\".\"created_at\" < \"library_removal_previews\".\"expires_at\"\n        and (\"library_removal_previews\".\"consumed_at\" is null\n          or (\"library_removal_previews\".\"consumed_at\" between \"library_removal_previews\".\"created_at\" and \"library_removal_previews\".\"expires_at\"\n            and \"library_removal_previews\".\"consumed_at\" <= \"library_removal_previews\".\"updated_at\"))"
+        }
+      }
+    },
+    "media_download_grants": {
+      "name": "media_download_grants",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "public_token_hash": {
+          "name": "public_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "link_revision": {
+          "name": "link_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reference_id": {
+          "name": "reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_type": {
+          "name": "content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'prepared'"
+        },
+        "bytes_transferred": {
+          "name": "bytes_transferred",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "media_download_grants_public_token_unique": {
+          "name": "media_download_grants_public_token_unique",
+          "columns": ["public_token_hash"],
+          "isUnique": true
+        },
+        "media_download_grants_user_expiry_idx": {
+          "name": "media_download_grants_user_expiry_idx",
+          "columns": ["user_id", "expires_at"],
+          "isUnique": false
+        },
+        "media_download_grants_session_idx": {
+          "name": "media_download_grants_session_idx",
+          "columns": ["session_id"],
+          "isUnique": false
+        },
+        "media_download_grants_expiry_idx": {
+          "name": "media_download_grants_expiry_idx",
+          "columns": ["expires_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "media_download_grants_user_id_users_id_fk": {
+          "name": "media_download_grants_user_id_users_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_session_id_sessions_id_fk": {
+          "name": "media_download_grants_session_id_sessions_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_reference_id_media_references_id_fk": {
+          "name": "media_download_grants_reference_id_media_references_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "media_references",
+          "columnsFrom": ["reference_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_link_fk": {
+          "name": "media_download_grants_link_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "service_identity_links",
+          "columnsFrom": ["service_identity_link_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "media_download_grants_id_check": {
+          "name": "media_download_grants_id_check",
+          "value": "length(\"media_download_grants\".\"id\") = 37\n        and substr(\"media_download_grants\".\"id\", 1, 15) = 'download_grant_'\n        and substr(\"media_download_grants\".\"id\", 16) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_download_grants_public_token_hash_check": {
+          "name": "media_download_grants_public_token_hash_check",
+          "value": "length(\"media_download_grants\".\"public_token_hash\") = 43\n        and \"media_download_grants\".\"public_token_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_download_grants_link_revision_check": {
+          "name": "media_download_grants_link_revision_check",
+          "value": "\"media_download_grants\".\"link_revision\" between 0 and 2147483647"
+        },
+        "media_download_grants_payload_check": {
+          "name": "media_download_grants_payload_check",
+          "value": "length(\"media_download_grants\".\"encrypted_payload\") between 1 and 32768"
+        },
+        "media_download_grants_filename_check": {
+          "name": "media_download_grants_filename_check",
+          "value": "length(\"media_download_grants\".\"filename\") between 1 and 240"
+        },
+        "media_download_grants_content_type_check": {
+          "name": "media_download_grants_content_type_check",
+          "value": "length(\"media_download_grants\".\"content_type\") between 3 and 128"
+        },
+        "media_download_grants_size_check": {
+          "name": "media_download_grants_size_check",
+          "value": "\"media_download_grants\".\"size_bytes\" between 1 and 140737488355328\n        and \"media_download_grants\".\"bytes_transferred\" between 0 and \"media_download_grants\".\"size_bytes\""
+        },
+        "media_download_grants_state_check": {
+          "name": "media_download_grants_state_check",
+          "value": "\"media_download_grants\".\"state\" in ('prepared', 'streaming', 'completed', 'cancelled', 'failed')"
+        },
+        "media_download_grants_timestamp_order_check": {
+          "name": "media_download_grants_timestamp_order_check",
+          "value": "\"media_download_grants\".\"created_at\" < \"media_download_grants\".\"expires_at\"\n        and \"media_download_grants\".\"updated_at\" >= \"media_download_grants\".\"created_at\"\n        and (\"media_download_grants\".\"started_at\" is null or \"media_download_grants\".\"started_at\" between \"media_download_grants\".\"created_at\" and \"media_download_grants\".\"updated_at\")\n        and (\"media_download_grants\".\"completed_at\" is null or (\n          \"media_download_grants\".\"started_at\" is not null\n          and \"media_download_grants\".\"completed_at\" between \"media_download_grants\".\"started_at\" and \"media_download_grants\".\"updated_at\"\n        ))"
         }
       }
     },
