@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LiquidGlassEnvironment } from "./liquid-glass-environment";
@@ -9,7 +9,7 @@ describe("LiquidGlassEnvironment", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps expensive backdrop refinement out of the initial content paint", () => {
+  it("keeps expensive backdrop refinement out of the initial content paint", async () => {
     let animationCallback: FrameRequestCallback | undefined;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       animationCallback = callback;
@@ -30,7 +30,9 @@ describe("LiquidGlassEnvironment", () => {
     expect(document.documentElement).not.toHaveAttribute("data-liquid-glass-ready");
 
     act(() => animationCallback?.(performance.now()));
-    expect(document.documentElement).toHaveAttribute("data-liquid-glass-ready");
+    await waitFor(() =>
+      expect(document.documentElement).toHaveAttribute("data-liquid-glass-ready"),
+    );
   });
 
   it("cancels a pending material refinement when it unmounts", () => {
