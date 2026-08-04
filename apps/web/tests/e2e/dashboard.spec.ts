@@ -665,6 +665,7 @@ test("request composer delegates a bounded request through the verified session"
 }) => {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
+  await mockMediaRequestRouting(page);
   const capture = await mockMediaRequestCreation(page);
   await page.goto("/");
 
@@ -681,7 +682,7 @@ test("request composer delegates a bounded request through the verified session"
   );
   await submitAction.click();
 
-  await expect(composer.getByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+  await expect(composer.getByRole("heading", { name: "Request received" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollTop)).toBe(
     rootScrollBeforeSubmission,
   );
@@ -719,7 +720,7 @@ test("request composer delegates opaque advanced routing without exposing storag
     .selectOption(mediaRequestRoutingReference("root-archive"));
   await composer.getByRole("button", { name: /Send request/i }).click();
 
-  await expect(composer.getByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+  await expect(composer.getByRole("heading", { name: "Request received" })).toBeVisible();
   expect(capture.body).toEqual({
     is4k: false,
     kind: "movie",

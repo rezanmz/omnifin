@@ -413,11 +413,15 @@ const seerrCreatedRequestSchema = z.object({
   createdAt: z.iso.datetime({ offset: true }),
   id: z.int().positive().max(2_147_483_647),
   is4k: z.boolean().default(false),
+  languageProfileId: z.int().positive().max(2_147_483_647).nullish(),
   media: z.object({ tmdbId: upstreamIdentifierSchema }),
+  profileId: z.int().positive().max(2_147_483_647).nullish(),
+  rootFolder: z.string().trim().min(1).max(1_024).nullish(),
   seasons: z
     .array(z.object({ seasonNumber: z.int().nonnegative().max(10_000) }))
     .max(100)
     .default([]),
+  serverId: z.int().nonnegative().max(2_147_483_647).nullish(),
   status: z.int().min(1).max(5),
   type: z.enum(["movie", "tv"]),
 });
@@ -488,7 +492,8 @@ export type SeerrRequestErrorReason =
   | "no_seasons_available"
   | "request_conflict"
   | "request_denied"
-  | "request_not_found";
+  | "request_not_found"
+  | "routing_unavailable";
 
 export class SeerrRequestError extends Error {
   public readonly reason: SeerrRequestErrorReason;
@@ -1947,6 +1952,16 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     const parsed = seerrCreatedRequestSchema.safeParse(decoded);
     if (!parsed.success) throw invalidRequestResponse();
     const created = parsed.data;
+    if (
+      selectedRouting &&
+      (created.serverId !== selectedRouting.serverId ||
+        created.profileId !== selectedRouting.profileId ||
+        created.rootFolder !== selectedRouting.rootFolder ||
+        (selectedRouting.languageProfileId !== undefined &&
+          created.languageProfileId !== selectedRouting.languageProfileId))
+    ) {
+      throw new SeerrRequestError("routing_unavailable");
+    }
     return mediaRequestResponseSchema.parse({
       createdAt: created.createdAt,
       id: `request:${created.id}`,

@@ -48,6 +48,7 @@ export type MediaRequestClientErrorKind =
   | "pending"
   | "rate_limited"
   | "routing"
+  | "routing_unavailable"
   | "signed_out"
   | "unavailable";
 
@@ -145,6 +146,9 @@ function mappedError(status: number, code: string, message: string): MediaReques
   }
   if (code === "request_routing_invalid") {
     return new MediaRequestClientError("routing", code, message, "new_key");
+  }
+  if (code === "request_routing_unavailable") {
+    return new MediaRequestClientError("routing_unavailable", code, message, "new_key");
   }
   if (code === "request_configuration_unavailable") {
     return new MediaRequestClientError("configuration", code, message, "new_key");

@@ -145,7 +145,15 @@ function client(
     }),
   }),
   loadEligibility: MediaRequestClient["loadEligibility"] = async () => eligibility,
-  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async () => routingOptions,
+  loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) => ({
+    ...routingOptions,
+    destinations: routingOptions.destinations.map((destination) => ({
+      ...destination,
+      service: kind === "movie" ? "radarr" : "sonarr",
+    })),
+    is4k,
+    kind,
+  }),
 ): MediaRequestClient {
   return { create, loadEligibility, loadRoutingOptions };
 }
@@ -217,7 +225,7 @@ describe("request composer", () => {
         }),
       ),
     );
-    expect(await screen.findByRole("heading", { name: "The signal is in motion" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Request received" })).toBeVisible();
     expect(screen.getByText("#42")).toBeVisible();
     expect(onCreated).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Done" }));
@@ -265,6 +273,7 @@ describe("request composer", () => {
     await user.click(screen.getByRole("button", { name: /Send request/i }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(loadRoutingOptions).toHaveBeenCalledOnce();
     expect(loadRoutingOptions).toHaveBeenCalledWith("series", false, expect.any(AbortSignal));
     expect(create.mock.calls[0]?.[0]).toEqual({
       is4k: false,
@@ -303,7 +312,7 @@ describe("request composer", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Request interrupted");
     await user.click(screen.getByRole("button", { name: "Review" }));
     await user.click(screen.getByRole("button", { name: /Send request/i }));
-    await screen.findByRole("heading", { name: "The signal is in motion" });
+    await screen.findByRole("heading", { name: "Request received" });
 
     const firstKey = create.mock.calls[0]?.[1].idempotencyKey;
     const secondKey = create.mock.calls[1]?.[1].idempotencyKey;
@@ -320,6 +329,27 @@ describe("request composer", () => {
     await user.click(await screen.findByRole("button", { name: /Specific/i }));
     expect(screen.getByRole("button", { name: /Send request/i })).toBeDisabled();
     expect(screen.getByText("Add at least one season to continue.")).toBeVisible();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("blocks submission when the selected format has no healthy default route", async () => {
+    const create = vi.fn<MediaRequestClient["create"]>();
+    render(
+      <RequestComposer
+        client={client(create, undefined, async (kind, is4k) => ({
+          ...routingOptions,
+          destinations: [],
+          is4k,
+          kind,
+        }))}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    expect(await screen.findByText("Automatic route unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Send request/i })).toBeDisabled();
     expect(create).not.toHaveBeenCalled();
   });
 });

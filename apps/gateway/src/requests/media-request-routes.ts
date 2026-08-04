@@ -69,6 +69,13 @@ function requestError(error: MediaRequestServiceError, reply: FastifyReply) {
         message: "The selected request routing expired or is no longer valid.",
         statusCode: 409,
       });
+    case "routing_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_routing_unavailable",
+        message: "No healthy default destination can route the selected format.",
+        statusCode: 409,
+      });
     case "idempotency_conflict":
       return new SafeHttpError({
         cause: error,
