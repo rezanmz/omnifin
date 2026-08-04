@@ -1,5 +1,6 @@
 import type {
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -8,7 +9,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
-import type { DiscoveryMediaDetailClient } from "../lib/media-details";
+import type { DiscoveryMediaDetailClient, DiscoveryPersonDetailClient } from "../lib/media-details";
 import { GlobalSearch } from "./global-search";
 import { GlobalSearchLoader } from "./global-search-loader";
 
@@ -82,6 +83,34 @@ const detailResponse: DiscoveryMediaDetailResponse = {
     voteAverage: 8.2,
     voteCount: 27_000,
     year: 1999,
+  },
+};
+
+const personResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    biography: "An actor and producer known for character-driven films.",
+    birthday: "1963-12-18",
+    birthplace: "Shawnee, Oklahoma",
+    credits: [
+      {
+        availability: "available",
+        kind: "movie",
+        role: "Tyler Durden",
+        title: "Fight Club",
+        tmdbId: 550,
+        voteAverage: 8.4,
+        year: 1999,
+      },
+    ],
+    creditsState: "ready",
+    deathday: null,
+    department: "Acting",
+    id: "person:287",
+    name: "Brad Pitt",
+    profilePath: null,
+    source: "seerr",
+    tmdbId: 287,
   },
 };
 
@@ -233,6 +262,33 @@ describe("global search", () => {
     expect(within(dialog).getByRole("heading", { name: "The Matrix" })).toBeVisible();
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("opens a normalized person profile directly from global search", async () => {
+    const user = userEvent.setup();
+    const loadPerson = vi.fn<DiscoveryPersonDetailClient["load"]>(async () => personResponse);
+    render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        initialOpen
+        initialQuery="matrix"
+        personClient={{ load: loadPerson }}
+      />,
+    );
+
+    await user.click(await screen.findByRole("option", { name: /Brad Pitt/i }));
+    await user.click(screen.getByRole("button", { name: "View profile for Brad Pitt" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Brad Pitt person context" });
+    expect(within(dialog).getByRole("heading", { name: "Brad Pitt" })).toBeVisible();
+    expect(within(dialog).getByText(personResponse.item.biography!)).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+    expect(loadPerson).toHaveBeenCalledWith(
+      { tmdbId: 287 },
+      { language: expect.any(String) },
+      expect.any(AbortSignal),
+    );
   });
 
   it("opens a keyboard-guided prompt without requesting one-character queries", async () => {
