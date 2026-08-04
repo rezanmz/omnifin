@@ -4,6 +4,7 @@ import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
   LIBRARY_EPISODE_MAX_STUDIOS,
+  LIBRARY_BROWSE_MAX_TOTAL_RESULTS,
   LIBRARY_EXTRAS_MAX_ITEMS,
   LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
   LIBRARY_MOVIE_MAX_CAST,
@@ -199,6 +200,7 @@ const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
+  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullish(),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -522,6 +524,7 @@ export interface JellyfinLibraryItem {
 export interface JellyfinLibraryResult {
   items: JellyfinLibraryItem[];
   nextStartIndex: number | null;
+  totalResults: number | null;
   truncated: boolean;
 }
 
@@ -1651,7 +1654,7 @@ export class JellyfinUserMediaClient {
         operation: "media.library",
         query: {
           EnableImageTypes: "Primary,Backdrop",
-          EnableTotalRecordCount: "false",
+          EnableTotalRecordCount: "true",
           EnableUserData: "true",
           Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
           ImageTypeLimit: "1",
@@ -1667,13 +1670,31 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    const truncated = response.Items.length > input.limit;
+    const reportedTotalResults = response.TotalRecordCount ?? null;
+    const totalResults =
+      reportedTotalResults !== null &&
+      reportedTotalResults >= input.startIndex + response.Items.length
+        ? reportedTotalResults
+        : null;
+    const consumed = Math.min(response.Items.length, input.limit);
+    const nextStartIndex =
+      totalResults === null
+        ? response.Items.length > input.limit
+          ? input.startIndex + consumed
+          : null
+        : input.startIndex + consumed < totalResults
+          ? input.startIndex + consumed
+          : null;
+    if (nextStartIndex !== null && consumed === 0) {
+      throw this.#client.invalidResponse("media.library");
+    }
     return {
       items: response.Items.slice(0, input.limit)
         .map(normalizeLibraryItem)
         .filter((item): item is JellyfinLibraryItem => item !== null),
-      nextStartIndex: truncated ? input.startIndex + input.limit : null,
-      truncated,
+      nextStartIndex,
+      totalResults,
+      truncated: nextStartIndex !== null,
     };
   }
 
