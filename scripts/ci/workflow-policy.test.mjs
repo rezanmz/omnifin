@@ -151,6 +151,68 @@ test("hosted Playwright installs use the bounded retry helper", () => {
   }
 });
 
+test("edge and stable publications use the bounded OCI signing helper", () => {
+  const edge = workflowDocument("edge.yml");
+  const stable = workflowDocument("publish.yml");
+  const edgeSigning = edge.jobs["attest-candidate"];
+  const stableSigning = stable.jobs["attest-candidate"];
+
+  for (const job of [edgeSigning, stableSigning]) {
+    const checkout = namedStep(job.steps, "Check out the verified signing helper");
+    const signing = job.steps.find((step) =>
+      ["Sign edge candidate digest", "Sign image digest with keyless identity"].includes(step.name),
+    );
+
+    assert.equal(checkout.with["persist-credentials"], false);
+    assert.equal(signing.run, "node scripts/ci/sign-oci-image.mjs");
+  }
+
+  assert.equal(
+    namedStep(edgeSigning.steps, "Check out the verified signing helper").with.ref,
+    "${{ github.event.workflow_run.head_sha }}",
+  );
+  assert.equal(
+    namedStep(stableSigning.steps, "Check out the verified signing helper").with.ref,
+    "${{ inputs.release_sha }}",
+  );
+  assert.doesNotMatch(workflow("edge.yml"), /run: cosign sign/u);
+  assert.doesNotMatch(workflow("publish.yml"), /run: cosign sign/u);
+});
+
+test("release candidates and required artifacts retain stable identities across reruns", () => {
+  const edge = workflow("edge.yml");
+  const stable = workflow("publish.yml");
+  const stableDocument = workflowDocument("publish.yml");
+  const buildUpload = namedStep(
+    stableDocument.jobs["build-candidate"].steps,
+    "Upload candidate bundle",
+  );
+  const sbomUpload = namedStep(stableDocument.jobs["build-candidate"].steps, "Retain release SBOM");
+  const candidateDownload = namedStep(
+    stableDocument.jobs["publish-candidate"].steps,
+    "Download candidate bundle",
+  );
+  const sbomDownload = namedStep(
+    stableDocument.jobs["attest-candidate"].steps,
+    "Download validated SPDX SBOM",
+  );
+
+  assert.match(edge, /CANDIDATE_TAG: edge-candidate-.*\$\{\{ github\.run_id \}\}/u);
+  assert.doesNotMatch(edge.match(/CANDIDATE_TAG:.*$/mu)?.[0] ?? "", /run_attempt/u);
+  assert.match(stable, /candidate-\$\{version\}-\$\{process\.env\.GITHUB_RUN_ID\}/u);
+  assert.doesNotMatch(stable.match(/const candidateTag =.*$/mu)?.[0] ?? "", /RUN_ATTEMPT/u);
+  assert.equal(buildUpload.with.name, "release-candidate-${{ github.run_id }}");
+  assert.equal(buildUpload.with.overwrite, true);
+  assert.equal(candidateDownload.with.name, buildUpload.with.name);
+  assert.equal(
+    sbomUpload.with.name,
+    "omnifin-${{ inputs.version }}-${{ github.run_id }}-spdx-sbom",
+  );
+  assert.equal(sbomUpload.with.overwrite, true);
+  assert.equal(sbomDownload.with.name, sbomUpload.with.name);
+  assert.match(stable, /Existing candidate tag does not match this run's built digest/u);
+});
+
 test("security workflow creates the SBOM output directory before generation", () => {
   const source = workflow("security.yml");
   const prepare = source.indexOf("- name: Prepare SBOM output directory");
