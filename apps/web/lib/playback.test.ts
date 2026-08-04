@@ -1,5 +1,8 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
-import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
+import type {
+  PlaybackContextResponse,
+  PlaybackNegotiationResponse,
+} from "@omnifin/contracts/playback";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { browserPlaybackPath, playbackClient } from "./playback";
@@ -62,6 +65,15 @@ const playback: PlaybackNegotiationResponse = {
   streamPath: `/v1/playback/${sessionId}/master.m3u8`,
   subtitleTracks: [],
 };
+const playbackContext: PlaybackContextResponse = {
+  currentDurationSeconds: 7_200,
+  generatedAt: "2026-07-28T12:30:00.000Z",
+  mediaReferenceId,
+  nextEpisode: null,
+  nextState: "end",
+  segments: [{ endSeconds: 120, kind: "intro", startSeconds: 4 }],
+  segmentsState: "ready",
+};
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -104,6 +116,24 @@ describe("playback client", () => {
       positionSeconds: 1_200,
       subtitleStreamIndex: null,
     });
+  });
+
+  it("loads bounded playback context through the same-origin gateway", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(playbackContext));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(playbackClient.loadContext(mediaReferenceId, controller.signal)).resolves.toEqual(
+      playbackContext,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/${mediaReferenceId}/playback-context`,
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: controller.signal,
+      }),
+    );
   });
 
   it("carries local library-management permission without exposing the principal", async () => {
