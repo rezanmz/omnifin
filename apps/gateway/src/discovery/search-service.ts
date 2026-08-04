@@ -11,6 +11,7 @@ import type { OptionalApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import {
   DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE,
+  DISCOVERY_BROWSE_MAX_PAGES,
   DISCOVERY_FEED_MAX_ITEMS_PER_RAIL,
   discoveryBrowseQuerySchema,
   discoveryBrowseResponseSchema,
@@ -381,7 +382,7 @@ export class DiscoverySearchService {
       generatedAt: this.#clock().toISOString(),
       items,
       page: page.page,
-      totalPages: page.totalPages,
+      totalPages: Math.min(page.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
       totalResults: page.totalResults,
     });
   }

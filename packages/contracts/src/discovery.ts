@@ -12,6 +12,7 @@ export const DISCOVERY_PERSON_MAX_CREDITS = 24;
 export const DISCOVERY_FEED_RAIL_COUNT = 4;
 export const DISCOVERY_FEED_MAX_ITEMS_PER_RAIL = 18;
 export const DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE = 40;
+export const DISCOVERY_BROWSE_MAX_PAGES = 500;
 
 export const DISCOVERY_MOVIE_GENRES = [
   "action",
@@ -188,7 +189,7 @@ export const discoveryBrowseQuerySchema = z
     minimumRating: z.coerce.number().finite().min(0).max(10).optional(),
     minimumVotes: z.coerce.number().int().min(0).max(1_000_000).optional(),
     originalLanguage: discoveryBrowseOriginalLanguageSchema.optional(),
-    page: z.coerce.number().int().min(1).max(500).default(1),
+    page: z.coerce.number().int().min(1).max(DISCOVERY_BROWSE_MAX_PAGES).default(1),
     query: z.string().trim().min(2).max(120).optional(),
     runtimeMax: z.coerce.number().int().min(15).max(600).optional(),
     sort: discoveryBrowseSortSchema.default("popularity"),
@@ -274,8 +275,8 @@ export const discoveryBrowseResponseSchema = z
     criteria: discoveryBrowseQuerySchema,
     generatedAt: z.iso.datetime({ offset: true }),
     items: z.array(discoveryFeedItemSchema).max(DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE),
-    page: z.int().min(1).max(500),
-    totalPages: z.int().min(0).max(500),
+    page: z.int().min(1).max(DISCOVERY_BROWSE_MAX_PAGES),
+    totalPages: z.int().min(0).max(DISCOVERY_BROWSE_MAX_PAGES),
     totalResults: z.int().nonnegative().max(10_000_000),
   })
   .superRefine((response, context) => {
