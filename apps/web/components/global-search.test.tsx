@@ -135,6 +135,7 @@ describe("global search", () => {
       // Firefox may apply scroll anchoring while React replaces the inert placeholder.
       // The handoff must restore the position captured before that DOM replacement.
       scrollTop = 1_283;
+      fireEvent.pointerUp(placeholder);
 
       await waitFor(() =>
         expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
@@ -147,11 +148,14 @@ describe("global search", () => {
     }
   });
 
-  it("retains focus when pointer activation suppresses the placeholder click", async () => {
+  it("retains focus after the complete pointer gesture hands off the lazy search", async () => {
     render(<GlobalSearchLoader client={client()} debounceMs={0} />);
     const placeholder = screen.getByRole("combobox");
 
     fireEvent.pointerDown(placeholder);
+    expect(placeholder).toHaveFocus();
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
+    fireEvent.pointerUp(placeholder);
 
     await waitFor(() =>
       expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
