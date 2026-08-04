@@ -42,6 +42,17 @@ describe("gateway logger", () => {
       method: undefined,
       path: undefined,
     });
+    expect(
+      serialize?.({
+        id: "download-request",
+        method: "GET",
+        url: `/v1/media/library/downloads/media_download_${"s".repeat(22)}`,
+      }),
+    ).toEqual({
+      id: "download-request",
+      method: "GET",
+      path: "/v1/media/library/downloads/[REDACTED]",
+    });
   });
 
   it("omits exception messages, stacks, paths, and credentials from captured logs", async () => {

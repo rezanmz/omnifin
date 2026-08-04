@@ -917,6 +917,55 @@ export const libraryArtworkResultIdSchema = z
 export const libraryMutationIdempotencyKeySchema = idempotencyKeySchema;
 export type LibraryMutationIdempotencyKey = z.infer<typeof libraryMutationIdempotencyKeySchema>;
 
+export const libraryDownloadGrantIdSchema = z.string().regex(/^media_download_[A-Za-z0-9_-]{22}$/u);
+export type LibraryDownloadGrantId = z.infer<typeof libraryDownloadGrantIdSchema>;
+
+export const libraryDownloadPrepareRequestSchema = z.strictObject({});
+export type LibraryDownloadPrepareRequest = z.infer<typeof libraryDownloadPrepareRequestSchema>;
+
+const libraryDownloadFilenameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(240)
+  .refine((value) => !/[\p{Cc}\p{Cf}/\\"]/u.test(value) && value !== "." && value !== "..");
+
+const libraryDownloadContentTypeSchema = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u);
+
+export const libraryDownloadPrepareResponseSchema = z
+  .strictObject({
+    archiveRetrieval: z.enum(["unknown", "possible"]),
+    contentType: libraryDownloadContentTypeSchema,
+    expiresAt: timestampSchema,
+    filename: libraryDownloadFilenameSchema,
+    generatedAt: timestampSchema,
+    grantId: libraryDownloadGrantIdSchema,
+    path: z.string().max(160),
+    referenceId: mediaReferenceIdSchema,
+    sizeBytes: z.int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .superRefine((response, context) => {
+    if (response.path !== `/v1/media/library/downloads/${response.grantId}`) {
+      context.addIssue({
+        code: "custom",
+        message: "Original-download paths must belong to their opaque grant.",
+        path: ["path"],
+      });
+    }
+    if (Date.parse(response.expiresAt) <= Date.parse(response.generatedAt)) {
+      context.addIssue({
+        code: "custom",
+        message: "Original-download grants must expire after they are generated.",
+        path: ["expiresAt"],
+      });
+    }
+  });
+export type LibraryDownloadPrepareResponse = z.infer<typeof libraryDownloadPrepareResponseSchema>;
+
 export const libraryScanRequestSchema = z.strictObject({});
 export type LibraryScanRequest = z.infer<typeof libraryScanRequestSchema>;
 
@@ -1049,6 +1098,12 @@ export const librarySeasonEpisodesQueryJsonSchema = withoutSchemaDialect(
 );
 export const librarySeasonEpisodesResponseJsonSchema = withoutSchemaDialect(
   librarySeasonEpisodesResponseSchema,
+);
+export const libraryDownloadPrepareRequestJsonSchema = withoutSchemaDialect(
+  libraryDownloadPrepareRequestSchema,
+);
+export const libraryDownloadPrepareResponseJsonSchema = withoutSchemaDialect(
+  libraryDownloadPrepareResponseSchema,
 );
 export const libraryScanRequestJsonSchema = withoutSchemaDialect(libraryScanRequestSchema);
 export const libraryItemRefreshRequestJsonSchema = withoutSchemaDialect(

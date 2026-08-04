@@ -1,6 +1,19 @@
 export { createApp, type CreateAppOptions } from "./app.js";
 export { hasPermission, requirePermission } from "./auth/authorization.js";
 export {
+  originalDownloadRoutes,
+  type OriginalDownloadRoutesOptions,
+} from "./media/original-download-routes.js";
+export {
+  OriginalDownloadError,
+  OriginalDownloadService,
+  type OriginalDownloadClientFactoryInput,
+  type OriginalDownloadContext,
+  type OriginalDownloadDependencies,
+  type OriginalDownloadErrorReason,
+  type OriginalDownloadTransfer,
+} from "./media/original-download-service.js";
+export {
   IdentityLinkService,
   IdentityLinkServiceError,
   type IdentityLinkRevocationResult,

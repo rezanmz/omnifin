@@ -30,6 +30,7 @@ const requiredTables = [
   "media_issues",
   "media_issue_operations",
   "media_references",
+  "media_download_grants",
   "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
@@ -165,6 +166,23 @@ const requiredColumns = {
     "last_used_at",
     "link_revision",
     "service_identity_link_id",
+    "user_id",
+  ],
+  media_download_grants: [
+    "bytes_transferred",
+    "completed_at",
+    "content_type",
+    "encrypted_payload",
+    "expires_at",
+    "filename",
+    "link_revision",
+    "public_token_hash",
+    "reference_id",
+    "service_identity_link_id",
+    "session_id",
+    "size_bytes",
+    "started_at",
+    "state",
     "user_id",
   ],
   media_issues: [
@@ -341,6 +359,12 @@ const requiredIndexes = {
     "media_references_expiry_idx",
     "media_references_link_item_unique",
     "media_references_user_last_used_idx",
+  ],
+  media_download_grants: [
+    "media_download_grants_expiry_idx",
+    "media_download_grants_public_token_unique",
+    "media_download_grants_session_idx",
+    "media_download_grants_user_expiry_idx",
   ],
   media_issues: [
     "media_issues_media_created_idx",
@@ -528,8 +552,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0023_user_media_state",
-  "Current migration journal must end at migration 0023_user_media_state.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0024_original_media_downloads",
+  "Current migration journal must end at migration 0024_original_media_downloads.",
 );
 
 try {
@@ -645,6 +670,43 @@ try {
       .map(({ from, to }) => `${from}:${to}`);
     if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
       throw new Error("Migration is missing the user-bound media reference foreign key.");
+    }
+
+    const mediaDownloadForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_download_grants)",
+    ) as {
+      from: string;
+      id: number;
+      seq: number;
+      table: string;
+      to: string;
+    }[];
+    const downloadLinkForeignKeyId = mediaDownloadForeignKeys.find(
+      ({ from, table }) =>
+        from === "service_identity_link_id" && table === "service_identity_links",
+    )?.id;
+    const downloadLinkForeignKeyColumns = mediaDownloadForeignKeys
+      .filter(({ id }) => id === downloadLinkForeignKeyId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ from, to }) => `${from}:${to}`);
+    if (downloadLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
+      throw new Error(
+        "Migration is missing the user-bound original-download identity foreign key.",
+      );
+    }
+    for (const [column, table] of [
+      ["user_id", "users"],
+      ["session_id", "sessions"],
+      ["reference_id", "media_references"],
+    ] as const) {
+      if (
+        !mediaDownloadForeignKeys.some(
+          ({ from, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id",
+        )
+      ) {
+        throw new Error(`Migration is missing the original-download ${column} foreign key.`);
+      }
     }
 
     const userMediaStateForeignKeys = database.sqlite.pragma(
@@ -925,7 +987,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0023.",
+      "Production migration did not advance the historical fixture exactly through migration 0024.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1090,7 +1152,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0023, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0024, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

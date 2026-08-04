@@ -96,6 +96,7 @@ export type Role = z.infer<typeof roleSchema>;
 
 export const permissionSchema = z.enum([
   "media.view",
+  "media.download",
   "playback.use",
   "playback.history.self.manage",
   "request.create",

@@ -9,6 +9,10 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseJsonSchema,
   libraryBrowseResponseSchema,
+  libraryDownloadPrepareRequestJsonSchema,
+  libraryDownloadPrepareRequestSchema,
+  libraryDownloadPrepareResponseJsonSchema,
+  libraryDownloadPrepareResponseSchema,
   libraryExtrasQueryJsonSchema,
   libraryExtrasQuerySchema,
   libraryExtrasResponseJsonSchema,
@@ -36,6 +40,7 @@ import {
 const referenceId = `media_${"m".repeat(22)}`;
 const searchId = `library_artwork_search_${"s".repeat(22)}`;
 const resultId = `library_artwork_result_${"r".repeat(22)}`;
+const downloadGrantId = `media_download_${"d".repeat(22)}`;
 
 const attention = {
   generatedAt: "2026-07-28T14:00:00.000Z",
@@ -86,6 +91,47 @@ const catalogue = {
 };
 
 describe("library operation contracts", () => {
+  it("binds short-lived original-download grants to one opaque library title", () => {
+    expect(libraryDownloadPrepareRequestSchema.parse({})).toEqual({});
+    expect(
+      libraryDownloadPrepareRequestSchema.safeParse({ itemId: "private-upstream" }).success,
+    ).toBe(false);
+
+    const prepared = {
+      archiveRetrieval: "unknown" as const,
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-28T14:02:00.000Z",
+      filename: "The Long Meridian (2026).mkv",
+      generatedAt: "2026-07-28T14:00:00.000Z",
+      grantId: downloadGrantId,
+      path: `/v1/media/library/downloads/${downloadGrantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    };
+    expect(libraryDownloadPrepareResponseSchema.parse(prepared)).toEqual(prepared);
+    expect(JSON.stringify(prepared)).not.toMatch(/jellyfin|upstream|\/private\//iu);
+    expect(
+      libraryDownloadPrepareResponseSchema.safeParse({
+        ...prepared,
+        path: `/v1/media/library/downloads/media_download_${"x".repeat(22)}`,
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryDownloadPrepareResponseSchema.safeParse({
+        ...prepared,
+        expiresAt: prepared.generatedAt,
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryDownloadPrepareResponseSchema.safeParse({
+        ...prepared,
+        filename: "unsafe\r\nname.mkv",
+      }).success,
+    ).toBe(false);
+    expect(libraryDownloadPrepareRequestJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryDownloadPrepareResponseJsonSchema).toMatchObject({ type: "object" });
+  });
+
   it("normalizes attention items without paths or upstream identifiers", () => {
     expect(libraryAttentionResponseSchema.parse(attention)).toEqual(attention);
     expect(JSON.stringify(attention)).not.toMatch(/\/media\/|upstream|providerId/iu);

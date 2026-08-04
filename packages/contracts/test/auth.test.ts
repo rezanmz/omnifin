@@ -710,6 +710,11 @@ describe("authentication contracts", () => {
         );
       }
     }
+
+    expect(ROLE_PERMISSIONS.viewer).not.toContain("media.download");
+    expect(ROLE_PERMISSIONS.requester).not.toContain("media.download");
+    expect(ROLE_PERMISSIONS.operator).not.toContain("media.download");
+    expect(ROLE_PERMISSIONS.admin).toContain("media.download");
   });
 
   it("retains explicit active account and session identities", () => {

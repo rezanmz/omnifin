@@ -2,6 +2,7 @@ import type {
   LibraryBrowseKind,
   LibraryBrowseResponse,
   LibraryBrowseSort,
+  LibraryDownloadPrepareResponse,
   LibraryExtrasResponse,
   LibraryPlaybackStateMutationRequest,
   LibraryPlaybackStateMutationResponse,
@@ -56,6 +57,14 @@ export class MediaLibraryClientError extends Error {
 export type MediaLibraryLoadOutcome =
   | { feed: LibraryBrowseResponse; status: "ready" }
   | { status: "forbidden" | "loading" | "signed_out" | "unavailable" };
+
+export interface MediaDownloadEligibilitySnapshot {
+  csrfToken: string;
+}
+
+export type MediaDownloadEligibility =
+  | { snapshot: MediaDownloadEligibilitySnapshot; status: "ready" }
+  | { status: "forbidden" | "signed_out" | "unavailable" };
 
 async function safeJson(response: Response): Promise<unknown> {
   try {
@@ -139,6 +148,11 @@ export interface MediaLibraryClient {
     signal?: AbortSignal,
   ): Promise<LibraryExtrasResponse>;
   loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
+  loadDownloadEligibility?(signal?: AbortSignal): Promise<MediaDownloadEligibility>;
+  prepareDownload?(
+    referenceId: string,
+    options: { csrfToken: string; signal?: AbortSignal },
+  ): Promise<LibraryDownloadPrepareResponse>;
   updatePlaybackState?(
     referenceId: string,
     request: LibraryPlaybackStateMutationRequest,
@@ -233,6 +247,63 @@ export const mediaLibraryClient: MediaLibraryClient = {
       signal,
     );
   },
+  async loadDownloadEligibility(signal) {
+    try {
+      const schemas = await contractSchemas();
+      const response = await fetchLibraryResponse(
+        "/api/auth/session",
+        { headers: { accept: "application/json" } },
+        signal,
+      );
+      if (!response.ok) {
+        return response.status === 401 ? { status: "signed_out" } : { status: "unavailable" };
+      }
+      const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(response));
+      if (!session.success) return { status: "unavailable" };
+      const { csrfToken, principal } = session.data;
+      if (principal === null || csrfToken === null) return { status: "signed_out" };
+      if (
+        principal.accountState !== "active" ||
+        !principal.permissions.includes("media.download")
+      ) {
+        return { status: "forbidden" };
+      }
+      return { snapshot: { csrfToken }, status: "ready" };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      return { status: "unavailable" };
+    }
+  },
+  async prepareDownload(referenceId, options) {
+    assertMediaReference(referenceId);
+    const schemas = await contractSchemas();
+    const body = schemas.library.libraryDownloadPrepareRequestSchema.parse({});
+    const response = await fetchLibraryResponse(
+      `/api/media/library/${referenceId}/downloads`,
+      {
+        body: JSON.stringify(body),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-omnifin-csrf": options.csrfToken,
+        },
+        method: "POST",
+      },
+      options.signal,
+    );
+    const prepared = await parsedResponse(
+      response,
+      schemas.library.libraryDownloadPrepareResponseSchema,
+    );
+    if (prepared.referenceId !== referenceId) {
+      throw new MediaLibraryClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway prepared a download for a different library title.",
+      );
+    }
+    return prepared;
+  },
   async updatePlaybackState(referenceId, request, signal, idempotencyKey = crypto.randomUUID()) {
     assertMediaReference(referenceId);
     const schemas = await contractSchemas();
@@ -288,4 +359,25 @@ export function mediaLibraryOutcomeFromError(
 export function sameOriginMediaPath(path: string | null) {
   if (!path?.startsWith("/v1/media/")) return undefined;
   return path.replace(/^\/v1\//u, "/api/");
+}
+
+export function startOriginalMediaDownload(
+  prepared: LibraryDownloadPrepareResponse,
+  ownerDocument: Document = document,
+) {
+  const path = sameOriginMediaPath(prepared.path);
+  if (!path) {
+    throw new MediaLibraryClientError(
+      "invalid_response",
+      "invalid_download_path",
+      "The prepared download path is not available on this origin.",
+    );
+  }
+  const link = ownerDocument.createElement("a");
+  link.download = prepared.filename;
+  link.href = path;
+  link.hidden = true;
+  ownerDocument.body.append(link);
+  link.click();
+  link.remove();
 }

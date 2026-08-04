@@ -6,6 +6,9 @@ import { openDatabase } from "../src/db/client.js";
 import * as authenticationSchema from "../src/db/schema.js";
 
 const migrationDirectory = path.resolve(import.meta.dirname, "../drizzle");
+const expectedMigrationCount = readdirSync(migrationDirectory).filter((filename) =>
+  /^\d{4}_.+\.sql$/u.test(filename),
+).length;
 
 function applyMigration(database: Database.Database, filename: string) {
   const migration = readFileSync(path.join(migrationDirectory, filename), "utf8");
@@ -1120,7 +1123,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_secret_reservations");
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
-      ).toEqual({ count: 24 });
+      ).toEqual({ count: expectedMigrationCount });
       expect(
         database.sqlite
           .prepare(

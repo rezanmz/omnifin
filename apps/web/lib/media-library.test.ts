@@ -1,3 +1,4 @@
+import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
 import type { LibraryBrowseResponse, LibraryExtrasResponse } from "@omnifin/contracts/library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +9,7 @@ import {
   mediaLibraryClient,
   mediaLibraryOutcomeFromError,
   sameOriginMediaPath,
+  startOriginalMediaDownload,
 } from "./media-library";
 
 const feed: LibraryBrowseResponse = readyMediaLibraryOutcome.feed;
@@ -164,6 +166,157 @@ describe("Media library client", () => {
     expect(headers.get("idempotency-key")).toBe("playback-state-browser-0123456789");
     expect(headers.get("x-omnifin-csrf")).toBe(csrfToken);
     expect(String(fetchMock.mock.calls)).not.toContain("jellyfin-user");
+  });
+
+  it("reveals original-file controls only to an active media-download principal", async () => {
+    const csrfToken = "media_download_csrf_0123456789abcdefghijklmnop";
+    const admin = {
+      ...libraryDemoPrincipal,
+      permissions: [...ROLE_PERMISSIONS.admin],
+      role: "admin" as const,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ csrfToken, principal: admin }))
+      .mockResolvedValueOnce(Response.json({ csrfToken, principal: libraryDemoPrincipal }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      snapshot: { csrfToken },
+      status: "ready",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "forbidden",
+    });
+  });
+
+  it("fails original-file eligibility closed across session and transport boundaries", async () => {
+    const abortError = new DOMException("Stopped", "AbortError");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ csrfToken: null, principal: null }))
+      .mockResolvedValueOnce(Response.json({ csrfToken: "invalid", principal: { role: "admin" } }))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(abortError);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "signed_out",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "signed_out",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "unavailable",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).rejects.toBe(abortError);
+  });
+
+  it("prepares an opaque same-origin original-file grant with CSRF", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const grantId = `media_download_${"d".repeat(22)}`;
+    const prepared = {
+      archiveRetrieval: "possible" as const,
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-30T12:05:00.000Z",
+      filename: "Ember Coast (2026).mkv",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      grantId,
+      path: `/v1/media/library/downloads/${grantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    };
+    const fetchMock = vi.fn(async () => Response.json(prepared, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
+    ).resolves.toEqual(prepared);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/library/${referenceId}/downloads`,
+      expect.objectContaining({
+        body: "{}",
+        credentials: "same-origin",
+        headers: expect.objectContaining({ "x-omnifin-csrf": "download-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("rejects a prepared grant that does not belong to the selected title", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const otherReferenceId = readyMediaLibraryOutcome.feed.items[1]!.media.id;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            archiveRetrieval: "unknown",
+            contentType: "video/x-matroska",
+            expiresAt: "2026-07-30T12:05:00.000Z",
+            filename: "Unexpected.mkv",
+            generatedAt: "2026-07-30T12:00:00.000Z",
+            grantId: `media_download_${"e".repeat(22)}`,
+            path: `/v1/media/library/downloads/media_download_${"e".repeat(22)}`,
+            referenceId: otherReferenceId,
+            sizeBytes: 1_024,
+          },
+          { status: 201 },
+        ),
+      ),
+    );
+
+    await expect(
+      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
+    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+  });
+
+  it("starts a browser download through the web proxy without retaining the grant in the DOM", () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const grantId = `media_download_${"d".repeat(22)}`;
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    startOriginalMediaDownload({
+      archiveRetrieval: "unknown",
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-30T12:05:00.000Z",
+      filename: "Ember Coast (2026).mkv",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      grantId,
+      path: `/v1/media/library/downloads/${grantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    });
+
+    const link = click.mock.instances[0] as HTMLAnchorElement;
+    expect(new URL(link.href).pathname).toBe(`/api/media/library/downloads/${grantId}`);
+    expect(link.download).toBe("Ember Coast (2026).mkv");
+    expect(document.body.contains(link)).toBe(false);
+  });
+
+  it("refuses to navigate when a prepared download path leaves the media proxy", () => {
+    expect(() =>
+      startOriginalMediaDownload({
+        archiveRetrieval: "unknown",
+        contentType: "video/x-matroska",
+        expiresAt: "2026-07-30T12:05:00.000Z",
+        filename: "Unsafe.mkv",
+        generatedAt: "2026-07-30T12:00:00.000Z",
+        grantId: `media_download_${"f".repeat(22)}`,
+        path: "https://jellyfin.internal/Videos/private/stream",
+        referenceId: readyMediaLibraryOutcome.feed.items[0]!.media.id,
+        sizeBytes: 1_024,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "invalid_download_path", kind: "invalid_response" }),
+    );
   });
 
   it("fails playback-state writes closed when the session is absent or lacks permission", async () => {

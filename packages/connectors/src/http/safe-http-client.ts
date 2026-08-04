@@ -57,7 +57,7 @@ export interface SafeStreamResponse {
   headers: Headers;
 }
 
-const MAX_STREAM_RESPONSE_BYTES = 512 * 1_024 * 1_024;
+const MAX_STREAM_RESPONSE_BYTES = 128 * 1_024 * 1_024 * 1_024 * 1_024;
 
 interface RequestLifecycle {
   controller: AbortController;
@@ -412,7 +412,7 @@ export class SafeHttpClient {
         service: this.service,
         operation: options.operation,
         code: "configuration_invalid",
-        message: "The connector stream limit must be between 1 byte and 512 MiB.",
+        message: "The connector stream limit must be between 1 byte and 128 TiB.",
         retryable: false,
       });
     }
