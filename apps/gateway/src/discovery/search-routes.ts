@@ -21,6 +21,10 @@ import {
   discoveryPersonDetailQuerySchema,
   discoveryPersonDetailResponseJsonSchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQueryJsonSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseJsonSchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -406,6 +410,52 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
           await discovery.personDetail(
             discoveryPersonDetailParamsSchema.parse(request.params),
             discoveryPersonDetailQuerySchema.parse(request.query),
+            { principal },
+            controller.signal,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof DiscoverySearchError) throw searchError(error);
+        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/discovery/people/:tmdbId/credits",
+    {
+      config: { rateLimit: { max: 80, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: discoveryPersonDetailParamsJsonSchema,
+        querystring: discoveryPersonCreditsQueryJsonSchema,
+        response: { 200: discoveryPersonCreditsResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return discoveryPersonCreditsResponseSchema.parse(
+          await discovery.personCredits(
+            discoveryPersonDetailParamsSchema.parse(request.params),
+            discoveryPersonCreditsQuerySchema.parse(request.query),
             { principal },
             controller.signal,
           ),

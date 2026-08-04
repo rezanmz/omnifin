@@ -23,6 +23,7 @@ import {
   libraryMutationIdempotencyKeySchema,
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseSchema,
+  libraryPersonProfileLinkResponseSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseSchema,
@@ -38,6 +39,7 @@ import {
   type LibraryExtrasResponse,
   type LibraryPlaybackStateMutationRequest,
   type LibraryPlaybackStateMutationResponse,
+  type LibraryPersonProfileLinkResponse,
   type LibraryRemovalPreview,
   type LibrarySeasonEpisodesQuery,
   type LibrarySeasonEpisodesResponse,
@@ -217,6 +219,7 @@ export interface ContinueWatchingDependencies {
         JellyfinUserMediaClient,
         | "readLibraryExtras"
         | "readLibrary"
+        | "readLibraryPerson"
         | "readLibrarySeasonEpisodes"
         | "readLibraryTitle"
         | "readViewingHistory"
@@ -726,6 +729,20 @@ export class ContinueWatchingService {
         this.#titleReferenceInput(result.item),
       ]);
       if (refreshedReferenceId !== referenceId) throw new MediaReferenceError();
+      const titleCredits = result.movie ?? result.seriesCredits;
+      const personReferences = this.#personReferences(
+        row,
+        titleCredits === null ? [] : [...titleCredits.cast, ...titleCredits.crew],
+      );
+      const publicCredit = (credit: NonNullable<typeof titleCredits>["cast"][number]) => ({
+        imagePath:
+          credit.image === null ? null : this.#personImagePath(referenceId, credit.image.itemId),
+        name: credit.name,
+        personReferenceId:
+          credit.person === null ? null : (personReferences.get(credit.person.itemId) ?? null),
+        role: credit.role,
+        type: credit.type,
+      });
       return libraryTitleDetailResponseSchema.parse({
         generatedAt: occurredAt.toISOString(),
         media: this.#libraryMedia(result.item, referenceId),
@@ -734,16 +751,8 @@ export class ContinueWatchingService {
             ? null
             : {
                 ...result.movie,
-                cast: result.movie.cast.map(({ image, imagePath: _imagePath, ...credit }) => ({
-                  ...credit,
-                  imagePath:
-                    image === null ? null : this.#personImagePath(referenceId, image.itemId),
-                })),
-                crew: result.movie.crew.map(({ image, imagePath: _imagePath, ...credit }) => ({
-                  ...credit,
-                  imagePath:
-                    image === null ? null : this.#personImagePath(referenceId, image.itemId),
-                })),
+                cast: result.movie.cast.map(publicCredit),
+                crew: result.movie.crew.map(publicCredit),
               },
         playback:
           result.item.kind === "movie" && result.item.runtimeSeconds !== null
@@ -753,8 +762,18 @@ export class ContinueWatchingService {
                 positionSeconds: result.item.positionSeconds,
               }
             : null,
+        providerReferences: result.providerReferences,
         seasons: result.seasons,
         seasonsTruncated: result.seasonsTruncated,
+        seriesCredits:
+          result.seriesCredits === null
+            ? null
+            : {
+                cast: result.seriesCredits.cast.map(publicCredit),
+                castTruncated: result.seriesCredits.castTruncated,
+                crew: result.seriesCredits.crew.map(publicCredit),
+                crewTruncated: result.seriesCredits.crewTruncated,
+              },
       });
     } catch (error) {
       if (error instanceof MediaLibraryError) throw error;
@@ -902,6 +921,43 @@ export class ContinueWatchingService {
     }
   }
 
+  public async readLibraryPersonProfile(
+    referenceId: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryPersonProfileLinkResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const row = this.#source(principal);
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaLibraryError("not_found", { cause: error });
+    }
+    if (reference.kind !== "person") throw new MediaLibraryError("not_found");
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryPerson) throw new ContinueWatchingConfigurationError();
+      const person = await client.readLibraryPerson(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (person.itemId !== reference.itemId) throw new MediaReferenceError();
+      const [refreshedReferenceId] = this.#references.createOrRefresh(this.#referenceContext(row), [
+        this.#personReferenceInput(person.itemId, person.name),
+      ]);
+      if (refreshedReferenceId !== referenceId) throw new MediaReferenceError();
+      return libraryPersonProfileLinkResponseSchema.parse({
+        generatedAt: this.#clock().toISOString(),
+        name: person.name,
+        tmdbId: person.tmdbId,
+      });
+    } catch (error) {
+      if (error instanceof MediaLibraryError) throw error;
+      throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
   public async readLibrarySeasonEpisodes(
     referenceId: string,
     seasonNumber: number,
@@ -953,10 +1009,20 @@ export class ContinueWatchingService {
           year: item.year,
         })),
       );
+      const personReferences = this.#personReferences(
+        row,
+        result.items.flatMap(({ credits }) => credits),
+      );
       const items = result.items.map((item, index) => ({
         airDate: item.airDate,
         communityRating: item.communityRating,
-        credits: item.credits,
+        credits: item.credits.map((credit) => ({
+          name: credit.name,
+          personReferenceId:
+            credit.person === null ? null : (personReferences.get(credit.person.itemId) ?? null),
+          role: credit.role,
+          type: credit.type,
+        })),
         creditsTruncated: item.creditsTruncated,
         criticRating: item.criticRating,
         genres: item.genres,
@@ -1265,7 +1331,9 @@ export class ContinueWatchingService {
     let itemId: string;
     try {
       const reference = this.#references.resolve(this.#referenceContext(row), referenceId);
-      if (reference.kind !== "movie") throw new MediaReferenceError();
+      if (reference.kind !== "movie" && reference.kind !== "series") {
+        throw new MediaReferenceError();
+      }
       itemId = libraryPersonImagePayloadSchema.parse(
         JSON.parse(this.#cipher.decrypt(token, this.#personImageContext(referenceId))),
       ).itemId;
@@ -1606,6 +1674,46 @@ export class ContinueWatchingService {
       title: item.title,
       year: item.year,
     };
+  }
+
+  #personReferenceInput(itemId: string, name: string) {
+    return {
+      artwork: { backdropItemId: null, posterItemId: null },
+      episodeNumber: null,
+      itemId,
+      kind: "person" as const,
+      seasonNumber: null,
+      title: name,
+      year: null,
+    };
+  }
+
+  #personReferences(
+    row: ContinueWatchingSourceRow,
+    credits: readonly {
+      name: string;
+      person: { itemId: string; tmdbId: number } | null;
+    }[],
+  ) {
+    const eligible = new Map<string, string>();
+    for (const credit of credits) {
+      if (credit.person !== null && !eligible.has(credit.person.itemId)) {
+        eligible.set(credit.person.itemId, credit.name);
+      }
+    }
+    const entries = [...eligible.entries()];
+    const references = new Map<string, string>();
+    for (let offset = 0; offset < entries.length; offset += 50) {
+      const batch = entries.slice(offset, offset + 50);
+      const referenceIds = this.#references.createOrRefresh(
+        this.#referenceContext(row),
+        batch.map(([itemId, name]) => this.#personReferenceInput(itemId, name)),
+      );
+      for (const [index, [itemId]] of batch.entries()) {
+        references.set(itemId, referenceIds[index]!);
+      }
+    }
+    return references;
   }
 
   #personImageContext(referenceId: string) {

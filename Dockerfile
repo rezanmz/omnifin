@@ -28,6 +28,14 @@ COPY packages/contracts/package.json packages/contracts/package.json
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile
 
+FROM toolchain AS native-addon
+
+RUN native_addon_dir="$(node -e "const path = require('node:path'); process.stdout.write(path.dirname(require.resolve('better-sqlite3/package.json', { paths: ['/workspace/apps/gateway'] })))")" \
+    && case "$native_addon_dir" in /workspace/node_modules/.pnpm/*/node_modules/better-sqlite3) ;; *) exit 70 ;; esac \
+    && npm run build-release --prefix "$native_addon_dir" \
+    && install --directory --mode=0755 /native \
+    && install --mode=0755 "$native_addon_dir/build/Release/better_sqlite3.node" /native/better_sqlite3.node
+
 FROM toolchain AS build
 
 ARG OMNIFIN_GATEWAY_URL=http://gateway:4000
@@ -38,6 +46,7 @@ ENV NODE_ENV=production \
 COPY apps apps
 COPY packages packages
 COPY eslint.config.mjs prettier.config.mjs ./
+COPY --from=native-addon /native/better_sqlite3.node /native/better_sqlite3.node
 
 # Next's standalone output expects a public directory even when an installation
 # does not ship static public assets yet.
@@ -46,7 +55,8 @@ RUN mkdir -p apps/web/public \
     && pnpm --filter @omnifin/gateway deploy --prod --legacy /out/gateway \
     && better_sqlite_dir="$(node -e "const path = require('node:path'); process.stdout.write(path.dirname(require.resolve('better-sqlite3/package.json', { paths: ['/out/gateway'] })))")" \
     && case "$better_sqlite_dir" in /out/gateway/node_modules/*/better-sqlite3) ;; *) exit 70 ;; esac \
-    && npm run build-release --prefix "$better_sqlite_dir" \
+    && install --directory --mode=0755 "$better_sqlite_dir/build/Release" \
+    && install --mode=0755 /native/better_sqlite3.node "$better_sqlite_dir/build/Release/better_sqlite3.node" \
     && rm -rf "$better_sqlite_dir/prebuilds" \
     && install --directory --mode=0700 \
        /workspace/apps/web/.next/standalone/.next/cache \
