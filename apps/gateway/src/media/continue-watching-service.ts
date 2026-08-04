@@ -14,6 +14,8 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseSchema,
   libraryBrowseSortSchema,
+  libraryExtrasQuerySchema,
+  libraryExtrasResponseSchema,
   libraryMutationIdempotencyKeySchema,
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseSchema,
@@ -27,6 +29,8 @@ import {
   viewingHistoryStateSchema,
   type LibraryBrowseQuery,
   type LibraryBrowseResponse,
+  type LibraryExtrasQuery,
+  type LibraryExtrasResponse,
   type LibraryPlaybackStateMutationRequest,
   type LibraryPlaybackStateMutationResponse,
   type LibrarySeasonEpisodesQuery,
@@ -36,6 +40,7 @@ import {
   type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
 import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
+import type { DiscoveryTrailer } from "@omnifin/contracts/discovery";
 import { createHash, X509Certificate } from "node:crypto";
 import { z, ZodError } from "zod";
 
@@ -43,6 +48,7 @@ import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
+import { DiscoverySearchError, DiscoverySearchService } from "../discovery/search-service.js";
 import {
   MediaReferenceError,
   MediaReferenceService,
@@ -70,6 +76,16 @@ const libraryCursorPayloadSchema = z.strictObject({
   version: z.literal(1),
 });
 type LibraryCursorPayload = z.infer<typeof libraryCursorPayloadSchema>;
+
+const libraryExtrasCursorPayloadSchema = z.strictObject({
+  limit: z.int().positive().max(24),
+  linkId: z.string().regex(IDENTIFIER_PATTERN),
+  linkRevision: z.int().nonnegative().max(2_147_483_647),
+  parentReferenceId: z.string().regex(/^media_[A-Za-z0-9_-]{22}$/u),
+  startIndex: z.int().nonnegative().max(1_000_000),
+  version: z.literal(1),
+});
+type LibraryExtrasCursorPayload = z.infer<typeof libraryExtrasCursorPayloadSchema>;
 
 const librarySeasonCursorPayloadSchema = z.strictObject({
   limit: z.int().positive().max(50),
@@ -150,6 +166,7 @@ export interface ContinueWatchingDependencies {
     Partial<
       Pick<
         JellyfinUserMediaClient,
+        | "readLibraryExtras"
         | "readLibrary"
         | "readLibrarySeasonEpisodes"
         | "readLibraryTitle"
@@ -158,6 +175,14 @@ export interface ContinueWatchingDependencies {
       >
     >;
   mediaReferences?: MediaReferenceDependencies;
+  readOnlineExtras?: (
+    input: {
+      kind: "movie" | "series";
+      principal: SessionPrincipal;
+      tmdbId: number;
+    },
+    signal?: AbortSignal,
+  ) => Promise<{ displayName: string; items: readonly DiscoveryTrailer[] }>;
 }
 
 export class ContinueWatchingError extends Error {
@@ -354,6 +379,26 @@ function safeFailure(
   };
 }
 
+function onlineExtrasFailure(error: unknown, occurredAt: Date): PartialFailure {
+  const code =
+    error instanceof SafeConnectorError
+      ? error.code
+      : error instanceof ZodError
+        ? "response_invalid"
+        : "upstream_error";
+  return {
+    code,
+    message: "Online trailers are temporarily unavailable.",
+    occurredAt: occurredAt.toISOString(),
+    operation: "discovery.detail",
+    retryable: code !== "configuration_invalid" && code !== "response_invalid",
+    service: "seerr",
+    ...(error instanceof SafeConnectorError && error.retryAfterSeconds !== undefined
+      ? { retryAfterSeconds: error.retryAfterSeconds }
+      : {}),
+  };
+}
+
 function mediaOperationFailureMessage(error: unknown, operation: UserMediaOperation) {
   if (error instanceof MediaReferenceError) {
     if (operation === "media.library") return "Library references are temporarily unavailable.";
@@ -441,6 +486,7 @@ export class ContinueWatchingService {
   readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
+  readonly #readOnlineExtras: NonNullable<ContinueWatchingDependencies["readOnlineExtras"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -456,6 +502,16 @@ export class ContinueWatchingService {
     this.#createUserMediaStateOperationToken =
       dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
+    if (dependencies.readOnlineExtras) this.#readOnlineExtras = dependencies.readOnlineExtras;
+    else {
+      const discovery = new DiscoverySearchService(database, config);
+      this.#readOnlineExtras = (input, signal) =>
+        discovery.trailers(
+          { kind: input.kind, tmdbId: input.tmdbId },
+          { principal: input.principal },
+          signal,
+        );
+    }
   }
 
   public async read(
@@ -620,6 +676,146 @@ export class ContinueWatchingService {
     } catch (error) {
       if (error instanceof MediaLibraryError) throw error;
       throw new MediaLibraryError("unavailable", { cause: error });
+    }
+  }
+
+  public async readLibraryExtras(
+    referenceId: string,
+    rawQuery: LibraryExtrasQuery,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryExtrasResponse> {
+    const principal = requirePermission(context.principal, "media.view");
+    const query = libraryExtrasQuerySchema.parse(rawQuery);
+    const row = this.#source(principal);
+    const occurredAt = this.#clock();
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new MediaLibraryError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie" && reference.kind !== "series") {
+      throw new MediaLibraryError("not_found");
+    }
+    const startIndex = query.cursor
+      ? this.#decodeLibraryExtrasCursor(query.cursor, query, row, referenceId)
+      : 0;
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryExtras) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibraryExtras(
+        {
+          itemId: reference.itemId,
+          limit: query.limit,
+          startIndex,
+          userId: row.externalUserId,
+        },
+        signal,
+      );
+      let onlineItems: readonly DiscoveryTrailer[] = [];
+      let onlineSource: {
+        displayName: string;
+        failure: PartialFailure | null;
+        status: "healthy" | "unavailable" | "unconfigured";
+      };
+      let onlineState: "empty" | "ready" | "unavailable" | "unconfigured";
+      if (result.catalogTmdbId === null) {
+        onlineSource = { displayName: "Online trailers", failure: null, status: "unconfigured" };
+        onlineState = "unconfigured";
+      } else {
+        try {
+          const online = await this.#readOnlineExtras(
+            { kind: reference.kind, principal, tmdbId: result.catalogTmdbId },
+            signal,
+          );
+          onlineItems = online.items;
+          onlineSource = {
+            displayName: safeDisplayName(online.displayName),
+            failure: null,
+            status: "healthy",
+          };
+          onlineState = onlineItems.length > 0 ? "ready" : "empty";
+        } catch (error) {
+          if (error instanceof DiscoverySearchError && error.reason === "connector_unconfigured") {
+            onlineSource = { displayName: "Seerr", failure: null, status: "unconfigured" };
+            onlineState = "unconfigured";
+          } else {
+            onlineSource = {
+              displayName: "Seerr",
+              failure: onlineExtrasFailure(error, occurredAt),
+              status: "unavailable",
+            };
+            onlineState = "unavailable";
+          }
+        }
+      }
+      const referenceIds = this.#references.createOrRefresh(
+        this.#referenceContext(row),
+        result.items.map((item) => ({
+          artwork: {
+            backdropItemId: item.artwork.backdrop?.itemId ?? null,
+            posterItemId: item.artwork.poster?.itemId ?? null,
+          },
+          episodeNumber: null,
+          itemId: item.externalId,
+          kind: "extra" as const,
+          seasonNumber: null,
+          title: item.title,
+          year: item.year,
+        })),
+      );
+      return libraryExtrasResponseSchema.parse({
+        generatedAt: occurredAt.toISOString(),
+        items: result.items.map((item, index) => ({
+          extraType: item.extraType,
+          media: this.#libraryExtraMedia(item, referenceIds[index]!),
+          playback: {
+            durationSeconds: item.runtimeSeconds,
+            played: item.played,
+            positionSeconds: item.positionSeconds,
+          },
+          source: "local",
+        })),
+        nextCursor:
+          result.nextStartIndex === null
+            ? null
+            : this.#encodeLibraryExtrasCursor({
+                limit: query.limit,
+                linkId: row.linkId,
+                linkRevision: row.linkRevision,
+                parentReferenceId: referenceId,
+                startIndex: result.nextStartIndex,
+                version: 1,
+              }),
+        onlineItems,
+        onlineSource,
+        onlineState,
+        parentReferenceId: referenceId,
+        source: {
+          displayName: safeDisplayName(row.connectorDisplayName),
+          failure: null,
+          status: "healthy",
+        },
+        state: result.items.length === 0 ? "empty" : "complete",
+      });
+    } catch (error) {
+      if (error instanceof MediaLibraryError) throw error;
+      return libraryExtrasResponseSchema.parse({
+        generatedAt: occurredAt.toISOString(),
+        items: [],
+        nextCursor: null,
+        onlineItems: [],
+        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineState: "unconfigured",
+        parentReferenceId: referenceId,
+        source: {
+          displayName: safeDisplayName(row.connectorDisplayName),
+          failure: safeFailure(error, occurredAt, "media.library"),
+          status: "unavailable",
+        },
+        state: "unavailable",
+      });
     }
   }
 
@@ -1144,6 +1340,29 @@ export class ContinueWatchingService {
     };
   }
 
+  #libraryExtraMedia(
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryExtras"]>>["items"][number],
+    id: string,
+  ) {
+    return {
+      artwork: {
+        accentColor: item.artwork.accentColor,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
+        blurHash: item.artwork.blurHash,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+      },
+      availability: "available" as const,
+      contentRating: item.contentRating,
+      id,
+      kind: "other" as const,
+      overview: item.overview,
+      runtimeMinutes: Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+      subtitle: "Local extra",
+      title: item.title,
+      year: item.year,
+    };
+  }
+
   #titleReferenceInput(
     item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>["item"],
   ) {
@@ -1181,6 +1400,10 @@ export class ContinueWatchingService {
     return this.#cipher.encrypt(JSON.stringify(value), "media_library_cursor");
   }
 
+  #encodeLibraryExtrasCursor(value: LibraryExtrasCursorPayload) {
+    return this.#cipher.encrypt(JSON.stringify(value), "media_library_extras_cursor");
+  }
+
   #encodeViewingHistoryCursor(value: ViewingHistoryCursorPayload) {
     return this.#cipher.encrypt(JSON.stringify(value), "media_viewing_history_cursor");
   }
@@ -1206,6 +1429,30 @@ export class ContinueWatchingService {
         decoded.limit !== query.limit ||
         decoded.titleReferenceId !== titleReferenceId ||
         decoded.seasonNumber !== seasonNumber
+      ) {
+        throw new Error("invalid");
+      }
+      return decoded.startIndex;
+    } catch (error) {
+      throw new MediaLibraryError("cursor_invalid", { cause: error });
+    }
+  }
+
+  #decodeLibraryExtrasCursor(
+    value: string,
+    query: LibraryExtrasQuery,
+    row: ContinueWatchingSourceRow,
+    parentReferenceId: string,
+  ) {
+    try {
+      const decoded = libraryExtrasCursorPayloadSchema.parse(
+        JSON.parse(this.#cipher.decrypt(value, "media_library_extras_cursor")),
+      );
+      if (
+        decoded.linkId !== row.linkId ||
+        decoded.linkRevision !== row.linkRevision ||
+        decoded.limit !== query.limit ||
+        decoded.parentReferenceId !== parentReferenceId
       ) {
         throw new Error("invalid");
       }

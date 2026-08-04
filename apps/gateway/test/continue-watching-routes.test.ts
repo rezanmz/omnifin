@@ -1,5 +1,6 @@
 import type {
   JellyfinContinueWatchingResult,
+  JellyfinLibraryExtrasResult,
   JellyfinLibrarySeasonEpisodesResult,
   JellyfinLibraryResult,
   JellyfinLibraryTitleResult,
@@ -10,6 +11,7 @@ import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   libraryBrowseResponseSchema,
+  libraryExtrasResponseSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
   viewingHistoryResponseSchema,
@@ -139,6 +141,29 @@ async function harness() {
       truncated: false,
     }),
   );
+  const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    catalogTmdbId: null,
+    items: [
+      {
+        artwork: {
+          accentColor: "#775544",
+          backdrop: null,
+          blurHash: null,
+          poster: { itemId: "route-private-extra", type: "Primary" },
+        },
+        contentRating: null,
+        externalId: "route-private-extra",
+        extraType: "trailer",
+        overview: "A local trailer.",
+        played: false,
+        positionSeconds: 0,
+        runtimeSeconds: 118,
+        title: "Official trailer",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 12,
+  }));
   const updatePlaybackState = vi.fn(async () => ({
     durationSeconds: 7_200,
     played: true,
@@ -165,6 +190,7 @@ async function harness() {
         readContinueWatching,
         readImage,
         readLibrary,
+        readLibraryExtras,
         readLibrarySeasonEpisodes,
         readLibraryTitle,
         readViewingHistory,
@@ -244,6 +270,7 @@ async function harness() {
     readContinueWatching,
     readImage,
     readLibrary,
+    readLibraryExtras,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
@@ -517,6 +544,85 @@ describe("Continue Watching routes", () => {
       expect(apiErrorSchema.parse(tampered.json()).error.code).toBe(
         "media_person_artwork_not_found",
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves lazy parent-scoped extras through authenticated opaque references", async () => {
+    const { app, readLibraryExtras, viewer } = await harness();
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const parentReferenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json())
+        .items[0]!.media.id;
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${parentReferenceId}/extras?limit=12`,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      const extras = libraryExtrasResponseSchema.parse(response.json());
+      expect(extras).toMatchObject({
+        items: [
+          {
+            extraType: "trailer",
+            media: {
+              id: `media_${"e".repeat(22)}`,
+              kind: "other",
+              title: "Official trailer",
+            },
+            source: "local",
+          },
+        ],
+        parentReferenceId,
+        state: "complete",
+      });
+      expect(extras.nextCursor).toMatch(/^v2\./u);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toContain("Cookie");
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
+      expect(readLibraryExtras).toHaveBeenCalledWith(
+        {
+          itemId: privateItemId,
+          limit: 12,
+          startIndex: 0,
+          userId: "viewer-external",
+        },
+        expect.any(AbortSignal),
+      );
+
+      const invalidCursor = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${parentReferenceId}/extras?limit=12&cursor=${encodeURIComponent(`${extras.nextCursor!}tampered`)}`,
+      });
+      expect(invalidCursor.statusCode, invalidCursor.body).toBe(400);
+      expect(apiErrorSchema.parse(invalidCursor.json()).error.code).toBe(
+        "media_library_cursor_invalid",
+      );
+
+      const missingTitle = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/media_${"z".repeat(22)}/extras`,
+      });
+      expect(missingTitle.statusCode, missingTitle.body).toBe(404);
+      expect(apiErrorSchema.parse(missingTitle.json()).error.code).toBe(
+        "media_library_title_not_found",
+      );
+
+      const signedOut = await app.inject({
+        method: "GET",
+        url: `/v1/media/library/${parentReferenceId}/extras`,
+      });
+      expect(signedOut.statusCode).toBe(401);
+      expect(readLibraryExtras).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }

@@ -1,6 +1,7 @@
 import type {
   LibraryBrowseItem,
   LibraryBrowseResponse,
+  LibraryExtra,
   LibrarySeasonEpisode,
   LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
@@ -326,6 +327,41 @@ const demoDetails = new Map(
   mediaLibraryDemoItems.map((libraryItem) => [libraryItem.media.id, titleDetail(libraryItem)]),
 );
 
+function demoExtras(referenceId: string): LibraryExtra[] {
+  const parent = mediaLibraryDemoItems.find((item) => item.media.id === referenceId);
+  if (!parent) return [];
+  return [
+    {
+      extraType: "trailer",
+      media: {
+        ...parent.media,
+        id: `media_${"x".repeat(22)}`,
+        kind: "other",
+        overview: "The local theatrical trailer stored beside this title in Jellyfin.",
+        runtimeMinutes: 2,
+        subtitle: "Local extra",
+        title: `${parent.media.title} — Official trailer`,
+      },
+      playback: { durationSeconds: 128, played: false, positionSeconds: 0 },
+      source: "local",
+    },
+    {
+      extraType: "behind_the_scenes",
+      media: {
+        ...parent.media,
+        id: `media_${"y".repeat(22)}`,
+        kind: "other",
+        overview: "A short production diary from the owned Jellyfin library.",
+        runtimeMinutes: 9,
+        subtitle: "Local extra",
+        title: "Inside the signal room",
+      },
+      playback: { durationSeconds: 540, played: false, positionSeconds: 96 },
+      source: "local",
+    },
+  ];
+}
+
 export const mediaLibraryDemoClient: MediaLibraryClient = {
   async load() {
     return readyMediaLibraryOutcome.feed;
@@ -342,6 +378,28 @@ export const mediaLibraryDemoClient: MediaLibraryClient = {
       nextCursor: null,
       seasonNumber,
       titleReferenceId: referenceId,
+    };
+  },
+  async loadExtras(referenceId) {
+    const items = demoExtras(referenceId);
+    return {
+      generatedAt,
+      items,
+      nextCursor: null,
+      onlineItems: [
+        {
+          id: "youtube:QdBZY2fkU-0",
+          provider: "youtube",
+          resolution: 2160,
+          title: "Official online trailer",
+          type: "trailer",
+        },
+      ],
+      onlineSource: { displayName: "Demo Seerr", failure: null, status: "healthy" },
+      onlineState: "ready",
+      parentReferenceId: referenceId,
+      source: { displayName: "Demo Jellyfin", failure: null, status: "healthy" },
+      state: items.length === 0 ? "empty" : "complete",
     };
   },
   async loadTitle(referenceId) {

@@ -8,6 +8,10 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseJsonSchema,
   libraryBrowseResponseSchema,
+  libraryExtrasQueryJsonSchema,
+  libraryExtrasQuerySchema,
+  libraryExtrasResponseJsonSchema,
+  libraryExtrasResponseSchema,
   libraryMutationIdempotencyKeySchema,
   libraryPlaybackStateMutationRequestJsonSchema,
   libraryPlaybackStateMutationRequestSchema,
@@ -371,6 +375,65 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
                 ? "The library title is no longer available."
                 : "The Jellyfin library is temporarily unavailable.",
             statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/:referenceId/extras",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: libraryTitleParamsJsonSchema,
+        querystring: libraryExtrasQueryJsonSchema,
+        response: { 200: libraryExtrasResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "media.view");
+      const { referenceId } = libraryTitleParamsSchema.parse(request.params);
+      const query = libraryExtrasQuerySchema.parse(request.query);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        return libraryExtrasResponseSchema.parse(
+          await service.readLibraryExtras(referenceId, query, { principal }, controller.signal),
+        );
+      } catch (error) {
+        if (error instanceof MediaLibraryError) {
+          const cursorInvalid = error.reason === "cursor_invalid";
+          const notFound = error.reason === "not_found";
+          throw new SafeHttpError({
+            cause: error,
+            code: cursorInvalid
+              ? "media_library_cursor_invalid"
+              : notFound
+                ? "media_library_title_not_found"
+                : "media_library_unavailable",
+            message: cursorInvalid
+              ? "The extras continuation cursor is invalid or no longer current."
+              : notFound
+                ? "The library title is no longer available."
+                : "The Jellyfin library is temporarily unavailable.",
+            statusCode: cursorInvalid ? 400 : notFound ? 404 : 503,
           });
         }
         throw error;

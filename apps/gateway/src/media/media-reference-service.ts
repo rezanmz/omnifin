@@ -51,7 +51,30 @@ const storedMediaReferenceV2Schema = z
     }
   });
 
+const storedMediaReferenceV3Schema = z
+  .strictObject({
+    artwork: artworkSchema,
+    episodeNumber: episodeNumberSchema,
+    itemId: itemIdSchema,
+    kind: z.enum(["movie", "series", "episode", "extra", "other"]),
+    schemaVersion: z.literal(3),
+    seasonNumber: episodeNumberSchema,
+    title: referenceTitleSchema,
+    year: z.int().min(1870).max(2200).nullable(),
+  })
+  .superRefine((reference, context) => {
+    const hasEpisodeNumbers = reference.seasonNumber !== null && reference.episodeNumber !== null;
+    if ((reference.kind === "episode") !== hasEpisodeNumbers) {
+      context.addIssue({
+        code: "custom",
+        message: "Only episode references can include complete episode coordinates.",
+        path: ["episodeNumber"],
+      });
+    }
+  });
+
 const storedMediaReferenceSchema = z.union([
+  storedMediaReferenceV3Schema,
   storedMediaReferenceV2Schema,
   storedMediaReferenceV1Schema,
 ]);
@@ -64,7 +87,7 @@ export interface MediaReferenceInput {
   };
   episodeNumber: number | null;
   itemId: string;
-  kind: "episode" | "movie" | "other" | "series";
+  kind: "episode" | "extra" | "movie" | "other" | "series";
   seasonNumber: number | null;
   title: string;
   year: number | null;
@@ -81,8 +104,8 @@ export interface ResolvedMediaReference {
   episodeNumber: number | null;
   id: string;
   itemId: string;
-  kind: "episode" | "movie" | "other" | "series";
-  schemaVersion: 1 | 2;
+  kind: "episode" | "extra" | "movie" | "other" | "series";
+  schemaVersion: 1 | 2 | 3;
   seasonNumber: number | null;
   title: string | null;
   year: number | null;
@@ -133,12 +156,12 @@ function referenceContext(referenceId: string) {
 }
 
 function storedPayload(input: MediaReferenceInput): StoredMediaReference {
-  return storedMediaReferenceV2Schema.parse({
+  return storedMediaReferenceV3Schema.parse({
     artwork: input.artwork,
     episodeNumber: input.episodeNumber,
     itemId: input.itemId,
     kind: input.kind,
-    schemaVersion: 2,
+    schemaVersion: 3,
     seasonNumber: input.seasonNumber,
     title: input.title,
     year: input.year,
@@ -147,7 +170,7 @@ function storedPayload(input: MediaReferenceInput): StoredMediaReference {
 
 function resolvedReference(id: string, payload: StoredMediaReference): ResolvedMediaReference {
   const normalized =
-    payload.schemaVersion === 2
+    payload.schemaVersion === 2 || payload.schemaVersion === 3
       ? payload
       : {
           ...payload,
@@ -329,6 +352,15 @@ export class MediaReferenceService {
       .get(context.linkId, context.linkRevision, digest) as StoredReferenceRow | undefined;
     if (existing) {
       if (!MEDIA_REFERENCE_PATTERN.test(existing.id)) throw new MediaReferenceError();
+      const existingPayload = storedMediaReferenceSchema.parse(
+        JSON.parse(this.#cipher.decrypt(existing.encryptedPayload, referenceContext(existing.id))),
+      );
+      const existingIsExtra =
+        existingPayload.schemaVersion === 3 && existingPayload.kind === "extra";
+      const payloadIsExtra = payload.schemaVersion === 3 && payload.kind === "extra";
+      if (existingIsExtra !== payloadIsExtra) {
+        throw new MediaReferenceError();
+      }
       const encryptedPayload = this.#cipher.encrypt(
         JSON.stringify(payload),
         referenceContext(existing.id),

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
+import { discoveryTrailerSchema } from "./discovery.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
@@ -10,6 +11,7 @@ export const LIBRARY_BROWSE_MAX_ITEMS = 50;
 export const LIBRARY_EPISODE_MAX_CREDITS = 24;
 export const LIBRARY_EPISODE_MAX_GENRES = 20;
 export const LIBRARY_EPISODE_MAX_STUDIOS = 12;
+export const LIBRARY_EXTRAS_MAX_ITEMS = 24;
 export const LIBRARY_MOVIE_MAX_AUDIO_TRACKS = 32;
 export const LIBRARY_MOVIE_MAX_CAST = 24;
 export const LIBRARY_MOVIE_MAX_CREW = 16;
@@ -454,6 +456,175 @@ export const libraryTitleDetailResponseSchema = z
     validateLibraryMediaArtwork(detail.media, context);
   });
 export type LibraryTitleDetailResponse = z.infer<typeof libraryTitleDetailResponseSchema>;
+
+export const libraryExtraTypeSchema = z.enum([
+  "trailer",
+  "clip",
+  "behind_the_scenes",
+  "deleted_scene",
+  "interview",
+  "scene",
+  "sample",
+  "featurette",
+  "short",
+  "other",
+]);
+export type LibraryExtraType = z.infer<typeof libraryExtraTypeSchema>;
+
+export const libraryExtrasQuerySchema = z.strictObject({
+  cursor: libraryCursorSchema.optional(),
+  limit: z.coerce.number().int().positive().max(LIBRARY_EXTRAS_MAX_ITEMS).default(12),
+});
+export type LibraryExtrasQuery = z.infer<typeof libraryExtrasQuerySchema>;
+
+export const libraryExtraSchema = z
+  .strictObject({
+    extraType: libraryExtraTypeSchema,
+    media: mediaSummarySchema,
+    playback: libraryPlaybackStateSchema,
+    source: z.literal("local"),
+  })
+  .superRefine((extra, context) => {
+    if (!mediaReferenceIdSchema.safeParse(extra.media.id).success) {
+      context.addIssue({
+        code: "custom",
+        message: "Library extras must use opaque media references.",
+        path: ["media", "id"],
+      });
+    }
+    if (extra.media.kind !== "other" || extra.media.availability !== "available") {
+      context.addIssue({
+        code: "custom",
+        message: "Library extras must be available local bonus videos.",
+        path: ["media", "kind"],
+      });
+    }
+    validateLibraryMediaArtwork(extra.media, context);
+  });
+export type LibraryExtra = z.infer<typeof libraryExtraSchema>;
+
+export const libraryExtrasSourceSchema = z
+  .strictObject({
+    displayName: safeTextSchema.max(160),
+    failure: partialFailureSchema.nullable(),
+    status: z.enum(["healthy", "unavailable"]),
+  })
+  .superRefine((source, context) => {
+    if ((source.status === "healthy") !== (source.failure === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "An unavailable extras source must include one safe failure.",
+        path: ["failure"],
+      });
+    }
+    if (
+      source.failure &&
+      (source.failure.service !== "jellyfin" ||
+        (source.failure.operation !== "media.library" &&
+          source.failure.operation !== "media.reference"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Library-extra failures must identify Jellyfin library access or references.",
+        path: ["failure"],
+      });
+    }
+  });
+export type LibraryExtrasSource = z.infer<typeof libraryExtrasSourceSchema>;
+
+export const libraryOnlineExtrasSourceSchema = z
+  .strictObject({
+    displayName: safeTextSchema.max(160),
+    failure: partialFailureSchema.nullable(),
+    status: z.enum(["healthy", "unavailable", "unconfigured"]),
+  })
+  .superRefine((source, context) => {
+    const healthy = source.status === "healthy" && source.failure === null;
+    const unconfigured = source.status === "unconfigured" && source.failure === null;
+    const unavailable =
+      source.status === "unavailable" &&
+      source.failure?.service === "seerr" &&
+      source.failure.operation === "discovery.detail";
+    if (!healthy && !unconfigured && !unavailable) {
+      context.addIssue({
+        code: "custom",
+        message: "Online-extra source health must match its safe failure.",
+        path: ["failure"],
+      });
+    }
+  });
+export type LibraryOnlineExtrasSource = z.infer<typeof libraryOnlineExtrasSourceSchema>;
+
+export const libraryExtrasResponseSchema = z
+  .strictObject({
+    generatedAt: timestampSchema,
+    items: z.array(libraryExtraSchema).max(LIBRARY_EXTRAS_MAX_ITEMS),
+    nextCursor: libraryCursorSchema.nullable(),
+    onlineItems: z.array(discoveryTrailerSchema).max(LIBRARY_EXTRAS_MAX_ITEMS),
+    onlineSource: libraryOnlineExtrasSourceSchema,
+    onlineState: z.enum(["ready", "empty", "unavailable", "unconfigured"]),
+    parentReferenceId: mediaReferenceIdSchema,
+    source: libraryExtrasSourceSchema,
+    state: z.enum(["complete", "empty", "unavailable"]),
+  })
+  .superRefine((response, context) => {
+    const references = new Set<string>();
+    for (const [index, item] of response.items.entries()) {
+      if (item.media.id === response.parentReferenceId || references.has(item.media.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Library extras must use unique child references.",
+          path: ["items", index, "media", "id"],
+        });
+      }
+      references.add(item.media.id);
+    }
+    const complete =
+      response.state === "complete" &&
+      response.items.length > 0 &&
+      response.source.status === "healthy";
+    const empty =
+      response.state === "empty" &&
+      response.items.length === 0 &&
+      response.nextCursor === null &&
+      response.source.status === "healthy";
+    const unavailable =
+      response.state === "unavailable" &&
+      response.items.length === 0 &&
+      response.nextCursor === null &&
+      response.source.status === "unavailable";
+    if (!complete && !empty && !unavailable) {
+      context.addIssue({
+        code: "custom",
+        message: "Library-extra state must match its items and Jellyfin source.",
+        path: ["state"],
+      });
+    }
+    const onlineReady =
+      response.onlineState === "ready" &&
+      response.onlineItems.length > 0 &&
+      response.onlineSource.status === "healthy";
+    const onlineEmpty =
+      response.onlineState === "empty" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "healthy";
+    const onlineUnavailable =
+      response.onlineState === "unavailable" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "unavailable";
+    const onlineUnconfigured =
+      response.onlineState === "unconfigured" &&
+      response.onlineItems.length === 0 &&
+      response.onlineSource.status === "unconfigured";
+    if (!onlineReady && !onlineEmpty && !onlineUnavailable && !onlineUnconfigured) {
+      context.addIssue({
+        code: "custom",
+        message: "Online-extra state must match its items and discovery source.",
+        path: ["onlineState"],
+      });
+    }
+  });
+export type LibraryExtrasResponse = z.infer<typeof libraryExtrasResponseSchema>;
 
 export const librarySeasonEpisodesQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
@@ -920,6 +1091,8 @@ export const viewingHistoryResponseJsonSchema = withoutSchemaDialect(viewingHist
 export const libraryTitleDetailResponseJsonSchema = withoutSchemaDialect(
   libraryTitleDetailResponseSchema,
 );
+export const libraryExtrasQueryJsonSchema = withoutSchemaDialect(libraryExtrasQuerySchema);
+export const libraryExtrasResponseJsonSchema = withoutSchemaDialect(libraryExtrasResponseSchema);
 export const librarySeasonEpisodesQueryJsonSchema = withoutSchemaDialect(
   librarySeasonEpisodesQuerySchema,
 );
