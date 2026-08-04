@@ -432,6 +432,85 @@ describe("OriginalDownloadService", () => {
     }
   });
 
+  it("accepts bounded suffix and open-ended ranges while keeping fallback filenames safe", async () => {
+    const test = await harness();
+    try {
+      test.readOriginalDownloadMetadata.mockResolvedValueOnce({
+        ...test.metadata,
+        container: null,
+        title: "///",
+        year: null,
+      });
+      const suffixGrant = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      expect(suffixGrant).toMatchObject({
+        contentType: "application/octet-stream",
+        filename: "Media",
+      });
+      const suffix = await test.service.open(suffixGrant.grantId, "bytes=-4", {
+        principal: test.session.principal,
+      });
+      expect(test.streamOriginalDownload).toHaveBeenLastCalledWith(
+        expect.objectContaining({ range: "bytes=-4" }),
+        undefined,
+      );
+      await suffix.finish("success", 4);
+
+      const openEndedGrant = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      const openEnded = await test.service.open(openEndedGrant.grantId, "bytes=4-", {
+        principal: test.session.principal,
+      });
+      expect(test.streamOriginalDownload).toHaveBeenLastCalledWith(
+        expect.objectContaining({ range: "bytes=4-" }),
+        undefined,
+      );
+      await openEnded.finish("failure", 50 * 1_024 * 1_024 * 1_024 + 1);
+      expect(
+        test.app.database.sqlite
+          .prepare(
+            "select state, bytes_transferred as bytesTransferred from media_download_grants order by created_at, id",
+          )
+          .all(),
+      ).toEqual([
+        { bytesTransferred: 4, state: "completed" },
+        { bytesTransferred: 50 * 1_024 * 1_024 * 1_024, state: "failed" },
+      ]);
+    } finally {
+      await test.app.close();
+    }
+  });
+
+  it("rejects malformed public grants and empty or zero-length suffix ranges", async () => {
+    const test = await harness();
+    try {
+      await expect(
+        test.service.open("media_download_invalid", undefined, {
+          principal: test.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "grant_invalid" });
+
+      const prepared = await test.service.prepare(test.referenceId, {
+        principal: test.session.principal,
+      });
+      await expect(
+        test.service.open(prepared.grantId, "bytes=-", {
+          principal: test.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "range_invalid" });
+      await expect(
+        test.service.open(prepared.grantId, "bytes=-0", {
+          principal: test.session.principal,
+        }),
+      ).rejects.toMatchObject({ reason: "range_invalid" });
+      expect(test.streamOriginalDownload).not.toHaveBeenCalled();
+    } finally {
+      await test.app.close();
+    }
+  });
+
   it("rejects unavailable metadata, denied sources, expired grants, and corrupt payloads", async () => {
     const test = await harness();
     try {

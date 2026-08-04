@@ -300,6 +300,49 @@ describe("original download routes", () => {
     }
   });
 
+  it("streams a full response with conservative fallback headers", async () => {
+    const test = await harness();
+    try {
+      const preparedResponse = await test.app.inject({
+        headers: test.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${test.referenceId}/downloads`,
+      });
+      const prepared = libraryDownloadPrepareResponseSchema.parse(preparedResponse.json());
+      test.streamOriginalDownload.mockResolvedValueOnce({
+        acceptRanges: false,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([4, 3, 2, 1]));
+            controller.close();
+          },
+        }),
+        contentLength: null,
+        contentRange: null,
+        contentType: null,
+        status: 200,
+      });
+
+      const streamed = await test.app.inject({
+        headers: { cookie: test.headers.cookie },
+        method: "GET",
+        url: prepared.path,
+      });
+      expect(streamed.statusCode, streamed.body).toBe(200);
+      expect(streamed.rawPayload).toEqual(Buffer.from([4, 3, 2, 1]));
+      expect(streamed.headers["accept-ranges"]).toBe("none");
+      expect(streamed.headers["content-type"]).toBe("application/octet-stream");
+      expect(streamed.headers).not.toHaveProperty("content-range");
+      expect(test.streamOriginalDownload).toHaveBeenCalledWith(
+        { itemId: privateItemId, maxResponseBytes: 9_000_000_000 },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await test.app.close();
+    }
+  });
+
   it("maps denied, unavailable, changed, and expired sources to stable public errors", async () => {
     const denied = await harness();
     try {

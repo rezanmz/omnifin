@@ -650,7 +650,7 @@ export class OriginalDownloadService {
       Number.isSafeInteger(bytesTransferred) && bytesTransferred >= 0
         ? Math.min(bytesTransferred, row.sizeBytes)
         : 0;
-    const state = outcome === "success" ? "completed" : outcome;
+    const state = outcome === "success" ? "completed" : outcome === "failure" ? "failed" : outcome;
     const auditOutcome = outcome === "success" ? "success" : "failure";
     try {
       this.#database.sqlite
