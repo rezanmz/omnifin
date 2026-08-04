@@ -1,6 +1,7 @@
 import type {
   DiscoveryMediaDetailResponse,
   DiscoveryMovieResult,
+  DiscoveryPersonCreditsResponse,
   DiscoveryPersonDetailResponse,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
@@ -11,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MediaDetailClientError,
   type DiscoveryMediaDetailClient,
+  type DiscoveryPersonCreditsClient,
   type DiscoveryPersonDetailClient,
 } from "../lib/media-details";
 import { MediaDetailDrawer } from "./media-detail-drawer";
@@ -65,6 +67,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "community",
           label: "TMDB",
+          providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
           scale: 10,
           sentiment: null,
           source: "tmdb",
@@ -74,6 +77,11 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         {
           audience: "critics",
           label: "Tomatometer",
+          providerReference: {
+            identifier: "the_matrix",
+            mediaKind: "movie",
+            provider: "rotten_tomatoes",
+          },
           scale: 100,
           sentiment: "Certified Fresh",
           source: "rotten_tomatoes",
@@ -162,6 +170,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
       },
     ],
     creditsState: "ready",
+    creditsTotal: 1,
     deathday: null,
     department: "Acting",
     id: "person:6384",
@@ -216,6 +225,10 @@ function personClient(load: DiscoveryPersonDetailClient["load"] = async () => pe
   return { load } satisfies DiscoveryPersonDetailClient;
 }
 
+function personCreditsClient(load: DiscoveryPersonCreditsClient["load"]) {
+  return { load } satisfies DiscoveryPersonCreditsClient;
+}
+
 describe("media detail drawer", () => {
   it("loads and presents bounded editorial detail in a modal sheet", async () => {
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => movieResponse);
@@ -228,6 +241,18 @@ describe("media detail drawer", () => {
     expect(screen.getByText("Keanu Reeves")).toBeVisible();
     expect(screen.getByText("Lana Wachowski")).toBeVisible();
     expect(screen.getByText("83%")).toBeVisible();
+    expect(screen.getByRole("link", { name: /TMDB rating/iu })).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org/movie/603",
+    );
+    expect(screen.getByRole("link", { name: /Tomatometer rating/iu })).toHaveAttribute(
+      "href",
+      "https://www.rottentomatoes.com/m/the_matrix",
+    );
+    expect(screen.getByRole("link", { name: /TMDB rating/iu })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
     expect(screen.getByRole("link", { name: /Official trailer/iu })).toHaveAttribute(
       "href",
       "https://www.youtube.com/watch?v=m8e-FF8MsqU",
@@ -311,6 +336,149 @@ describe("media detail drawer", () => {
       { language: expect.any(String) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("uses a person as the root context and returns there after inspecting a credit", async () => {
+    const user = userEvent.setup();
+    const loadMedia = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => movieResponse);
+    render(
+      <MediaDetailDrawer
+        client={client(loadMedia)}
+        media={null}
+        onOpenChange={vi.fn()}
+        open
+        person={{ name: "Keanu Reeves", tmdbId: 6384 }}
+        personClient={personClient()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /The Matrix.*Neo/iu }));
+    expect(await screen.findByRole("heading", { name: "The Matrix" })).toBeVisible();
+    expect(loadMedia).toHaveBeenCalledWith(
+      { kind: "movie", tmdbId: 603 },
+      { language: expect.any(String) },
+      expect.any(AbortSignal),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Back to Keanu Reeves" }));
+    expect(await screen.findByRole("heading", { name: "Keanu Reeves" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Back to Keanu Reeves" })).not.toBeInTheDocument();
+  });
+
+  it("loads complete filmography pages without replacing the current person context", async () => {
+    const user = userEvent.setup();
+    const initialCredits = Array.from({ length: 24 }, (_, index) => ({
+      availability: "available" as const,
+      kind: "movie" as const,
+      role: `Role ${index + 1}`,
+      title: `Movie ${index + 1}`,
+      tmdbId: 1_000 + index,
+      voteAverage: 7,
+      year: 2000 + index,
+    }));
+    const nextPage: DiscoveryPersonCreditsResponse = {
+      generatedAt: "2026-07-28T20:01:00.000Z",
+      items: Array.from({ length: 6 }, (_, index) => ({
+        availability: "unavailable" as const,
+        kind: "series" as const,
+        role: `Series role ${index + 25}`,
+        title: `Series ${index + 25}`,
+        tmdbId: 2_000 + index,
+        voteAverage: 6.5,
+        year: 2024,
+      })),
+      page: 2,
+      pageSize: 24,
+      totalPages: 2,
+      totalResults: 30,
+    };
+    const loadCredits = vi.fn<DiscoveryPersonCreditsClient["load"]>(async () => nextPage);
+    render(
+      <MediaDetailDrawer
+        media={null}
+        onOpenChange={vi.fn()}
+        open
+        person={{ name: "Keanu Reeves", tmdbId: 6384 }}
+        personClient={personClient(async () => ({
+          ...personResponse,
+          item: { ...personResponse.item, credits: initialCredits, creditsTotal: 30 },
+        }))}
+        personCreditsClient={personCreditsClient(loadCredits)}
+      />,
+    );
+
+    expect(await screen.findByText("Showing 24 of 30 credits")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Load more credits for Keanu Reeves" }));
+    expect(await screen.findByText("Showing 30 of 30 credits")).toBeVisible();
+    expect(screen.getByText("Complete filmography loaded")).toBeVisible();
+    expect(screen.getByRole("button", { name: /Series 30.*Series role 30/iu })).toBeVisible();
+    expect(loadCredits).toHaveBeenCalledWith(
+      { tmdbId: 6384 },
+      { language: expect.any(String), page: 2 },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("keeps a failed filmography page retryable without losing loaded credits", async () => {
+    const user = userEvent.setup();
+    const loadCredits = vi
+      .fn<DiscoveryPersonCreditsClient["load"]>()
+      .mockRejectedValueOnce(new Error("private upstream failure"))
+      .mockResolvedValueOnce({
+        generatedAt: "2026-07-28T20:01:00.000Z",
+        items: [
+          {
+            availability: "requested",
+            kind: "movie",
+            role: "John Wick",
+            title: "John Wick",
+            tmdbId: 245891,
+            voteAverage: 7.4,
+            year: 2014,
+          },
+        ],
+        page: 2,
+        pageSize: 24,
+        totalPages: 2,
+        totalResults: 25,
+      });
+    render(
+      <MediaDetailDrawer
+        media={null}
+        onOpenChange={vi.fn()}
+        open
+        person={{ name: "Keanu Reeves", tmdbId: 6384 }}
+        personClient={personClient(async () => ({
+          ...personResponse,
+          item: {
+            ...personResponse.item,
+            credits: Array.from({ length: 24 }, (_, index) => ({
+              availability: "available" as const,
+              kind: "movie" as const,
+              role: `Role ${index + 1}`,
+              title: index === 0 ? "The Matrix" : `Movie ${index + 1}`,
+              tmdbId: 1_000 + index,
+              voteAverage: 7,
+              year: 2000 + index,
+            })),
+            creditsTotal: 25,
+          },
+        }))}
+        personCreditsClient={personCreditsClient(loadCredits)}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Load more credits for Keanu Reeves" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Retry loading credits for Keanu Reeves" }),
+    );
+    expect(await screen.findByText("Showing 25 of 25 credits")).toBeVisible();
+    expect(screen.getByText("Complete filmography loaded")).toBeVisible();
+    expect(screen.getByText("The Matrix")).toBeVisible();
+    expect(loadCredits).toHaveBeenCalledTimes(2);
   });
 
   it("keeps explicit degraded intelligence states calm and useful", async () => {

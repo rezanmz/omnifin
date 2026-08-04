@@ -235,8 +235,10 @@ function harness(
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: libraryResult().items[0]!,
     movie: null,
+    providerReferences: [],
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
+    seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
   }));
   const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
     catalogTmdbId: 1_042,
@@ -281,8 +283,22 @@ function harness(
           airDate: "2025-02-14",
           communityRating: 8.4,
           credits: [
-            { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
-            { name: "Ari Chen", role: null, type: "writer" },
+            {
+              name: "Mara Voss",
+              person: null,
+              personItemId: null,
+              personReferenceId: null,
+              role: "Dr. Elian Vale",
+              type: "cast",
+            },
+            {
+              name: "Ari Chen",
+              person: null,
+              personItemId: null,
+              personReferenceId: null,
+              role: null,
+              type: "writer",
+            },
           ],
           creditsTruncated: false,
           criticRating: 91,
@@ -450,6 +466,7 @@ describe("ContinueWatchingService", () => {
         studios: [],
         tagline: null,
       },
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -457,6 +474,7 @@ describe("ContinueWatchingService", () => {
       },
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
@@ -578,6 +596,7 @@ describe("ContinueWatchingService", () => {
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: null,
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -585,6 +604,7 @@ describe("ContinueWatchingService", () => {
       },
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
@@ -1209,6 +1229,9 @@ describe("ContinueWatchingService", () => {
             image: { itemId: "private-person-1", type: "Primary" },
             imagePath: null,
             name: "Mara Voss",
+            person: null,
+            personItemId: null,
+            personReferenceId: null,
             role: "Iris Vale",
             type: "cast",
           },
@@ -1220,6 +1243,9 @@ describe("ContinueWatchingService", () => {
             image: null,
             imagePath: null,
             name: "Jon Bell",
+            person: null,
+            personItemId: null,
+            personReferenceId: null,
             role: null,
             type: "director",
           },
@@ -1253,8 +1279,10 @@ describe("ContinueWatchingService", () => {
         studios: ["Northlight Pictures"],
         tagline: "The horizon remembers.",
       },
+      providerReferences: [],
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
