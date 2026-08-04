@@ -1,8 +1,12 @@
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
   SAVED_CUSTOM_LIST_MAX_COUNT,
+  SAVED_LIST_MAX_ITEMS,
+  savedCatalogItemSchema,
   savedListCreateRequestSchema,
   savedListDeleteResponseSchema,
+  savedListMembershipRequestSchema,
+  savedListMembershipResponseSchema,
   savedListMutationResponseSchema,
   savedListRestoreRequestSchema,
   savedListsQuerySchema,
@@ -10,6 +14,7 @@ import {
   savedListUpdateRequestSchema,
   type SavedListCreateRequest,
   type SavedListDeleteResponse,
+  type SavedListMembershipResponse,
   type SavedListMutationResponse,
   type SavedListSummary,
   type SavedListsQuery,
@@ -21,8 +26,16 @@ import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
+import {
+  SavedTargetService,
+  SavedTargetServiceError,
+  type ResolvedSavedTarget,
+  type SavedTargetServiceDependencies,
+} from "./target-service.js";
 
 const LIST_ID_PATTERN = /^saved_list_[A-Za-z0-9_-]{22}$/u;
+const LIST_ITEM_ID_PATTERN = /^saved_item_[A-Za-z0-9_-]{22}$/u;
+const CATALOG_ID_PATTERN = /^catalog_[A-Za-z0-9_-]{22}$/u;
 const OPERATION_ID_PATTERN = /^saved_operation_[A-Za-z0-9_-]{22}$/u;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const UNDO_WINDOW_MS = 30_000;
@@ -58,11 +71,21 @@ interface OperationRow {
   state: "pending" | "succeeded" | "failed";
 }
 
+interface SavedCatalogRow {
+  id: string;
+}
+
+interface SavedMembershipRow {
+  createdAt: number;
+  id: string;
+  position: number;
+}
+
 interface PendingOperation {
   fingerprintHash: string;
   id: string;
   idempotencyKeyHash: string;
-  kind: "create_list" | "restore_list";
+  kind: "add_item" | "create_list" | "restore_list";
   resourceId: string | null;
   userId: string;
 }
@@ -76,8 +99,11 @@ export interface SavedListContext {
 export interface SavedListServiceDependencies {
   clock?: () => Date;
   createAuditId?: () => string;
+  createCatalogToken?: () => string;
+  createItemToken?: () => string;
   createListToken?: () => string;
   createOperationToken?: () => string;
+  targetDependencies?: SavedTargetServiceDependencies;
 }
 
 export type SavedListErrorReason =
@@ -86,12 +112,14 @@ export type SavedListErrorReason =
   | "idempotency_in_progress"
   | "integrity_failure"
   | "list_immutable"
+  | "list_item_quota_reached"
   | "list_not_found"
   | "list_not_deleted"
   | "list_quota_reached"
   | "principal_unavailable"
   | "revision_stale"
   | "storage_failure"
+  | "target_not_found"
   | "undo_expired";
 
 export class SavedListServiceError extends Error {
@@ -117,9 +145,12 @@ export class SavedListService {
   readonly #clock: () => Date;
   readonly #config: Pick<AppConfig, "encryptionKey">;
   readonly #createAuditId: () => string;
+  readonly #createCatalogToken: () => string;
+  readonly #createItemToken: () => string;
   readonly #createListToken: () => string;
   readonly #createOperationToken: () => string;
   readonly #database: DatabaseHandle;
+  readonly #targets: SavedTargetService;
 
   public constructor(
     database: DatabaseHandle,
@@ -131,8 +162,14 @@ export class SavedListService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAuditId = dependencies.createAuditId ?? (() => `saved-audit-${randomToken(16)}`);
+    this.#createCatalogToken = dependencies.createCatalogToken ?? (() => randomToken(16));
+    this.#createItemToken = dependencies.createItemToken ?? (() => randomToken(16));
     this.#createListToken = dependencies.createListToken ?? (() => randomToken(16));
     this.#createOperationToken = dependencies.createOperationToken ?? (() => randomToken(16));
+    this.#targets = new SavedTargetService(database, config, {
+      clock: this.#clock,
+      ...dependencies.targetDependencies,
+    });
   }
 
   public list(rawQuery: unknown, context: SavedListContext): SavedListsResponse {
@@ -377,12 +414,120 @@ export class SavedListService {
     }
   }
 
+  public addItem(
+    listId: string,
+    rawInput: unknown,
+    idempotencyKey: string,
+    ifMatch: string,
+    context: SavedListContext,
+  ): { body: SavedListMembershipResponse; etag: string; replayed: boolean } {
+    const principal = this.#activePrincipal(context);
+    const id = this.#listId(listId);
+    const input = savedListMembershipRequestSchema.parse(rawInput);
+    const now = this.#now();
+    const operation = this.#operation(
+      principal.userId,
+      "add_item",
+      idempotencyKey,
+      { ifMatch, listId: id, targetReferenceId: input.targetReferenceId },
+      id,
+    );
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const replay = this.#reserveOperation(operation, now);
+          if (replay) {
+            const body = savedListMembershipResponseSchema.parse(replay);
+            return {
+              body,
+              etag: this.#etag(principal.userId, body.listId, body.revision),
+              replayed: true,
+            };
+          }
+          const list = this.#row(id, principal.userId, false);
+          if (!list) throw new SavedListServiceError("list_not_found");
+          this.#matchRevision(list, ifMatch);
+          const target = this.#resolveOwnedTarget(input.targetReferenceId, principal);
+          const catalogId = this.#upsertOwnedCatalog(principal.userId, target, now);
+          const existing = this.#membership(id, principal.userId, catalogId);
+          if (existing) {
+            const body = this.#membershipResponse(
+              false,
+              id,
+              list.revision,
+              existing,
+              catalogId,
+              target,
+            );
+            this.#completeOperation(operation.id, principal.userId, body, now);
+            return {
+              body,
+              etag: this.#etag(principal.userId, id, list.revision),
+              replayed: false,
+            };
+          }
+          if (list.itemCount >= SAVED_LIST_MAX_ITEMS) {
+            throw new SavedListServiceError("list_item_quota_reached");
+          }
+          const membership = this.#insertMembership(
+            id,
+            principal.userId,
+            catalogId,
+            list.itemCount,
+            now,
+          );
+          const revision = this.#nextRevision(list.revision);
+          const updated = this.#database.sqlite
+            .prepare(
+              `update saved_lists set revision = ?, updated_at = ?
+               where id = ? and user_id = ? and revision = ? and deleted_at is null`,
+            )
+            .run(revision, now, id, principal.userId, list.revision);
+          if (updated.changes !== 1) throw new SavedListServiceError("revision_stale");
+          const body = this.#membershipResponse(true, id, revision, membership, catalogId, target);
+          this.#completeOperation(operation.id, principal.userId, body, now);
+          this.#audit(
+            "saved.list.item.added",
+            id,
+            { catalogReferenceId: catalogId, revision },
+            context,
+            now,
+          );
+          return {
+            body,
+            etag: this.#etag(principal.userId, id, revision),
+            replayed: false,
+          };
+        })
+        .immediate();
+    } catch (error) {
+      throw this.#normalizeError(error);
+    }
+  }
+
   #activePrincipal(context: SavedListContext): ActivePrincipal {
     const principal = requirePermission(context.principal, "saved.lists.self.manage");
     if (principal.accountState !== "active" || !principal.userId) {
       throw new SavedListServiceError("principal_unavailable");
     }
     return principal as ActivePrincipal;
+  }
+
+  #resolveOwnedTarget(targetReferenceId: string, principal: ActivePrincipal) {
+    try {
+      return this.#targets.resolveOwned(targetReferenceId, { principal });
+    } catch (error) {
+      if (error instanceof SavedTargetServiceError) {
+        if (error.reason === "not_found") {
+          throw new SavedListServiceError("target_not_found", { cause: error });
+        }
+        if (error.reason === "principal_unavailable") {
+          throw new SavedListServiceError("principal_unavailable", { cause: error });
+        }
+        throw new SavedListServiceError("storage_failure", { cause: error });
+      }
+      throw error;
+    }
   }
 
   #listCustomRows(
@@ -494,6 +639,199 @@ export class SavedListService {
     throw new SavedListServiceError("integrity_failure");
   }
 
+  #upsertOwnedCatalog(userId: string, target: ResolvedSavedTarget, now: number) {
+    const existing = this.#database.sqlite
+      .prepare("select id from saved_catalog_items where user_id = ? and identity_digest = ?")
+      .get(userId, target.payload.catalogIdentityDigest) as SavedCatalogRow | undefined;
+    if (existing && !CATALOG_ID_PATTERN.test(existing.id)) {
+      throw new SavedListServiceError("storage_failure");
+    }
+    const id = existing?.id ?? this.#newCatalogId();
+    const identity = {
+      itemId: target.payload.itemId,
+      kind: target.payload.kind,
+      linkId: target.linkId,
+      linkRevision: target.linkRevision,
+      schemaVersion: 1,
+    };
+    const snapshot = {
+      artwork: target.payload.artwork,
+      favorite: target.payload.favorite,
+      kind: target.payload.kind,
+      overview: target.payload.overview,
+      resolutionState: target.payload.resolutionState,
+      schemaVersion: 1,
+      title: target.payload.title,
+      year: target.payload.year,
+    };
+    const encryptedIdentity = this.#cipher.encrypt(
+      JSON.stringify(identity),
+      this.#catalogIdentityContext(userId, id),
+    );
+    const encryptedSnapshot = this.#cipher.encrypt(
+      JSON.stringify(snapshot),
+      this.#catalogSnapshotContext(userId, id),
+    );
+    if (existing) {
+      const updated = this.#database.sqlite
+        .prepare(
+          `update saved_catalog_items
+           set encrypted_identity = ?, encrypted_snapshot = ?, library_reference_id = ?,
+               library_reference_user_id = ?, last_resolved_at = ?, updated_at = ?
+           where id = ? and user_id = ? and identity_digest = ?`,
+        )
+        .run(
+          encryptedIdentity,
+          encryptedSnapshot,
+          target.payload.libraryReferenceId,
+          userId,
+          now,
+          now,
+          id,
+          userId,
+          target.payload.catalogIdentityDigest,
+        );
+      if (updated.changes !== 1) throw new SavedListServiceError("storage_failure");
+      return id;
+    }
+    try {
+      this.#database.sqlite
+        .prepare(
+          `insert into saved_catalog_items (
+             id, user_id, identity_digest, encrypted_identity, encrypted_snapshot,
+             library_reference_id, library_reference_user_id, last_resolved_at,
+             created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          userId,
+          target.payload.catalogIdentityDigest,
+          encryptedIdentity,
+          encryptedSnapshot,
+          target.payload.libraryReferenceId,
+          userId,
+          now,
+          now,
+          now,
+        );
+      return id;
+    } catch (error) {
+      throw new SavedListServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #newCatalogId() {
+    for (let attempt = 0; attempt < MAX_ID_CREATION_ATTEMPTS; attempt += 1) {
+      const id = `catalog_${this.#createCatalogToken()}`;
+      if (!CATALOG_ID_PATTERN.test(id)) {
+        throw new SavedListServiceError("integrity_failure");
+      }
+      const collision = this.#database.sqlite
+        .prepare("select 1 from saved_catalog_items where id = ?")
+        .get(id);
+      if (!collision) return id;
+    }
+    throw new SavedListServiceError("integrity_failure");
+  }
+
+  #membership(listId: string, userId: string, catalogId: string) {
+    return this.#database.sqlite
+      .prepare(
+        `select id, position, created_at as createdAt
+         from saved_list_items
+         where list_id = ? and user_id = ? and catalog_item_id = ?`,
+      )
+      .get(listId, userId, catalogId) as SavedMembershipRow | undefined;
+  }
+
+  #insertMembership(
+    listId: string,
+    userId: string,
+    catalogId: string,
+    itemCount: number,
+    now: number,
+  ) {
+    if (itemCount >= SAVED_LIST_MAX_ITEMS) {
+      throw new SavedListServiceError("list_item_quota_reached");
+    }
+    const positionRow = this.#database.sqlite
+      .prepare(
+        "select coalesce(max(position), -1) + 1 as position from saved_list_items where list_id = ?",
+      )
+      .get(listId) as { position: number };
+    if (
+      !Number.isSafeInteger(positionRow.position) ||
+      positionRow.position < 0 ||
+      positionRow.position >= SAVED_LIST_MAX_ITEMS
+    ) {
+      throw new SavedListServiceError("list_item_quota_reached");
+    }
+    for (let attempt = 0; attempt < MAX_ID_CREATION_ATTEMPTS; attempt += 1) {
+      const id = `saved_item_${this.#createItemToken()}`;
+      if (!LIST_ITEM_ID_PATTERN.test(id)) {
+        throw new SavedListServiceError("integrity_failure");
+      }
+      try {
+        this.#database.sqlite
+          .prepare(
+            `insert into saved_list_items (
+               id, user_id, list_id, catalog_item_id, position, created_at, updated_at
+             ) values (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(id, userId, listId, catalogId, positionRow.position, now, now);
+        return { createdAt: now, id, position: positionRow.position };
+      } catch (error) {
+        const collision = this.#database.sqlite
+          .prepare("select 1 from saved_list_items where id = ?")
+          .get(id);
+        if (!collision) throw error;
+      }
+    }
+    throw new SavedListServiceError("integrity_failure");
+  }
+
+  #membershipResponse(
+    created: boolean,
+    listId: string,
+    revision: number,
+    membership: SavedMembershipRow,
+    catalogId: string,
+    target: ResolvedSavedTarget,
+  ) {
+    if (!LIST_ITEM_ID_PATTERN.test(membership.id)) {
+      throw new SavedListServiceError("storage_failure");
+    }
+    const artworkPrefix = `/v1/saved/catalog/${catalogId}/images/`;
+    return savedListMembershipResponseSchema.parse({
+      created,
+      item: {
+        addedAt: new Date(membership.createdAt).toISOString(),
+        catalog: savedCatalogItemSchema.parse({
+          artwork: {
+            accentColor: null,
+            backdropPath: target.payload.artwork.backdrop ? `${artworkPrefix}backdrop` : null,
+            blurHash: null,
+            posterPath: target.payload.artwork.poster ? `${artworkPrefix}poster` : null,
+          },
+          availability: "owned",
+          favorite: target.payload.favorite,
+          id: catalogId,
+          kind: target.payload.kind,
+          libraryReferenceId: target.payload.libraryReferenceId,
+          overview: target.payload.overview,
+          resolutionState: target.payload.resolutionState,
+          title: target.payload.title,
+          year: target.payload.year,
+        }),
+        id: membership.id,
+        position: membership.position,
+      },
+      listId,
+      revision,
+    });
+  }
+
   #summary(row: SavedListRow): SavedListSummary {
     if (!LIST_ID_PATTERN.test(row.id) || row.userId.length === 0) {
       throw new SavedListServiceError("storage_failure");
@@ -534,6 +872,14 @@ export class SavedListService {
 
   #descriptionContext(userId: string, listId: string) {
     return `saved_list_description:${userId}:${listId}`;
+  }
+
+  #catalogIdentityContext(userId: string, catalogId: string) {
+    return `saved_catalog_identity_payload:${userId}:${catalogId}`;
+  }
+
+  #catalogSnapshotContext(userId: string, catalogId: string) {
+    return `saved_catalog_snapshot:${userId}:${catalogId}`;
   }
 
   #operationContext(userId: string, operationId: string) {
@@ -591,7 +937,7 @@ export class SavedListService {
 
   #operation(
     userId: string,
-    kind: "create_list" | "restore_list",
+    kind: "add_item" | "create_list" | "restore_list",
     idempotencyKey: string,
     fingerprint: unknown,
     resourceId: string | null = null,

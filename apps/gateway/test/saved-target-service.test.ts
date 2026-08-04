@@ -164,6 +164,9 @@ function harness(favoriteResult: boolean | Error = true) {
     mediaReferences: { clock: () => startedAt },
   });
   return {
+    advance(milliseconds: number) {
+      now += milliseconds;
+    },
     appConfig,
     createClient,
     database,
@@ -212,6 +215,19 @@ describe("SavedTargetService", () => {
     expect(stored.identityDigest).toMatch(/^[A-Za-z0-9_-]{22}$/u);
     expect(database.sqlite.prepare("select count(*) as count from saved_targets").get()).toEqual({
       count: 1,
+    });
+
+    expect(
+      service.resolveOwned(issued.targetReferenceId, { principal: principal() }),
+    ).toMatchObject({
+      linkId: "saved-viewer-link",
+      linkRevision: 3,
+      payload: {
+        itemId: privateItemId,
+        kind: "movie",
+        libraryReferenceId: referenceId,
+        title: "Private title",
+      },
     });
   });
 
@@ -351,4 +367,37 @@ describe("SavedTargetService", () => {
       ).rejects.toMatchObject({ reason: "storage_failure" });
     },
   );
+
+  it("rejects expired, stale-link, malformed, and guessed targets without disclosing them", async () => {
+    const first = harness();
+    const issued = await first.service.issueOwned(first.referenceId, { principal: principal() });
+    first.advance(15 * 60 * 1_000);
+    expect(() =>
+      first.service.resolveOwned(issued.targetReferenceId, { principal: principal() }),
+    ).toThrow(expect.objectContaining({ reason: "not_found" }));
+
+    const second = harness();
+    const stale = await second.service.issueOwned(second.referenceId, { principal: principal() });
+    second.database.sqlite
+      .prepare("update service_identity_links set revision = 4 where id = 'saved-viewer-link'")
+      .run();
+    expect(() =>
+      second.service.resolveOwned(stale.targetReferenceId, { principal: principal() }),
+    ).toThrow(expect.objectContaining({ reason: "not_found" }));
+
+    const third = harness();
+    const malformed = await third.service.issueOwned(third.referenceId, {
+      principal: principal(),
+    });
+    third.database.sqlite
+      .prepare("update saved_targets set encrypted_payload = 'malformed' where id = ?")
+      .run(malformed.targetReferenceId);
+    expect(() =>
+      third.service.resolveOwned(malformed.targetReferenceId, { principal: principal() }),
+    ).toThrow(expect.objectContaining({ reason: "storage_failure" }));
+
+    expect(() =>
+      third.service.resolveOwned(`save_target_${"z".repeat(22)}`, { principal: principal() }),
+    ).toThrow(expect.objectContaining({ reason: "not_found" }));
+  });
 });

@@ -5,6 +5,10 @@ import {
   savedListDeleteResponseSchema,
   savedListIdempotencyKeySchema,
   savedListIdSchema,
+  savedListMembershipRequestJsonSchema,
+  savedListMembershipRequestSchema,
+  savedListMembershipResponseJsonSchema,
+  savedListMembershipResponseSchema,
   savedListMutationResponseJsonSchema,
   savedListMutationResponseSchema,
   savedListRestoreRequestJsonSchema,
@@ -126,6 +130,13 @@ function handleServiceError(error: SavedListServiceError, reply: FastifyReply) {
         message: "Watch Later cannot be renamed or deleted.",
         statusCode: 409,
       });
+    case "list_item_quota_reached":
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_list_item_quota_reached",
+        message: "This private list has reached its title limit.",
+        statusCode: 409,
+      });
     case "list_not_found":
       return new SafeHttpError({
         cause: error,
@@ -177,6 +188,13 @@ function handleServiceError(error: SavedListServiceError, reply: FastifyReply) {
         code: "saved_list_temporarily_unavailable",
         message: "Private lists are temporarily unavailable.",
         statusCode: 503,
+      });
+    case "target_not_found":
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_target_not_found",
+        message: "Refresh this title before saving it.",
+        statusCode: 404,
       });
   }
 }
@@ -359,6 +377,42 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
         reply.header("etag", result.etag);
         reply.header("idempotency-replayed", String(result.replayed));
         return savedListMutationResponseSchema.parse(result.body);
+      } catch (error) {
+        handleError(error, reply);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/saved/lists/:listId/items",
+    {
+      bodyLimit: 2_048,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 60, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: savedListMembershipRequestJsonSchema,
+        params: listParamsJsonSchema,
+        response: { 201: savedListMembershipResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { listId } = listParamsSchema.parse(request.params);
+        const result = saved.addItem(
+          listId,
+          savedListMembershipRequestSchema.parse(request.body),
+          idempotencyKey(request),
+          ifMatch(request),
+          operationContext(request, reply),
+        );
+        reply.header("etag", result.etag);
+        reply.header("idempotency-replayed", String(result.replayed));
+        reply.header("location", `/v1/saved/lists/${listId}/items/${result.body.item.id}`);
+        reply.status(201);
+        return savedListMembershipResponseSchema.parse(result.body);
       } catch (error) {
         handleError(error, reply);
       }

@@ -1,8 +1,10 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   savedListDeleteResponseSchema,
+  savedListMembershipResponseSchema,
   savedListMutationResponseSchema,
   savedListsResponseSchema,
+  savedMembershipSummarySchema,
 } from "@omnifin/contracts/saved";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +12,8 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import { MediaReferenceService } from "../src/media/media-reference-service.js";
+import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-08-04T08:30:00.000Z");
 const baseUrl = "https://omnifin.example";
@@ -42,13 +46,27 @@ async function harness() {
   let listToken = 0;
   let operationToken = 0;
   let auditId = 0;
+  const appConfig = config();
+  const cipher = new EnvelopeCipher(appConfig.encryptionKey);
   const app = await createApp({
-    config: config(),
+    config: appConfig,
     savedListDependencies: {
       clock: () => now,
       createAuditId: () => `saved-route-audit-${++auditId}`,
+      createCatalogToken: () => "c".repeat(22),
+      createItemToken: () => "i".repeat(22),
       createListToken: () => (++listToken).toString(36).padStart(22, "l"),
       createOperationToken: () => (++operationToken).toString(36).padStart(22, "o"),
+      targetDependencies: { mediaReferences: { clock: () => now } },
+    },
+    savedTargetDependencies: {
+      clock: () => now,
+      createClient: () => ({
+        readFavoriteState: async () => true,
+        updateFavoriteState: async ({ favorite }) => favorite,
+      }),
+      createTargetToken: () => "t".repeat(22),
+      mediaReferences: { clock: () => now },
     },
     sessionDependencies: {
       clock: () => now,
@@ -62,7 +80,10 @@ async function harness() {
       baseUrl: "https://jellyfin.example.test",
       createdAt: now,
       displayName: "Home Jellyfin",
-      encryptedCredentials: "v2.private-connector-credentials",
+      encryptedCredentials: cipher.encrypt(
+        JSON.stringify({ credentials: { kind: "none" }, schemaVersion: 1 }),
+        "connector_credentials:jellyfin:jellyfin-home",
+      ),
       healthState: "healthy",
       id: "jellyfin-home",
       type: "jellyfin",
@@ -87,7 +108,10 @@ async function harness() {
       connectorId: "jellyfin-home",
       createdAt: now,
       deviceId: "saved-viewer-device",
-      encryptedAccessToken: "v2.private-jellyfin-token",
+      encryptedAccessToken: cipher.encrypt(
+        "private-jellyfin-token",
+        "service_identity_access_token:jellyfin:saved-viewer-link",
+      ),
       externalDisplayName: "Saved Viewer",
       externalServerId: "private-server",
       externalUserId: "private-user",
@@ -102,6 +126,24 @@ async function harness() {
       userId: "saved-viewer",
     })
     .run();
+  const references = new MediaReferenceService(app.database, appConfig, {
+    clock: () => now,
+    createToken: () => "m".repeat(22),
+  });
+  const [referenceId] = references.createOrRefresh(
+    { linkId: "saved-viewer-link", linkRevision: 1, userId: "saved-viewer" },
+    [
+      {
+        artwork: { backdropItemId: "private-owned-movie", posterItemId: "private-owned-movie" },
+        episodeNumber: null,
+        itemId: "private-owned-movie",
+        kind: "movie",
+        seasonNumber: null,
+        title: "Private owned movie",
+        year: 2026,
+      },
+    ],
+  );
   const session = app.sessionService.createSession({
     attribution: {
       authMethod: "jellyfin",
@@ -116,6 +158,7 @@ async function harness() {
       cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}`,
       origin: baseUrl,
     },
+    referenceId: referenceId!,
   };
 }
 
@@ -258,6 +301,83 @@ describe("saved-list routes", () => {
         name: "Changed",
         revision: 3,
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("adds an issued owned title to Watch Later through the protected web contract", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const listsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/saved/lists",
+      });
+      const watchLater = savedListsResponseSchema.parse(listsResponse.json()).watchLater;
+      const listResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/saved/lists/${watchLater.id}`,
+      });
+      const targetResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      expect(targetResponse.statusCode, targetResponse.body).toBe(201);
+      const target = savedMembershipSummarySchema.parse(targetResponse.json());
+
+      const missingPrecondition = await app.inject({
+        headers: { ...headers, "idempotency-key": "saved-route-add-owned-0001" },
+        method: "POST",
+        payload: { targetReferenceId: target.targetReferenceId },
+        url: `/v1/saved/lists/${watchLater.id}/items`,
+      });
+      expect(missingPrecondition.statusCode).toBe(428);
+
+      const staleTarget = await app.inject({
+        headers: {
+          ...headers,
+          "idempotency-key": "saved-route-add-stale-0001",
+          "if-match": String(listResponse.headers.etag),
+        },
+        method: "POST",
+        payload: { targetReferenceId: `save_target_${"z".repeat(22)}` },
+        url: `/v1/saved/lists/${watchLater.id}/items`,
+      });
+      expect(staleTarget.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(staleTarget.json()).error.code).toBe("saved_target_not_found");
+
+      const request = {
+        headers: {
+          ...headers,
+          "idempotency-key": "saved-route-add-owned-0001",
+          "if-match": String(listResponse.headers.etag),
+        },
+        method: "POST" as const,
+        payload: { targetReferenceId: target.targetReferenceId },
+        url: `/v1/saved/lists/${watchLater.id}/items`,
+      };
+      const added = await app.inject(request);
+      const replayed = await app.inject(request);
+      expect(added.statusCode, added.body).toBe(201);
+      expect(replayed.statusCode, replayed.body).toBe(201);
+      expect(replayed.body).toBe(added.body);
+      expect(added.headers["idempotency-replayed"]).toBe("false");
+      expect(replayed.headers["idempotency-replayed"]).toBe("true");
+      expect(added.headers.etag).not.toBe(listResponse.headers.etag);
+      expect(savedListMembershipResponseSchema.parse(added.json())).toMatchObject({
+        created: true,
+        item: { catalog: { availability: "owned", title: "Private owned movie" } },
+        listId: watchLater.id,
+        revision: 1,
+      });
+      expect(added.headers.location).toMatch(
+        new RegExp(`^/v1/saved/lists/${watchLater.id}/items/saved_item_`),
+      );
+      expect(added.body).not.toMatch(/private-owned-movie|private-jellyfin-token/u);
     } finally {
       await app.close();
     }

@@ -33,7 +33,7 @@ const storedFavoriteStateSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("unavailable"), value: z.boolean().nullable() }),
 ]);
 
-const storedTargetPayloadSchema = z.strictObject({
+export const storedTargetPayloadSchema = z.strictObject({
   artwork: z.strictObject({
     backdrop: z.boolean(),
     poster: z.boolean(),
@@ -86,6 +86,13 @@ interface StoredTargetRow {
   id: string;
 }
 
+interface ResolvedTargetRow {
+  encryptedPayload: string;
+  expiresAt: number;
+  linkRevision: number;
+  serviceIdentityLinkId: string;
+}
+
 interface CatalogMembershipRow {
   customListCount: number;
   id: string;
@@ -94,6 +101,12 @@ interface CatalogMembershipRow {
 
 export interface SavedTargetContext {
   principal: SessionPrincipal;
+}
+
+export interface ResolvedSavedTarget {
+  linkId: string;
+  linkRevision: number;
+  payload: StoredSavedTarget;
 }
 
 export interface SavedTargetClientFactoryInput extends ConnectorTargetConfig {
@@ -335,6 +348,68 @@ export class SavedTargetService {
         .immediate();
     } catch (error) {
       if (error instanceof SavedTargetServiceError) throw error;
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  public resolveOwned(targetReferenceId: string, context: SavedTargetContext): ResolvedSavedTarget {
+    const principal = requirePermission(context.principal, "saved.lists.self.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new SavedTargetServiceError("principal_unavailable");
+    }
+    if (!TARGET_ID_PATTERN.test(targetReferenceId)) {
+      throw new SavedTargetServiceError("not_found");
+    }
+    const userId = principal.userId;
+    const source = this.#source(principal);
+    const now = this.#now();
+    try {
+      const row = this.#database.sqlite
+        .prepare(
+          `select encrypted_payload as encryptedPayload, expires_at as expiresAt,
+                  link_revision as linkRevision,
+                  service_identity_link_id as serviceIdentityLinkId
+           from saved_targets
+           where id = ? and user_id = ?`,
+        )
+        .get(targetReferenceId, userId) as ResolvedTargetRow | undefined;
+      if (
+        !row ||
+        row.expiresAt <= now ||
+        row.serviceIdentityLinkId !== source.linkId ||
+        row.linkRevision !== source.linkRevision
+      ) {
+        throw new SavedTargetServiceError("not_found");
+      }
+      const payload = storedTargetPayloadSchema.parse(
+        JSON.parse(
+          this.#cipher.decrypt(row.encryptedPayload, targetContext(userId, targetReferenceId)),
+        ),
+      );
+      const reference = this.#references.resolve(
+        { linkId: source.linkId, linkRevision: source.linkRevision, userId },
+        payload.libraryReferenceId,
+      );
+      if (
+        reference.itemId !== payload.itemId ||
+        reference.kind !== payload.kind ||
+        reference.title !== payload.title
+      ) {
+        throw new SavedTargetServiceError("not_found");
+      }
+      const touched = this.#database.sqlite
+        .prepare(
+          `update saved_targets set last_used_at = ?
+           where id = ? and user_id = ? and expires_at > ?`,
+        )
+        .run(now, targetReferenceId, userId, now);
+      if (touched.changes !== 1) throw new SavedTargetServiceError("not_found");
+      return { linkId: source.linkId, linkRevision: source.linkRevision, payload };
+    } catch (error) {
+      if (error instanceof SavedTargetServiceError) throw error;
+      if (error instanceof MediaReferenceError) {
+        throw new SavedTargetServiceError("not_found", { cause: error });
+      }
       throw new SavedTargetServiceError("storage_failure", { cause: error });
     }
   }
