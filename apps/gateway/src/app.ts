@@ -159,6 +159,7 @@ export interface CreateAppOptions {
   playbackIssueDependencies?: PlaybackIssueRoutesOptions["dependencies"];
   issueWorkbenchDependencies?: IssueWorkbenchRoutesOptions["dependencies"];
   playbackDependencies?: PlaybackRoutesOptions["dependencies"];
+  playbackPreferenceDependencies?: PlaybackPreferenceRoutesOptions["dependencies"];
   subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
   libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
   savedListDependencies?: SavedListRoutesOptions["dependencies"];
@@ -498,6 +499,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.playbackDependencies === undefined
         ? {}
         : { dependencies: options.playbackDependencies }),
+    });
+    await app.register(playbackPreferenceRoutes, {
+      ...(options.playbackPreferenceDependencies === undefined
+        ? {}
+        : { dependencies: options.playbackPreferenceDependencies }),
     });
     await app.register(playbackIssueRoutes, {
       ...(options.playbackIssueDependencies === undefined
