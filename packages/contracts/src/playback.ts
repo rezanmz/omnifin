@@ -438,10 +438,11 @@ export const playbackProgressResponseJsonSchema = {
 } as const;
 
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
-  const { $schema: _schema, ...jsonSchema } = z.toJSONSchema(schema, {
+  const jsonSchema = z.toJSONSchema(schema, {
     io: "input",
     reused: "inline",
   });
+  delete jsonSchema.$schema;
   return jsonSchema;
 }
 
