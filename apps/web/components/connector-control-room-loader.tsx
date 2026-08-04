@@ -26,6 +26,6 @@ const LazyConnectorControlRoom = dynamic(
 );
 
 export function ConnectorControlRoomLoader(properties: ConnectorControlRoomProperties) {
-  const ready = useIdleRender();
+  const ready = useIdleRender(800);
   return ready ? <LazyConnectorControlRoom {...properties} /> : <ConnectorControlRoomSkeleton />;
 }
