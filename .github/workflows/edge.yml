@@ -3,6 +3,7 @@ name: Edge image
 on:
   workflow_run:
     workflows:
+      - CI
       - Security
     branches:
       - main
@@ -30,22 +31,31 @@ jobs:
     outputs:
       eligible: ${{ steps.source.outputs.eligible }}
     steps:
-      - name: Accept only a successful protected-main Security push
+      - name: Accept only a successful protected-main quality gate
         id: source
         env:
           SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
           SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           SOURCE_EVENT: ${{ github.event.workflow_run.event }}
           SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
+          case "$SOURCE_WORKFLOW" in
+            CI|Security) ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "No edge publication: this is not a recognized protected-main quality gate."
+              exit 0
+              ;;
+          esac
           if [ "$SOURCE_CONCLUSION" = "success" ] && [ "$SOURCE_EVENT" = "push" ] && \
              [ "$SOURCE_BRANCH" = "main" ] && [ "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
             echo "eligible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "eligible=false" >> "$GITHUB_OUTPUT"
-          echo "No edge publication: this is not a successful protected-main Security push run."
+          echo "No edge publication: this is not a successful protected-main quality-gate push."
 
   verify-main-gates:
     name: Verify exact current-main gates
