@@ -25,6 +25,7 @@ const blueprintSource = readFileSync(
   "utf8",
 );
 const runnerSource = readFileSync(new URL("./authentik/run.mjs", import.meta.url), "utf8");
+const proxySource = readFileSync(new URL("./authentik/tls-proxy.mjs", import.meta.url), "utf8");
 const dispatchSource = readFileSync(
   new URL("./authentik/dispatch-backchannel.py", import.meta.url),
   "utf8",
@@ -163,6 +164,14 @@ test("normalizes HTTP diagnostics without retaining response details", () => {
 test("detects generated secrets before runtime logs can be retained", () => {
   assert.equal(secretLeakDetected(["gateway ready"], ["private-value"]), false);
   assert.equal(secretLeakDetected(["bad private-value output"], ["private-value"]), true);
+});
+
+test("forwards only allowlisted headers through the Authentik TLS fixture", () => {
+  assert.match(proxySource, /forwardedRequestHeaders/u);
+  assert.match(proxySource, /forwardResponseHeaders/u);
+  assert.match(proxySource, /response\.statusCode/u);
+  assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
+  assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|filtered\[name\]/u);
 });
 
 test("browser failure diagnostics are restricted to allowlisted stage identifiers", () => {
