@@ -25,6 +25,41 @@ export function restoreDocumentScrollPosition(position: DocumentScrollPosition |
   });
 }
 
+export function stabilizeDocumentScrollPosition(
+  position: DocumentScrollPosition | null,
+  frameLimit = 24,
+) {
+  if (!position || frameLimit < 1) return () => undefined;
+
+  let active = true;
+  let frame = 0;
+  let frameRequest = 0;
+  const stop = () => {
+    if (!active) return;
+    active = false;
+    window.cancelAnimationFrame(frameRequest);
+    window.removeEventListener("pointerdown", stop);
+    window.removeEventListener("touchmove", stop);
+    window.removeEventListener("wheel", stop);
+  };
+  const restore = () => {
+    if (!active) return;
+    restoreImmediately(position);
+    frame += 1;
+    if (frame >= frameLimit) {
+      stop();
+      return;
+    }
+    frameRequest = window.requestAnimationFrame(restore);
+  };
+
+  window.addEventListener("pointerdown", stop, { passive: true });
+  window.addEventListener("touchmove", stop, { passive: true });
+  window.addEventListener("wheel", stop, { passive: true });
+  restore();
+  return stop;
+}
+
 export function focusWithoutDocumentScroll(
   target: HTMLElement | null | undefined,
   options: { select?: boolean } = {},
