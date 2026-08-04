@@ -428,6 +428,53 @@ describe("discovery search service", () => {
     }
   });
 
+  it("bounds an upstream browse page ceiling without discarding valid results", async () => {
+    const { browse, database, service } = harness();
+    browse.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            availability: "unavailable",
+            id: "movie:603",
+            kind: "movie",
+            originalTitle: null,
+            overview: "A valid result from a very large catalogue.",
+            source: "seerr",
+            title: "Large catalogue result",
+            tmdbId: 603,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        },
+      ],
+      page: 1,
+      totalPages: 61_307,
+      totalResults: 1_226_132,
+    });
+    try {
+      await expect(
+        service.browse(
+          {
+            availability: "any",
+            kind: "movie",
+            locale: "en-CA",
+            page: 1,
+            sort: "popularity",
+          },
+          { principal: principal() },
+        ),
+      ).resolves.toMatchObject({
+        items: [{ id: "movie:603" }],
+        page: 1,
+        totalPages: 500,
+        totalResults: 1_226_132,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("fails closed when the connector lacks browse capability", async () => {
     const test = harness({ withBrowse: false });
     try {
