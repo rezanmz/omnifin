@@ -2,6 +2,7 @@ import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import type {
   SavedFavoriteMutationRequest,
   SavedFavoriteMutationResponse,
+  SavedDiscoveryTargetIssueRequest,
   SavedListCreateRequest,
   SavedListDeleteResponse,
   SavedListItemsQuery,
@@ -119,6 +120,10 @@ export interface SavedListsClient {
   ): Promise<SavedVersionedResponse<SavedListDeleteResponse>>;
   issueLibraryTarget(
     referenceId: string,
+    options: Pick<SavedMutationOptions, "csrfToken" | "signal">,
+  ): Promise<SavedMembershipSummary>;
+  issueDiscoveryTarget(
+    input: SavedDiscoveryTargetIssueRequest,
     options: Pick<SavedMutationOptions, "csrfToken" | "signal">,
   ): Promise<SavedMembershipSummary>;
   list(signal?: AbortSignal): Promise<SavedListsResponse>;
@@ -447,6 +452,18 @@ export const savedListsClient: SavedListsClient = {
     }
     const response = await fetchSameOrigin(`/api/saved/targets/library/${referenceId}`, {
       body: "{}",
+      headers: mutationHeaders(options, false),
+      method: "POST",
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    return parsedResponse(response, saved.savedMembershipSummarySchema);
+  },
+
+  async issueDiscoveryTarget(input, options) {
+    const { saved } = await contractSchemas();
+    const body = saved.savedDiscoveryTargetIssueRequestSchema.parse(input);
+    const response = await fetchSameOrigin("/api/saved/targets/discovery", {
+      body: JSON.stringify(body),
       headers: mutationHeaders(options, false),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),

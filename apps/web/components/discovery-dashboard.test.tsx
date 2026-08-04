@@ -68,6 +68,9 @@ describe("DiscoveryDashboard", () => {
       "/browse?kind=movie",
     );
     expect(screen.getAllByRole("button", { name: "Request The Far Meridian" })).not.toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "Toggle The Far Meridian in Watch Later" }),
+    ).not.toHaveLength(0);
     expect(screen.getByRole("region", { name: "The Far Meridian" })).toHaveAttribute(
       "data-artwork-source",
       "remote",

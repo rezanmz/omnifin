@@ -171,6 +171,10 @@
   transform: scale(1.05);
 }
 
+.compact[data-placement="before-primary"] {
+  right: 102px;
+}
+
 .compact:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--acid) 62%, transparent);
   outline-offset: 3px;

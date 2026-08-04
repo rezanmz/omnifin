@@ -62,6 +62,7 @@ function client(input: { customListIds?: string[]; watchLater?: boolean } = {}) 
       etag: nextEtag,
       replayed: false,
     })),
+    issueDiscoveryTarget: vi.fn(async () => issued),
     issueLibraryTarget: vi.fn(async () => issued),
     load: vi.fn<SavedListsClient["load"]>(async () => readySavedOutcome),
     readList: vi.fn(async () => ({ data: readySavedOutcome.snapshot.lists.watchLater, etag })),
@@ -125,6 +126,30 @@ describe("SavedTitleActions", () => {
       },
     );
     expect(actions.addItem).not.toHaveBeenCalled();
+  });
+
+  it("saves a requestable title without invoking its request workflow", async () => {
+    const user = userEvent.setup();
+    const actions = client();
+    render(
+      <SavedTitleActions
+        client={actions}
+        compact
+        discovery={{ kind: "movie", language: "en-CA", tmdbId: 603 }}
+        title="The Far Meridian"
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Toggle The Far Meridian in Watch Later" }),
+    );
+
+    expect(actions.issueDiscoveryTarget).toHaveBeenCalledWith(
+      { kind: "movie", language: "en-CA", tmdbId: 603 },
+      { csrfToken: readySavedOutcome.snapshot.csrfToken },
+    );
+    expect(actions.issueLibraryTarget).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Added to Watch Later.");
   });
 
   it("loads detail controls and synchronizes Favorite distinctly through Jellyfin", async () => {

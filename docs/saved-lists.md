@@ -19,15 +19,15 @@ an owned title.
 
 Every storage query starts with the authenticated Omnifin `user_id`. A reference that belongs to
 another user is indistinguishable from a missing reference and returns the canonical `404` response.
-The API never exposes native Jellyfin, Seerr, TMDB, TVDB, or IMDb identifiers, connector URLs,
-filesystem paths, or connector credentials. Responses use `Cache-Control: private, no-store` and
+Saved-list responses never expose native Jellyfin, Seerr, TMDB, TVDB, or IMDb identifiers,
+connector URLs, filesystem paths, or connector credentials. Responses use `Cache-Control: private, no-store` and
 `Vary: Cookie`; logs and metrics exclude list names, descriptions, media titles, reference tokens,
 and query text.
 
 Two opaque reference classes prevent accidental data disclosure and unbounded persistence:
 
-- `save_target_*` is a short-lived, server-backed capability issued with a Library, Discovery,
-  Search, or detail response. It is bound to the current user, identity-link revision, normalized
+- `save_target_*` is a short-lived, server-backed capability issued on demand from a Library,
+  Discovery, Search, or detail control. It is bound to the current user, identity-link revision, normalized
   title identity, and expiry. It cannot select a connector, URL, or upstream identifier.
 - `catalog_*` is a durable random reference created only after the user saves a title. It is scoped
   to that user and survives connector replacement or Jellyfin item replacement.
@@ -92,6 +92,13 @@ desired membership already exists, a repeated add succeeds without incrementing 
 when its older ETag is stale. A removal behaves the same when the membership is already absent.
 Every actual membership change increments the list revision exactly once.
 
+Owned controls issue targets from an opaque user-scoped Library reference. Discovery controls send
+only the bounded media kind, locale, and TMDB coordinate already present in the normalized Discovery
+contract to `POST /v1/saved/targets/discovery`. Before issuing a target, the gateway re-resolves that
+coordinate through the configured Seerr connector and stores only an encrypted normalized snapshot.
+Issuing or consuming this target does not call the media-request service. Requestable cards and
+details therefore provide Watch Later as a separate 44-pixel action beside Request.
+
 A reorder request supplies `startPosition` and the complete ordered set of 2–100 opaque membership
 identifiers currently occupying that contiguous window. The service verifies that exact set before
 rewriting normalized integer positions. A different set returns `409 saved_reorder_window_changed`;
@@ -132,6 +139,10 @@ the deployment secret.
 
 ## Deterministic reconciliation
 
+The current foundation preserves owned and requestable entries as separate encrypted catalog
+identities and retains deliberate missing/degraded states. Cross-source promotion into one durable
+entry is the remaining reconciliation step and must follow this fail-closed algorithm:
+
 One user can encounter the same title through Discovery and Jellyfin. Reconciliation uses this
 ordered algorithm within the same media kind:
 
@@ -170,7 +181,9 @@ recovery. Reordering works through drag, keyboard move commands, touch controls,
 navigation; reduced-motion mode removes positional animation. Delete confirmation says that only the
 private list is removed and that media files are untouched.
 
-Tests cover user isolation, guessed references, expired targets, duplicate submissions, stale ETags,
-reorder races, quota boundaries, encrypted-field leakage, connector replacement, Jellyfin remove and
-re-add, owned/discovery deduplication, favorite round trips, partial outages, keyboard use, screen
-reader announcements, mobile/touch layout, and ten-foot focus behavior.
+Current automated coverage includes user isolation, guessed and expired references, duplicate
+submissions, stale ETags, reorder races, encrypted-field leakage, owned-item removal, verified
+requestable target issuance, proof that saving does not create a request, favorite round trips,
+partial outages, keyboard controls, and screen-reader announcements. Connector replacement,
+owned/discovery deduplication, mobile visual baselines, and ten-foot focus evidence remain release
+gates before this feature can be marked complete.

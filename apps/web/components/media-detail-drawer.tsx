@@ -37,6 +37,7 @@ import {
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
+import { SavedTitleActions } from "./saved-title-actions";
 
 export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
 
@@ -324,6 +325,11 @@ function DetailContent({
               ))}
             </ul>
           ) : null}
+          <SavedTitleActions
+            discovery={{ kind: detail.kind, language: detailLanguage(), tmdbId: detail.tmdbId }}
+            eager
+            title={detail.title}
+          />
         </div>
       </section>
 

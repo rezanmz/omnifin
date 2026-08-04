@@ -1,6 +1,9 @@
 "use client";
 
-import type { SavedMembershipSummary } from "@omnifin/contracts/saved";
+import type {
+  SavedDiscoveryTargetIssueRequest,
+  SavedMembershipSummary,
+} from "@omnifin/contracts/saved";
 import { Bookmark, BookmarkCheck, Check, Heart, ListPlus, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,13 +30,23 @@ type ActionState =
   | { kind: "ready"; message?: string }
   | { kind: "error"; message: string };
 
-export interface SavedTitleActionsProperties {
+interface SavedTitleActionsBaseProperties {
   client?: SavedListsClient;
   compact?: boolean;
+  compactPlacement?: "before-primary" | "primary";
   eager?: boolean;
-  referenceId: string;
   title: string;
 }
+
+export type SavedTitleActionsProperties = SavedTitleActionsBaseProperties &
+  (
+    | { discovery: SavedDiscoveryTargetIssueRequest; referenceId?: never }
+    | { discovery?: never; referenceId: string }
+  );
+
+type SavedActionTarget =
+  | { input: SavedDiscoveryTargetIssueRequest; kind: "discovery" }
+  | { kind: "library"; referenceId: string };
 
 function boundaryError(status: "forbidden" | "signed_out" | "unavailable") {
   if (status === "signed_out") {
@@ -71,29 +84,43 @@ function actionError(error: unknown) {
 
 async function resolveTitle(
   client: SavedListsClient,
-  referenceId: string,
+  target: SavedActionTarget,
   signal?: AbortSignal,
 ): Promise<ResolvedTitle> {
   const outcome = await client.load(signal);
   if (outcome.status !== "ready") throw boundaryError(outcome.status);
   const listId = outcome.snapshot.lists.watchLater.id;
   const [summary, list] = await Promise.all([
-    client.issueLibraryTarget(referenceId, {
-      csrfToken: outcome.snapshot.csrfToken,
-      ...(signal === undefined ? {} : { signal }),
-    }),
+    target.kind === "library"
+      ? client.issueLibraryTarget(target.referenceId, {
+          csrfToken: outcome.snapshot.csrfToken,
+          ...(signal === undefined ? {} : { signal }),
+        })
+      : client.issueDiscoveryTarget(target.input, {
+          csrfToken: outcome.snapshot.csrfToken,
+          ...(signal === undefined ? {} : { signal }),
+        }),
     client.readList(listId, signal),
   ]);
   return { etag: list.etag, snapshot: outcome.snapshot, summary };
 }
 
-export function SavedTitleActions({
-  client = savedListsClient,
-  compact = false,
-  eager = false,
-  referenceId,
-  title,
-}: SavedTitleActionsProperties) {
+export function SavedTitleActions(properties: SavedTitleActionsProperties) {
+  const {
+    client = savedListsClient,
+    compact = false,
+    compactPlacement = "primary",
+    eager = false,
+    title,
+  } = properties;
+  const target: SavedActionTarget = properties.discovery
+    ? { input: properties.discovery, kind: "discovery" }
+    : { kind: "library", referenceId: properties.referenceId };
+  const targetKey =
+    target.kind === "library"
+      ? target.referenceId
+      : `${target.input.kind}:${target.input.tmdbId}:${target.input.language}`;
+  const discoveryTarget = target.kind === "discovery";
   const [resolved, setResolved] = useState<ResolvedTitle | null>(null);
   const [state, setState] = useState<ActionState>({ kind: eager ? "loading" : "idle" });
   const mounted = useRef(true);
@@ -101,14 +128,16 @@ export function SavedTitleActions({
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
-      const next = await resolveTitle(client, referenceId, signal);
+      const next = await resolveTitle(client, target, signal);
       if (mounted.current && !signal?.aborted) {
         setResolved(next);
         setState({ kind: "ready" });
       }
       return next;
     },
-    [client, referenceId],
+    // Target fields are scalar contract values; the key keeps refresh stable between renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [client, targetKey],
   );
 
   useEffect(() => {
@@ -133,7 +162,7 @@ export function SavedTitleActions({
     if (pending) return;
     setState({ action: "watch_later", kind: "pending" });
     try {
-      const current = resolved ?? (await resolveTitle(client, referenceId));
+      const current = resolved ?? (await resolveTitle(client, target));
       const listId = current.snapshot.lists.watchLater.id;
       let etag: string;
       let summary: SavedMembershipSummary;
@@ -184,7 +213,7 @@ export function SavedTitleActions({
     if (pending) return;
     setState({ action: "custom_list", kind: "pending", listId });
     try {
-      const current = resolved ?? (await resolveTitle(client, referenceId));
+      const current = resolved ?? (await resolveTitle(client, target));
       const list = await client.readList(listId);
       const included = current.summary.customListIds.includes(listId);
       let catalogId = current.summary.catalogReferenceId;
@@ -294,6 +323,7 @@ export function SavedTitleActions({
           className={styles.compact}
           data-active={watchLater || undefined}
           data-directional-item
+          data-placement={compactPlacement}
           disabled={pending}
           onClick={(event) => {
             event.stopPropagation();
@@ -324,21 +354,23 @@ export function SavedTitleActions({
           <WatchIcon aria-hidden="true" className={pending ? styles.spin : undefined} />
           {watchLater ? "In Watch Later" : "Watch Later"}
         </button>
-        <button
-          aria-pressed={favoriteAvailable ? favorite : undefined}
-          className="button button--glass"
-          disabled={pending || !favoriteAvailable}
-          onClick={() => void toggleFavorite()}
-          title={favoriteAvailable ? undefined : "Favorite state is unavailable from Jellyfin"}
-          type="button"
-        >
-          {state.kind === "pending" && state.action === "favorite" ? (
-            <LoaderCircle aria-hidden="true" className={styles.spin} />
-          ) : (
-            <Heart aria-hidden="true" fill={favorite ? "currentColor" : "none"} />
-          )}
-          {favorite ? "Jellyfin Favorite" : "Favorite"}
-        </button>
+        {discoveryTarget ? null : (
+          <button
+            aria-pressed={favoriteAvailable ? favorite : undefined}
+            className="button button--glass"
+            disabled={pending || !favoriteAvailable}
+            onClick={() => void toggleFavorite()}
+            title={favoriteAvailable ? undefined : "Favorite state is unavailable from Jellyfin"}
+            type="button"
+          >
+            {state.kind === "pending" && state.action === "favorite" ? (
+              <LoaderCircle aria-hidden="true" className={styles.spin} />
+            ) : (
+              <Heart aria-hidden="true" fill={favorite ? "currentColor" : "none"} />
+            )}
+            {favorite ? "Jellyfin Favorite" : "Favorite"}
+          </button>
+        )}
       </div>
       {resolved ? (
         <details className={styles.listPicker}>

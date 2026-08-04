@@ -218,6 +218,7 @@ describe("savedListsClient", () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(response(mutation, 201, { etag, "idempotency-replayed": "false" }))
+      .mockResolvedValueOnce(response(target, 201))
       .mockResolvedValueOnce(response(target, 201));
     vi.stubGlobal("fetch", fetch);
 
@@ -230,6 +231,12 @@ describe("savedListsClient", () => {
     await expect(savedListsClient.issueLibraryTarget(mediaId, { csrfToken })).resolves.toEqual(
       target,
     );
+    await expect(
+      savedListsClient.issueDiscoveryTarget(
+        { kind: "movie", language: "en-CA", tmdbId: 603 },
+        { csrfToken },
+      ),
+    ).resolves.toEqual(target);
 
     const [createUrl, createInit] = fetch.mock.calls[0]!;
     expect(createUrl).toBe("/api/saved/lists");
@@ -241,6 +248,12 @@ describe("savedListsClient", () => {
     const [targetUrl, targetInit] = fetch.mock.calls[1]!;
     expect(targetUrl).toBe(`/api/saved/targets/library/${mediaId}`);
     expect(targetInit).toMatchObject({ body: "{}", method: "POST" });
+    const [discoveryTargetUrl, discoveryTargetInit] = fetch.mock.calls[2]!;
+    expect(discoveryTargetUrl).toBe("/api/saved/targets/discovery");
+    expect(discoveryTargetInit).toMatchObject({
+      body: JSON.stringify({ kind: "movie", language: "en-CA", tmdbId: 603 }),
+      method: "POST",
+    });
   });
 
   it("requires local retry and concurrency proofs before a mutation is sent", async () => {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { MediaCardModel } from "../lib/dashboard-data";
 import { handleDirectionalFocus } from "../lib/directional-focus";
+import { SavedTitleActions } from "./saved-title-actions";
 
 type CardStyle = CSSProperties & { "--card-accent": string };
 
@@ -179,6 +180,14 @@ export function MediaRail({
                     <Sparkles aria-hidden="true" />
                     <span className="media-card__request-label">Request</span>
                   </button>
+                ) : null}
+                {item.savedDiscoveryTarget ? (
+                  <SavedTitleActions
+                    compact
+                    compactPlacement={item.requestable && onRequest ? "before-primary" : "primary"}
+                    discovery={item.savedDiscoveryTarget}
+                    title={item.title}
+                  />
                 ) : null}
                 <div className="media-card__copy">
                   <h3>{item.title}</h3>
