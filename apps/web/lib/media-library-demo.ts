@@ -255,6 +255,7 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
         }
       : null;
   return {
+    connectedActions: [],
     generatedAt,
     media: item.media,
     movie,

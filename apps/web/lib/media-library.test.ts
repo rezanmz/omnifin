@@ -48,6 +48,7 @@ describe("Media library client", () => {
       (item) => item.media.kind === "series",
     )!;
     const detail = {
+      connectedActions: [],
       generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
       media: series.media,
       movie: null,

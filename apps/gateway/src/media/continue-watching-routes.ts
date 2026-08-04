@@ -25,6 +25,7 @@ import {
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseJsonSchema,
   libraryTitleDetailResponseSchema,
+  libraryConnectedActionServiceSchema,
   viewingHistoryQueryJsonSchema,
   viewingHistoryQuerySchema,
   viewingHistoryResponseJsonSchema,
@@ -40,6 +41,7 @@ import {
   ContinueWatchingError,
   ContinueWatchingService,
   type ContinueWatchingDependencies,
+  LibraryConnectedActionError,
   MediaArtworkError,
   MediaLibraryError,
   MediaPlaybackStateError,
@@ -65,6 +67,10 @@ const libraryTitleParamsSchema = z.strictObject({
   referenceId: mediaReferenceIdSchema,
 });
 
+const libraryConnectedActionParamsSchema = libraryTitleParamsSchema.extend({
+  service: libraryConnectedActionServiceSchema,
+});
+
 const librarySeasonParamsSchema = z.strictObject({
   referenceId: mediaReferenceIdSchema,
   seasonNumber: z.coerce.number().int().nonnegative().max(100_000),
@@ -75,6 +81,16 @@ const libraryTitleParamsJsonSchema = {
   additionalProperties: false,
   required: ["referenceId"],
   properties: { referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" } },
+} as const;
+
+const libraryConnectedActionParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["referenceId", "service"],
+  properties: {
+    referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+    service: { enum: ["radarr", "sonarr"] },
+  },
 } as const;
 
 const librarySeasonParamsJsonSchema = {
@@ -438,6 +454,63 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
               error.reason === "not_found"
                 ? "The library title is no longer available."
                 : "The Jellyfin library is temporarily unavailable.",
+            statusCode: error.reason === "not_found" ? 404 : 503,
+          });
+        }
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/:referenceId/actions/:service",
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: { params: libraryConnectedActionParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "acquisition.manage");
+      const { referenceId, service: connectedService } = libraryConnectedActionParamsSchema.parse(
+        request.params,
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const destination = await service.openConnectedAction(
+          referenceId,
+          connectedService,
+          { principal },
+          controller.signal,
+        );
+        reply.header("referrer-policy", "no-referrer");
+        return reply.redirect(destination.href, 303);
+      } catch (error) {
+        if (error instanceof LibraryConnectedActionError) {
+          throw new SafeHttpError({
+            cause: error,
+            code:
+              error.reason === "not_found"
+                ? "library_connected_action_not_found"
+                : "library_connected_action_unavailable",
+            message:
+              error.reason === "not_found"
+                ? "This title is not available in the connected service."
+                : "The connected service is temporarily unavailable.",
             statusCode: error.reason === "not_found" ? 404 : 503,
           });
         }

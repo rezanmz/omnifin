@@ -26,6 +26,7 @@ import {
   Clapperboard,
   Clock3,
   Download,
+  ExternalLink,
   Film,
   Gauge,
   HardDrive,
@@ -336,6 +337,36 @@ function PlaybackActions({
             : ""}
       </p>
     </div>
+  );
+}
+
+function ConnectedServiceActions({
+  actions,
+}: {
+  actions: LibraryTitleDetailResponse["connectedActions"];
+}) {
+  const safeActions = actions.flatMap((action) => {
+    const href = sameOriginMediaPath(action.href);
+    return href === undefined ? [] : [{ ...action, href }];
+  });
+  if (safeActions.length === 0) return null;
+  return (
+    <nav aria-label="Connected services" className="library-title__connected-actions">
+      {safeActions.map((action) => (
+        <a
+          aria-label={`${action.label} in a new tab`}
+          className="button button--glass"
+          data-directional-item
+          href={action.href}
+          key={action.service}
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          <ExternalLink aria-hidden="true" />
+          {action.label}
+        </a>
+      ))}
+    </nav>
   );
 }
 
@@ -1609,6 +1640,7 @@ export function LibraryTitleDrawer({
                   {detail!.media.kind === "movie" ? (
                     <OriginalMediaDownloadAction client={client} media={detail!.media} />
                   ) : null}
+                  <ConnectedServiceActions actions={detail!.connectedActions} />
                 </div>
               </section>
 

@@ -28,11 +28,29 @@ const radarrLibraryMovieSchema = z.object({
 
 const radarrLibraryMovieResponseSchema = z.array(radarrLibraryMovieSchema).max(10);
 
+const radarrLibraryMovieNavigationSchema = radarrLibraryMovieSchema.extend({
+  titleSlug: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,299}$/u),
+});
+
+const radarrLibraryMovieNavigationResponseSchema = z
+  .array(radarrLibraryMovieNavigationSchema)
+  .max(10);
+
 export interface RadarrLibraryMovieOwnership {
   hasFile: boolean;
   mediaId: number;
   monitored: boolean;
   sizeBytes: number | null;
+}
+
+export interface RadarrLibraryMovieNavigation {
+  mediaId: number;
+  titleSlug: string;
 }
 
 export class RadarrAdapter extends ServarrAcquisitionAdapter {
@@ -76,5 +94,33 @@ export class RadarrAdapter extends ServarrAcquisitionAdapter {
       monitored: match.monitored,
       sizeBytes: match.movieFile?.size ?? null,
     };
+  }
+
+  async resolveLibraryMovieNavigation(
+    rawIdentity: { imdb: string | null; tmdb: number | null },
+    signal?: AbortSignal,
+  ): Promise<RadarrLibraryMovieNavigation | null> {
+    const identity = libraryMovieIdentitySchema.parse(rawIdentity);
+    const records = await this.client.requestJson(
+      `${this.apiRoot}/movie`,
+      radarrLibraryMovieNavigationResponseSchema,
+      {
+        headers: { "X-Api-Key": this.apiKey },
+        operation: "media.library.connected_action",
+        query:
+          identity.tmdb === null ? { imdbId: identity.imdb! } : { tmdbId: String(identity.tmdb) },
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const matches = records.filter(
+      (record) =>
+        (identity.tmdb === null || record.tmdbId === identity.tmdb) &&
+        (identity.imdb === null ||
+          record.imdbId === identity.imdb ||
+          (identity.tmdb !== null && (record.imdbId === null || record.imdbId === undefined))),
+    );
+    if (matches.length === 0) return null;
+    if (matches.length !== 1) throw this.client.invalidResponse("media.library.connected_action");
+    return { mediaId: matches[0]!.id, titleSlug: matches[0]!.titleSlug };
   }
 }

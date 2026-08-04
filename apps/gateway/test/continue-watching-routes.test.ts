@@ -68,6 +68,10 @@ async function harness(
     providerIds?: { imdb: string | null; tmdb: number | null };
     radarrConnectorCount?: number;
     radarrEnabled?: boolean;
+    resolveConnectedAction?: () => Promise<{
+      publicUiUrl: string;
+      titleSlug: string;
+    } | null>;
     resolveLibraryMovie?: (
       input: { imdb: string | null; tmdb: number | null },
       signal?: AbortSignal,
@@ -143,6 +147,10 @@ async function harness(
   }));
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: (await readLibrary()).items[0]!,
+    managementIdentity: {
+      kind: "movie",
+      providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
+    },
     movie: {
       cast: [],
       castTruncated: false,
@@ -241,6 +249,9 @@ async function harness(
       ...(options.resolveManagedMovie === undefined
         ? {}
         : { resolveManagedMovie: options.resolveManagedMovie }),
+      ...(options.resolveConnectedAction === undefined
+        ? {}
+        : { resolveConnectedAction: options.resolveConnectedAction }),
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -545,6 +556,10 @@ describe("Continue Watching routes", () => {
       const rawItem = (await readLibrary.mock.results[0]!.value).items[0]!;
       readLibraryTitle.mockResolvedValueOnce({
         item: rawItem,
+        managementIdentity: {
+          kind: "movie",
+          providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        },
         movie: {
           cast: [
             {
@@ -613,6 +628,112 @@ describe("Continue Watching routes", () => {
       expect(apiErrorSchema.parse(tampered.json()).error.code).toBe(
         "media_person_artwork_not_found",
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reauthorizes connected-service navigation and returns only an exact no-referrer redirect", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://movies.example.test/radarr/",
+      titleSlug: "the-far-meridian",
+    }));
+    const { app, viewer } = await harness({ resolveConnectedAction, role: "operator" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const detail = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}`,
+      });
+      expect(libraryTitleDetailResponseSchema.parse(detail.json()).connectedActions).toEqual([
+        {
+          href: `/v1/media/library/${referenceId}/actions/radarr`,
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ]);
+
+      const redirect = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/actions/radarr`,
+      });
+      expect(redirect.statusCode, redirect.body).toBe(303);
+      expect(redirect.headers.location).toBe(
+        "https://movies.example.test/radarr/movie/the-far-meridian",
+      );
+      expect(redirect.headers["referrer-policy"]).toBe("no-referrer");
+      expect(redirect.headers["cache-control"]).toBe("no-store");
+      expect(redirect.body).not.toMatch(/jellyfin|api\/v3|private/iu);
+
+      const wrongService = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/actions/sonarr`,
+      });
+      expect(wrongService.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies connected-service navigation to viewers before resolving its target", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://movies.example.test/radarr/",
+      titleSlug: "the-far-meridian",
+    }));
+    const { app, viewer } = await harness({ resolveConnectedAction, role: "viewer" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const denied = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/actions/radarr`,
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a bounded unavailable response when connected-service resolution fails", async () => {
+    const resolveConnectedAction = vi.fn(async () => {
+      throw new Error("private https://radarr.lan/api/v3 sensitive-key");
+    });
+    const { app, viewer } = await harness({ resolveConnectedAction, role: "operator" });
+    try {
+      const catalogueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: "/v1/media/library?kind=movies&sort=title",
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/${referenceId}/actions/radarr`,
+      });
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "library_connected_action_unavailable",
+      );
+      expect(response.body).not.toMatch(/radarr\.lan|api\/v3|sensitive-key/iu);
     } finally {
       await app.close();
     }
@@ -995,6 +1116,10 @@ describe("Continue Watching routes", () => {
     readLibrary.mockResolvedValueOnce({ items: [series], nextStartIndex: null, truncated: false });
     readLibraryTitle.mockResolvedValueOnce({
       item: series,
+      managementIdentity: {
+        kind: "series",
+        providerIds: { tmdb: 1_042, tvdb: 401_337 },
+      },
       movie: null,
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,

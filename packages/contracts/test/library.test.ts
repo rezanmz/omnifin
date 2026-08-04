@@ -395,6 +395,14 @@ describe("library operation contracts", () => {
       title: "Season 2",
     };
     const detail = {
+      connectedActions: [
+        {
+          href: `/v1/media/library/${seriesReferenceId}/actions/sonarr`,
+          kind: "service_navigation" as const,
+          label: "Open in Sonarr",
+          service: "sonarr" as const,
+        },
+      ],
       generatedAt: catalogue.generatedAt,
       media: seriesMedia,
       movie: null,
@@ -403,6 +411,36 @@ describe("library operation contracts", () => {
       seasonsTruncated: false,
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        connectedActions: [
+          {
+            ...detail.connectedActions[0],
+            href: `/v1/media/library/media_${"z".repeat(22)}/actions/sonarr`,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        connectedActions: [detail.connectedActions[0], detail.connectedActions[0]],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        connectedActions: [
+          {
+            href: `/v1/media/library/${seriesReferenceId}/actions/radarr`,
+            kind: "service_navigation",
+            label: "Open in Radarr",
+            service: "radarr",
+          },
+        ],
+      }).success,
+    ).toBe(false);
 
     const episodes = {
       generatedAt: catalogue.generatedAt,
@@ -514,6 +552,14 @@ describe("library operation contracts", () => {
   it("models rich owned-movie facts without accepting cross-reference person artwork", () => {
     const media = catalogue.items[0]!.media;
     const detail = {
+      connectedActions: [
+        {
+          href: `/v1/media/library/${media.id}/actions/radarr`,
+          kind: "service_navigation" as const,
+          label: "Open in Radarr",
+          service: "radarr" as const,
+        },
+      ],
       generatedAt: catalogue.generatedAt,
       media,
       movie: {

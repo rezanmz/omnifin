@@ -267,6 +267,46 @@ describe("MediaLibrary", () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it("renders connected-service navigation as a same-origin accessible new-tab action", async () => {
+    const user = userEvent.setup();
+    const item = mediaLibraryDemoItems.find(({ media }) => media.kind === "movie")!;
+    const client = {
+      ...mediaLibraryDemoClient,
+      loadTitle: async (referenceId: string, signal?: AbortSignal) => {
+        const detail = await mediaLibraryDemoClient.loadTitle!(referenceId, signal);
+        return {
+          ...detail,
+          connectedActions: [
+            {
+              href: `/v1/media/library/${referenceId}/actions/radarr`,
+              kind: "service_navigation" as const,
+              label: "Open in Radarr",
+              service: "radarr" as const,
+            },
+          ],
+        };
+      },
+    };
+    render(
+      libraryScreen(
+        <MediaLibrary client={client} initialOutcome={readyMediaLibraryOutcome} live={false} />,
+      ),
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: new RegExp(`^View details for ${item.media.title}`, "u"),
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: `${item.media.title} details` });
+    const action = await within(dialog).findByRole("link", {
+      name: "Open in Radarr in a new tab",
+    });
+    expect(action).toHaveAttribute("href", `/api/media/library/${item.media.id}/actions/radarr`);
+    expect(action).toHaveAttribute("target", "_blank");
+    expect(action).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
   it("updates saved Jellyfin progress separately from one-time playback position", async () => {
     const user = userEvent.setup();
     const referenceId = `media_${"a".repeat(22)}`;

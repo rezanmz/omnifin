@@ -516,6 +516,15 @@ export interface JellyfinLibrarySeason {
 
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
+  managementIdentity:
+    | {
+        kind: "movie";
+        providerIds: { imdb: string | null; tmdb: number | null };
+      }
+    | {
+        kind: "series";
+        providerIds: { tmdb: number | null; tvdb: number | null };
+      };
   movie: JellyfinLibraryMovieDetail | null;
   removal?: JellyfinLibraryRemovalFacts | null;
   seasons: JellyfinLibrarySeason[];
@@ -886,7 +895,7 @@ function normalizeMovieDetail(
 
 function normalizedProviderId(
   providerIds: Record<string, string> | null | undefined,
-  provider: "imdb" | "tmdb",
+  provider: "imdb" | "tmdb" | "tvdb",
 ) {
   const value = Object.entries(providerIds ?? {}).find(
     ([key]) => key.toLocaleLowerCase("en-US") === provider,
@@ -894,12 +903,45 @@ function normalizedProviderId(
   return value?.trim() ?? null;
 }
 
+function normalizedPositiveProviderNumber(
+  providerIds: Record<string, string> | null | undefined,
+  provider: "tmdb" | "tvdb",
+) {
+  const value = normalizedProviderId(providerIds, provider);
+  if (value === null || !/^[1-9][0-9]{0,15}$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeTitleManagementIdentity(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+  kind: "movie" | "series",
+): JellyfinLibraryTitleResult["managementIdentity"] {
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
+  if (kind === "series") {
+    return {
+      kind,
+      providerIds: {
+        tmdb,
+        tvdb: normalizedPositiveProviderNumber(item.ProviderIds, "tvdb"),
+      },
+    };
+  }
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  return {
+    kind,
+    providerIds: {
+      imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
+      tmdb,
+    },
+  };
+}
+
 function normalizeMovieRemovalFacts(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
 ): JellyfinLibraryRemovalFacts {
   const imdb = normalizedProviderId(item.ProviderIds, "imdb");
-  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
-  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,15}$/u.test(tmdb) ? Number(tmdb) : null;
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
   const sizes = (item.MediaSources ?? []).map(({ Size }) => Size ?? null);
   const sizeBytes =
     sizes.length > 0 && sizes.every((size): size is number => size !== null)
@@ -909,10 +951,7 @@ function normalizeMovieRemovalFacts(
     canDelete: item.CanDelete === true,
     providerIds: {
       imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
-      tmdb:
-        parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0
-          ? parsedTmdb
-          : null,
+      tmdb,
     },
     sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : null,
   };
@@ -1563,6 +1602,7 @@ export class JellyfinUserMediaClient {
     if (item.kind === "movie") {
       return {
         item,
+        managementIdentity: normalizeTitleManagementIdentity(itemResponse, "movie"),
         movie: normalizeMovieDetail(itemResponse),
         removal: normalizeMovieRemovalFacts(itemResponse),
         seasons: [],
@@ -1621,6 +1661,7 @@ export class JellyfinUserMediaClient {
     }
     return {
       item,
+      managementIdentity: normalizeTitleManagementIdentity(itemResponse, "series"),
       movie: null,
       seasons: seasonItems.map((season) =>
         normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
