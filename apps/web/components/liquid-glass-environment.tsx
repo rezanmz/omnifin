@@ -56,6 +56,10 @@ export function LiquidGlassEnvironment() {
         passive: true,
       });
     }
+    // Deterministic fixture routes represent the fully settled interface in committed visual
+    // baselines. Production routes still wait for completed user intent so optical repainting
+    // cannot become a late first-paint candidate.
+    if (new URLSearchParams(window.location.search).has("test-view")) enableMaterial();
 
     return () => {
       stopListening();
