@@ -15,10 +15,15 @@ export function AboutScreenSkeleton({
   displayProfile?: DisplayProfile;
   embedded?: boolean;
 }) {
+  const Shell = embedded ? "div" : "main";
   return (
     <div className="about-layout" data-display-profile={displayProfile}>
       {embedded ? null : <CinematicBackdrop />}
-      <main aria-busy="true" className="about-shell" id="main-content" tabIndex={-1}>
+      <Shell
+        aria-busy="true"
+        className="about-shell"
+        {...(embedded ? {} : { id: "main-content", tabIndex: -1 })}
+      >
         <nav aria-label="About navigation" className="about-topbar">
           <a aria-label="Omnifin home" className="about-topbar__brand" href="/">
             <BrandMark />
@@ -108,7 +113,7 @@ export function AboutScreenSkeleton({
           <span aria-hidden="true">·</span>
           <span>Identity supplied by your local gateway</span>
         </footer>
-      </main>
+      </Shell>
     </div>
   );
 }

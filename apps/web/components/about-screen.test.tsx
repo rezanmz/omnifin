@@ -34,6 +34,14 @@ describe("AboutScreen", () => {
     expect(container.querySelectorAll(".about-skeleton-line").length).toBeGreaterThan(4);
   });
 
+  it("does not duplicate the route landmark while an embedded page hands off", () => {
+    const { container } = render(<AboutScreenSkeleton embedded />);
+
+    expect(container.querySelector("main")).not.toBeInTheDocument();
+    expect(container.querySelector("#main-content")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading local build identity");
+  });
+
   it("presents a verified release and exact corresponding source", () => {
     renderScreen({ identity: stableIdentity, status: "ready" });
 
