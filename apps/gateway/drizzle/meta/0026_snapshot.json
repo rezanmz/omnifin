@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "aa31d801-032e-426b-bd73-bb6dd1d88b95",
-  "prevId": "695447ec-d404-4738-9dfb-8d62a8a16098",
+  "id": "bd20e3cc-6409-421d-923b-24ef018ca7c1",
+  "prevId": "0a46df08-dc35-4560-8563-08eb1a7b871e",
   "tables": {
     "acquisition_grab_operations": {
       "name": "acquisition_grab_operations",
@@ -2558,6 +2558,241 @@
         "library_removal_previews_timestamp_order_check": {
           "name": "library_removal_previews_timestamp_order_check",
           "value": "\"library_removal_previews\".\"created_at\" >= 0\n        and \"library_removal_previews\".\"created_at\" <= \"library_removal_previews\".\"updated_at\"\n        and \"library_removal_previews\".\"created_at\" < \"library_removal_previews\".\"expires_at\"\n        and (\"library_removal_previews\".\"consumed_at\" is null\n          or (\"library_removal_previews\".\"consumed_at\" between \"library_removal_previews\".\"created_at\" and \"library_removal_previews\".\"expires_at\"\n            and \"library_removal_previews\".\"consumed_at\" <= \"library_removal_previews\".\"updated_at\"))"
+        }
+      }
+    },
+    "media_download_grants": {
+      "name": "media_download_grants",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "public_token_hash": {
+          "name": "public_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "link_revision": {
+          "name": "link_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reference_id": {
+          "name": "reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_type": {
+          "name": "content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'prepared'"
+        },
+        "bytes_transferred": {
+          "name": "bytes_transferred",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "media_download_grants_public_token_unique": {
+          "name": "media_download_grants_public_token_unique",
+          "columns": ["public_token_hash"],
+          "isUnique": true
+        },
+        "media_download_grants_user_expiry_idx": {
+          "name": "media_download_grants_user_expiry_idx",
+          "columns": ["user_id", "expires_at"],
+          "isUnique": false
+        },
+        "media_download_grants_session_idx": {
+          "name": "media_download_grants_session_idx",
+          "columns": ["session_id"],
+          "isUnique": false
+        },
+        "media_download_grants_expiry_idx": {
+          "name": "media_download_grants_expiry_idx",
+          "columns": ["expires_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "media_download_grants_user_id_users_id_fk": {
+          "name": "media_download_grants_user_id_users_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_session_id_sessions_id_fk": {
+          "name": "media_download_grants_session_id_sessions_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "sessions",
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_reference_id_media_references_id_fk": {
+          "name": "media_download_grants_reference_id_media_references_id_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "media_references",
+          "columnsFrom": ["reference_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_download_grants_link_fk": {
+          "name": "media_download_grants_link_fk",
+          "tableFrom": "media_download_grants",
+          "tableTo": "service_identity_links",
+          "columnsFrom": ["service_identity_link_id", "user_id"],
+          "columnsTo": ["id", "user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "media_download_grants_id_check": {
+          "name": "media_download_grants_id_check",
+          "value": "length(\"media_download_grants\".\"id\") = 37\n        and substr(\"media_download_grants\".\"id\", 1, 15) = 'download_grant_'\n        and substr(\"media_download_grants\".\"id\", 16) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_download_grants_public_token_hash_check": {
+          "name": "media_download_grants_public_token_hash_check",
+          "value": "length(\"media_download_grants\".\"public_token_hash\") = 43\n        and \"media_download_grants\".\"public_token_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "media_download_grants_link_revision_check": {
+          "name": "media_download_grants_link_revision_check",
+          "value": "\"media_download_grants\".\"link_revision\" between 0 and 2147483647"
+        },
+        "media_download_grants_payload_check": {
+          "name": "media_download_grants_payload_check",
+          "value": "length(\"media_download_grants\".\"encrypted_payload\") between 1 and 32768"
+        },
+        "media_download_grants_filename_check": {
+          "name": "media_download_grants_filename_check",
+          "value": "length(\"media_download_grants\".\"filename\") between 1 and 240"
+        },
+        "media_download_grants_content_type_check": {
+          "name": "media_download_grants_content_type_check",
+          "value": "length(\"media_download_grants\".\"content_type\") between 3 and 128"
+        },
+        "media_download_grants_size_check": {
+          "name": "media_download_grants_size_check",
+          "value": "\"media_download_grants\".\"size_bytes\" between 1 and 140737488355328\n        and \"media_download_grants\".\"bytes_transferred\" between 0 and \"media_download_grants\".\"size_bytes\""
+        },
+        "media_download_grants_state_check": {
+          "name": "media_download_grants_state_check",
+          "value": "\"media_download_grants\".\"state\" in ('prepared', 'streaming', 'completed', 'cancelled', 'failed')"
+        },
+        "media_download_grants_timestamp_order_check": {
+          "name": "media_download_grants_timestamp_order_check",
+          "value": "\"media_download_grants\".\"created_at\" < \"media_download_grants\".\"expires_at\"\n        and \"media_download_grants\".\"updated_at\" >= \"media_download_grants\".\"created_at\"\n        and (\"media_download_grants\".\"started_at\" is null or \"media_download_grants\".\"started_at\" between \"media_download_grants\".\"created_at\" and \"media_download_grants\".\"updated_at\")\n        and (\"media_download_grants\".\"completed_at\" is null or (\n          \"media_download_grants\".\"started_at\" is not null\n          and \"media_download_grants\".\"completed_at\" between \"media_download_grants\".\"started_at\" and \"media_download_grants\".\"updated_at\"\n        ))"
         }
       }
     },
