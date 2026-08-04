@@ -24,6 +24,10 @@ import {
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseJsonSchema,
   libraryPlaybackStateMutationResponseSchema,
+  libraryRemovalCommitRequestJsonSchema,
+  libraryRemovalCommitRequestSchema,
+  libraryRemovalOperationJsonSchema,
+  libraryRemovalOperationSchema,
   libraryRemovalPreviewJsonSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesQueryJsonSchema,
@@ -44,6 +48,7 @@ const searchId = `library_artwork_search_${"s".repeat(22)}`;
 const resultId = `library_artwork_result_${"r".repeat(22)}`;
 const downloadGrantId = `media_download_${"d".repeat(22)}`;
 const removalPreviewId = `library_removal_preview_${"d".repeat(22)}`;
+const removalOperationId = `library_removal_operation_${"e".repeat(22)}`;
 
 const attention = {
   generatedAt: "2026-07-28T14:00:00.000Z",
@@ -729,6 +734,83 @@ describe("library operation contracts", () => {
     ).toBe(false);
   });
 
+  it("binds a destructive removal commit to one exact preview and typed title", () => {
+    const request = {
+      confirmationTitle: "The Long Meridian",
+      mode: "delete_files_and_unmonitor" as const,
+      previewId: removalPreviewId,
+    };
+
+    expect(libraryRemovalCommitRequestSchema.parse(request)).toEqual(request);
+    expect(
+      libraryRemovalCommitRequestSchema.safeParse({
+        ...request,
+        connectorId: "radarr-primary",
+        itemId: "upstream-movie-id",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("reports a completed removal without exposing its private execution coordinates", () => {
+    const operation = {
+      completedAt: "2026-07-28T14:01:08.000Z",
+      mode: "delete_files_and_unmonitor" as const,
+      operationId: removalOperationId,
+      previewId: removalPreviewId,
+      referenceId,
+      stages: [
+        { kind: "authorization_recheck" as const, state: "succeeded" as const },
+        { kind: "source_revalidation" as const, state: "succeeded" as const },
+        { kind: "monitoring_change" as const, state: "succeeded" as const },
+        { kind: "organized_file_deletion" as const, state: "succeeded" as const },
+        { kind: "manager_record_removal" as const, state: "not_applicable" as const },
+        { kind: "jellyfin_reconciliation" as const, state: "succeeded" as const },
+      ],
+      startedAt: "2026-07-28T14:01:00.000Z",
+      state: "succeeded" as const,
+    };
+
+    expect(libraryRemovalOperationSchema.parse(operation)).toEqual(operation);
+    expect(JSON.stringify(operation)).not.toMatch(/path|external|connector|upstream|title/iu);
+    expect(
+      libraryRemovalOperationSchema.safeParse({
+        ...operation,
+        stages: operation.stages.map((stage) =>
+          stage.kind === "organized_file_deletion" ? { ...stage, state: "uncertain" } : stage,
+        ),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("preserves uncertain destructive outcomes for explicit reconciliation", () => {
+    const operation = {
+      completedAt: "2026-07-28T14:01:08.000Z",
+      failureCode: "outcome_unknown" as const,
+      mode: "remove_from_radarr_and_delete_files" as const,
+      operationId: removalOperationId,
+      previewId: removalPreviewId,
+      referenceId,
+      stages: [
+        { kind: "authorization_recheck" as const, state: "succeeded" as const },
+        { kind: "source_revalidation" as const, state: "succeeded" as const },
+        { kind: "monitoring_change" as const, state: "not_applicable" as const },
+        { kind: "organized_file_deletion" as const, state: "uncertain" as const },
+        { kind: "manager_record_removal" as const, state: "uncertain" as const },
+        { kind: "jellyfin_reconciliation" as const, state: "pending" as const },
+      ],
+      startedAt: "2026-07-28T14:01:00.000Z",
+      state: "reconcile_required" as const,
+    };
+
+    expect(libraryRemovalOperationSchema.parse(operation)).toEqual(operation);
+    expect(
+      libraryRemovalOperationSchema.safeParse({
+        ...operation,
+        completedAt: null,
+      }).success,
+    ).toBe(false);
+  });
+
   it("binds opaque artwork previews to their short-lived search", () => {
     const response = {
       expiresAt: "2026-07-28T14:20:00.000Z",
@@ -769,6 +851,9 @@ describe("library operation contracts", () => {
     expect(libraryPlaybackStateMutationResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryRemovalPreviewJsonSchema).not.toHaveProperty("$schema");
     expect(libraryRemovalPreviewJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryRemovalCommitRequestJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryRemovalOperationJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryRemovalOperationJsonSchema).toMatchObject({ type: "object" });
     expect(viewingHistoryQueryJsonSchema).not.toHaveProperty("$schema");
     expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
