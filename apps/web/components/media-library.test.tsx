@@ -282,6 +282,56 @@ describe("MediaLibrary", () => {
     expect(within(detail).getByRole("button", { name: "Mark watched" })).toBeVisible();
   });
 
+  it("prepares an admin-only original download from the title detail without exposing Jellyfin", async () => {
+    const user = userEvent.setup();
+    const referenceId = `media_${"a".repeat(22)}`;
+    const grantId = `media_download_${"d".repeat(22)}`;
+    const prepareDownload = vi.fn(async () => ({
+      archiveRetrieval: "unknown" as const,
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-30T12:05:00.000Z",
+      filename: "Ember Coast (2026).mkv",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      grantId,
+      path: `/v1/media/library/downloads/${grantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      libraryScreen(
+        <MediaLibrary
+          client={{
+            ...mediaLibraryDemoClient,
+            loadDownloadEligibility: async () => ({
+              snapshot: { csrfToken: "original-download-csrf" },
+              status: "ready",
+            }),
+            prepareDownload,
+          }}
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+        />,
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
+    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
+    await user.click(await within(detail).findByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(prepareDownload).toHaveBeenCalledWith(referenceId, {
+        csrfToken: "original-download-csrf",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(within(detail).getByText("Download started in your browser.")).toBeVisible();
+    expect(within(detail).getByText(/Ember Coast \(2026\)\.mkv/u)).toBeVisible();
+    const link = click.mock.instances[0] as HTMLAnchorElement;
+    expect(new URL(link.href).pathname).toBe(`/api/media/library/downloads/${grantId}`);
+    expect(detail.innerHTML).not.toContain("jellyfin-user");
+  });
+
   it("keeps a series as one title and exposes its episodes inside a season hierarchy", async () => {
     const user = userEvent.setup();
     const playbackClient = {

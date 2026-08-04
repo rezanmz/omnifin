@@ -1,4 +1,5 @@
 import type { LibraryBrowseResponse } from "@omnifin/contracts/library";
+import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { libraryDemoPrincipal } from "./library-care-demo";
@@ -8,6 +9,7 @@ import {
   mediaLibraryClient,
   mediaLibraryOutcomeFromError,
   sameOriginMediaPath,
+  startOriginalMediaDownload,
 } from "./media-library";
 
 const feed: LibraryBrowseResponse = readyMediaLibraryOutcome.feed;
@@ -112,6 +114,81 @@ describe("Media library client", () => {
     expect(headers.get("idempotency-key")).toBe("playback-state-browser-0123456789");
     expect(headers.get("x-omnifin-csrf")).toBe(csrfToken);
     expect(String(fetchMock.mock.calls)).not.toContain("jellyfin-user");
+  });
+
+  it("reveals original-file controls only to an active media-download principal", async () => {
+    const csrfToken = "media_download_csrf_0123456789abcdefghijklmnop";
+    const admin = {
+      ...libraryDemoPrincipal,
+      permissions: [...ROLE_PERMISSIONS.admin],
+      role: "admin" as const,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ csrfToken, principal: admin }))
+      .mockResolvedValueOnce(Response.json({ csrfToken, principal: libraryDemoPrincipal }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      snapshot: { csrfToken },
+      status: "ready",
+    });
+    await expect(mediaLibraryClient.loadDownloadEligibility!()).resolves.toEqual({
+      status: "forbidden",
+    });
+  });
+
+  it("prepares an opaque same-origin original-file grant with CSRF", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const grantId = `media_download_${"d".repeat(22)}`;
+    const prepared = {
+      archiveRetrieval: "possible" as const,
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-30T12:05:00.000Z",
+      filename: "Ember Coast (2026).mkv",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      grantId,
+      path: `/v1/media/library/downloads/${grantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    };
+    const fetchMock = vi.fn(async () => Response.json(prepared, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
+    ).resolves.toEqual(prepared);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/library/${referenceId}/downloads`,
+      expect.objectContaining({
+        body: "{}",
+        credentials: "same-origin",
+        headers: expect.objectContaining({ "x-omnifin-csrf": "download-csrf" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("starts a browser download through the web proxy without retaining the grant in the DOM", () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const grantId = `media_download_${"d".repeat(22)}`;
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    startOriginalMediaDownload({
+      archiveRetrieval: "unknown",
+      contentType: "video/x-matroska",
+      expiresAt: "2026-07-30T12:05:00.000Z",
+      filename: "Ember Coast (2026).mkv",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      grantId,
+      path: `/v1/media/library/downloads/${grantId}`,
+      referenceId,
+      sizeBytes: 6_979_321_856,
+    });
+
+    const link = click.mock.instances[0] as HTMLAnchorElement;
+    expect(new URL(link.href).pathname).toBe(`/api/media/library/downloads/${grantId}`);
+    expect(link.download).toBe("Ember Coast (2026).mkv");
+    expect(document.body.contains(link)).toBe(false);
   });
 
   it("fails playback-state writes closed when the session is absent or lacks permission", async () => {

@@ -5,6 +5,7 @@ import "./library-title-drawer.css";
 
 import type {
   LibraryBrowseItem,
+  LibraryDownloadPrepareResponse,
   LibraryMovieDetail,
   LibraryMovieMediaSource,
   LibraryPlaybackState,
@@ -22,6 +23,7 @@ import {
   ChevronRight,
   Clapperboard,
   Clock3,
+  Download,
   Film,
   Gauge,
   HardDrive,
@@ -40,6 +42,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MediaLibraryClientError,
   sameOriginMediaPath,
+  startOriginalMediaDownload,
+  type MediaDownloadEligibility,
   type MediaLibraryClient,
 } from "../lib/media-library";
 
@@ -307,6 +311,136 @@ function PlaybackActions({
             : ""}
       </p>
     </div>
+  );
+}
+
+type OriginalDownloadState =
+  | { kind: "idle" }
+  | { kind: "preparing" }
+  | { kind: "error"; message: string }
+  | { kind: "started"; prepared: LibraryDownloadPrepareResponse };
+
+function originalDownloadErrorMessage(error: unknown) {
+  if (error instanceof MediaLibraryClientError) {
+    if (error.kind === "signed_out") return "Your session ended. Sign in again to download.";
+    if (error.kind === "forbidden") return "This account cannot download original media.";
+    if (error.code === "original_download_busy") {
+      return "Another original-file download is active. Try again when it finishes.";
+    }
+    if (error.code === "original_download_source_changed") {
+      return "Jellyfin reported a newer source file. Prepare the download again.";
+    }
+  }
+  return "The original file could not be prepared. Playback and your library were not changed.";
+}
+
+export function OriginalMediaDownloadAction({
+  client,
+  media,
+  onStartDownload = startOriginalMediaDownload,
+}: {
+  client: MediaLibraryClient;
+  media: Pick<LibraryBrowseItem["media"], "id" | "title">;
+  onStartDownload?: (prepared: LibraryDownloadPrepareResponse) => void;
+}) {
+  const [eligibility, setEligibility] = useState<MediaDownloadEligibility | { status: "loading" }>({
+    status: "loading",
+  });
+  const [state, setState] = useState<OriginalDownloadState>({ kind: "idle" });
+  const prepareController = useRef<AbortController | null>(null);
+  const available = Boolean(client.loadDownloadEligibility && client.prepareDownload);
+
+  useEffect(() => {
+    if (!available || !client.loadDownloadEligibility) return;
+    const controller = new AbortController();
+    void client
+      .loadDownloadEligibility(controller.signal)
+      .then(setEligibility)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setEligibility({ status: "unavailable" });
+      });
+    return () => controller.abort();
+  }, [available, client]);
+
+  useEffect(
+    () => () => {
+      prepareController.current?.abort();
+    },
+    [],
+  );
+
+  if (!available || eligibility.status !== "ready") return null;
+
+  async function prepare() {
+    if (eligibility.status !== "ready" || !client.prepareDownload || state.kind === "preparing") {
+      return;
+    }
+    prepareController.current?.abort();
+    const controller = new AbortController();
+    prepareController.current = controller;
+    setState({ kind: "preparing" });
+    try {
+      const prepared = await client.prepareDownload(media.id, {
+        csrfToken: eligibility.snapshot.csrfToken,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      onStartDownload(prepared);
+      setState({ kind: "started", prepared });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setState({ kind: "error", message: originalDownloadErrorMessage(error) });
+    } finally {
+      if (prepareController.current === controller) prepareController.current = null;
+    }
+  }
+
+  return (
+    <section aria-label={`Original file for ${media.title}`} className="library-title__download">
+      <span aria-hidden="true" className="library-title__download-icon">
+        <Download />
+      </span>
+      <div>
+        <strong>Original file</strong>
+        <span>
+          {state.kind === "started"
+            ? `${state.prepared.filename} · ${formatBytes(state.prepared.sizeBytes)}`
+            : "A private five-minute link, delivered directly from Jellyfin."}
+        </span>
+      </div>
+      <button
+        className="button button--glass"
+        data-directional-item
+        disabled={state.kind === "preparing"}
+        onClick={() => void prepare()}
+        type="button"
+      >
+        {state.kind === "preparing" ? (
+          <LoaderCircle aria-hidden="true" className="library-title__spinner" />
+        ) : state.kind === "started" ? (
+          <Check aria-hidden="true" />
+        ) : (
+          <Download aria-hidden="true" />
+        )}
+        {state.kind === "preparing"
+          ? "Preparing…"
+          : state.kind === "started"
+            ? "Download again"
+            : "Download"}
+      </button>
+      <p aria-live="polite" data-state={state.kind}>
+        {state.kind === "preparing"
+          ? "Confirming the current Jellyfin source…"
+          : state.kind === "started"
+            ? state.prepared.archiveRetrieval === "possible"
+              ? "Download started. Archived storage may take a moment to respond."
+              : "Download started in your browser."
+            : state.kind === "error"
+              ? state.message
+              : ""}
+      </p>
+    </section>
   );
 }
 
@@ -706,6 +840,7 @@ function EpisodeDetail({
         onPlay={onPlay}
         playback={episode.playback}
       />
+      <OriginalMediaDownloadAction client={client} media={episode.media} />
     </section>
   );
 }
@@ -1124,6 +1259,9 @@ export function LibraryTitleDrawer({
                       }
                       playback={detail!.playback}
                     />
+                  ) : null}
+                  {detail!.media.kind === "movie" ? (
+                    <OriginalMediaDownloadAction client={client} media={detail!.media} />
                   ) : null}
                 </div>
               </section>
