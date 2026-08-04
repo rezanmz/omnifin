@@ -56,7 +56,7 @@
       transparent 72%
     ),
     linear-gradient(145deg, var(--glass-highlight), transparent 30% 70%, var(--glass-rim-mid)),
-    var(--glass);
+    color-mix(in srgb, var(--surface-card-solid) 94%, var(--ambient-accent, var(--acid)));
   box-shadow:
     inset 0 1px 0 var(--glass-specular),
     inset 0 -1px 0 var(--glass-rim-shadow),

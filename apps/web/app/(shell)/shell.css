@@ -313,7 +313,7 @@
   align-items: center;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  background: var(--glass);
+  background: color-mix(in srgb, var(--surface-card-solid) 94%, var(--ambient-accent, var(--acid)));
   border: 1px solid var(--glass-edge);
   border-radius: 28px;
   box-shadow: 0 20px 48px var(--glass-cast-shadow);
@@ -397,7 +397,11 @@
     align-items: center;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: var(--glass);
+    background: color-mix(
+      in srgb,
+      var(--surface-card-solid) 94%,
+      var(--ambient-accent, var(--acid))
+    );
     border: 1px solid var(--glass-edge);
     border-radius: 28px;
     bottom: max(8px, env(safe-area-inset-bottom));
