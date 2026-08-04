@@ -535,7 +535,11 @@ test("CI runs Storybook and accessibility as independent protected jobs", () => 
 
   assert.equal(storybook.name, "Storybook");
   assert.equal(accessibility.name, "Accessibility");
-  assert.equal(accessibility["timeout-minutes"], 30);
+  assert.equal(storybook["timeout-minutes"], 30);
+  assert.equal(accessibility["timeout-minutes"], 35);
+  assert.equal(document.jobs.browser["timeout-minutes"], 35);
+  assert.equal(document.jobs.visual["timeout-minutes"], 35);
+  assert.equal(document.jobs.lighthouse["timeout-minutes"], 30);
   assert.ok(storybook.steps.some((step) => step.run === "pnpm test:storybook"));
   assert.ok(!storybook.steps.some((step) => step.run === "pnpm test:a11y"));
   assert.ok(accessibility.steps.some((step) => step.run === "pnpm test:a11y"));

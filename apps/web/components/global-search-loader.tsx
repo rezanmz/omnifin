@@ -28,7 +28,7 @@ function GlobalSearchPlaceholder({
   query,
   setQuery,
 }: {
-  activate?: (focusRequested?: boolean) => void;
+  activate?: (focusRequested?: boolean, activationPosition?: DocumentScrollPosition | null) => void;
   busy?: boolean;
   inputReference?: RefObject<HTMLInputElement | null>;
   interactive?: boolean;
@@ -37,7 +37,9 @@ function GlobalSearchPlaceholder({
   setQuery?: (query: string) => void;
 }) {
   const editScrollReference = useRef<DocumentScrollPosition | null>(null);
+  const pointerActivationPositionReference = useRef<DocumentScrollPosition | null>(null);
   const pointerScrollReference = useRef<DocumentScrollPosition | null>(null);
+  const pointerActivationReference = useRef(false);
 
   return (
     <div className="global-search" data-liquid-glass>
@@ -57,6 +59,9 @@ function GlobalSearchPlaceholder({
         disabled={!interactive}
         id="global-search-placeholder"
         onClick={() => activate?.(true)}
+        onBlur={() => {
+          pointerActivationReference.current = false;
+        }}
         onChange={(event) => {
           setQuery?.(event.currentTarget.value);
           restoreDocumentScrollPosition(editScrollReference.current);
@@ -69,7 +74,7 @@ function GlobalSearchPlaceholder({
         onFocus={() => {
           restoreDocumentScrollPosition(pointerScrollReference.current);
           pointerScrollReference.current = null;
-          activate?.(true);
+          if (!pointerActivationReference.current) activate?.(true);
         }}
         onKeyDown={(event) => {
           if (
@@ -84,14 +89,26 @@ function GlobalSearchPlaceholder({
         }}
         onPointerEnter={preload}
         onPointerDown={(event) => {
-          pointerScrollReference.current = captureDocumentScrollPosition();
-          activate?.(true);
+          const position = captureDocumentScrollPosition();
+          pointerActivationPositionReference.current = position;
+          pointerScrollReference.current = position;
+          pointerActivationReference.current = true;
           if (document.activeElement !== event.currentTarget) {
             event.preventDefault();
             focusWithoutDocumentScroll(event.currentTarget);
           }
         }}
+        onPointerCancel={() => {
+          pointerActivationReference.current = false;
+          pointerActivationPositionReference.current = null;
+        }}
         placeholder="Search everything…"
+        onPointerUp={() => {
+          pointerActivationReference.current = false;
+          const position = pointerActivationPositionReference.current;
+          pointerActivationPositionReference.current = null;
+          activate?.(true, position);
+        }}
         ref={inputReference}
         role="combobox"
         type="text"
@@ -121,20 +138,25 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const activationScrollReference = useRef<DocumentScrollPosition | null>(null);
   const placeholderReference = useRef<HTMLInputElement>(null);
 
-  const activate = useCallback((focusRequested = false) => {
-    activationScrollReference.current ??= captureDocumentScrollPosition();
-    if (focusRequested) setOpenRequested(true);
-    setLoading(true);
-    void loadGlobalSearch()
-      .then((Component) => {
-        setRestoreFocus(
-          (requested) =>
-            requested || focusRequested || document.activeElement === placeholderReference.current,
-        );
-        setSearchComponent(() => Component);
-      })
-      .catch(() => setLoading(false));
-  }, []);
+  const activate = useCallback(
+    (focusRequested = false, activationPosition?: DocumentScrollPosition | null) => {
+      activationScrollReference.current ??= activationPosition ?? captureDocumentScrollPosition();
+      if (focusRequested) setOpenRequested(true);
+      setLoading(true);
+      void loadGlobalSearch()
+        .then((Component) => {
+          setRestoreFocus(
+            (requested) =>
+              requested ||
+              focusRequested ||
+              document.activeElement === placeholderReference.current,
+          );
+          setSearchComponent(() => Component);
+        })
+        .catch(() => setLoading(false));
+    },
+    [],
+  );
 
   useLayoutEffect(() => {
     if (!SearchComponent) return;
@@ -156,7 +178,9 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   if (!SearchComponent) {
     return (
       <GlobalSearchPlaceholder
-        activate={(focusRequested) => activate(focusRequested)}
+        activate={(focusRequested, activationPosition) =>
+          activate(focusRequested, activationPosition)
+        }
         busy={loading}
         inputReference={placeholderReference}
         interactive={hydrated}

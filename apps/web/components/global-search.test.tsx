@@ -135,6 +135,7 @@ describe("global search", () => {
       // Firefox may apply scroll anchoring while React replaces the inert placeholder.
       // The handoff must restore the position captured before that DOM replacement.
       scrollTop = 1_283;
+      fireEvent.pointerUp(placeholder);
 
       await waitFor(() =>
         expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
@@ -147,16 +148,66 @@ describe("global search", () => {
     }
   });
 
-  it("retains focus when pointer activation suppresses the placeholder click", async () => {
+  it("retains focus after the complete pointer gesture hands off the lazy search", async () => {
     render(<GlobalSearchLoader client={client()} debounceMs={0} />);
     const placeholder = screen.getByRole("combobox");
 
     fireEvent.pointerDown(placeholder);
+    expect(placeholder).toHaveFocus();
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
+    fireEvent.pointerUp(placeholder);
 
     await waitFor(() =>
       expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
     );
     expect(screen.getByRole("combobox")).toHaveFocus();
+  });
+
+  it("falls back to click activation after a canceled pointer gesture", async () => {
+    render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const placeholder = screen.getByRole("combobox");
+
+    fireEvent.pointerDown(placeholder);
+    fireEvent.pointerDown(placeholder);
+    fireEvent.pointerCancel(placeholder);
+    fireEvent.blur(placeholder);
+    fireEvent.click(placeholder);
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+    );
+    expect(screen.getByRole("combobox")).toHaveFocus();
+  });
+
+  it("preserves a keyboard edit while handing the placeholder to live search", async () => {
+    const search = vi.fn(async () => searchResponse);
+    render(<GlobalSearchLoader client={client(search)} debounceMs={0} />);
+    const placeholder = screen.getByRole("combobox");
+
+    placeholder.focus();
+    fireEvent.keyDown(placeholder, { key: "m" });
+    fireEvent.change(placeholder, { target: { value: "matrix" } });
+
+    expect(await screen.findByRole("option", { name: /The Matrix/i })).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveValue("matrix");
+    expect(search).toHaveBeenCalledOnce();
+  });
+
+  it("opens the lazy search from its keyboard navigation affordances", async () => {
+    const { unmount } = render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const arrowTarget = screen.getByRole("combobox");
+    fireEvent.keyDown(arrowTarget, { key: "ArrowDown" });
+    await waitFor(() =>
+      expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+    );
+    unmount();
+
+    render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const enterTarget = screen.getByRole("combobox");
+    fireEvent.keyDown(enterTarget, { key: "Enter" });
+    await waitFor(() =>
+      expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+    );
   });
 
   it("opens normalized title details without keeping the search console behind the dialog", async () => {

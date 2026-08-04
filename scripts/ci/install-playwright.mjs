@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 export const DEFAULT_BROWSER_ATTEMPTS = 2;
 export const DEFAULT_BROWSER_TIMEOUT_MS = 180_000;
-export const DEFAULT_DEPENDENCY_TIMEOUT_MS = 600_000;
+export const DEFAULT_DEPENDENCY_TIMEOUT_MS = 900_000;
 export const DEFAULT_BACKOFF_MS = 10_000;
 
 const FORCE_KILL_DELAY_MS = 10_000;
@@ -41,8 +41,8 @@ function validateOptions({ backoffMs, browserAttempts, browserTimeoutMs, depende
     ["browser install", browserTimeoutMs],
     ["dependency install", dependencyTimeoutMs],
   ]) {
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) {
-      throw new Error(`Playwright ${label} timeout must be between 1 second and 10 minutes.`);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 1_200_000) {
+      throw new Error(`Playwright ${label} timeout must be between 1 second and 20 minutes.`);
     }
   }
   if (!Number.isInteger(backoffMs) || backoffMs < 0 || backoffMs > 60_000) {

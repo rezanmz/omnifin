@@ -41,7 +41,7 @@ test("installs operating-system dependencies once before retrying browser downlo
 
   assert.equal(DEFAULT_BROWSER_ATTEMPTS, 2);
   assert.equal(DEFAULT_BROWSER_TIMEOUT_MS, 180_000);
-  assert.equal(DEFAULT_DEPENDENCY_TIMEOUT_MS, 600_000);
+  assert.equal(DEFAULT_DEPENDENCY_TIMEOUT_MS, 900_000);
   assert.equal(DEFAULT_BACKOFF_MS, 10_000);
   assert.deepEqual(dependencyAttempts, [
     {
@@ -203,6 +203,24 @@ test("rejects unknown or duplicate browser targets before spawning", async () =>
       runDependencyAttempt: runAttempt,
     }),
     /Duplicate Playwright browser target/u,
+  );
+  assert.equal(attempts, 0);
+});
+
+test("rejects an unbounded dependency timeout before spawning", async () => {
+  let attempts = 0;
+  const runAttempt = async () => {
+    attempts += 1;
+    return success;
+  };
+
+  await assert.rejects(
+    installPlaywright(["chromium"], {
+      dependencyTimeoutMs: 1_200_001,
+      runBrowserAttempt: runAttempt,
+      runDependencyAttempt: runAttempt,
+    }),
+    /dependency install timeout must be between 1 second and 20 minutes/u,
   );
   assert.equal(attempts, 0);
 });
