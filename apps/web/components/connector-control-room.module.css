@@ -1207,7 +1207,8 @@
     padding: 46px 5px 28px;
   }
   .hero h1 {
-    font-size: clamp(3.25rem, 16vw, 5.2rem);
+    font-size: clamp(2.8rem, 13vw, 4.2rem);
+    max-width: none;
   }
   .heroSeal {
     min-width: min(100%, 270px);
