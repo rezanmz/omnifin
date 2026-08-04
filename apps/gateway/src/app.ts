@@ -77,6 +77,7 @@ import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import { runtimeIdentityRoutes } from "./runtime/identity-routes.js";
 import { loadRuntimeIdentity } from "./runtime/identity.js";
 import { savedListRoutes, type SavedListRoutesOptions } from "./saved/list-routes.js";
+import { savedTargetRoutes, type SavedTargetRoutesOptions } from "./saved/target-routes.js";
 import {
   continueWatchingRoutes,
   type ContinueWatchingRoutesOptions,
@@ -157,6 +158,7 @@ export interface CreateAppOptions {
   subtitleOperationDependencies?: SubtitleOperationRoutesOptions["dependencies"];
   libraryOperationDependencies?: LibraryOperationRoutesOptions["dependencies"];
   savedListDependencies?: SavedListRoutesOptions["dependencies"];
+  savedTargetDependencies?: SavedTargetRoutesOptions["dependencies"];
   mediaRequestDependencies?: MediaRequestRoutesOptions["dependencies"];
   requestReviewDependencies?: RequestReviewRoutesOptions["dependencies"];
   acquisitionProvenanceDependencies?: AcquisitionProvenanceRoutesOptions["dependencies"];
@@ -517,6 +519,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.savedListDependencies === undefined
         ? {}
         : { dependencies: options.savedListDependencies }),
+    });
+    await app.register(savedTargetRoutes, {
+      ...(options.savedTargetDependencies === undefined
+        ? {}
+        : { dependencies: options.savedTargetDependencies }),
     });
     await app.register(mediaRequestRoutes, {
       ...(options.mediaRequestDependencies === undefined

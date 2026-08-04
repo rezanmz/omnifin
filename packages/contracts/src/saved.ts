@@ -453,6 +453,9 @@ export const savedMembershipSummarySchema = z
   });
 export type SavedMembershipSummary = z.infer<typeof savedMembershipSummarySchema>;
 
+export const savedOwnedTargetIssueRequestSchema = z.strictObject({});
+export type SavedOwnedTargetIssueRequest = z.infer<typeof savedOwnedTargetIssueRequestSchema>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -496,3 +499,6 @@ export const savedFavoriteMutationResponseJsonSchema = withoutSchemaDialect(
   savedFavoriteMutationResponseSchema,
 );
 export const savedMembershipSummaryJsonSchema = withoutSchemaDialect(savedMembershipSummarySchema);
+export const savedOwnedTargetIssueRequestJsonSchema = withoutSchemaDialect(
+  savedOwnedTargetIssueRequestSchema,
+);
