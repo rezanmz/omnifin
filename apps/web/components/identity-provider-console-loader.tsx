@@ -31,14 +31,18 @@ export function IdentityProviderConsoleLoader(properties: IdentityProviderConsol
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    let secondFrame = 0;
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setReady(true));
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-    };
+    const requestIdle =
+      typeof window.requestIdleCallback === "function"
+        ? window.requestIdleCallback.bind(window)
+        : null;
+    if (requestIdle) {
+      const callback = requestIdle(() => setReady(true), { timeout: 1_200 });
+      return () => {
+        if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(callback);
+      };
+    }
+    const timeout = globalThis.setTimeout(() => setReady(true), 160);
+    return () => globalThis.clearTimeout(timeout);
   }, []);
 
   if (!ready) return <IdentityProviderConsoleSkeleton />;
