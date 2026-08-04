@@ -2,6 +2,7 @@ import { apiErrorSchema } from "@omnifin/contracts/errors";
 import {
   savedListDeleteResponseSchema,
   savedListItemsResponseSchema,
+  savedListMembershipDeleteResponseSchema,
   savedListMembershipResponseSchema,
   savedListMutationResponseSchema,
   savedListsResponseSchema,
@@ -369,14 +370,15 @@ describe("saved-list routes", () => {
       expect(added.headers["idempotency-replayed"]).toBe("false");
       expect(replayed.headers["idempotency-replayed"]).toBe("true");
       expect(added.headers.etag).not.toBe(listResponse.headers.etag);
-      expect(savedListMembershipResponseSchema.parse(added.json())).toMatchObject({
+      const addedBody = savedListMembershipResponseSchema.parse(added.json());
+      expect(addedBody).toMatchObject({
         created: true,
         item: { catalog: { availability: "owned", title: "Private owned movie" } },
         listId: watchLater.id,
         revision: 1,
       });
-      expect(added.headers.location).toMatch(
-        new RegExp(`^/v1/saved/lists/${watchLater.id}/items/saved_item_`),
+      expect(added.headers.location).toBe(
+        `/v1/saved/lists/${watchLater.id}/items/${addedBody.item.catalog.id}`,
       );
       expect(added.body).not.toMatch(/private-owned-movie|private-jellyfin-token/u);
 
@@ -387,12 +389,37 @@ describe("saved-list routes", () => {
       });
       expect(page.statusCode, page.body).toBe(200);
       expect(page.headers["cache-control"]).toBe("private, no-store");
+      expect(page.headers.etag).toBe(added.headers.etag);
       expect(savedListItemsResponseSchema.parse(page.json())).toMatchObject({
         items: [{ catalog: { availability: "owned", title: "Private owned movie" } }],
         list: { id: watchLater.id, itemCount: 1, revision: 1 },
         reconciliation: { state: "current" },
       });
       expect(page.body).not.toMatch(/private-owned-movie|private-jellyfin-token/u);
+
+      const removed = await app.inject({
+        headers: { ...headers, "if-match": String(page.headers.etag) },
+        method: "DELETE",
+        url: `/v1/saved/lists/${watchLater.id}/items/${addedBody.item.catalog.id}`,
+      });
+      expect(removed.statusCode, removed.body).toBe(200);
+      expect(savedListMembershipDeleteResponseSchema.parse(removed.json())).toMatchObject({
+        catalogReferenceId: addedBody.item.catalog.id,
+        listId: watchLater.id,
+        removed: true,
+        revision: 2,
+      });
+      const repeated = await app.inject({
+        headers: { ...headers, "if-match": String(listResponse.headers.etag) },
+        method: "DELETE",
+        url: `/v1/saved/lists/${watchLater.id}/items/${addedBody.item.catalog.id}`,
+      });
+      expect(repeated.statusCode, repeated.body).toBe(200);
+      expect(savedListMembershipDeleteResponseSchema.parse(repeated.json())).toMatchObject({
+        removed: false,
+        revision: 2,
+      });
+      expect(repeated.headers.etag).toBe(removed.headers.etag);
     } finally {
       await app.close();
     }

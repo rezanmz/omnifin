@@ -2,15 +2,19 @@ import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
   SAVED_CUSTOM_LIST_MAX_COUNT,
   SAVED_LIST_MAX_ITEMS,
+  savedCatalogReferenceIdSchema,
   savedCatalogItemSchema,
   savedFavoriteStateSchema,
   savedListCreateRequestSchema,
   savedListDeleteResponseSchema,
   savedListMembershipRequestSchema,
+  savedListMembershipDeleteResponseSchema,
   savedListMembershipResponseSchema,
   savedListItemsQuerySchema,
   savedListItemsResponseSchema,
   savedListMutationResponseSchema,
+  savedListReorderRequestSchema,
+  savedListReorderResponseSchema,
   savedListRestoreRequestSchema,
   savedListsQuerySchema,
   savedListsResponseSchema,
@@ -18,9 +22,11 @@ import {
   type SavedListCreateRequest,
   type SavedListDeleteResponse,
   type SavedListMembershipResponse,
+  type SavedListMembershipDeleteResponse,
   type SavedListItemsQuery,
   type SavedListItemsResponse,
   type SavedListMutationResponse,
+  type SavedListReorderResponse,
   type SavedListSummary,
   type SavedListsQuery,
   type SavedListsResponse,
@@ -120,6 +126,10 @@ interface SavedMembershipRow {
   position: number;
 }
 
+interface MutableSavedMembershipRow extends SavedMembershipRow {
+  catalogItemId: string;
+}
+
 interface SavedListItemRow extends SavedMembershipRow {
   catalogId: string;
   encryptedSnapshot: string;
@@ -130,7 +140,7 @@ interface PendingOperation {
   fingerprintHash: string;
   id: string;
   idempotencyKeyHash: string;
-  kind: "add_item" | "create_list" | "restore_list";
+  kind: "add_item" | "create_list" | "reorder_items" | "restore_list";
   resourceId: string | null;
   userId: string;
 }
@@ -162,6 +172,7 @@ export type SavedListErrorReason =
   | "list_not_deleted"
   | "list_quota_reached"
   | "principal_unavailable"
+  | "reorder_window_changed"
   | "revision_stale"
   | "storage_failure"
   | "target_not_found"
@@ -265,6 +276,14 @@ export class SavedListService {
     rawQuery: unknown,
     context: SavedListContext,
   ): SavedListItemsResponse {
+    return this.readItems(listId, rawQuery, context).body;
+  }
+
+  public readItems(
+    listId: string,
+    rawQuery: unknown,
+    context: SavedListContext,
+  ): { body: SavedListItemsResponse; etag: string } {
     const principal = this.#activePrincipal(context);
     const id = this.#listId(listId);
     const query = savedListItemsQuerySchema.parse(rawQuery);
@@ -309,7 +328,7 @@ export class SavedListService {
       const degraded = filtered.some(
         ({ catalog }) => catalog.resolutionState === "connector_unavailable",
       );
-      return savedListItemsResponseSchema.parse({
+      const body = savedListItemsResponseSchema.parse({
         generatedAt: new Date(now).toISOString(),
         items: page,
         list: this.#summary(list),
@@ -343,6 +362,7 @@ export class SavedListService {
             }
           : { failures: [], state: "current" },
       });
+      return { body, etag: this.#etag(principal.userId, id, list.revision) };
     } catch (error) {
       throw this.#normalizeError(error);
     }
@@ -628,6 +648,207 @@ export class SavedListService {
             "saved.list.item.added",
             id,
             { catalogReferenceId: catalog.id, revision },
+            context,
+            now,
+          );
+          return {
+            body,
+            etag: this.#etag(principal.userId, id, revision),
+            replayed: false,
+          };
+        })
+        .immediate();
+    } catch (error) {
+      throw this.#normalizeError(error);
+    }
+  }
+
+  public removeItem(
+    listId: string,
+    catalogReferenceId: string,
+    ifMatch: string,
+    context: SavedListContext,
+  ): { body: SavedListMembershipDeleteResponse; etag: string } {
+    const principal = this.#activePrincipal(context);
+    const id = this.#listId(listId);
+    const catalogId = savedCatalogReferenceIdSchema.parse(catalogReferenceId);
+    const now = this.#now();
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const list = this.#row(id, principal.userId, false);
+          if (!list) throw new SavedListServiceError("list_not_found");
+          const membership = this.#mutableMembership(id, principal.userId, catalogId);
+          if (!membership) {
+            return {
+              body: savedListMembershipDeleteResponseSchema.parse({
+                catalogReferenceId: catalogId,
+                listId: id,
+                removed: false,
+                revision: list.revision,
+              }),
+              etag: this.#etag(principal.userId, id, list.revision),
+            };
+          }
+          this.#matchRevision(list, ifMatch);
+          const revision = this.#nextRevision(list.revision);
+          const tail = this.#database.sqlite
+            .prepare(
+              `select id, catalog_item_id as catalogItemId, position,
+                      created_at as createdAt
+               from saved_list_items
+               where list_id = ? and user_id = ? and position > ?
+               order by position`,
+            )
+            .all(id, principal.userId, membership.position) as MutableSavedMembershipRow[];
+          const removed = this.#database.sqlite
+            .prepare(
+              `delete from saved_list_items
+               where list_id = ? and user_id = ? and position >= ?`,
+            )
+            .run(id, principal.userId, membership.position);
+          if (removed.changes !== tail.length + 1) {
+            throw new SavedListServiceError("storage_failure");
+          }
+          for (const row of tail) {
+            this.#insertExistingMembership(id, principal.userId, row, row.position - 1, now);
+          }
+          const updated = this.#database.sqlite
+            .prepare(
+              `update saved_lists set revision = ?, updated_at = ?
+               where id = ? and user_id = ? and revision = ? and deleted_at is null`,
+            )
+            .run(revision, now, id, principal.userId, list.revision);
+          if (updated.changes !== 1) throw new SavedListServiceError("revision_stale");
+          this.#database.sqlite
+            .prepare(
+              `delete from saved_catalog_items
+               where id = ? and user_id = ?
+                 and not exists (
+                   select 1 from saved_list_items
+                   where catalog_item_id = ? and user_id = ?
+                 )`,
+            )
+            .run(catalogId, principal.userId, catalogId, principal.userId);
+          const body = savedListMembershipDeleteResponseSchema.parse({
+            catalogReferenceId: catalogId,
+            listId: id,
+            removed: true,
+            revision,
+          });
+          this.#audit(
+            "saved.list.item.removed",
+            id,
+            { catalogReferenceId: catalogId, revision },
+            context,
+            now,
+          );
+          return { body, etag: this.#etag(principal.userId, id, revision) };
+        })
+        .immediate();
+    } catch (error) {
+      throw this.#normalizeError(error);
+    }
+  }
+
+  public reorderItems(
+    listId: string,
+    rawInput: unknown,
+    idempotencyKey: string,
+    ifMatch: string,
+    context: SavedListContext,
+  ): { body: SavedListReorderResponse; etag: string; replayed: boolean } {
+    const principal = this.#activePrincipal(context);
+    const id = this.#listId(listId);
+    const input = savedListReorderRequestSchema.parse(rawInput);
+    const now = this.#now();
+    const operation = this.#operation(
+      principal.userId,
+      "reorder_items",
+      idempotencyKey,
+      { ifMatch, input, listId: id },
+      id,
+    );
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const replay = this.#reserveOperation(operation, now);
+          if (replay) {
+            const body = savedListReorderResponseSchema.parse(replay);
+            return {
+              body,
+              etag: this.#etag(principal.userId, id, body.revision),
+              replayed: true,
+            };
+          }
+          const list = this.#row(id, principal.userId, false);
+          if (!list) throw new SavedListServiceError("list_not_found");
+          this.#matchRevision(list, ifMatch);
+          const rows = this.#reorderWindow(
+            id,
+            principal.userId,
+            input.startPosition,
+            input.orderedItemIds.length,
+          );
+          const requested = new Set(input.orderedItemIds);
+          if (
+            rows.length !== input.orderedItemIds.length ||
+            rows.some((row) => !requested.has(row.id))
+          ) {
+            throw new SavedListServiceError("reorder_window_changed");
+          }
+          const bodyInput = {
+            orderedItemIds: input.orderedItemIds,
+            revision: list.revision,
+            startPosition: input.startPosition,
+          };
+          if (rows.every((row, index) => row.id === input.orderedItemIds[index])) {
+            const body = savedListReorderResponseSchema.parse(bodyInput);
+            this.#completeOperation(operation.id, principal.userId, body, now);
+            return {
+              body,
+              etag: this.#etag(principal.userId, id, list.revision),
+              replayed: false,
+            };
+          }
+          const byId = new Map(rows.map((row) => [row.id, row]));
+          const removed = this.#database.sqlite
+            .prepare(
+              `delete from saved_list_items
+               where list_id = ? and user_id = ? and position >= ? and position < ?`,
+            )
+            .run(
+              id,
+              principal.userId,
+              input.startPosition,
+              input.startPosition + input.orderedItemIds.length,
+            );
+          if (removed.changes !== rows.length) throw new SavedListServiceError("storage_failure");
+          for (const [index, itemId] of input.orderedItemIds.entries()) {
+            const row = byId.get(itemId);
+            if (!row) throw new SavedListServiceError("reorder_window_changed");
+            this.#insertExistingMembership(
+              id,
+              principal.userId,
+              row,
+              input.startPosition + index,
+              now,
+            );
+          }
+          const revision = this.#nextRevision(list.revision);
+          const updated = this.#database.sqlite
+            .prepare(
+              `update saved_lists set revision = ?, updated_at = ?
+               where id = ? and user_id = ? and revision = ? and deleted_at is null`,
+            )
+            .run(revision, now, id, principal.userId, list.revision);
+          if (updated.changes !== 1) throw new SavedListServiceError("revision_stale");
+          const body = savedListReorderResponseSchema.parse({ ...bodyInput, revision });
+          this.#completeOperation(operation.id, principal.userId, body, now);
+          this.#audit(
+            "saved.list.items.reordered",
+            id,
+            { count: rows.length, revision, startPosition: input.startPosition },
             context,
             now,
           );
@@ -1032,6 +1253,44 @@ export class SavedListService {
       .all(listId, userId) as SavedListItemRow[];
   }
 
+  #mutableMembership(listId: string, userId: string, catalogId: string) {
+    return this.#database.sqlite
+      .prepare(
+        `select id, catalog_item_id as catalogItemId, position, created_at as createdAt
+         from saved_list_items
+         where list_id = ? and user_id = ? and catalog_item_id = ?`,
+      )
+      .get(listId, userId, catalogId) as MutableSavedMembershipRow | undefined;
+  }
+
+  #reorderWindow(listId: string, userId: string, startPosition: number, length: number) {
+    return this.#database.sqlite
+      .prepare(
+        `select id, catalog_item_id as catalogItemId, position, created_at as createdAt
+         from saved_list_items
+         where list_id = ? and user_id = ? and position >= ? and position < ?
+         order by position`,
+      )
+      .all(listId, userId, startPosition, startPosition + length) as MutableSavedMembershipRow[];
+  }
+
+  #insertExistingMembership(
+    listId: string,
+    userId: string,
+    row: MutableSavedMembershipRow,
+    position: number,
+    now: number,
+  ) {
+    const inserted = this.#database.sqlite
+      .prepare(
+        `insert into saved_list_items (
+           id, user_id, list_id, catalog_item_id, position, created_at, updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(row.id, userId, listId, row.catalogItemId, position, row.createdAt, now);
+    if (inserted.changes !== 1) throw new SavedListServiceError("storage_failure");
+  }
+
   #listItem(row: SavedListItemRow, userId: string) {
     if (
       !LIST_ITEM_ID_PATTERN.test(row.id) ||
@@ -1223,7 +1482,7 @@ export class SavedListService {
 
   #operation(
     userId: string,
-    kind: "add_item" | "create_list" | "restore_list",
+    kind: "add_item" | "create_list" | "reorder_items" | "restore_list",
     idempotencyKey: string,
     fingerprint: unknown,
     resourceId: string | null = null,

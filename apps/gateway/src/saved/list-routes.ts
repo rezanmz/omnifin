@@ -5,8 +5,11 @@ import {
   savedListDeleteResponseSchema,
   savedListIdempotencyKeySchema,
   savedListIdSchema,
+  savedCatalogReferenceIdSchema,
   savedListMembershipRequestJsonSchema,
   savedListMembershipRequestSchema,
+  savedListMembershipDeleteResponseJsonSchema,
+  savedListMembershipDeleteResponseSchema,
   savedListMembershipResponseJsonSchema,
   savedListMembershipResponseSchema,
   savedListItemsQueryJsonSchema,
@@ -15,6 +18,10 @@ import {
   savedListItemsResponseSchema,
   savedListMutationResponseJsonSchema,
   savedListMutationResponseSchema,
+  savedListReorderRequestJsonSchema,
+  savedListReorderRequestSchema,
+  savedListReorderResponseJsonSchema,
+  savedListReorderResponseSchema,
   savedListRestoreRequestJsonSchema,
   savedListRestoreRequestSchema,
   savedListsQueryJsonSchema,
@@ -38,10 +45,26 @@ import {
 } from "./list-service.js";
 
 const listParamsSchema = z.strictObject({ listId: savedListIdSchema });
+const membershipParamsSchema = z.strictObject({
+  catalogReferenceId: savedCatalogReferenceIdSchema,
+  listId: savedListIdSchema,
+});
 const listParamsJsonSchema = {
   additionalProperties: false,
   properties: { listId: { pattern: "^saved_list_[A-Za-z0-9_-]{22}$", type: "string" } },
   required: ["listId"],
+  type: "object",
+} as const;
+const membershipParamsJsonSchema = {
+  additionalProperties: false,
+  properties: {
+    catalogReferenceId: {
+      pattern: "^catalog_[A-Za-z0-9_-]{22}$",
+      type: "string",
+    },
+    listId: { pattern: "^saved_list_[A-Za-z0-9_-]{22}$", type: "string" },
+  },
+  required: ["listId", "catalogReferenceId"],
   type: "object",
 } as const;
 const STRONG_ETAG_PATTERN = /^"saved_[A-Za-z0-9_-]{22}"$/u;
@@ -168,6 +191,13 @@ function handleServiceError(error: SavedListServiceError, reply: FastifyReply) {
         code: "saved_list_principal_unavailable",
         message: "An active linked account is required for private lists.",
         statusCode: 403,
+      });
+    case "reorder_window_changed":
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_reorder_window_changed",
+        message: "The selected titles moved. Refresh this private list before reordering it.",
+        statusCode: 409,
       });
     case "revision_stale":
       if (error.currentEtag) reply.header("etag", error.currentEtag);
@@ -414,7 +444,7 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
         );
         reply.header("etag", result.etag);
         reply.header("idempotency-replayed", String(result.replayed));
-        reply.header("location", `/v1/saved/lists/${listId}/items/${result.body.item.id}`);
+        reply.header("location", `/v1/saved/lists/${listId}/items/${result.body.item.catalog.id}`);
         reply.status(201);
         return savedListMembershipResponseSchema.parse(result.body);
       } catch (error) {
@@ -440,13 +470,77 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
     async (request, reply) => {
       try {
         const { listId } = listParamsSchema.parse(request.params);
-        return savedListItemsResponseSchema.parse(
-          saved.items(
-            listId,
-            savedListItemsQuerySchema.parse(request.query),
-            operationContext(request, reply),
-          ),
+        const result = saved.readItems(
+          listId,
+          savedListItemsQuerySchema.parse(request.query),
+          operationContext(request, reply),
         );
+        reply.header("etag", result.etag);
+        return savedListItemsResponseSchema.parse(result.body);
+      } catch (error) {
+        handleError(error, reply);
+      }
+    },
+  );
+
+  app.delete(
+    "/v1/saved/lists/:listId/items/:catalogReferenceId",
+    {
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 60, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: membershipParamsJsonSchema,
+        response: { 200: savedListMembershipDeleteResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { catalogReferenceId, listId } = membershipParamsSchema.parse(request.params);
+        const result = saved.removeItem(
+          listId,
+          catalogReferenceId,
+          ifMatch(request),
+          operationContext(request, reply),
+        );
+        reply.header("etag", result.etag);
+        return savedListMembershipDeleteResponseSchema.parse(result.body);
+      } catch (error) {
+        handleError(error, reply);
+      }
+    },
+  );
+
+  app.patch(
+    "/v1/saved/lists/:listId/items/order",
+    {
+      bodyLimit: 8_192,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 30, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: savedListReorderRequestJsonSchema,
+        params: listParamsJsonSchema,
+        response: { 200: savedListReorderResponseJsonSchema },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { listId } = listParamsSchema.parse(request.params);
+        const result = saved.reorderItems(
+          listId,
+          savedListReorderRequestSchema.parse(request.body),
+          idempotencyKey(request),
+          ifMatch(request),
+          operationContext(request, reply),
+        );
+        reply.header("etag", result.etag);
+        reply.header("idempotency-replayed", String(result.replayed));
+        return savedListReorderResponseSchema.parse(result.body);
       } catch (error) {
         handleError(error, reply);
       }

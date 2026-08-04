@@ -484,6 +484,144 @@ describe("SavedListService membership", () => {
     });
   });
 
+  it("removes only private membership, closes the position gap, and makes repeats safe", async () => {
+    const { context, database, lists, secondTargetReferenceId, targetReferenceId } =
+      await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+    const first = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-before-remove-0001",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+    const second = lists.addItem(
+      watchLater.id,
+      { targetReferenceId: secondTargetReferenceId },
+      "add-before-remove-0002",
+      first.etag,
+      context(),
+    );
+
+    const removed = lists.removeItem(
+      watchLater.id,
+      first.body.item.catalog.id,
+      second.etag,
+      context(),
+    );
+    expect(removed).toMatchObject({
+      body: {
+        catalogReferenceId: first.body.item.catalog.id,
+        listId: watchLater.id,
+        removed: true,
+        revision: 3,
+      },
+    });
+    expect(removed.etag).not.toBe(second.etag);
+    expect(lists.items(watchLater.id, {}, context())).toMatchObject({
+      items: [{ id: second.body.item.id, position: 0 }],
+      list: { itemCount: 1, revision: 3 },
+    });
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from saved_catalog_items where id = ?")
+        .get(first.body.item.catalog.id),
+    ).toEqual({ count: 0 });
+
+    const repeated = lists.removeItem(
+      watchLater.id,
+      first.body.item.catalog.id,
+      first.etag,
+      context(),
+    );
+    expect(repeated).toEqual({
+      body: {
+        catalogReferenceId: first.body.item.catalog.id,
+        listId: watchLater.id,
+        removed: false,
+        revision: 3,
+      },
+      etag: removed.etag,
+    });
+    expect(
+      database.sqlite
+        .prepare("select event_type as eventType from audit_events order by rowid")
+        .all(),
+    ).toEqual([
+      { eventType: "saved.list.item.added" },
+      { eventType: "saved.list.item.added" },
+      { eventType: "saved.list.item.removed" },
+    ]);
+  });
+
+  it("reorders an exact bounded window with revision and replay protection", async () => {
+    const { context, lists, secondTargetReferenceId, targetReferenceId } = await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+    const first = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-before-reorder-0001",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+    const second = lists.addItem(
+      watchLater.id,
+      { targetReferenceId: secondTargetReferenceId },
+      "add-before-reorder-0002",
+      first.etag,
+      context(),
+    );
+    const input = {
+      orderedItemIds: [second.body.item.id, first.body.item.id],
+      startPosition: 0,
+    };
+
+    const reordered = lists.reorderItems(
+      watchLater.id,
+      input,
+      "reorder-saved-items-0001",
+      second.etag,
+      context(),
+    );
+    const replayed = lists.reorderItems(
+      watchLater.id,
+      input,
+      "reorder-saved-items-0001",
+      second.etag,
+      context(),
+    );
+    expect(reordered).toMatchObject({
+      body: { ...input, revision: 3 },
+      replayed: false,
+    });
+    expect(replayed).toEqual({ ...reordered, replayed: true });
+    expect(lists.items(watchLater.id, {}, context()).items).toMatchObject([
+      { id: second.body.item.id, position: 0 },
+      { id: first.body.item.id, position: 1 },
+    ]);
+
+    const unchanged = lists.reorderItems(
+      watchLater.id,
+      input,
+      "reorder-saved-items-0002",
+      reordered.etag,
+      context(),
+    );
+    expect(unchanged).toMatchObject({ body: { revision: 3 }, etag: reordered.etag });
+    expect(() =>
+      lists.reorderItems(
+        watchLater.id,
+        { ...input, startPosition: 1 },
+        "reorder-saved-items-0003",
+        reordered.etag,
+        context(),
+      ),
+    ).toThrow(expect.objectContaining({ reason: "reorder_window_changed" }));
+    expect(() =>
+      lists.reorderItems(watchLater.id, input, "reorder-saved-items-0004", second.etag, context()),
+    ).toThrow(expect.objectContaining({ reason: "revision_stale" }));
+  });
+
   it("normalizes corrupt targets and invalid generated identifiers to safe failures", async () => {
     const first = await harness();
     const watchLater = first.lists.list({}, first.context()).watchLater;
