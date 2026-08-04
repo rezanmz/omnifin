@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/rezanmz/omnifin/compare/v0.9.1...v0.10.0) (2026-08-04)
+
+
+### Features
+
+* **gateway:** add trailers and owned extras ([#266](https://github.com/rezanmz/omnifin/issues/266)) ([0400df8](https://github.com/rezanmz/omnifin/commit/0400df8328076c98927dcce5b8bc97fbc2dfc843))
+
+
+### Fixes
+
+* **ci:** stabilize browser quality gates ([#280](https://github.com/rezanmz/omnifin/issues/280)) ([d521c16](https://github.com/rezanmz/omnifin/commit/d521c16590b66728dbee8f658da7bc5b7a41b55a))
+
 ## [0.9.1](https://github.com/rezanmz/omnifin/compare/v0.9.0...v0.9.1) (2026-08-04)
 
 
