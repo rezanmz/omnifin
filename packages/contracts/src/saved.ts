@@ -469,6 +469,19 @@ export type SavedMembershipSummary = z.infer<typeof savedMembershipSummarySchema
 export const savedOwnedTargetIssueRequestSchema = z.strictObject({});
 export type SavedOwnedTargetIssueRequest = z.infer<typeof savedOwnedTargetIssueRequestSchema>;
 
+export const savedDiscoveryTargetIssueRequestSchema = z.strictObject({
+  kind: z.enum(["movie", "series"]),
+  language: z
+    .string()
+    .trim()
+    .regex(/^[a-z]{2}(?:-[A-Z]{2})?$/u)
+    .default("en"),
+  tmdbId: z.int().positive().max(2_147_483_647),
+});
+export type SavedDiscoveryTargetIssueRequest = z.infer<
+  typeof savedDiscoveryTargetIssueRequestSchema
+>;
+
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
   delete jsonSchema.$schema;
@@ -514,4 +527,7 @@ export const savedFavoriteMutationResponseJsonSchema = withoutSchemaDialect(
 export const savedMembershipSummaryJsonSchema = withoutSchemaDialect(savedMembershipSummarySchema);
 export const savedOwnedTargetIssueRequestJsonSchema = withoutSchemaDialect(
   savedOwnedTargetIssueRequestSchema,
+);
+export const savedDiscoveryTargetIssueRequestJsonSchema = withoutSchemaDialect(
+  savedDiscoveryTargetIssueRequestSchema,
 );

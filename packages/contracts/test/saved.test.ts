@@ -5,6 +5,8 @@ import {
   SAVED_LIST_PAGE_MAX_ITEMS,
   SAVED_LIST_REORDER_MAX_ITEMS,
   savedCatalogItemSchema,
+  savedDiscoveryTargetIssueRequestJsonSchema,
+  savedDiscoveryTargetIssueRequestSchema,
   savedFavoriteMutationRequestJsonSchema,
   savedFavoriteMutationRequestSchema,
   savedFavoriteMutationResponseSchema,
@@ -238,6 +240,40 @@ describe("saved-list contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts only bounded discovery identities for request-free saving", () => {
+    expect(
+      savedDiscoveryTargetIssueRequestSchema.parse({ kind: "movie", tmdbId: 603 }),
+    ).toEqual({ kind: "movie", language: "en", tmdbId: 603 });
+    expect(
+      savedDiscoveryTargetIssueRequestSchema.parse({
+        kind: "series",
+        language: "fa-IR",
+        tmdbId: 14_278,
+      }),
+    ).toEqual({ kind: "series", language: "fa-IR", tmdbId: 14_278 });
+    expect(
+      savedDiscoveryTargetIssueRequestSchema.safeParse({
+        kind: "person",
+        language: "en",
+        tmdbId: 603,
+      }).success,
+    ).toBe(false);
+    expect(
+      savedDiscoveryTargetIssueRequestSchema.safeParse({
+        kind: "movie",
+        language: "en-us",
+        tmdbId: 603,
+      }).success,
+    ).toBe(false);
+    expect(
+      savedDiscoveryTargetIssueRequestSchema.safeParse({
+        kind: "movie",
+        request: true,
+        tmdbId: 603,
+      }).success,
+    ).toBe(false);
+  });
+
   it("bounds and de-duplicates optimistic reorder windows", () => {
     const secondId = "saved_item_zyxwvutsrqponmlkjihgfe";
     const request = savedListReorderRequestSchema.parse({
@@ -326,6 +362,7 @@ describe("saved-list contracts", () => {
   it("exports closed HTTP schemas", () => {
     expect(savedListItemsResponseJsonSchema).not.toHaveProperty("$schema");
     expect(savedFavoriteMutationRequestJsonSchema).not.toHaveProperty("$schema");
+    expect(savedDiscoveryTargetIssueRequestJsonSchema).not.toHaveProperty("$schema");
     expect(JSON.stringify(savedFavoriteMutationRequestJsonSchema)).toContain(
       "additionalProperties",
     );
