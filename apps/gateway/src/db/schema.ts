@@ -332,6 +332,39 @@ export const connectorConfigs = sqliteTable(
   ],
 );
 
+export const mediaRequestProfilePreferences = sqliteTable(
+  "media_request_profile_preferences",
+  {
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["movie", "series"] }).notNull(),
+    is4k: integer("is_4k", { mode: "boolean" }).notNull(),
+    destinationId: integer("destination_id").notNull(),
+    profileId: integer("profile_id").notNull(),
+    updatedByUserId: text("updated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectorId, table.kind, table.is4k] }),
+    check(
+      "media_request_profile_preferences_kind_check",
+      sql`${table.kind} in ('movie', 'series')`,
+    ),
+    check("media_request_profile_preferences_is_4k_check", sql`${table.is4k} in (0, 1)`),
+    check(
+      "media_request_profile_preferences_destination_check",
+      sql`${table.destinationId} between 0 and 2147483647`,
+    ),
+    check(
+      "media_request_profile_preferences_profile_check",
+      sql`${table.profileId} between 1 and 2147483647`,
+    ),
+  ],
+);
+
 export const serviceIdentityLinks = sqliteTable(
   "service_identity_links",
   {

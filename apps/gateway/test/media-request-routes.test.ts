@@ -1,5 +1,9 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { mediaRequestResponseSchema, type MediaRequestResponse } from "@omnifin/contracts/requests";
+import {
+  mediaRequestResponseSchema,
+  mediaRequestRoutingOptionsResponseSchema,
+  type MediaRequestResponse,
+} from "@omnifin/contracts/requests";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -49,6 +53,7 @@ const createdRequest: MediaRequestResponse = {
   id: "request:101",
   is4k: false,
   kind: "movie",
+  qualityProfile: "Balanced",
   seasons: null,
   source: "seerr",
   status: "pending",
@@ -59,7 +64,7 @@ async function harness(
   options: {
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
     listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
-    role?: "requester" | "viewer";
+    role?: "admin" | "requester" | "viewer";
   } = {},
 ) {
   const config = testConfig();
@@ -258,6 +263,94 @@ describe("media request routes", () => {
       expect(response.body).not.toContain("/srv/private");
       expect(listRequestRouting).toHaveBeenCalledWith("movie", false, expect.any(AbortSignal));
       expect(resolveUser).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("lets an administrator persist an opaque profile preference", async () => {
+    const { app, headers } = await harness({ role: "admin" });
+    try {
+      const optionsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      const options = mediaRequestRoutingOptionsResponseSchema.parse(optionsResponse.json());
+      const destination = options.destinations[0]!;
+      const payload = {
+        is4k: false,
+        kind: "movie",
+        routing: {
+          destination: destination.id,
+          languageProfile: null,
+          qualityProfile: destination.qualityProfiles[0]!.id,
+          rootFolder: destination.rootFolders[0]!.id,
+        },
+      };
+      const withoutCsrf = Object.fromEntries(
+        Object.entries(headers).filter(([name]) => name !== SESSION_CSRF_HEADER),
+      );
+      const denied = await app.inject({
+        headers: withoutCsrf,
+        method: "PUT",
+        payload,
+        url: "/v1/requests/routing-preference",
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("csrf_denied");
+
+      const response = await app.inject({
+        headers,
+        method: "PUT",
+        payload,
+        url: "/v1/requests/routing-preference",
+      });
+
+      expect(response.statusCode, response.body).toBe(204);
+      expect(
+        app.database.sqlite
+          .prepare("select profile_id as profileId from media_request_profile_preferences")
+          .get(),
+      ).toEqual({ profileId: 4 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies a requester before persisting a profile preference", async () => {
+    const { app, headers } = await harness();
+    try {
+      const optionsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      const options = mediaRequestRoutingOptionsResponseSchema.parse(optionsResponse.json());
+      const destination = options.destinations[0]!;
+      const response = await app.inject({
+        headers,
+        method: "PUT",
+        payload: {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination: destination.id,
+            languageProfile: null,
+            qualityProfile: destination.qualityProfiles[0]!.id,
+            rootFolder: destination.rootFolders[0]!.id,
+          },
+        },
+        url: "/v1/requests/routing-preference",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("permission_denied");
+      expect(
+        app.database.sqlite
+          .prepare("select count(*) as count from media_request_profile_preferences")
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       await app.close();
     }

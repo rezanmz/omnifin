@@ -32,6 +32,7 @@ const requiredTables = [
   "media_issue_operations",
   "media_references",
   "media_download_grants",
+  "media_request_profile_preferences",
   "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
@@ -229,6 +230,16 @@ const requiredColumns = {
     "response_json",
     "state",
     "user_id",
+  ],
+  media_request_profile_preferences: [
+    "connector_id",
+    "created_at",
+    "destination_id",
+    "is_4k",
+    "kind",
+    "profile_id",
+    "updated_at",
+    "updated_by_user_id",
   ],
   playback_asset_handles: [
     "encrypted_target",
@@ -568,8 +579,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0025_library_removal_previews",
-  "Current migration journal must end at migration 0025_library_removal_previews.",
+    currentMigrationTag === "0026_media_request_profile_preferences",
+  "Current migration journal must end at migration 0026_media_request_profile_preferences.",
 );
 
 try {
@@ -664,6 +675,23 @@ try {
       throw new Error(
         "Migration is missing the connector type-bound service identity foreign key.",
       );
+    }
+
+    const requestPreferenceForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_request_profile_preferences)",
+    ) as { from: string; on_delete: string; table: string; to: string }[];
+    for (const [column, table, onDelete] of [
+      ["connector_id", "connector_configs", "CASCADE"],
+      ["updated_by_user_id", "users", "SET NULL"],
+    ] as const) {
+      if (
+        !requestPreferenceForeignKeys.some(
+          ({ from, on_delete: foreignDelete, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id" && foreignDelete === onDelete,
+        )
+      ) {
+        throw new Error(`Migration is missing the request-preference ${column} foreign key.`);
+      }
     }
 
     const mediaReferenceForeignKeys = database.sqlite.pragma(
@@ -1030,7 +1058,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0025.",
+      "Production migration did not advance the historical fixture exactly through migration 0026.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1195,7 +1223,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0025, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0026, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

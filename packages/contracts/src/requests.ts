@@ -38,6 +38,15 @@ export const mediaRequestRoutingOptionsQuerySchema = z.strictObject({
 });
 export type MediaRequestRoutingOptionsQuery = z.infer<typeof mediaRequestRoutingOptionsQuerySchema>;
 
+export const mediaRequestRoutingPreferenceInputSchema = z.strictObject({
+  is4k: z.boolean(),
+  kind: z.enum(["movie", "series"]),
+  routing: mediaRequestRoutingSelectionSchema,
+});
+export type MediaRequestRoutingPreferenceInput = z.infer<
+  typeof mediaRequestRoutingPreferenceInputSchema
+>;
+
 const mediaRequestRoutingChoiceSchema = z.strictObject({
   id: requestRoutingReferenceSchema,
   isDefault: z.boolean(),
@@ -114,6 +123,7 @@ export const mediaRequestResponseSchema = z.strictObject({
   id: requestIdentifierSchema,
   is4k: z.boolean(),
   kind: z.enum(["movie", "series"]),
+  qualityProfile: z.string().trim().min(1).max(160),
   seasons: z.array(seasonNumberSchema).max(100).nullable(),
   source: z.literal("seerr"),
   status: mediaRequestStatusSchema,
@@ -147,6 +157,7 @@ export const requestReviewItemSchema = z.strictObject({
   id: requestIdentifierSchema,
   is4k: z.boolean(),
   kind: z.enum(["movie", "series"]),
+  qualityProfile: z.string().trim().min(1).max(160),
   requestedBy: z.string().trim().min(1).max(160),
   seasons: z.array(seasonNumberSchema).max(100).nullable(),
   source: z.literal("seerr"),
@@ -209,6 +220,9 @@ export const mediaRequestInputJsonSchema = withoutSchemaDialect(mediaRequestWire
 export const mediaRequestResponseJsonSchema = withoutSchemaDialect(mediaRequestResponseSchema);
 export const mediaRequestRoutingOptionsResponseJsonSchema = withoutSchemaDialect(
   mediaRequestRoutingOptionsResponseSchema,
+);
+export const mediaRequestRoutingPreferenceInputJsonSchema = withoutSchemaDialect(
+  mediaRequestRoutingPreferenceInputSchema,
 );
 export const requestReviewDecisionInputJsonSchema = withoutSchemaDialect(
   requestReviewDecisionInputSchema,

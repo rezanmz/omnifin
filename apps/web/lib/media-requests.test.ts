@@ -44,6 +44,7 @@ const createdRequest: MediaRequestResponse = {
   id: "request:42",
   is4k: true,
   kind: "series",
+  qualityProfile: "Balanced",
   seasons: [1, 2],
   source: "seerr",
   status: "pending",
@@ -155,6 +156,34 @@ describe("media request client", () => {
       "/api/requests/routing-options?is4k=false&kind=movie",
     );
     expect(JSON.stringify(routingOptions)).not.toContain("/srv/");
+  });
+
+  it("saves an opaque routing preference with CSRF protection", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const destination = routingOptions.destinations[0]!;
+    const input = {
+      is4k: false,
+      kind: "movie" as const,
+      routing: {
+        destination: destination.id,
+        languageProfile: null,
+        qualityProfile: destination.qualityProfiles[0]!.id,
+        rootFolder: destination.rootFolders[0]!.id,
+      },
+    };
+
+    await expect(
+      mediaRequestClient.saveRoutingPreference(input, { csrfToken }),
+    ).resolves.toBeUndefined();
+
+    const [path, request] = fetchMock.mock.calls[0]!;
+    expect(path).toBe("/api/requests/routing-preference");
+    expect(request?.method).toBe("PUT");
+    expect(new Headers(request?.headers).get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(JSON.parse(String(request?.body))).toEqual(input);
   });
 
   it("rejects malformed routing choices and maps expired references", async () => {
