@@ -28,7 +28,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { DiscoverySearchError } from "../src/discovery/search-service.js";
 import {
   ContinueWatchingError,
@@ -244,7 +248,9 @@ function libraryResult(): JellyfinLibraryResult {
 
 function harness(
   options: {
-    createRadarrAdapter?: (input: ApiKeyConnectorConfig) => Pick<
+    createRadarrAdapter?: (
+      input: ApiKeyConnectorConfig,
+    ) => Pick<
       RadarrAdapter,
       | "deleteLibraryMovie"
       | "deleteLibraryMovieFile"
@@ -256,7 +262,9 @@ function harness(
     resolveManagedMovie?: (input: {
       providerIds: { imdb: string | null; tmdb: number | null };
     }) => Promise<
-      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
+      | ((
+          { fileId: number; hasFile: true } | { fileId: null; hasFile: false }
+        ) & {
           connectorId: string;
           mediaId: number;
           monitored: boolean;
@@ -274,37 +282,53 @@ function harness(
   if (options.createRadarrAdapter !== undefined) insertRadarr(database, config);
   const readContinueWatching = vi.fn(async () => resumeResult());
   const readLibrary = vi.fn(async () => libraryResult());
-  const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
-    item: libraryResult().items[0]!,
-    movie: null,
-    providerReferences: [],
-    seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
-    seasonsTruncated: false,
-    seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
-  }));
-  const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
-    catalogTmdbId: 1_042,
-    items: [
-      {
-        artwork: {
-          accentColor: "#775544",
-          backdrop: { itemId: "private-extra-backdrop", type: "Backdrop" },
-          blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
-          poster: { itemId: "private-extra-poster", type: "Primary" },
+  const readLibraryTitle = vi.fn(
+    async (): Promise<JellyfinLibraryTitleResult> => ({
+      item: libraryResult().items[0]!,
+      movie: null,
+      providerReferences: [],
+      seasons: [
+        {
+          episodeCount: 8,
+          playedEpisodeCount: 3,
+          seasonNumber: 2,
+          title: "Season 2",
         },
-        contentRating: null,
-        externalId: "private-upstream-trailer",
-        extraType: "trailer",
-        overview: "A local theatrical trailer.",
-        played: false,
-        positionSeconds: 15,
-        runtimeSeconds: 142,
-        title: "Official trailer",
-        year: 2026,
+      ],
+      seasonsTruncated: false,
+      seriesCredits: {
+        cast: [],
+        castTruncated: false,
+        crew: [],
+        crewTruncated: false,
       },
-    ],
-    nextStartIndex: 12,
-  }));
+    }),
+  );
+  const readLibraryExtras = vi.fn(
+    async (): Promise<JellyfinLibraryExtrasResult> => ({
+      catalogTmdbId: 1_042,
+      items: [
+        {
+          artwork: {
+            accentColor: "#775544",
+            backdrop: { itemId: "private-extra-backdrop", type: "Backdrop" },
+            blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+            poster: { itemId: "private-extra-poster", type: "Primary" },
+          },
+          contentRating: null,
+          externalId: "private-upstream-trailer",
+          extraType: "trailer",
+          overview: "A local theatrical trailer.",
+          played: false,
+          positionSeconds: 15,
+          runtimeSeconds: 142,
+          title: "Official trailer",
+          year: 2026,
+        },
+      ],
+      nextStartIndex: 12,
+    }),
+  );
   const readOnlineExtras = vi.fn(async () => ({
     displayName: "Home Seerr",
     items: [
@@ -366,7 +390,9 @@ function harness(
   }));
   const deleteLibraryItem = vi.fn(async () => undefined);
   const readViewingHistory = vi.fn(
-    async (input: { afterItemId?: string }): Promise<JellyfinViewingHistoryResult> => ({
+    async (input: {
+      afterItemId?: string;
+    }): Promise<JellyfinViewingHistoryResult> => ({
       boundaryFound: true,
       items:
         input.afterItemId === undefined
@@ -396,8 +422,10 @@ function harness(
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
-    createRemovalOperationToken: options.createRemovalOperationToken ?? (() => "r".repeat(22)),
-    createRemovalPreviewToken: options.createRemovalPreviewToken ?? (() => "d".repeat(22)),
+    createRemovalOperationToken:
+      options.createRemovalOperationToken ?? (() => "r".repeat(22)),
+    createRemovalPreviewToken:
+      options.createRemovalPreviewToken ?? (() => "d".repeat(22)),
     ...(options.createRadarrAdapter === undefined
       ? {}
       : { createRadarrAdapter: options.createRadarrAdapter }),
@@ -623,10 +651,14 @@ describe("ContinueWatchingService", () => {
         /private-upstream|viewer-external|tt1234567|98765|The Long Meridian|radarr-main/iu,
       );
       await expect(
-        service.previewLibraryRemoval(referenceId, { principal: adminPrincipal() }),
+        service.previewLibraryRemoval(referenceId, {
+          principal: adminPrincipal(),
+        }),
       ).rejects.toMatchObject({ reason: "unavailable" });
       expect(
-        database.sqlite.prepare("select count(*) as count from library_removal_previews").get(),
+        database.sqlite
+          .prepare("select count(*) as count from library_removal_previews")
+          .get(),
       ).toEqual({ count: 1 });
     } finally {
       database.close();
@@ -646,7 +678,11 @@ describe("ContinueWatchingService", () => {
     const deleteLibraryMovie = vi.fn(async () => undefined);
     const updateAcquisitionMonitoring = vi.fn(async () => ({
       monitored: false,
-      target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
+      target: {
+        kind: "movie" as const,
+        mediaId: 42,
+        service: "radarr" as const,
+      },
       verifiedAt: now.toISOString(),
     }));
     const createRadarrAdapter = vi.fn(() => ({
@@ -696,7 +732,9 @@ describe("ContinueWatchingService", () => {
         principal: adminPrincipal(),
       });
       const encryptedV2 = database.sqlite
-        .prepare("select encrypted_payload as encryptedPayload from library_removal_previews")
+        .prepare(
+          "select encrypted_payload as encryptedPayload from library_removal_previews",
+        )
         .get() as { encryptedPayload: string };
       const legacyManagedPayload = {
         itemId: "private-upstream-movie",
@@ -729,9 +767,14 @@ describe("ContinueWatchingService", () => {
         previewId: preview.previewId,
       };
       await expect(
-        service.commitLibraryRemoval(referenceId, request, "legacy-managed-preview", {
-          principal: adminPrincipal(),
-        }),
+        service.commitLibraryRemoval(
+          referenceId,
+          request,
+          "legacy-managed-preview",
+          {
+            principal: adminPrincipal(),
+          },
+        ),
       ).rejects.toMatchObject({ reason: "source_changed" });
       const { fileId: _legacyFileId, ...legacyManagedSourceWithoutFileId } =
         legacyManagedPayload.source;
@@ -747,16 +790,25 @@ describe("ContinueWatchingService", () => {
           ),
         );
       await expect(
-        service.commitLibraryRemoval(referenceId, request, "legacy-managed-preview-pre-file-id", {
-          principal: adminPrincipal(),
-        }),
+        service.commitLibraryRemoval(
+          referenceId,
+          request,
+          "legacy-managed-preview-pre-file-id",
+          {
+            principal: adminPrincipal(),
+          },
+        ),
       ).rejects.toMatchObject({ reason: "source_changed" });
       expect(
-        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+        database.sqlite
+          .prepare("select count(*) as count from library_removal_operations")
+          .get(),
       ).toEqual({ count: 0 });
       expect(
         database.sqlite
-          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .prepare(
+            "select consumed_at as consumedAt from library_removal_previews",
+          )
           .get(),
       ).toEqual({ consumedAt: null });
       database.sqlite
@@ -780,7 +832,9 @@ describe("ContinueWatchingService", () => {
       ).rejects.toMatchObject({ reason: "invalid_mode" });
       expect(
         database.sqlite
-          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .prepare(
+            "select consumed_at as consumedAt from library_removal_previews",
+          )
           .get(),
       ).toEqual({ consumedAt: null });
       const first = await service.commitLibraryRemoval(
@@ -804,7 +858,9 @@ describe("ContinueWatchingService", () => {
         ),
       ).rejects.toMatchObject({ reason: "idempotency_conflict" });
 
-      expect(libraryRemovalOperationSchema.parse(first.operation)).toEqual(first.operation);
+      expect(libraryRemovalOperationSchema.parse(first.operation)).toEqual(
+        first.operation,
+      );
       expect(first).toMatchObject({
         operation: {
           mode: "delete_files_keep_monitored",
@@ -834,7 +890,11 @@ describe("ContinueWatchingService", () => {
           `select state, response_json as responseJson, encrypted_payload as encryptedPayload
              from library_removal_operations`,
         )
-        .get() as { encryptedPayload: string; responseJson: string; state: string };
+        .get() as {
+        encryptedPayload: string;
+        responseJson: string;
+        state: string;
+      };
       expect(
         new EnvelopeCipher(testConfig().encryptionKey).decrypt(
           storedOperation.encryptedPayload,
@@ -844,12 +904,18 @@ describe("ContinueWatchingService", () => {
       expect(storedOperation).toMatchObject({ state: "succeeded" });
       expect(
         database.sqlite
-          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .prepare(
+            "select consumed_at as consumedAt from library_removal_previews",
+          )
           .get(),
       ).toEqual({ consumedAt: now.getTime() });
-      database.sqlite.prepare("delete from media_references where id = ?").run(referenceId);
+      database.sqlite
+        .prepare("delete from media_references where id = ?")
+        .run(referenceId);
       expect(
-        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+        database.sqlite
+          .prepare("select count(*) as count from library_removal_operations")
+          .get(),
       ).toEqual({ count: 1 });
       expect(
         service.readLibraryRemovalOperation(first.operation.operationId, {
@@ -875,8 +941,15 @@ describe("ContinueWatchingService", () => {
   it("serializes distinct previews for the same exact removal target", async () => {
     let operationIndex = 0;
     let previewIndex = 0;
-    const { database, deleteLibraryItem, readLibrary, readLibraryTitle, service } = harness({
-      createRemovalOperationToken: () => ["r", "s"][operationIndex++]!.repeat(22),
+    const {
+      database,
+      deleteLibraryItem,
+      readLibrary,
+      readLibraryTitle,
+      service,
+    } = harness({
+      createRemovalOperationToken: () =>
+        ["r", "s"][operationIndex++]!.repeat(22),
       createRemovalPreviewToken: () => ["d", "e"][previewIndex++]!.repeat(22),
     });
     const movie = {
@@ -913,7 +986,8 @@ describe("ContinueWatchingService", () => {
     deleteLibraryItem.mockImplementation(async () => {
       await writeGate;
     });
-    let firstCommit: ReturnType<typeof service.commitLibraryRemoval> | null = null;
+    let firstCommit: ReturnType<typeof service.commitLibraryRemoval> | null =
+      null;
 
     try {
       const catalogue = await service.browse(
@@ -953,12 +1027,16 @@ describe("ContinueWatchingService", () => {
       ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
       expect(
         database.sqlite
-          .prepare("select count(*) as count from library_removal_operations where state = 'running'")
+          .prepare(
+            "select count(*) as count from library_removal_operations where state = 'running'",
+          )
           .get(),
       ).toEqual({ count: 1 });
 
       releaseWrite();
-      await expect(firstCommit).resolves.toMatchObject({ operation: { state: "succeeded" } });
+      await expect(firstCommit).resolves.toMatchObject({
+        operation: { state: "succeeded" },
+      });
       await expect(
         service.commitLibraryRemoval(
           referenceId,
@@ -973,12 +1051,18 @@ describe("ContinueWatchingService", () => {
       ).resolves.toMatchObject({ operation: { state: "succeeded" } });
       expect(deleteLibraryItem).toHaveBeenCalledTimes(2);
       const targetDigests = database.sqlite
-        .prepare("select target_digest as targetDigest from library_removal_operations order by id")
+        .prepare(
+          "select target_digest as targetDigest from library_removal_operations order by id",
+        )
         .all() as { targetDigest: string }[];
       expect(targetDigests).toHaveLength(2);
       expect(targetDigests[0]?.targetDigest).toMatch(/^[A-Za-z0-9_-]{22}$/u);
-      expect(targetDigests[1]?.targetDigest).toBe(targetDigests[0]?.targetDigest);
-      expect(JSON.stringify(targetDigests)).not.toContain("shared-upstream-movie");
+      expect(targetDigests[1]?.targetDigest).toBe(
+        targetDigests[0]?.targetDigest,
+      );
+      expect(JSON.stringify(targetDigests)).not.toContain(
+        "shared-upstream-movie",
+      );
     } finally {
       releaseWrite();
       if (firstCommit !== null) await Promise.allSettled([firstCommit]);
@@ -1008,129 +1092,142 @@ describe("ContinueWatchingService", () => {
       mode: "remove_from_radarr_and_delete_files" as const,
       monitored: true,
     },
-  ])("executes only the reviewed $mode Radarr writes (monitored=$monitored)", async (testCase) => {
-    const ownership = {
-      fileId: 314,
-      hasFile: true as const,
-      mediaId: 42,
-      monitored: testCase.monitored,
-      sizeBytes: 6_979_321_856,
-    };
-    const resolveLibraryMovie = vi.fn(async () => ownership);
-    const deleteLibraryMovieFile = vi.fn(async () => undefined);
-    const deleteLibraryMovie = vi.fn(async () => undefined);
-    const updateAcquisitionMonitoring = vi.fn(async () => ({
-      monitored: false,
-      target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
-      verifiedAt: now.toISOString(),
-    }));
-    const createRadarrAdapter = vi.fn(() => ({
-      deleteLibraryMovie,
-      deleteLibraryMovieFile,
-      resolveLibraryMovie,
-      updateAcquisitionMonitoring,
-    }));
-    const { database, readLibrary, readLibraryTitle, service } = harness({
-      createRadarrAdapter,
-    });
-    const movie = {
-      ...libraryResult().items[0]!,
-      externalId: "private-upstream-movie",
-      kind: "movie" as const,
-      runtimeSeconds: 7_080,
-      title: "The Long Meridian",
-      year: 2026,
-    };
-    readLibrary.mockResolvedValue({
-      items: [movie],
-      nextStartIndex: null,
-      totalResults: 1,
-      truncated: false,
-    });
-    readLibraryTitle.mockResolvedValue({
-      item: movie,
-      movie: null,
-      providerReferences: [],
-      removal: {
-        canDelete: true,
-        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
-        sizeBytes: ownership.sizeBytes,
-      },
-      seasons: [],
-      seasonsTruncated: false,
-      seriesCredits: null,
-    });
-
-    try {
-      const catalogue = await service.browse(
-        { kind: "movies", limit: 30, sort: "title" },
-        { principal: adminPrincipal() },
-      );
-      const referenceId = catalogue.items[0]!.media.id;
-      const preview = await service.previewLibraryRemoval(referenceId, {
-        principal: adminPrincipal(),
-      });
-      if (!testCase.monitored) {
-        expect(preview.options.map(({ mode }) => mode)).not.toContain(
-          "delete_files_keep_monitored",
-        );
-        await expect(
-          service.commitLibraryRemoval(
-            referenceId,
-            {
-              confirmationTitle: "The Long Meridian",
-              mode: "delete_files_keep_monitored",
-              previewId: preview.previewId,
-            },
-            "remove-unmonitored-as-monitored",
-            { principal: adminPrincipal() },
-          ),
-        ).rejects.toMatchObject({ reason: "invalid_mode" });
-      }
-      const result = await service.commitLibraryRemoval(
-        referenceId,
-        {
-          confirmationTitle: "The Long Meridian",
-          mode: testCase.mode,
-          previewId: preview.previewId,
+  ])(
+    "executes only the reviewed $mode Radarr writes (monitored=$monitored)",
+    async (testCase) => {
+      const ownership = {
+        fileId: 314,
+        hasFile: true as const,
+        mediaId: 42,
+        monitored: testCase.monitored,
+        sizeBytes: 6_979_321_856,
+      };
+      const resolveLibraryMovie = vi.fn(async () => ownership);
+      const deleteLibraryMovieFile = vi.fn(async () => undefined);
+      const deleteLibraryMovie = vi.fn(async () => undefined);
+      const updateAcquisitionMonitoring = vi.fn(async () => ({
+        monitored: false,
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
         },
-        `remove-managed-${testCase.mode}`,
-        { principal: adminPrincipal() },
-      );
-
-      expect(result.operation).toMatchObject({
-        stages: expect.arrayContaining([
-          { kind: "monitoring_change", state: testCase.expectedMonitoringStage },
-          { kind: "organized_file_deletion", state: "succeeded" },
-          { kind: "manager_record_removal", state: testCase.expectedManagerStage },
-        ]),
-        state: "succeeded",
+        verifiedAt: now.toISOString(),
+      }));
+      const createRadarrAdapter = vi.fn(() => ({
+        deleteLibraryMovie,
+        deleteLibraryMovieFile,
+        resolveLibraryMovie,
+        updateAcquisitionMonitoring,
+      }));
+      const { database, readLibrary, readLibraryTitle, service } = harness({
+        createRadarrAdapter,
       });
-      if (testCase.mode === "delete_files_and_unmonitor") {
-        if (testCase.expectedMonitoringWrite) {
-          expect(updateAcquisitionMonitoring).toHaveBeenCalledWith(
-            {
-              expectedMonitored: true,
-              mediaId: 42,
-              monitored: false,
-              service: "radarr",
-            },
-            undefined,
+      const movie = {
+        ...libraryResult().items[0]!,
+        externalId: "private-upstream-movie",
+        kind: "movie" as const,
+        runtimeSeconds: 7_080,
+        title: "The Long Meridian",
+        year: 2026,
+      };
+      readLibrary.mockResolvedValue({
+        items: [movie],
+        nextStartIndex: null,
+        totalResults: 1,
+        truncated: false,
+      });
+      readLibraryTitle.mockResolvedValue({
+        item: movie,
+        movie: null,
+        providerReferences: [],
+        removal: {
+          canDelete: true,
+          providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+          sizeBytes: ownership.sizeBytes,
+        },
+        seasons: [],
+        seasonsTruncated: false,
+        seriesCredits: null,
+      });
+
+      try {
+        const catalogue = await service.browse(
+          { kind: "movies", limit: 30, sort: "title" },
+          { principal: adminPrincipal() },
+        );
+        const referenceId = catalogue.items[0]!.media.id;
+        const preview = await service.previewLibraryRemoval(referenceId, {
+          principal: adminPrincipal(),
+        });
+        if (!testCase.monitored) {
+          expect(preview.options.map(({ mode }) => mode)).not.toContain(
+            "delete_files_keep_monitored",
           );
+          await expect(
+            service.commitLibraryRemoval(
+              referenceId,
+              {
+                confirmationTitle: "The Long Meridian",
+                mode: "delete_files_keep_monitored",
+                previewId: preview.previewId,
+              },
+              "remove-unmonitored-as-monitored",
+              { principal: adminPrincipal() },
+            ),
+          ).rejects.toMatchObject({ reason: "invalid_mode" });
+        }
+        const result = await service.commitLibraryRemoval(
+          referenceId,
+          {
+            confirmationTitle: "The Long Meridian",
+            mode: testCase.mode,
+            previewId: preview.previewId,
+          },
+          `remove-managed-${testCase.mode}`,
+          { principal: adminPrincipal() },
+        );
+
+        expect(result.operation).toMatchObject({
+          stages: expect.arrayContaining([
+            {
+              kind: "monitoring_change",
+              state: testCase.expectedMonitoringStage,
+            },
+            { kind: "organized_file_deletion", state: "succeeded" },
+            {
+              kind: "manager_record_removal",
+              state: testCase.expectedManagerStage,
+            },
+          ]),
+          state: "succeeded",
+        });
+        if (testCase.mode === "delete_files_and_unmonitor") {
+          if (testCase.expectedMonitoringWrite) {
+            expect(updateAcquisitionMonitoring).toHaveBeenCalledWith(
+              {
+                expectedMonitored: true,
+                mediaId: 42,
+                monitored: false,
+                service: "radarr",
+              },
+              undefined,
+            );
+          } else {
+            expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+          }
+          expect(deleteLibraryMovieFile).toHaveBeenCalledWith(314, undefined);
+          expect(deleteLibraryMovie).not.toHaveBeenCalled();
         } else {
+          expect(deleteLibraryMovie).toHaveBeenCalledWith(42, undefined);
+          expect(deleteLibraryMovieFile).not.toHaveBeenCalled();
           expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
         }
-        expect(deleteLibraryMovieFile).toHaveBeenCalledWith(314, undefined);
-        expect(deleteLibraryMovie).not.toHaveBeenCalled();
-      } else {
-        expect(deleteLibraryMovie).toHaveBeenCalledWith(42, undefined);
-        expect(deleteLibraryMovieFile).not.toHaveBeenCalled();
-        expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+      } finally {
+        database.close();
       }
-    } finally {
-      database.close();
-    }
-  });
+    },
+  );
 
   it("requires a recent authenticated session before consuming a destructive preview", async () => {
     const resolveLibraryMovie = vi.fn(async () => ({
@@ -1146,7 +1243,11 @@ describe("ContinueWatchingService", () => {
       resolveLibraryMovie,
       updateAcquisitionMonitoring: vi.fn(async () => ({
         monitored: false,
-        target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
         verifiedAt: now.toISOString(),
       })),
     }));
@@ -1210,11 +1311,15 @@ describe("ContinueWatchingService", () => {
       ).rejects.toMatchObject({ reason: "authentication_stale" });
       expect(
         database.sqlite
-          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .prepare(
+            "select consumed_at as consumedAt from library_removal_previews",
+          )
           .get(),
       ).toEqual({ consumedAt: null });
       expect(
-        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+        database.sqlite
+          .prepare("select count(*) as count from library_removal_operations")
+          .get(),
       ).toEqual({ count: 0 });
     } finally {
       database.close();
@@ -1240,7 +1345,11 @@ describe("ContinueWatchingService", () => {
       resolveLibraryMovie,
       updateAcquisitionMonitoring: vi.fn(async () => ({
         monitored: false,
-        target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
         verifiedAt: now.toISOString(),
       })),
     }));
@@ -1309,7 +1418,9 @@ describe("ContinueWatchingService", () => {
       expect(deleteLibraryMovieFile).not.toHaveBeenCalled();
       expect(
         database.sqlite
-          .prepare("select state, failure_code as failureCode from library_removal_operations")
+          .prepare(
+            "select state, failure_code as failureCode from library_removal_operations",
+          )
           .get(),
       ).toEqual({ failureCode: "source_changed", state: "failed" });
     } finally {
@@ -1334,7 +1445,9 @@ describe("ContinueWatchingService", () => {
       }),
       resolveLibraryMovie: vi.fn(async () => {
         if (createRadarrAdapter.mock.calls.length === 2) {
-          const rotatedCredentials = new EnvelopeCipher(testConfig().encryptionKey).encrypt(
+          const rotatedCredentials = new EnvelopeCipher(
+            testConfig().encryptionKey,
+          ).encrypt(
             JSON.stringify({
               credentials: { apiKey: "rotated-private-key", kind: "api_key" },
               schemaVersion: 1,
@@ -1345,13 +1458,21 @@ describe("ContinueWatchingService", () => {
             .prepare(
               "update connector_configs set base_url = ?, encrypted_credentials = ? where id = ?",
             )
-            .run("https://rotated-radarr.example.test/", rotatedCredentials, "radarr-main");
+            .run(
+              "https://rotated-radarr.example.test/",
+              rotatedCredentials,
+              "radarr-main",
+            );
         }
         return ownership;
       }),
       updateAcquisitionMonitoring: vi.fn(async () => ({
         monitored: false,
-        target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
         verifiedAt: now.toISOString(),
       })),
     }));
@@ -1441,7 +1562,11 @@ describe("ContinueWatchingService", () => {
       resolveLibraryMovie,
       updateAcquisitionMonitoring: vi.fn(async () => ({
         monitored: false,
-        target: { kind: "movie" as const, mediaId: 42, service: "radarr" as const },
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
         verifiedAt: now.toISOString(),
       })),
     }));
@@ -1506,7 +1631,9 @@ describe("ContinueWatchingService", () => {
       expect(first).toMatchObject({
         operation: {
           failureCode: "outcome_unknown",
-          stages: expect.arrayContaining([{ kind: "organized_file_deletion", state: "uncertain" }]),
+          stages: expect.arrayContaining([
+            { kind: "organized_file_deletion", state: "uncertain" },
+          ]),
           state: "reconcile_required",
         },
         replayed: false,
@@ -1589,9 +1716,14 @@ describe("ContinueWatchingService", () => {
       });
       expect(
         database.sqlite
-          .prepare("select state, failure_code as failureCode from library_removal_operations")
+          .prepare(
+            "select state, failure_code as failureCode from library_removal_operations",
+          )
           .get(),
-      ).toEqual({ failureCode: "outcome_unknown", state: "reconcile_required" });
+      ).toEqual({
+        failureCode: "outcome_unknown",
+        state: "reconcile_required",
+      });
     } finally {
       database.close();
     }
@@ -1660,10 +1792,14 @@ describe("ContinueWatchingService", () => {
       }
 
       await expect(
-        service.previewLibraryRemoval(referenceId, { principal: adminPrincipal() }),
+        service.previewLibraryRemoval(referenceId, {
+          principal: adminPrincipal(),
+        }),
       ).rejects.toMatchObject({ reason: "unavailable" });
       expect(
-        database.sqlite.prepare("select count(*) as count from library_removal_previews").get(),
+        database.sqlite
+          .prepare("select count(*) as count from library_removal_previews")
+          .get(),
       ).toEqual({ count: 20 });
     } finally {
       database.close();
@@ -1674,7 +1810,9 @@ describe("ContinueWatchingService", () => {
     const { database, readContinueWatching, service } = harness();
     readContinueWatching.mockResolvedValueOnce({ items: [], truncated: false });
     try {
-      await expect(service.read({ principal: principal() })).resolves.toMatchObject({
+      await expect(
+        service.read({ principal: principal() }),
+      ).resolves.toMatchObject({
         failures: [],
         items: [],
         state: "empty",
@@ -1705,11 +1843,17 @@ describe("ContinueWatchingService", () => {
             playback: null,
           },
         ],
-        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "healthy",
+        },
         state: "complete",
         totalResults: 46,
       });
-      expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+      expect(first.nextCursor).toMatch(
+        /^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u,
+      );
       expect(first.nextCursor).not.toContain("viewer-link");
       expect(first.nextCursor).not.toContain("Meridian");
       expect(JSON.stringify(first)).not.toMatch(
@@ -1727,7 +1871,10 @@ describe("ContinueWatchingService", () => {
         undefined,
       );
       expect(createClient).toHaveBeenCalledWith(
-        expect.objectContaining({ accessToken: privateAccessToken, deviceId: "viewer-device" }),
+        expect.objectContaining({
+          accessToken: privateAccessToken,
+          deviceId: "viewer-device",
+        }),
       );
 
       const longestQuery = await service.browse(
@@ -1736,7 +1883,9 @@ describe("ContinueWatchingService", () => {
       );
       expect(longestQuery.nextCursor?.length).toBeLessThanOrEqual(512);
       expect(longestQuery.totalResults).toBe(46);
-      expect(libraryBrowseResponseSchema.parse(longestQuery)).toEqual(longestQuery);
+      expect(libraryBrowseResponseSchema.parse(longestQuery)).toEqual(
+        longestQuery,
+      );
 
       const nextPage = await service.browse(
         {
@@ -1775,13 +1924,23 @@ describe("ContinueWatchingService", () => {
               kind: "episode",
               title: "Northern Lights",
             },
-            playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+            playback: {
+              durationSeconds: 2_700,
+              played: false,
+              positionSeconds: 900,
+            },
           },
         ],
-        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "healthy",
+        },
         state: "complete",
       });
-      expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+      expect(first.nextCursor).toMatch(
+        /^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u,
+      );
       expect(JSON.stringify(first)).not.toMatch(
         /private-jellyfin|private-upstream|viewer-external/u,
       );
@@ -1806,7 +1965,11 @@ describe("ContinueWatchingService", () => {
         },
         { principal: principal() },
       );
-      expect(second).toMatchObject({ items: [], nextCursor: null, state: "empty" });
+      expect(second).toMatchObject({
+        items: [],
+        nextCursor: null,
+        state: "empty",
+      });
       expect(readViewingHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({
           afterItemId: privateItemId,
@@ -1903,27 +2066,39 @@ describe("ContinueWatchingService", () => {
         },
         state: "unavailable",
       });
-      expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
+      expect(JSON.stringify(unavailable)).not.toMatch(
+        /private-upstream|private-jellyfin/iu,
+      );
     } finally {
       database.close();
     }
   });
 
   it("opens a series title before paging its episodes through bound opaque references", async () => {
-    const { database, readLibrarySeasonEpisodes, readLibraryTitle, service } = harness();
+    const { database, readLibrarySeasonEpisodes, readLibraryTitle, service } =
+      harness();
     try {
       const catalogue = await service.browse(
         { kind: "series", limit: 30, sort: "title" },
         { principal: principal() },
       );
       const referenceId = catalogue.items[0]!.media.id;
-      const detail = await service.readLibraryTitle(referenceId, { principal: principal() });
+      const detail = await service.readLibraryTitle(referenceId, {
+        principal: principal(),
+      });
 
       expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
       expect(detail).toMatchObject({
         media: { id: referenceId, kind: "series", title: "Northern Lights" },
         playback: null,
-        seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+        seasons: [
+          {
+            episodeCount: 8,
+            playedEpisodeCount: 3,
+            seasonNumber: 2,
+            title: "Season 2",
+          },
+        ],
       });
       expect(readLibraryTitle).toHaveBeenCalledWith(
         { itemId: privateSeriesId, userId: "viewer-external" },
@@ -1936,7 +2111,9 @@ describe("ContinueWatchingService", () => {
         { limit: 30 },
         { principal: principal() },
       );
-      expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(episodes);
+      expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(
+        episodes,
+      );
       expect(episodes).toMatchObject({
         items: [
           {
@@ -1953,7 +2130,11 @@ describe("ContinueWatchingService", () => {
               kind: "episode",
               title: "The Long Meridian",
             },
-            playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+            playback: {
+              durationSeconds: 2_700,
+              played: false,
+              positionSeconds: 900,
+            },
             studios: ["Northlight Pictures"],
           },
         ],
@@ -2002,7 +2183,8 @@ describe("ContinueWatchingService", () => {
   });
 
   it("pages parent-scoped local extras without exposing Jellyfin identities", async () => {
-    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
+    const { database, readLibraryExtras, readOnlineExtras, service } =
+      harness();
     try {
       const catalogue = await service.browse(
         { kind: "series", limit: 30, sort: "title" },
@@ -2029,7 +2211,11 @@ describe("ContinueWatchingService", () => {
               kind: "other",
               title: "Official trailer",
             },
-            playback: { durationSeconds: 142, played: false, positionSeconds: 15 },
+            playback: {
+              durationSeconds: 142,
+              played: false,
+              positionSeconds: 15,
+            },
             source: "local",
           },
         ],
@@ -2041,9 +2227,17 @@ describe("ContinueWatchingService", () => {
             title: "Official online trailer",
           },
         ],
-        onlineSource: { displayName: "Home Seerr", failure: null, status: "healthy" },
+        onlineSource: {
+          displayName: "Home Seerr",
+          failure: null,
+          status: "healthy",
+        },
         onlineState: "ready",
-        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "healthy",
+        },
         state: "complete",
       });
       expect(first.nextCursor).toMatch(/^v2\./u);
@@ -2051,7 +2245,9 @@ describe("ContinueWatchingService", () => {
         { kind: "series", principal: principal(), tmdbId: 1_042 },
         undefined,
       );
-      expect(JSON.stringify(first)).not.toMatch(/private-|viewer-external|jellyfin-access/iu);
+      expect(JSON.stringify(first)).not.toMatch(
+        /private-|viewer-external|jellyfin-access/iu,
+      );
       expect(readLibraryExtras).toHaveBeenCalledWith(
         {
           itemId: privateSeriesId,
@@ -2082,7 +2278,9 @@ describe("ContinueWatchingService", () => {
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
       expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
 
-      readOnlineExtras.mockRejectedValueOnce(new Error("private Seerr detail payload"));
+      readOnlineExtras.mockRejectedValueOnce(
+        new Error("private Seerr detail payload"),
+      );
       const withoutOnline = await service.readLibraryExtras(
         parentReferenceId,
         { limit: 12 },
@@ -2125,14 +2323,17 @@ describe("ContinueWatchingService", () => {
         },
         state: "unavailable",
       });
-      expect(JSON.stringify(unavailable)).not.toMatch(/private-upstream|private-jellyfin/iu);
+      expect(JSON.stringify(unavailable)).not.toMatch(
+        /private-upstream|private-jellyfin/iu,
+      );
     } finally {
       database.close();
     }
   });
 
   it("keeps optional extra sources explicit across empty, unconfigured, and invalid states", async () => {
-    const { database, readLibraryExtras, readOnlineExtras, service } = harness();
+    const { database, readLibraryExtras, readOnlineExtras, service } =
+      harness();
     try {
       const catalogue = await service.browse(
         { kind: "series", limit: 30, sort: "title" },
@@ -2190,7 +2391,10 @@ describe("ContinueWatchingService", () => {
         items: [],
         nextStartIndex: null,
       });
-      readOnlineExtras.mockResolvedValueOnce({ displayName: "Home Seerr", items: [] });
+      readOnlineExtras.mockResolvedValueOnce({
+        displayName: "Home Seerr",
+        items: [],
+      });
       const empty = await service.readLibraryExtras(
         parentReferenceId,
         { limit: 12 },
@@ -2209,7 +2413,9 @@ describe("ContinueWatchingService", () => {
         items: [],
         nextStartIndex: null,
       });
-      readOnlineExtras.mockRejectedValueOnce(new DiscoverySearchError("connector_unconfigured"));
+      readOnlineExtras.mockRejectedValueOnce(
+        new DiscoverySearchError("connector_unconfigured"),
+      );
       const noDiscoveryConnector = await service.readLibraryExtras(
         parentReferenceId,
         { limit: 12 },
@@ -2217,7 +2423,11 @@ describe("ContinueWatchingService", () => {
       );
       expect(noDiscoveryConnector).toMatchObject({
         onlineItems: [],
-        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineSource: {
+          displayName: "Seerr",
+          failure: null,
+          status: "unconfigured",
+        },
         onlineState: "unconfigured",
         state: "empty",
       });
@@ -2225,7 +2435,11 @@ describe("ContinueWatchingService", () => {
       const localExtraReferenceId = localOnly.items[0]!.media.id;
       const calls = readLibraryExtras.mock.calls.length;
       await expect(
-        service.readLibraryExtras(localExtraReferenceId, { limit: 12 }, { principal: principal() }),
+        service.readLibraryExtras(
+          localExtraReferenceId,
+          { limit: 12 },
+          { principal: principal() },
+        ),
       ).rejects.toMatchObject({ reason: "not_found" });
       expect(readLibraryExtras).toHaveBeenCalledTimes(calls);
     } finally {
@@ -2244,7 +2458,12 @@ describe("ContinueWatchingService", () => {
     } = harness();
     const movie = {
       ...libraryResult().items[0]!,
-      artwork: { accentColor: "#775544", backdrop: null, blurHash: null, poster: null },
+      artwork: {
+        accentColor: "#775544",
+        backdrop: null,
+        blurHash: null,
+        poster: null,
+      },
       externalId: "private-upstream-movie",
       kind: "movie" as const,
       played: false,
@@ -2329,7 +2548,9 @@ describe("ContinueWatchingService", () => {
       );
       const referenceId = catalogue.items[0]!.media.id;
 
-      const detail = await service.readLibraryTitle(referenceId, { principal: principal() });
+      const detail = await service.readLibraryTitle(referenceId, {
+        principal: principal(),
+      });
       expect(detail).toMatchObject({
         media: {
           artwork: { backdropPath: null, posterPath: null },
@@ -2348,18 +2569,30 @@ describe("ContinueWatchingService", () => {
           ],
           communityRating: 8.4,
           genres: ["Drama"],
-          mediaSources: [{ label: "4K · HEVC · MKV", sizeBytes: 6_979_321_856 }],
+          mediaSources: [
+            { label: "4K · HEVC · MKV", sizeBytes: 6_979_321_856 },
+          ],
           premiereDate: "2026-04-18",
         },
-        playback: { durationSeconds: 7_080, played: false, positionSeconds: 1_200 },
+        playback: {
+          durationSeconds: 7_080,
+          played: false,
+          positionSeconds: 1_200,
+        },
         seasons: [],
       });
-      expect(JSON.stringify(detail)).not.toMatch(/private-person|private-upstream/u);
+      expect(JSON.stringify(detail)).not.toMatch(
+        /private-person|private-upstream/u,
+      );
       const personPath = detail.movie?.cast[0]?.imagePath;
       expect(personPath).toBeTruthy();
       const token = personPath!.split("/").at(-1)!;
       await expect(
-        service.readPersonArtwork({ principal: principal() }, referenceId, token),
+        service.readPersonArtwork(
+          { principal: principal() },
+          referenceId,
+          token,
+        ),
       ).resolves.toMatchObject({
         contentType: "image/jpeg",
         etag: expect.stringMatching(/^"person_/u),
@@ -2370,7 +2603,11 @@ describe("ContinueWatchingService", () => {
         type: "Primary",
       });
       await expect(
-        service.readPersonArtwork({ principal: principal() }, referenceId, `${token}tampered`),
+        service.readPersonArtwork(
+          { principal: principal() },
+          referenceId,
+          `${token}tampered`,
+        ),
       ).rejects.toMatchObject({ reason: "not_found" });
       await expect(
         service.readLibrarySeasonEpisodes(
@@ -2395,20 +2632,32 @@ describe("ContinueWatchingService", () => {
         referenceId,
         { action: "reset_progress" },
         "playback-state-1",
-        { ipAddress: "198.51.100.24", principal: principal(), requestId: "request-state-1" },
+        {
+          ipAddress: "198.51.100.24",
+          principal: principal(),
+          requestId: "request-state-1",
+        },
       );
       const replay = await service.updatePlaybackState(
         referenceId,
         { action: "reset_progress" },
         "playback-state-1",
-        { ipAddress: "198.51.100.24", principal: principal(), requestId: "request-state-1" },
+        {
+          ipAddress: "198.51.100.24",
+          principal: principal(),
+          requestId: "request-state-1",
+        },
       );
 
       expect(first).toEqual({
         replayed: false,
         response: {
           action: "reset_progress",
-          playback: { durationSeconds: 2_700, played: false, positionSeconds: 0 },
+          playback: {
+            durationSeconds: 2_700,
+            played: false,
+            positionSeconds: 0,
+          },
           referenceId,
           updatedAt: now.toISOString(),
         },
@@ -2432,7 +2681,9 @@ describe("ContinueWatchingService", () => {
           )
           .all(),
       );
-      expect(stored).not.toMatch(/playback-state-1|private-upstream|viewer-external/u);
+      expect(stored).not.toMatch(
+        /playback-state-1|private-upstream|viewer-external/u,
+      );
       expect(stored).toContain('"state":"succeeded"');
       const audits = database.sqlite
         .prepare(
@@ -2450,7 +2701,9 @@ describe("ContinueWatchingService", () => {
         metadataJson: '{"action":"reset_progress"}',
         outcome: "success",
         requestId: "request-state-1",
-        targetId: expect.stringMatching(/^user_media_state_[A-Za-z0-9_-]{22}$/u),
+        targetId: expect.stringMatching(
+          /^user_media_state_[A-Za-z0-9_-]{22}$/u,
+        ),
         targetType: "user_media_state_operation",
       });
       expect(JSON.stringify(audits)).not.toMatch(
@@ -2478,9 +2731,14 @@ describe("ContinueWatchingService", () => {
         { principal: principal() },
       );
       await expect(
-        service.updatePlaybackState(referenceId, { action: "mark_unwatched" }, "playback-state-2", {
-          principal: principal(),
-        }),
+        service.updatePlaybackState(
+          referenceId,
+          { action: "mark_unwatched" },
+          "playback-state-2",
+          {
+            principal: principal(),
+          },
+        ),
       ).rejects.toMatchObject({ reason: "idempotency_conflict" });
       await expect(
         service.updatePlaybackState(
@@ -2508,7 +2766,11 @@ describe("ContinueWatchingService", () => {
           service: "jellyfin",
         }),
       )
-      .mockResolvedValueOnce({ durationSeconds: 2_700, played: true, positionSeconds: 0 });
+      .mockResolvedValueOnce({
+        durationSeconds: 2_700,
+        played: true,
+        positionSeconds: 0,
+      });
     try {
       const feed = await service.read({ principal: principal() });
       const referenceId = feed.items[0]!.media.id;
@@ -2529,7 +2791,10 @@ describe("ContinueWatchingService", () => {
         ),
       ).resolves.toMatchObject({
         replayed: false,
-        response: { action: "mark_watched", playback: { played: true, positionSeconds: 0 } },
+        response: {
+          action: "mark_watched",
+          playback: { played: true, positionSeconds: 0 },
+        },
       });
       expect(updatePlaybackState).toHaveBeenCalledTimes(2);
     } finally {
@@ -2561,13 +2826,21 @@ describe("ContinueWatchingService", () => {
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
       await expect(
         service.browse(
-          { cursor, kind: "movies", limit: 30, query: "Meridian", sort: "recent" },
+          {
+            cursor,
+            kind: "movies",
+            limit: 30,
+            query: "Meridian",
+            sort: "recent",
+          },
           { principal: principal() },
         ),
       ).rejects.toMatchObject({ reason: "cursor_invalid" });
 
       database.sqlite
-        .prepare("update service_identity_links set revision = revision + 1 where id = ?")
+        .prepare(
+          "update service_identity_links set revision = revision + 1 where id = ?",
+        )
         .run("viewer-link");
       await expect(
         service.browse(
@@ -2583,7 +2856,9 @@ describe("ContinueWatchingService", () => {
 
   it("returns a safe degraded catalogue without leaking upstream failures", async () => {
     const { database, readLibrary, service } = harness();
-    readLibrary.mockRejectedValueOnce(new Error(`private ${privateItemId} ${privateAccessToken}`));
+    readLibrary.mockRejectedValueOnce(
+      new Error(`private ${privateItemId} ${privateAccessToken}`),
+    );
     try {
       const response = await service.browse(
         { kind: "all", limit: 30, sort: "recent" },
@@ -2598,7 +2873,9 @@ describe("ContinueWatchingService", () => {
         },
         state: "unavailable",
       });
-      expect(JSON.stringify(response)).not.toMatch(/private-jellyfin|private-upstream/u);
+      expect(JSON.stringify(response)).not.toMatch(
+        /private-jellyfin|private-upstream/u,
+      );
     } finally {
       database.close();
     }
@@ -2614,7 +2891,10 @@ describe("ContinueWatchingService", () => {
     });
     try {
       await expect(
-        service.browse({ kind: "all", limit: 30, sort: "recent" }, { principal: principal() }),
+        service.browse(
+          { kind: "all", limit: 30, sort: "recent" },
+          { principal: principal() },
+        ),
       ).resolves.toMatchObject({
         items: [],
         nextCursor: null,
@@ -2660,7 +2940,11 @@ describe("ContinueWatchingService", () => {
     const { database, readImage, service } = harness();
     try {
       await expect(
-        service.readArtwork({ principal: principal() }, `media_${"z".repeat(22)}`, "poster"),
+        service.readArtwork(
+          { principal: principal() },
+          `media_${"z".repeat(22)}`,
+          "poster",
+        ),
       ).rejects.toMatchObject({ reason: "not_found" });
       expect(readImage).not.toHaveBeenCalled();
     } finally {
@@ -2672,10 +2956,16 @@ describe("ContinueWatchingService", () => {
     const { database, readImage, service } = harness();
     try {
       const feed = await service.read({ principal: principal() });
-      readImage.mockRejectedValueOnce(new Error("private upstream artwork failure"));
+      readImage.mockRejectedValueOnce(
+        new Error("private upstream artwork failure"),
+      );
 
       await expect(
-        service.readArtwork({ principal: principal() }, feed.items[0]!.media.id, "poster"),
+        service.readArtwork(
+          { principal: principal() },
+          feed.items[0]!.media.id,
+          "poster",
+        ),
       ).rejects.toEqual(
         expect.objectContaining<Partial<MediaArtworkError>>({
           code: "media_artwork_unavailable",
@@ -2699,7 +2989,9 @@ describe("ContinueWatchingService", () => {
       }),
     );
     try {
-      await expect(upstream.service.read({ principal: principal() })).resolves.toMatchObject({
+      await expect(
+        upstream.service.read({ principal: principal() }),
+      ).resolves.toMatchObject({
         failures: [expect.objectContaining({ code: "timeout" })],
         items: [],
         state: "unavailable",
@@ -2710,7 +3002,9 @@ describe("ContinueWatchingService", () => {
 
     const corrupt = harness();
     corrupt.database.sqlite
-      .prepare("update service_identity_links set encrypted_access_token = ? where id = ?")
+      .prepare(
+        "update service_identity_links set encrypted_access_token = ? where id = ?",
+      )
       .run("private-corrupt-token", "viewer-link");
     try {
       const response = await corrupt.service.read({ principal: principal() });
@@ -2728,9 +3022,9 @@ describe("ContinueWatchingService", () => {
   it("rejects a principal whose exact current link cannot be resolved", async () => {
     const { database, service } = harness({ withIdentity: false });
     try {
-      await expect(service.read({ principal: principal() })).rejects.toBeInstanceOf(
-        ContinueWatchingError,
-      );
+      await expect(
+        service.read({ principal: principal() }),
+      ).rejects.toBeInstanceOf(ContinueWatchingError);
     } finally {
       database.close();
     }
