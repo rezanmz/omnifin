@@ -194,9 +194,31 @@ const jellyfinLibraryItemSchema = z.object({
     .catch(null),
 });
 
-const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
-  Type: z.enum(["Episode", "Movie"]),
-});
+const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema
+  .pick({
+    CanDownload: true,
+    Container: true,
+    Etag: true,
+    Id: true,
+    IndexNumber: true,
+    Name: true,
+    ParentIndexNumber: true,
+    ProductionYear: true,
+    SeriesName: true,
+  })
+  .extend({
+    MediaSources: z
+      .array(
+        z.object({
+          Container: z.string().trim().min(1).max(64).nullish(),
+          Id: z.string().trim().min(1).max(256),
+          Size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+        }),
+      )
+      .max(64)
+      .nullish(),
+    Type: z.enum(["Episode", "Movie"]),
+  });
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
@@ -1874,18 +1896,26 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    if (!response.Name || response.Id !== input.itemId) {
+    const matchingSources = (response.MediaSources ?? []).filter(
+      (candidate) => candidate.Id === input.itemId,
+    );
+    const source = matchingSources.length === 1 ? matchingSources[0]! : null;
+    const canDownload = response.CanDownload === true;
+    if (
+      !response.Name ||
+      response.Id !== input.itemId ||
+      (canDownload && (!source || !source.Size))
+    ) {
       throw this.#client.invalidResponse("media.original_download.metadata");
     }
-    const source = response.MediaSources?.[0];
     const episodeTitle =
       response.Type === "Episode"
         ? [response.SeriesName, episodeLabel(response)].filter(Boolean).join(" - ")
         : response.Name;
     return {
-      canDownload: response.CanDownload === true,
+      canDownload,
       container:
-        compactText(response.Container ?? source?.Container, 64)?.toLocaleLowerCase("en-US") ??
+        compactText(source?.Container ?? response.Container, 64)?.toLocaleLowerCase("en-US") ??
         null,
       etag: response.Etag ?? null,
       externalId: response.Id,
