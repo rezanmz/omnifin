@@ -75,6 +75,15 @@ describe("JellyfinUserMediaClient", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("rejects an unexpected successful status for item deletion", async () => {
+    const { client } = clientWithResponses([new Response("accepted", { status: 200 })]);
+
+    await expect(client.deleteLibraryItem("movie-upstream-1")).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "library.removal.file_delete",
+    });
+  });
+
   it("reads the inferred user's modern resume feed and normalizes movies", async () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({ Items: [movie], StartIndex: 0, TotalRecordCount: 1 }),

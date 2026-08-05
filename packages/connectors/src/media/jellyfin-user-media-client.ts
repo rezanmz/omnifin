@@ -1392,13 +1392,16 @@ export class JellyfinUserMediaClient {
 
   public async deleteLibraryItem(rawItemId: string, signal?: AbortSignal): Promise<void> {
     const itemId = jellyfinItemIdSchema.parse(rawItemId);
-    await this.#client.requestText(`Items/${itemId}`, {
+    const response = await this.#client.requestText(`Items/${itemId}`, {
       acceptedStatuses: [204],
       headers: { authorization: this.#authorization },
       method: "DELETE",
       operation: "library.removal.file_delete",
       ...(signal === undefined ? {} : { signal }),
     });
+    if (response.status !== 204) {
+      throw this.#client.invalidResponse("library.removal.file_delete");
+    }
   }
 
   public async readContinueWatching(signal?: AbortSignal): Promise<JellyfinContinueWatchingResult> {
