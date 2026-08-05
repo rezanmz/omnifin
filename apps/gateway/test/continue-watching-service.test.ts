@@ -753,8 +753,12 @@ describe("ContinueWatchingService", () => {
           principal: adminPrincipal(),
         }),
       ).rejects.toMatchObject({ reason: "source_changed" });
-      const { fileId: _legacyFileId, ...legacyManagedSourceWithoutFileId } =
-        legacyManagedPayload.source;
+      const legacyManagedSourceWithoutFileId = {
+        connectorId: legacyManagedPayload.source.connectorId,
+        kind: legacyManagedPayload.source.kind,
+        mediaId: legacyManagedPayload.source.mediaId,
+        monitored: legacyManagedPayload.source.monitored,
+      };
       database.sqlite.prepare("update library_removal_previews set encrypted_payload = ?").run(
         new EnvelopeCipher(testConfig().encryptionKey).encrypt(
           JSON.stringify({
@@ -1366,7 +1370,6 @@ describe("ContinueWatchingService", () => {
       monitored: true,
       sizeBytes: 6_979_321_856,
     };
-    let database!: DatabaseHandle;
     const writeKeys: string[] = [];
     const createRadarrAdapter = vi.fn((input: ApiKeyConnectorConfig) => ({
       deleteLibraryMovie: vi.fn(async () => undefined),
@@ -1401,7 +1404,7 @@ describe("ContinueWatchingService", () => {
       })),
     }));
     const fixture = harness({ createRadarrAdapter });
-    database = fixture.database;
+    const database = fixture.database;
     const movie = {
       ...libraryResult().items[0]!,
       externalId: "private-upstream-movie",
