@@ -55,6 +55,35 @@ const series = {
 };
 
 describe("JellyfinUserMediaClient", () => {
+  it("deletes one exact item through the paired user's authenticated endpoint", async () => {
+    const { client, requests } = clientWithResponses([new Response(null, { status: 204 })]);
+
+    await client.deleteLibraryItem("movie-upstream-1");
+
+    expect(requests[0]?.url.pathname).toBe("/base/Items/movie-upstream-1");
+    expect(requests[0]?.url.search).toBe("");
+    expect(requests[0]?.init.method).toBe("DELETE");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("rejects a non-canonical deletion target before issuing a request", async () => {
+    const { client, requests } = clientWithResponses([]);
+
+    await expect(client.deleteLibraryItem("../another-title")).rejects.toBeDefined();
+    expect(requests).toHaveLength(0);
+  });
+
+  it("rejects an unexpected successful status for item deletion", async () => {
+    const { client } = clientWithResponses([new Response("accepted", { status: 200 })]);
+
+    await expect(client.deleteLibraryItem("movie-upstream-1")).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "library.removal.file_delete",
+    });
+  });
+
   it("reads the inferred user's modern resume feed and normalizes movies", async () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({ Items: [movie], StartIndex: 0, TotalRecordCount: 1 }),
