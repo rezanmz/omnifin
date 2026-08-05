@@ -505,17 +505,35 @@ test("edge promotion revalidates protected main immediately before moving aliase
   );
 });
 
-test("release automation allows protected main CI to finish under runner contention", () => {
-  for (const workflowName of ["edge.yml", "release-please.yml"]) {
+test("release automation lets only the latest exact-SHA gate completion publish", () => {
+  for (const [workflowName, mutationJob] of [
+    ["edge.yml", "build-candidate"],
+    ["release-please.yml", "release"],
+  ]) {
     const document = workflowDocument(workflowName);
     const gate = document.jobs["verify-main-gates"];
-    assert.equal(gate["timeout-minutes"], 40);
+    assert.equal(gate["timeout-minutes"], 10);
+    assert.equal(gate.outputs.ready, "${{ steps.gates.outputs.ready }}");
     const verification = namedStep(
       gate.steps,
       "Require CI and Security for the exact current main SHA",
     );
-    assert.match(verification.run, /--require-main-tip --wait-seconds 1800/u);
+    assert.equal(verification.id, "gates");
+    assert.match(verification.run, /--require-main-tip/u);
+    assert.match(
+      verification.run,
+      /--trigger-run-id "\$\{\{ github\.event\.workflow_run\.id \}\}"/u,
+    );
+    assert.doesNotMatch(verification.run, /--wait-seconds/u);
+    assert.equal(document.jobs[mutationJob].if, "needs.verify-main-gates.outputs.ready == 'true'");
   }
+});
+
+test("duplicate exact-SHA edge handoffs serialize without cancellation", () => {
+  const document = workflowDocument("edge.yml");
+
+  assert.equal(document.concurrency.group, "edge-main-${{ github.event.workflow_run.head_sha }}");
+  assert.equal(document.concurrency["cancel-in-progress"], false);
 });
 
 test("edge publication retriggers from either protected-main quality gate", () => {
@@ -532,6 +550,18 @@ test("edge publication retriggers from either protected-main quality gate", () =
   assert.match(source.run, /SOURCE_EVENT.*push/su);
   assert.match(source.run, /SOURCE_BRANCH.*main/su);
   assert.match(source.run, /SOURCE_REPOSITORY.*GITHUB_REPOSITORY/su);
+});
+
+test("release preparation retriggers from either protected-main quality gate", () => {
+  const document = workflowDocument("release-please.yml");
+  const source = namedStep(
+    document.jobs.prerequisite.steps,
+    "Validate source and report automation status",
+  );
+
+  assert.deepEqual(document.on.workflow_run.workflows, ["CI", "Security"]);
+  assert.equal(source.env.SOURCE_WORKFLOW, "${{ github.event.workflow_run.name }}");
+  assert.match(source.run, /CI\|Security/u);
 });
 
 test("draft-aware release jobs receive narrowly scoped push access", () => {

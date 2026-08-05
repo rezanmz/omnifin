@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   evaluateWorkflowRuns,
+  evaluateTriggerReadiness,
   githubJson,
   validateMainBranch,
+  verifyMainGateTrigger,
   verifyMainGates,
 } from "./verify-main-gates.mjs";
 
@@ -18,6 +20,7 @@ const validRun = {
   head_sha: sha,
   id: 10,
   status: "completed",
+  updated_at: "2026-08-04T20:00:00Z",
 };
 
 test("accepts only a successful exact-SHA main push", () => {
@@ -39,12 +42,102 @@ test("does not accept pull-request or foreign-repository runs", () => {
 
 test("the newest exact push attempt determines the gate", () => {
   assert.deepEqual(
-    evaluateWorkflowRuns([validRun, { ...validRun, conclusion: "failure", id: 11 }], {
-      repository,
-      sha,
-    }),
-    { state: "failed", conclusion: "failure", url: undefined },
+    evaluateWorkflowRuns(
+      [
+        validRun,
+        {
+          ...validRun,
+          conclusion: "failure",
+          id: 11,
+          updated_at: "2026-08-04T20:01:00Z",
+        },
+      ],
+      {
+        repository,
+        sha,
+      },
+    ),
+    {
+      completedAt: "2026-08-04T20:01:00Z",
+      conclusion: "failure",
+      runId: 11,
+      state: "failed",
+      url: undefined,
+    },
   );
+});
+
+test("assigns publication to the latest successful gate completion", () => {
+  const results = [
+    {
+      completedAt: "2026-08-04T20:00:00Z",
+      name: "Security",
+      runId: 20,
+      state: "success",
+    },
+    {
+      completedAt: "2026-08-04T20:02:00Z",
+      name: "CI",
+      runId: 10,
+      state: "success",
+    },
+  ];
+
+  assert.equal(evaluateTriggerReadiness(results, 10).ready, true);
+  assert.equal(evaluateTriggerReadiness(results, 20).ready, false);
+});
+
+test("defers a successful trigger while its exact-SHA peer is pending or failed", () => {
+  assert.match(
+    evaluateTriggerReadiness(
+      [
+        { name: "CI", state: "pending" },
+        {
+          completedAt: "2026-08-04T20:00:00Z",
+          name: "Security",
+          runId: 20,
+          state: "success",
+        },
+      ],
+      20,
+    ).reason,
+    /Waiting for exact-SHA gates: CI/u,
+  );
+  assert.match(
+    evaluateTriggerReadiness(
+      [
+        { conclusion: "failure", name: "CI", state: "failed" },
+        {
+          completedAt: "2026-08-04T20:00:00Z",
+          name: "Security",
+          runId: 20,
+          state: "success",
+        },
+      ],
+      20,
+    ).reason,
+    /CI concluded failure/u,
+  );
+});
+
+test("breaks tied completion timestamps by workflow run ID", () => {
+  const results = [
+    {
+      completedAt: "2026-08-04T20:00:00Z",
+      name: "CI",
+      runId: 10,
+      state: "success",
+    },
+    {
+      completedAt: "2026-08-04T20:00:00Z",
+      name: "Security",
+      runId: 20,
+      state: "success",
+    },
+  ];
+
+  assert.equal(evaluateTriggerReadiness(results, 10).ready, false);
+  assert.equal(evaluateTriggerReadiness(results, 20).ready, true);
 });
 
 test("requires main to remain protected", () => {
@@ -142,6 +235,50 @@ test("rechecks protected main immediately before accepting successful gates", as
 
   assert.equal(mainTipChecks, 2);
   assert.equal(results.length, 2);
+});
+
+test("rechecks protected main only when the source completion owns publication", async () => {
+  let mainTipChecks = 0;
+  const options = { requireMainTip: true, sha, triggerRunId: 20 };
+  const environment = { GITHUB_REPOSITORY: repository, GITHUB_TOKEN: "test-token" };
+  const verifyTip = async () => {
+    mainTipChecks += 1;
+  };
+
+  const deferred = await verifyMainGateTrigger(options, environment, {
+    inspectGates: async () => [
+      { name: "CI", state: "pending" },
+      {
+        completedAt: "2026-08-04T20:00:00Z",
+        name: "Security",
+        runId: 20,
+        state: "success",
+      },
+    ],
+    verifyMainTip: verifyTip,
+  });
+  assert.equal(deferred.ready, false);
+  assert.equal(mainTipChecks, 1);
+
+  const ready = await verifyMainGateTrigger(options, environment, {
+    inspectGates: async () => [
+      {
+        completedAt: "2026-08-04T20:00:00Z",
+        name: "CI",
+        runId: 10,
+        state: "success",
+      },
+      {
+        completedAt: "2026-08-04T20:02:00Z",
+        name: "Security",
+        runId: 20,
+        state: "success",
+      },
+    ],
+    verifyMainTip: verifyTip,
+  });
+  assert.equal(ready.ready, true);
+  assert.equal(mainTipChecks, 3);
 });
 
 test("fails when the final protected-main recheck detects a race", async () => {
