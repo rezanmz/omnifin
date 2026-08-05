@@ -451,7 +451,13 @@ function MediaLibraryContent({
     : locallyFilteredItems(loadedItems, kind, submittedQuery, sort);
   const accent = items[0] ? itemAccent(items[0]) : "#6f8d84";
   const filtersActive = kind !== "all" || Boolean(submittedQuery);
-  const resultCopy = `${items.length} ${items.length === 1 ? "title" : "titles"} in view`;
+  const totalResults = refreshAvailable ? latestPage.totalResults : items.length;
+  const resultCopy =
+    totalResults === null
+      ? `${items.length} ${items.length === 1 ? "title" : "titles"} loaded`
+      : items.length < totalResults
+        ? `${items.length} of ${totalResults} titles loaded`
+        : `${totalResults} ${totalResults === 1 ? "title" : "titles"}`;
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -502,16 +508,16 @@ function MediaLibraryContent({
         </div>
         <dl className={styles.heroMetrics} data-liquid-glass>
           <div>
-            <dt>In view</dt>
+            <dt>Total</dt>
+            <dd>{totalResults ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Loaded</dt>
             <dd>{items.length}</dd>
           </div>
           <div>
             <dt>Source</dt>
             <dd>{latestPage.source.displayName}</dd>
-          </div>
-          <div>
-            <dt>Signal</dt>
-            <dd>Private</dd>
           </div>
         </dl>
       </header>

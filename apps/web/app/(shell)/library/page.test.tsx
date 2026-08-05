@@ -59,7 +59,7 @@ describe("LibraryPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: /View details for Ember Coast/u })).toBeVisible();
     expect(screen.getByRole("button", { name: /View details for Northern Lights/u })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "8 titles in view" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "8 titles" })).toBeVisible();
   });
 
   it("renders a deliberate empty state", async () => {

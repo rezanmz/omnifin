@@ -160,7 +160,9 @@ const connectorBaseUrlSchema = z
       url.username ||
       url.password ||
       url.search ||
-      url.hash
+      url.hash ||
+      value.includes("?") ||
+      value.includes("#")
     ) {
       context.addIssue({
         code: "custom",
@@ -185,7 +187,9 @@ export const connectorPublicUiUrlSchema = z
       url.username ||
       url.password ||
       url.search ||
-      url.hash
+      url.hash ||
+      value.includes("?") ||
+      value.includes("#")
     ) {
       context.addIssue({
         code: "custom",

@@ -208,6 +208,7 @@ function libraryResult(): JellyfinLibraryResult {
       },
     ],
     nextStartIndex: 30,
+    totalResults: 46,
     truncated: true,
   };
 }
@@ -235,8 +236,10 @@ function harness(
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: libraryResult().items[0]!,
     movie: null,
+    providerReferences: [],
     seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
     seasonsTruncated: false,
+    seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
   }));
   const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
     catalogTmdbId: 1_042,
@@ -281,8 +284,22 @@ function harness(
           airDate: "2025-02-14",
           communityRating: 8.4,
           credits: [
-            { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" },
-            { name: "Ari Chen", role: null, type: "writer" },
+            {
+              name: "Mara Voss",
+              person: null,
+              personItemId: null,
+              personReferenceId: null,
+              role: "Dr. Elian Vale",
+              type: "cast",
+            },
+            {
+              name: "Ari Chen",
+              person: null,
+              personItemId: null,
+              personReferenceId: null,
+              role: null,
+              type: "writer",
+            },
           ],
           creditsTruncated: false,
           criticRating: 91,
@@ -433,7 +450,12 @@ describe("ContinueWatchingService", () => {
       title: "The Long Meridian",
       year: 2026,
     };
-    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: {
@@ -450,6 +472,7 @@ describe("ContinueWatchingService", () => {
         studios: [],
         tagline: null,
       },
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -457,6 +480,7 @@ describe("ContinueWatchingService", () => {
       },
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
@@ -574,10 +598,16 @@ describe("ContinueWatchingService", () => {
       title: "The Long Meridian",
       year: 2026,
     };
-    readLibrary.mockResolvedValue({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValue({
       item: movie,
       movie: null,
+      providerReferences: [],
       removal: {
         canDelete: true,
         providerIds: { imdb: "tt1234567", tmdb: 98_765 },
@@ -585,6 +615,7 @@ describe("ContinueWatchingService", () => {
       },
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
@@ -658,6 +689,7 @@ describe("ContinueWatchingService", () => {
         ],
         source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
         state: "complete",
+        totalResults: 46,
       });
       expect(first.nextCursor).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
       expect(first.nextCursor).not.toContain("viewer-link");
@@ -685,9 +717,10 @@ describe("ContinueWatchingService", () => {
         { principal: principal() },
       );
       expect(longestQuery.nextCursor?.length).toBeLessThanOrEqual(512);
+      expect(longestQuery.totalResults).toBe(46);
       expect(libraryBrowseResponseSchema.parse(longestQuery)).toEqual(longestQuery);
 
-      await service.browse(
+      const nextPage = await service.browse(
         {
           cursor: first.nextCursor!,
           kind: "all",
@@ -697,6 +730,7 @@ describe("ContinueWatchingService", () => {
         },
         { principal: principal() },
       );
+      expect(nextPage.totalResults).toBe(first.totalResults);
       expect(readLibrary).toHaveBeenLastCalledWith(
         expect.objectContaining({ startIndex: 30, userId: "viewer-external" }),
         undefined,
@@ -1200,7 +1234,12 @@ describe("ContinueWatchingService", () => {
       runtimeSeconds: 7_080,
       title: "The Far Meridian",
     };
-    readLibrary.mockResolvedValueOnce({ items: [movie], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
     readLibraryTitle.mockResolvedValueOnce({
       item: movie,
       movie: {
@@ -1209,6 +1248,9 @@ describe("ContinueWatchingService", () => {
             image: { itemId: "private-person-1", type: "Primary" },
             imagePath: null,
             name: "Mara Voss",
+            person: null,
+            personItemId: null,
+            personReferenceId: null,
             role: "Iris Vale",
             type: "cast",
           },
@@ -1220,6 +1262,9 @@ describe("ContinueWatchingService", () => {
             image: null,
             imagePath: null,
             name: "Jon Bell",
+            person: null,
+            personItemId: null,
+            personReferenceId: null,
             role: null,
             type: "director",
           },
@@ -1253,8 +1298,10 @@ describe("ContinueWatchingService", () => {
         studios: ["Northlight Pictures"],
         tagline: "The horizon remembers.",
       },
+      providerReferences: [],
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     });
 
     try {
@@ -1541,7 +1588,12 @@ describe("ContinueWatchingService", () => {
 
   it("distinguishes a healthy empty paired-user catalogue from an unavailable source", async () => {
     const { database, readLibrary, service } = harness();
-    readLibrary.mockResolvedValueOnce({ items: [], nextStartIndex: null, truncated: false });
+    readLibrary.mockResolvedValueOnce({
+      items: [],
+      nextStartIndex: null,
+      totalResults: 0,
+      truncated: false,
+    });
     try {
       await expect(
         service.browse({ kind: "all", limit: 30, sort: "recent" }, { principal: principal() }),
@@ -1550,6 +1602,7 @@ describe("ContinueWatchingService", () => {
         nextCursor: null,
         source: { failure: null, status: "healthy" },
         state: "empty",
+        totalResults: 0,
       });
     } finally {
       database.close();

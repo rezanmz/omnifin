@@ -6,6 +6,7 @@ import type {
   DiscoveryMediaDetail,
   DiscoveryMediaRecommendation,
   DiscoveryMovieResult,
+  DiscoveryPersonCredit,
   DiscoveryPersonDetail,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
@@ -32,13 +33,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MediaDetailClientError,
   discoveryMediaDetailClient,
+  discoveryPersonCreditsClient,
   discoveryPersonDetailClient,
   type DiscoveryMediaDetailClient,
+  type DiscoveryPersonCreditsClient,
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
+import { titleProviderHref } from "../lib/title-provider-reference";
 
 export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
+
+export interface DetailPerson {
+  name: string;
+  tmdbId: number;
+}
 
 type DetailState =
   | { kind: "loading"; requestKey: string }
@@ -50,9 +59,11 @@ type PersonState =
   | { detail: DiscoveryPersonDetail; kind: "ready"; requestKey: string }
   | { errorKind: MediaDetailClientErrorKind; kind: "error"; requestKey: string };
 
+type DetailNavigationContext =
+  { kind: "media"; media: DetailMedia } | { kind: "person"; personId: number };
+
 interface DetailNavigationState {
-  media: DetailMedia;
-  personId: number | null;
+  path: readonly DetailNavigationContext[];
   rootKey: string;
 }
 
@@ -62,6 +73,8 @@ export interface MediaDetailDrawerProperties {
   onOpenChange: (open: boolean) => void;
   onRequest?: (media: DetailMedia) => void;
   open: boolean;
+  person?: DetailPerson | null;
+  personCreditsClient?: DiscoveryPersonCreditsClient;
   personClient?: DiscoveryPersonDetailClient;
 }
 
@@ -365,14 +378,38 @@ function DetailContent({
           <ul className="media-detail__ratings">
             {detail.intelligence.ratings.map((rating) => (
               <li key={`${rating.source}-${rating.audience}`}>
-                <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
-                <span>{rating.label}</span>
-                <small>
-                  {rating.sentiment ??
-                    (rating.voteCount === null
-                      ? "Community signal"
-                      : formatRatings(rating.voteCount))}
-                </small>
+                {rating.providerReference ? (
+                  <a
+                    aria-label={`${rating.label} rating ${formatRatingValue(rating.value, rating.scale)} — open canonical title page in a new tab`}
+                    className="media-detail__rating-signal media-detail__rating-signal--linked"
+                    data-directional-item
+                    href={titleProviderHref(rating.providerReference)}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
+                    <span>
+                      {rating.label} <ExternalLink aria-hidden="true" />
+                    </span>
+                    <small>
+                      {rating.sentiment ??
+                        (rating.voteCount === null
+                          ? "Community signal"
+                          : formatRatings(rating.voteCount))}
+                    </small>
+                  </a>
+                ) : (
+                  <div className="media-detail__rating-signal">
+                    <strong>{formatRatingValue(rating.value, rating.scale)}</strong>
+                    <span>{rating.label}</span>
+                    <small>
+                      {rating.sentiment ??
+                        (rating.voteCount === null
+                          ? "Community signal"
+                          : formatRatings(rating.voteCount))}
+                    </small>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -569,13 +606,65 @@ function DetailContent({
 }
 
 function PersonContent({
+  creditsClient,
   detail,
   onInspectMedia,
 }: {
+  creditsClient: DiscoveryPersonCreditsClient;
   detail: DiscoveryPersonDetail;
   onInspectMedia: (media: DetailMedia) => void;
 }) {
   const life = [detail.birthday, detail.deathday].filter(Boolean).join(" — ");
+  const abortReference = useRef<AbortController | null>(null);
+  const [credits, setCredits] = useState<readonly DiscoveryPersonCredit[]>(detail.credits);
+  const [creditsPage, setCreditsPage] = useState(1);
+  const [creditsState, setCreditsState] = useState<"error" | "idle" | "loading">("idle");
+  const [creditsTotal, setCreditsTotal] = useState(
+    Math.max(detail.credits.length, detail.creditsTotal),
+  );
+  const hasMoreCredits = credits.length < creditsTotal;
+
+  useEffect(
+    () => () => {
+      abortReference.current?.abort();
+    },
+    [],
+  );
+
+  async function loadMoreCredits() {
+    if (creditsState === "loading" || !hasMoreCredits) return;
+    abortReference.current?.abort();
+    const controller = new AbortController();
+    abortReference.current = controller;
+    const nextPage = creditsPage + 1;
+    setCreditsState("loading");
+    try {
+      const response = await creditsClient.load(
+        { tmdbId: detail.tmdbId },
+        { language: detailLanguage(), page: nextPage },
+        controller.signal,
+      );
+      if (response.page !== nextPage) throw new Error("Unexpected person-credit page.");
+      setCredits((current) => {
+        const seen = new Set(
+          current.map((credit) => `${credit.kind}:${credit.tmdbId}:${credit.role}`),
+        );
+        return [
+          ...current,
+          ...response.items.filter(
+            (credit) => !seen.has(`${credit.kind}:${credit.tmdbId}:${credit.role}`),
+          ),
+        ];
+      });
+      setCreditsPage(response.page);
+      setCreditsTotal(response.totalResults);
+      setCreditsState("idle");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setCreditsState("error");
+    }
+  }
+
   return (
     <div className="media-detail__content media-detail__person-content">
       <section className="media-detail__person-hero">
@@ -617,9 +706,9 @@ function PersonContent({
             <small>Credits are temporarily offline</small>
           ) : null}
         </div>
-        {detail.credits.length > 0 ? (
+        {credits.length > 0 ? (
           <ul>
-            {detail.credits.map((credit, index) => (
+            {credits.map((credit, index) => (
               <li key={`${credit.kind}:${credit.tmdbId}:${credit.role}`}>
                 <button
                   data-directional-item
@@ -645,6 +734,34 @@ function PersonContent({
               : "No eligible movie or series credits were supplied."}
           </p>
         )}
+        {credits.length > 0 ? (
+          <div className="media-detail__person-pagination">
+            <span aria-live="polite">
+              Showing {credits.length.toLocaleString()} of {creditsTotal.toLocaleString()} credits
+            </span>
+            {hasMoreCredits ? (
+              <button
+                aria-label={
+                  creditsState === "error"
+                    ? `Retry loading credits for ${detail.name}`
+                    : `Load more credits for ${detail.name}`
+                }
+                data-directional-item
+                disabled={creditsState === "loading"}
+                onClick={() => void loadMoreCredits()}
+                type="button"
+              >
+                {creditsState === "loading"
+                  ? "Loading more…"
+                  : creditsState === "error"
+                    ? "Retry credits"
+                    : "Load more work"}
+              </button>
+            ) : (
+              <small>Complete filmography loaded</small>
+            )}
+          </div>
+        ) : null}
       </section>
 
       <div className="media-detail__footer">
@@ -663,6 +780,8 @@ export function MediaDetailDrawer({
   onOpenChange,
   onRequest,
   open,
+  person = null,
+  personCreditsClient = discoveryPersonCreditsClient,
   personClient = discoveryPersonDetailClient,
 }: MediaDetailDrawerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
@@ -672,10 +791,21 @@ export function MediaDetailDrawer({
   const [personAttempt, setPersonAttempt] = useState(0);
   const [personState, setPersonState] = useState<PersonState | null>(null);
   const [state, setState] = useState<DetailState | null>(null);
-  const rootKey = media ? `${media.kind}:${media.tmdbId}` : "none";
+  const rootKey = media
+    ? `media:${media.kind}:${media.tmdbId}`
+    : person
+      ? `person:${person.tmdbId}`
+      : "none";
   const activeNavigation = navigation?.rootKey === rootKey ? navigation : null;
-  const activeMedia = activeNavigation?.media ?? media;
-  const personId = activeNavigation?.personId ?? null;
+  const rootContext: DetailNavigationContext | null = media
+    ? { kind: "media", media }
+    : person
+      ? { kind: "person", personId: person.tmdbId }
+      : null;
+  const navigationPath = activeNavigation?.path ?? [];
+  const activeContext = navigationPath.at(-1) ?? rootContext;
+  const activeMedia = activeContext?.kind === "media" ? activeContext.media : null;
+  const personId = activeContext?.kind === "person" ? activeContext.personId : null;
   const requestKey = activeMedia ? `${activeMedia.kind}:${activeMedia.tmdbId}:${attempt}` : "none";
   const personRequestKey = personId ? `${personId}:${personAttempt}` : "none";
 
@@ -759,24 +889,50 @@ export function MediaDetailDrawer({
   }, [open, personId, personRequestKey, personState]);
 
   function inspectMedia(nextMedia: DetailMedia) {
-    setNavigation({ media: nextMedia, personId: null, rootKey });
+    setNavigation({ path: [...navigationPath, { kind: "media", media: nextMedia }], rootKey });
     setAttempt(0);
     scrollReference.current?.scrollTo?.({ behavior: "auto", top: 0 });
   }
 
   function inspectPerson(nextPersonId: number) {
     if (!activeMedia) return;
-    setNavigation({ media: activeMedia, personId: nextPersonId, rootKey });
+    setNavigation({
+      path: [...navigationPath, { kind: "person", personId: nextPersonId }],
+      rootKey,
+    });
     setPersonAttempt(0);
     scrollReference.current?.scrollTo?.({ behavior: "auto", top: 0 });
   }
 
-  if (!media || !activeMedia) return null;
+  const showingRoot = navigationPath.length === 0;
+  const previousContext = navigationPath.at(-2) ?? rootContext;
+  const previousLabel =
+    previousContext?.kind === "media"
+      ? previousContext.media.title
+      : previousContext?.kind === "person" && previousContext.personId === person?.tmdbId
+        ? person.name
+        : personState?.kind === "ready" &&
+            previousContext?.kind === "person" &&
+            personState.detail.tmdbId === previousContext.personId
+          ? personState.detail.name
+          : "person profile";
+
+  function returnToPrevious() {
+    setNavigation((current) => {
+      if (!current || current.rootKey !== rootKey || current.path.length <= 1) return null;
+      return { ...current, path: current.path.slice(0, -1) };
+    });
+    setAttempt(0);
+    setPersonAttempt(0);
+    scrollReference.current?.scrollTo?.({ behavior: "auto", top: 0 });
+  }
+
+  if ((!media && !person) || (!activeMedia && personId === null)) return null;
 
   return (
     <dialog
       aria-label={
-        personId === null
+        personId === null && activeMedia
           ? `${activeMedia.title} details`
           : visiblePersonState?.kind === "ready"
             ? `${visiblePersonState.detail.name} person context`
@@ -798,15 +954,12 @@ export function MediaDetailDrawer({
       <div className="media-detail__glass" data-liquid-glass>
         <div className="media-detail__header">
           <div className="media-detail__header-context">
-            {personId === null ? null : (
+            {showingRoot ? null : (
               <button
-                aria-label={`Back to ${activeMedia.title}`}
+                aria-label={`Back to ${previousLabel}`}
                 className="media-detail__back"
                 data-directional-item
-                onClick={() => {
-                  setNavigation({ media: activeMedia, personId: null, rootKey });
-                  scrollReference.current?.scrollTo?.({ behavior: "auto", top: 0 });
-                }}
+                onClick={returnToPrevious}
                 type="button"
               >
                 <ArrowLeft aria-hidden="true" />
@@ -816,10 +969,12 @@ export function MediaDetailDrawer({
               <span>{personId === null ? "Expanded signal" : "Contributor signal"}</span>
               <small>
                 {personId === null
-                  ? activeMedia.kind === "movie"
+                  ? activeMedia?.kind === "movie"
                     ? "Movie intelligence"
                     : "Series intelligence"
-                  : `Back to ${activeMedia.title}`}
+                  : showingRoot
+                    ? "Person intelligence"
+                    : `Back to ${previousLabel}`}
               </small>
             </div>
           </div>
@@ -835,7 +990,12 @@ export function MediaDetailDrawer({
         </div>
         <div aria-live="polite" className="media-detail__scroll" ref={scrollReference}>
           {visiblePersonState?.kind === "ready" ? (
-            <PersonContent detail={visiblePersonState.detail} onInspectMedia={inspectMedia} />
+            <PersonContent
+              creditsClient={personCreditsClient}
+              detail={visiblePersonState.detail}
+              key={visiblePersonState.detail.id}
+              onInspectMedia={inspectMedia}
+            />
           ) : visiblePersonState?.kind === "error" ? (
             <DetailError
               errorKind={visiblePersonState.errorKind}
@@ -843,7 +1003,7 @@ export function MediaDetailDrawer({
             />
           ) : visiblePersonState?.kind === "loading" ? (
             <DetailSkeleton title="person context" />
-          ) : visibleState?.kind === "ready" ? (
+          ) : visibleState?.kind === "ready" && activeMedia ? (
             <DetailContent
               detail={visibleState.detail}
               media={activeMedia}
@@ -857,7 +1017,7 @@ export function MediaDetailDrawer({
               onRetry={() => setAttempt((current) => current + 1)}
             />
           ) : (
-            <DetailSkeleton title={activeMedia.title} />
+            <DetailSkeleton title={activeMedia?.title ?? person?.name ?? "details"} />
           )}
         </div>
       </div>
