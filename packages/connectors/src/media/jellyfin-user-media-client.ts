@@ -50,6 +50,7 @@ const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
+const jellyfinItemIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u);
 
 const imageTagsSchema = z.record(
   z.string().trim().min(1).max(80),
@@ -1551,6 +1552,20 @@ export class JellyfinUserMediaClient {
       ...(target.tlsPolicy === undefined ? {} : { tlsPolicy: target.tlsPolicy }),
       ...(target.transport === undefined ? {} : { transport: target.transport }),
     });
+  }
+
+  public async deleteLibraryItem(rawItemId: string, signal?: AbortSignal): Promise<void> {
+    const itemId = jellyfinItemIdSchema.parse(rawItemId);
+    const response = await this.#client.requestText(`Items/${itemId}`, {
+      acceptedStatuses: [204],
+      headers: { authorization: this.#authorization },
+      method: "DELETE",
+      operation: "library.removal.file_delete",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (response.status !== 204) {
+      throw this.#client.invalidResponse("library.removal.file_delete");
+    }
   }
 
   public async readContinueWatching(signal?: AbortSignal): Promise<JellyfinContinueWatchingResult> {
