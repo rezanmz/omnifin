@@ -1,15 +1,30 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { migrate as migrateWithDrizzle } from "drizzle-orm/better-sqlite3/migrator";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 
-const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "omnifin-migration-"));
+const temporaryDirectory = mkdtempSync(
+  path.join(tmpdir(), "omnifin-migration-"),
+);
 const freshDatabasePath = path.join(temporaryDirectory, "fresh.db");
 const upgradeDatabasePath = path.join(temporaryDirectory, "upgrade.db");
 const collisionDatabasePath = path.join(temporaryDirectory, "collision.db");
-const currentMigrationDirectory = path.resolve(import.meta.dirname, "../drizzle");
-const historicalMigrationDirectory = path.join(temporaryDirectory, "migrations-through-0002");
+const currentMigrationDirectory = path.resolve(
+  import.meta.dirname,
+  "../drizzle",
+);
+const historicalMigrationDirectory = path.join(
+  temporaryDirectory,
+  "migrations-through-0002",
+);
 const requiredTables = [
   "acquisition_grab_operations",
   "acquisition_queue_recovery_operations",
@@ -82,7 +97,13 @@ const requiredColumns = {
     "state",
     "user_id",
   ],
-  audit_budget_entries: ["bucket_hash", "created_at", "generation", "scope", "slot"],
+  audit_budget_entries: [
+    "bucket_hash",
+    "created_at",
+    "generation",
+    "scope",
+    "slot",
+  ],
   audit_budget_scopes: [
     "clock_watermark_at",
     "generation",
@@ -94,6 +115,7 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  connector_configs: ["public_ui_url"],
   download_queue_bulk_operations: [
     "completed_at",
     "fingerprint_hash",
@@ -279,7 +301,13 @@ const requiredColumns = {
     "state",
     "user_id",
   ],
-  oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
+  oidc_logout_receipts: [
+    "expires_at",
+    "issued_at",
+    "jti_hash",
+    "provider_id",
+    "received_at",
+  ],
   oidc_providers: [
     "approved_endpoint_origins_json",
     "discovery_capabilities_json",
@@ -306,7 +334,12 @@ const requiredColumns = {
     "token_hash",
     "valid_from",
   ],
-  session_secret_reservations: ["origin_session_id", "purpose", "reserved_at", "secret_hash"],
+  session_secret_reservations: [
+    "origin_session_id",
+    "purpose",
+    "reserved_at",
+    "secret_hash",
+  ],
   sessions: [
     "encrypted_csrf_token",
     "encrypted_id_token_hint",
@@ -440,7 +473,10 @@ const requiredIndexes = {
     "playback_asset_handles_expiry_idx",
     "playback_asset_handles_session_target_idx",
   ],
-  playback_sessions: ["playback_sessions_expiry_idx", "playback_sessions_user_updated_idx"],
+  playback_sessions: [
+    "playback_sessions_expiry_idx",
+    "playback_sessions_user_updated_idx",
+  ],
   service_identity_links: ["service_identity_links_connector_idx"],
   session_rotation_aliases: [
     "session_rotation_aliases_expiry_idx",
@@ -508,13 +544,19 @@ interface LegacySessionFixture {
   tokenHash: string;
 }
 
-function assertCondition(condition: unknown, message: string): asserts condition {
+function assertCondition(
+  condition: unknown,
+  message: string,
+): asserts condition {
   if (!condition) throw new Error(message);
 }
 
 function writeHistoricalMigrationFixture() {
   const journal = JSON.parse(
-    readFileSync(path.join(currentMigrationDirectory, "meta/_journal.json"), "utf8"),
+    readFileSync(
+      path.join(currentMigrationDirectory, "meta/_journal.json"),
+      "utf8",
+    ),
   ) as MigrationJournal;
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
@@ -547,10 +589,15 @@ function writeHistoricalMigrationFixture() {
 }
 
 function applyHistoricalMigrations(database: DatabaseHandle) {
-  migrateWithDrizzle(database.db, { migrationsFolder: historicalMigrationDirectory });
+  migrateWithDrizzle(database.db, {
+    migrationsFolder: historicalMigrationDirectory,
+  });
 }
 
-function insertLegacySession(database: DatabaseHandle, fixture: LegacySessionFixture) {
+function insertLegacySession(
+  database: DatabaseHandle,
+  fixture: LegacySessionFixture,
+) {
   database.sqlite
     .prepare(
       `insert into sessions (
@@ -589,7 +636,10 @@ function migrationJournalState(database: DatabaseHandle) {
     .get() as { count: number; latestMigrationTimestamp: number };
 }
 
-function assertNoForeignKeyViolations(database: DatabaseHandle, context: string) {
+function assertNoForeignKeyViolations(
+  database: DatabaseHandle,
+  context: string,
+) {
   const violations = database.sqlite.pragma("foreign_key_check") as unknown[];
   assertCondition(
     violations.length === 0,
@@ -605,8 +655,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0027_library_removal_operations",
-  "Current migration journal must end at migration 0027_library_removal_operations.",
+    currentMigrationTag === "0028_library_removal_operations",
+  "Current migration journal must end at migration 0028_library_removal_operations.",
 );
 
 try {
@@ -622,7 +672,8 @@ try {
     const names = new Set(tables.map(({ name }) => name));
     const missing = requiredTables.filter((required) => !names.has(required));
     const unexpected = [...names].filter(
-      (name) => !requiredTables.includes(name as (typeof requiredTables)[number]),
+      (name) =>
+        !requiredTables.includes(name as (typeof requiredTables)[number]),
     );
 
     if (missing.length > 0 || unexpected.length > 0) {
@@ -639,9 +690,13 @@ try {
           }[]
         ).map(({ name }) => name),
       );
-      const missingColumns = columns.filter((column) => !availableColumns.has(column));
+      const missingColumns = columns.filter(
+        (column) => !availableColumns.has(column),
+      );
       if (missingColumns.length > 0) {
-        throw new Error(`Migration columns missing from ${table}: ${missingColumns.join(", ")}.`);
+        throw new Error(
+          `Migration columns missing from ${table}: ${missingColumns.join(", ")}.`,
+        );
       }
     }
 
@@ -653,15 +708,22 @@ try {
           }[]
         ).map(({ name }) => name),
       );
-      const missingIndexes = indexes.filter((indexName) => !availableIndexes.has(indexName));
+      const missingIndexes = indexes.filter(
+        (indexName) => !availableIndexes.has(indexName),
+      );
       if (missingIndexes.length > 0) {
-        throw new Error(`Migration indexes missing from ${table}: ${missingIndexes.join(", ")}.`);
+        throw new Error(
+          `Migration indexes missing from ${table}: ${missingIndexes.join(", ")}.`,
+        );
       }
     }
 
     const quickConnectTable = database.sqlite
-      .prepare("select sql from sqlite_master where type = 'table' and name = ?")
-      .get("jellyfin_quick_connect_transactions") as { sql: string } | undefined;
+      .prepare(
+        "select sql from sqlite_master where type = 'table' and name = ?",
+      )
+      .get("jellyfin_quick_connect_transactions") as
+      { sql: string } | undefined;
     assertCondition(
       quickConnectTable?.sql.includes("'bootstrap'") === true,
       "Migration is missing the recovery-bound Quick Connect bootstrap purpose.",
@@ -669,7 +731,9 @@ try {
 
     const availableTriggers = new Set(
       (
-        database.sqlite.prepare("select name from sqlite_master where type = 'trigger'").all() as {
+        database.sqlite
+          .prepare("select name from sqlite_master where type = 'trigger'")
+          .all() as {
           name: string;
         }[]
       ).map(({ name }) => name),
@@ -678,7 +742,9 @@ try {
       (triggerName) => !availableTriggers.has(triggerName),
     );
     if (missingTriggers.length > 0) {
-      throw new Error(`Migration triggers missing: ${missingTriggers.join(", ")}.`);
+      throw new Error(
+        `Migration triggers missing: ${missingTriggers.join(", ")}.`,
+      );
     }
 
     const serviceLinkForeignKeys = database.sqlite.pragma(
@@ -691,13 +757,16 @@ try {
       to: string;
     }[];
     const connectorForeignKeyId = serviceLinkForeignKeys.find(
-      ({ from, table }) => from === "connector_id" && table === "connector_configs",
+      ({ from, table }) =>
+        from === "connector_id" && table === "connector_configs",
     )?.id;
     const connectorForeignKeyColumns = serviceLinkForeignKeys
       .filter(({ id }) => id === connectorForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
-    if (connectorForeignKeyColumns.join(",") !== "connector_id:id,service:type") {
+    if (
+      connectorForeignKeyColumns.join(",") !== "connector_id:id,service:type"
+    ) {
       throw new Error(
         "Migration is missing the connector type-bound service identity foreign key.",
       );
@@ -713,10 +782,15 @@ try {
       if (
         !requestPreferenceForeignKeys.some(
           ({ from, on_delete: foreignDelete, table: foreignTable, to }) =>
-            from === column && foreignTable === table && to === "id" && foreignDelete === onDelete,
+            from === column &&
+            foreignTable === table &&
+            to === "id" &&
+            foreignDelete === onDelete,
         )
       ) {
-        throw new Error(`Migration is missing the request-preference ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the request-preference ${column} foreign key.`,
+        );
       }
     }
 
@@ -731,14 +805,20 @@ try {
     }[];
     const linkForeignKeyId = mediaReferenceForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const linkForeignKeyColumns = mediaReferenceForeignKeys
       .filter(({ id }) => id === linkForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
-    if (linkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
-      throw new Error("Migration is missing the user-bound media reference foreign key.");
+    if (
+      linkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error(
+        "Migration is missing the user-bound media reference foreign key.",
+      );
     }
 
     const mediaDownloadForeignKeys = database.sqlite.pragma(
@@ -752,13 +832,17 @@ try {
     }[];
     const downloadLinkForeignKeyId = mediaDownloadForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const downloadLinkForeignKeyColumns = mediaDownloadForeignKeys
       .filter(({ id }) => id === downloadLinkForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
-    if (downloadLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
+    if (
+      downloadLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
       throw new Error(
         "Migration is missing the user-bound original-download identity foreign key.",
       );
@@ -774,7 +858,9 @@ try {
             from === column && foreignTable === table && to === "id",
         )
       ) {
-        throw new Error(`Migration is missing the original-download ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the original-download ${column} foreign key.`,
+        );
       }
     }
 
@@ -791,7 +877,9 @@ try {
             from === column && foreignTable === table && to === "id",
         )
       ) {
-        throw new Error(`Migration is missing the user-media-state ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the user-media-state ${column} foreign key.`,
+        );
       }
     }
 
@@ -808,19 +896,27 @@ try {
             from === column && foreignTable === table && to === "id",
         )
       ) {
-        throw new Error(`Migration is missing the library-removal ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the library-removal ${column} foreign key.`,
+        );
       }
     }
     const removalLinkForeignKeyId = removalPreviewForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const removalLinkForeignKeyColumns = removalPreviewForeignKeys
       .filter(({ id }) => id === removalLinkForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
-    if (removalLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
-      throw new Error("Migration is missing the user-bound removal-preview link foreign key.");
+    if (
+      removalLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error(
+        "Migration is missing the user-bound removal-preview link foreign key.",
+      );
     }
 
     const removalOperationForeignKeys = database.sqlite.pragma(
@@ -829,10 +925,13 @@ try {
     if (
       removalOperationForeignKeys.length !== 1 ||
       !removalOperationForeignKeys.some(
-        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+        ({ from, table, to }) =>
+          from === "user_id" && table === "users" && to === "id",
       )
     ) {
-      throw new Error("Removal operations must only reference their durable owning user.");
+      throw new Error(
+        "Removal operations must only reference their durable owning user.",
+      );
     }
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
       "foreign_key_list(discovery_artwork_references)",
@@ -847,11 +946,15 @@ try {
             from === column && foreignTable === table && to === "id",
         )
       ) {
-        throw new Error(`Migration is missing the discovery-artwork ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the discovery-artwork ${column} foreign key.`,
+        );
       }
     }
 
-    const playbackForeignKeys = database.sqlite.pragma("foreign_key_list(playback_sessions)") as {
+    const playbackForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(playback_sessions)",
+    ) as {
       from: string;
       id: number;
       seq: number;
@@ -860,25 +963,37 @@ try {
     }[];
     const playbackLinkForeignKeyId = playbackForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const playbackLinkForeignKeyColumns = playbackForeignKeys
       .filter(({ id }) => id === playbackLinkForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
-    if (playbackLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id") {
-      throw new Error("Migration is missing the user-bound playback session foreign key.");
+    if (
+      playbackLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
+    ) {
+      throw new Error(
+        "Migration is missing the user-bound playback session foreign key.",
+      );
     }
     if (
       !playbackForeignKeys.some(
         ({ from, table, to }) =>
-          from === "media_reference_id" && table === "media_references" && to === "id",
+          from === "media_reference_id" &&
+          table === "media_references" &&
+          to === "id",
       )
     ) {
-      throw new Error("Migration is missing the playback-to-media-reference foreign key.");
+      throw new Error(
+        "Migration is missing the playback-to-media-reference foreign key.",
+      );
     }
 
-    const mediaIssueForeignKeys = database.sqlite.pragma("foreign_key_list(media_issues)") as {
+    const mediaIssueForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_issues)",
+    ) as {
       from: string;
       id: number;
       seq: number;
@@ -887,24 +1002,32 @@ try {
     }[];
     const mediaIssueLinkForeignKeyId = mediaIssueForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const mediaIssueLinkForeignKeyColumns = mediaIssueForeignKeys
       .filter(({ id }) => id === mediaIssueLinkForeignKeyId)
       .sort((left, right) => left.seq - right.seq)
       .map(({ from, to }) => `${from}:${to}`);
     if (
-      mediaIssueLinkForeignKeyColumns.join(",") !== "service_identity_link_id:id,user_id:user_id"
+      mediaIssueLinkForeignKeyColumns.join(",") !==
+      "service_identity_link_id:id,user_id:user_id"
     ) {
-      throw new Error("Migration is missing the user-bound media issue identity foreign key.");
+      throw new Error(
+        "Migration is missing the user-bound media issue identity foreign key.",
+      );
     }
     if (
       !mediaIssueForeignKeys.some(
         ({ from, table, to }) =>
-          from === "media_reference_id" && table === "media_references" && to === "id",
+          from === "media_reference_id" &&
+          table === "media_references" &&
+          to === "id",
       )
     ) {
-      throw new Error("Migration is missing the issue-to-media-reference foreign key.");
+      throw new Error(
+        "Migration is missing the issue-to-media-reference foreign key.",
+      );
     }
 
     const subtitleSearchForeignKeys = database.sqlite.pragma(
@@ -918,7 +1041,8 @@ try {
     }[];
     const subtitleSearchLinkForeignKeyId = subtitleSearchForeignKeys.find(
       ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
+        from === "service_identity_link_id" &&
+        table === "service_identity_links",
     )?.id;
     const subtitleSearchLinkForeignKeyColumns = subtitleSearchForeignKeys
       .filter(({ id }) => id === subtitleSearchLinkForeignKeyId)
@@ -928,7 +1052,9 @@ try {
       subtitleSearchLinkForeignKeyColumns.join(",") !==
       "service_identity_link_id:id,user_id:user_id"
     ) {
-      throw new Error("Migration is missing the user-bound subtitle search identity foreign key.");
+      throw new Error(
+        "Migration is missing the user-bound subtitle search identity foreign key.",
+      );
     }
     for (const [column, table] of [
       ["media_reference_id", "media_references"],
@@ -940,7 +1066,9 @@ try {
             from === column && foreignTable === table && to === "id",
         )
       ) {
-        throw new Error(`Migration is missing the subtitle-search ${column} foreign key.`);
+        throw new Error(
+          `Migration is missing the subtitle-search ${column} foreign key.`,
+        );
       }
     }
 
@@ -949,10 +1077,13 @@ try {
     ) as { from: string; table: string; to: string }[];
     if (
       !subtitleDownloadForeignKeys.some(
-        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+        ({ from, table, to }) =>
+          from === "user_id" && table === "users" && to === "id",
       )
     ) {
-      throw new Error("Migration is missing the subtitle-download user foreign key.");
+      throw new Error(
+        "Migration is missing the subtitle-download user foreign key.",
+      );
     }
 
     const rotationAliasForeignKeys = database.sqlite.pragma(
@@ -965,7 +1096,8 @@ try {
       to: string;
     }[];
     const reservationForeignKeyId = rotationAliasForeignKeys.find(
-      ({ from, table }) => from === "token_hash" && table === "session_secret_reservations",
+      ({ from, table }) =>
+        from === "token_hash" && table === "session_secret_reservations",
     )?.id;
     const reservationForeignKeyColumns = rotationAliasForeignKeys
       .filter(({ id }) => id === reservationForeignKeyId)
@@ -989,12 +1121,16 @@ try {
           from === "scope" && table === "audit_budget_scopes" && to === "scope",
       )
     ) {
-      throw new Error("Migration is missing the fixed-scope audit budget foreign key.");
+      throw new Error(
+        "Migration is missing the fixed-scope audit budget foreign key.",
+      );
     }
 
     assertCondition(
       (
-        database.sqlite.prepare("select count(*) as count from audit_budget_scopes").get() as {
+        database.sqlite
+          .prepare("select count(*) as count from audit_budget_scopes")
+          .get() as {
           count: number;
         }
       ).count === 0,
@@ -1044,14 +1180,20 @@ try {
       .run(auditScope);
     assertCondition(
       database.sqlite
-        .prepare("delete from audit_budget_entries where scope = ? and generation = 1")
+        .prepare(
+          "delete from audit_budget_entries where scope = ? and generation = 1",
+        )
         .run(auditScope).changes === 1,
       "Audit budget could not delete an entry after its generation advanced.",
     );
 
-    const foreignKeyViolations = database.sqlite.pragma("foreign_key_check") as unknown[];
+    const foreignKeyViolations = database.sqlite.pragma(
+      "foreign_key_check",
+    ) as unknown[];
     if (foreignKeyViolations.length > 0) {
-      throw new Error(`Migration left ${foreignKeyViolations.length} foreign-key violations.`);
+      throw new Error(
+        `Migration left ${foreignKeyViolations.length} foreign-key violations.`,
+      );
     }
 
     process.stdout.write(
@@ -1095,7 +1237,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0027.",
+      "Production migration did not advance the historical fixture exactly through migration 0028.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1162,7 +1304,9 @@ try {
       ).count === 1,
       "Production upgrade did not create a durable rotation alias.",
     );
-    upgradeDatabase.sqlite.exec("delete from sessions where id = 'upgrade-session-one'");
+    upgradeDatabase.sqlite.exec(
+      "delete from sessions where id = 'upgrade-session-one'",
+    );
     assertCondition(
       (
         upgradeDatabase.sqlite
@@ -1181,7 +1325,10 @@ try {
       ).count === 3,
       "Permanent reservations did not survive deletion of their origin session.",
     );
-    assertNoForeignKeyViolations(upgradeDatabase, "Production upgrade migration");
+    assertNoForeignKeyViolations(
+      upgradeDatabase,
+      "Production upgrade migration",
+    );
   } finally {
     upgradeDatabase.close();
   }
@@ -1240,7 +1387,9 @@ try {
     );
     assertCondition(
       (
-        collisionDatabase.sqlite.prepare("select count(*) as count from sessions").get() as {
+        collisionDatabase.sqlite
+          .prepare("select count(*) as count from sessions")
+          .get() as {
           count: number;
         }
       ).count === 2,
@@ -1254,13 +1403,16 @@ try {
         }),
       "Failed collision migration advanced the Drizzle journal beyond migration 0002.",
     );
-    assertNoForeignKeyViolations(collisionDatabase, "Failed collision migration");
+    assertNoForeignKeyViolations(
+      collisionDatabase,
+      "Failed collision migration",
+    );
   } finally {
     collisionDatabase.close();
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0027, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0028, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

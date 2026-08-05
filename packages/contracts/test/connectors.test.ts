@@ -161,6 +161,43 @@ describe("connector contracts", () => {
     expect(
       connectorCreateRequestSchema.safeParse({
         ...base,
+        publicUiUrl: "https://radarr.example.test/ui/",
+      }).success,
+    ).toBe(true);
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
+        publicUiUrl: "http://radarr.lan/",
+      }).success,
+    ).toBe(false);
+    const unsupportedBrowserUrl = connectorCreateRequestSchema.safeParse({
+      ...base,
+      credentials: { kind: "none" },
+      publicUiUrl: "https://jellyfin.example.test/",
+      service: "jellyfin",
+    });
+    expect(unsupportedBrowserUrl.success).toBe(false);
+    if (!unsupportedBrowserUrl.success) {
+      expect(unsupportedBrowserUrl.error.issues).toContainEqual(
+        expect.objectContaining({
+          message: "A browser URL is supported only for Radarr and Sonarr.",
+          path: ["publicUiUrl"],
+        }),
+      );
+    }
+    for (const publicUiUrl of [
+      "javascript:alert(1)",
+      "https://operator:private@radarr.example.test/",
+      "https://radarr.example.test/?",
+      "https://radarr.example.test/?apiKey=private",
+      "https://radarr.example.test/#",
+      "https://radarr.example.test/#unexpected",
+    ]) {
+      expect(connectorCreateRequestSchema.safeParse({ ...base, publicUiUrl }).success).toBe(false);
+    }
+    expect(
+      connectorCreateRequestSchema.safeParse({
+        ...base,
         baseUrl: "",
       }).success,
     ).toBe(false);
@@ -195,6 +232,9 @@ describe("connector contracts", () => {
         baseUrl: "https://radarr.example.test/?apiKey=private",
       }).success,
     ).toBe(false);
+    for (const baseUrl of ["https://radarr.example.test/?", "https://radarr.example.test/#"]) {
+      expect(connectorCreateRequestSchema.safeParse({ ...base, baseUrl }).success).toBe(false);
+    }
     expect(
       connectorCreateRequestSchema.safeParse({
         ...base,
@@ -222,6 +262,7 @@ describe("connector contracts", () => {
       service: "radarr",
       displayName: "Radarr",
       baseUrl: "https://radarr.example.test/",
+      publicUiUrl: null,
       credentialKind: "api_key",
       credentialsConfigured: true,
       tlsPolicy: "strict",

@@ -45,6 +45,7 @@ const jellyfin: ConnectorAdmin = {
   id: "jellyfin-primary",
   insecureHttpApproved: false,
   lastProbe: null,
+  publicUiUrl: null,
   revision: "revision_0123456789abcdef",
   service: "jellyfin",
   tlsCaCertificateConfigured: false,

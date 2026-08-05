@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d72bbdc7-4633-464e-b248-cbaf1640ebbe",
-  "prevId": "016e5741-dd87-416d-8b7d-c5a304008173",
+  "id": "b0bd4167-ae32-4da2-b8b7-ca27eae76fde",
+  "prevId": "d72bbdc7-4633-464e-b248-cbaf1640ebbe",
   "tables": {
     "acquisition_grab_operations": {
       "name": "acquisition_grab_operations",
@@ -2182,6 +2182,250 @@
         }
       }
     },
+    "library_removal_operations": {
+      "name": "library_removal_operations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "service_identity_link_id": {
+          "name": "service_identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "link_revision": {
+          "name": "link_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_reference_id": {
+          "name": "media_reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preview_id": {
+          "name": "preview_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotency_key_hash": {
+          "name": "idempotency_key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint_hash": {
+          "name": "fingerprint_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "target_digest": {
+          "name": "target_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'running'"
+        },
+        "response_json": {
+          "name": "response_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "encrypted_payload": {
+          "name": "encrypted_payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {
+        "library_removal_operations_user_key_unique": {
+          "name": "library_removal_operations_user_key_unique",
+          "columns": ["user_id", "idempotency_key_hash"],
+          "isUnique": true
+        },
+        "library_removal_operations_preview_unique": {
+          "name": "library_removal_operations_preview_unique",
+          "columns": ["preview_id"],
+          "isUnique": true
+        },
+        "library_removal_operations_running_target_unique": {
+          "name": "library_removal_operations_running_target_unique",
+          "columns": ["target_digest"],
+          "isUnique": true,
+          "where": "\"library_removal_operations\".\"state\" = 'running'"
+        },
+        "library_removal_operations_state_created_idx": {
+          "name": "library_removal_operations_state_created_idx",
+          "columns": ["state", "created_at"],
+          "isUnique": false
+        },
+        "library_removal_operations_reference_idx": {
+          "name": "library_removal_operations_reference_idx",
+          "columns": ["media_reference_id", "created_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "library_removal_operations_user_id_users_id_fk": {
+          "name": "library_removal_operations_user_id_users_id_fk",
+          "tableFrom": "library_removal_operations",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "library_removal_operations_id_check": {
+          "name": "library_removal_operations_id_check",
+          "value": "length(\"library_removal_operations\".\"id\") = 48\n        and substr(\"library_removal_operations\".\"id\", 1, 26) = 'library_removal_operation_'\n        and substr(\"library_removal_operations\".\"id\", 27) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_preview_id_check": {
+          "name": "library_removal_operations_preview_id_check",
+          "value": "length(\"library_removal_operations\".\"preview_id\") = 46\n        and substr(\"library_removal_operations\".\"preview_id\", 1, 24) = 'library_removal_preview_'\n        and substr(\"library_removal_operations\".\"preview_id\", 25) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_reference_id_check": {
+          "name": "library_removal_operations_reference_id_check",
+          "value": "length(\"library_removal_operations\".\"media_reference_id\") = 28\n        and substr(\"library_removal_operations\".\"media_reference_id\", 1, 6) = 'media_'\n        and substr(\"library_removal_operations\".\"media_reference_id\", 7) not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_session_id_check": {
+          "name": "library_removal_operations_session_id_check",
+          "value": "length(\"library_removal_operations\".\"session_id\") between 1 and 128\n        and \"library_removal_operations\".\"session_id\" not glob '*[^A-Za-z0-9._:-]*'"
+        },
+        "library_removal_operations_link_id_check": {
+          "name": "library_removal_operations_link_id_check",
+          "value": "length(\"library_removal_operations\".\"service_identity_link_id\") between 1 and 128\n        and \"library_removal_operations\".\"service_identity_link_id\" not glob '*[^A-Za-z0-9._:-]*'"
+        },
+        "library_removal_operations_link_revision_check": {
+          "name": "library_removal_operations_link_revision_check",
+          "value": "\"library_removal_operations\".\"link_revision\" between 0 and 2147483647"
+        },
+        "library_removal_operations_mode_check": {
+          "name": "library_removal_operations_mode_check",
+          "value": "\"library_removal_operations\".\"mode\" in (\n        'delete_files_keep_monitored',\n        'delete_files_and_unmonitor',\n        'remove_from_radarr_and_delete_files',\n        'delete_unmanaged_files'\n      )"
+        },
+        "library_removal_operations_key_hash_check": {
+          "name": "library_removal_operations_key_hash_check",
+          "value": "length(\"library_removal_operations\".\"idempotency_key_hash\") = 43\n        and \"library_removal_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_fingerprint_hash_check": {
+          "name": "library_removal_operations_fingerprint_hash_check",
+          "value": "length(\"library_removal_operations\".\"fingerprint_hash\") = 43\n        and \"library_removal_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_target_digest_check": {
+          "name": "library_removal_operations_target_digest_check",
+          "value": "length(\"library_removal_operations\".\"target_digest\") = 22\n        and \"library_removal_operations\".\"target_digest\" not glob '*[^A-Za-z0-9_-]*'"
+        },
+        "library_removal_operations_state_check": {
+          "name": "library_removal_operations_state_check",
+          "value": "\"library_removal_operations\".\"state\" in ('running', 'succeeded', 'reconcile_required', 'failed')"
+        },
+        "library_removal_operations_response_check": {
+          "name": "library_removal_operations_response_check",
+          "value": "length(\"library_removal_operations\".\"response_json\") between 2 and 16384\n        and json_valid(\"library_removal_operations\".\"response_json\")\n        and json_type(\"library_removal_operations\".\"response_json\") = 'object'"
+        },
+        "library_removal_operations_payload_check": {
+          "name": "library_removal_operations_payload_check",
+          "value": "length(\"library_removal_operations\".\"encrypted_payload\") between 1 and 65536"
+        },
+        "library_removal_operations_outcome_check": {
+          "name": "library_removal_operations_outcome_check",
+          "value": "(\n          \"library_removal_operations\".\"state\" = 'running'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is null\n        ) or (\n          \"library_removal_operations\".\"state\" = 'succeeded'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is not null\n        ) or (\n          \"library_removal_operations\".\"state\" in ('reconcile_required', 'failed')\n          and length(\"library_removal_operations\".\"failure_code\") between 1 and 64\n          and \"library_removal_operations\".\"completed_at\" is not null\n        )"
+        },
+        "library_removal_operations_timestamp_order_check": {
+          "name": "library_removal_operations_timestamp_order_check",
+          "value": "\"library_removal_operations\".\"created_at\" >= 0\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"updated_at\"\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"started_at\"\n        and (\"library_removal_operations\".\"completed_at\" is null\n          or (\"library_removal_operations\".\"completed_at\" >= \"library_removal_operations\".\"started_at\"\n            and \"library_removal_operations\".\"completed_at\" <= \"library_removal_operations\".\"updated_at\"))"
+        }
+      }
+    },
     "library_removal_previews": {
       "name": "library_removal_previews",
       "columns": {
@@ -3013,7 +3257,11 @@
       "indexes": {
         "media_references_link_item_unique": {
           "name": "media_references_link_item_unique",
-          "columns": ["service_identity_link_id", "link_revision", "item_digest"],
+          "columns": [
+            "service_identity_link_id",
+            "link_revision",
+            "item_digest"
+          ],
           "isUnique": true
         },
         "media_references_user_last_used_idx": {
@@ -4616,7 +4864,12 @@
         },
         "sessions_user_active_idx": {
           "name": "sessions_user_active_idx",
-          "columns": ["user_id", "revoked_at", "expires_at", "absolute_expires_at"],
+          "columns": [
+            "user_id",
+            "revoked_at",
+            "expires_at",
+            "absolute_expires_at"
+          ],
           "isUnique": false
         },
         "sessions_recovery_created_idx": {
@@ -4666,7 +4919,11 @@
           "name": "sessions_oidc_identity_fk",
           "tableFrom": "sessions",
           "tableTo": "external_identities",
-          "columnsFrom": ["external_identity_id", "user_id", "oidc_provider_id"],
+          "columnsFrom": [
+            "external_identity_id",
+            "user_id",
+            "oidc_provider_id"
+          ],
           "columnsTo": ["id", "user_id", "provider_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"

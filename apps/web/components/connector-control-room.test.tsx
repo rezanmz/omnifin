@@ -58,6 +58,7 @@ const jellyfin: ConnectorAdmin = {
     status: "healthy",
     version: "10.10.7",
   },
+  publicUiUrl: null,
   revision: "revision_0123456789abcdef",
   service: "jellyfin",
   tlsCaCertificateConfigured: false,
@@ -154,6 +155,18 @@ describe("ConnectorControlRoom", () => {
     expect(screen.getByRole("status")).toHaveTextContent("saved in standby");
   });
 
+  it("clears a browser destination when changing the service type", async () => {
+    const user = userEvent.setup();
+    render(<ConnectorControlRoom client={client()} initialOutcome={ready([])} />);
+
+    await user.click(await screen.findByRole("button", { name: "Radarr" }));
+    const browserUrl = screen.getByRole("textbox", { name: /Browser URL/ });
+    await user.type(browserUrl, "https://radarr.example.test");
+    await user.click(screen.getByRole("button", { name: "Sonarr" }));
+
+    expect(screen.getByRole("textbox", { name: /Browser URL/ })).toHaveValue("");
+  });
+
   it("probes before bringing a connector online", async () => {
     const user = userEvent.setup();
     const unknown = { ...jellyfin, healthState: "unknown" as const, lastProbe: null };
@@ -237,6 +250,29 @@ describe("ConnectorControlRoom", () => {
       csrfToken,
     );
     expect(update.mock.calls[0]?.[1]).toMatchObject({ displayName: "Cinema Radarr" });
+  });
+
+  it("validates and submits the separate browser-facing URL", async () => {
+    const user = userEvent.setup();
+    const update = vi.fn(async (_connectorId, input) => ({ ...radarr, ...input }));
+    render(<ConnectorControlRoom client={client({ update })} initialOutcome={ready([radarr])} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const browserUrl = await screen.findByRole("textbox", { name: /Browser URL/ });
+    await user.type(browserUrl, "javascript:alert(1)");
+    await user.click(screen.getByRole("button", { name: "Save and re-probe" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/url/i);
+    expect(update).not.toHaveBeenCalled();
+
+    await user.clear(browserUrl);
+    await user.type(browserUrl, "https://media.example.test/radarr");
+    await user.click(screen.getByRole("button", { name: "Save and re-probe" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update).toHaveBeenCalledWith(
+      radarr.id,
+      expect.objectContaining({ publicUiUrl: "https://media.example.test/radarr" }),
+      csrfToken,
+    );
   });
 
   it("requires an intentional method change and can clear optional API authentication", async () => {

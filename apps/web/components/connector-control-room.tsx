@@ -354,6 +354,12 @@ function DetailWorkspace({
               <dt>Configuration</dt>
               <dd>{connector.enabled ? "Active" : "Disabled by default"}</dd>
             </div>
+            {connector.service === "radarr" || connector.service === "sonarr" ? (
+              <div>
+                <dt>Browser actions</dt>
+                <dd>{connector.publicUiUrl ? "Configured separately" : "Not configured"}</dd>
+              </div>
+            ) : null}
           </dl>
         </section>
       </div>
