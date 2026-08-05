@@ -38,7 +38,11 @@ import {
   MediaReferenceService,
   type MediaReferenceDependencies,
 } from "./media-reference-service.js";
-import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./playback-limits.js";
+import {
+  MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
+  MAX_PLAYBACK_MANIFEST_BYTES,
+  MAX_PLAYBACK_MANIFEST_REFERENCES,
+} from "./playback-limits.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const PLAYBACK_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
@@ -46,7 +50,6 @@ const STOPPED_SESSION_TTL_MS = 15 * 60 * 1_000;
 const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
 const MAX_CREATION_ATTEMPTS = 8;
 const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
-const MANIFEST_MAX_BYTES = 1 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
 const MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION = 20_000;
@@ -360,13 +363,16 @@ function contentRange(headers: Headers) {
 }
 
 function decodeManifest(body: Uint8Array) {
+  if (body.byteLength > MAX_PLAYBACK_MANIFEST_BYTES) {
+    throw new PlaybackSessionError("unavailable");
+  }
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch (error) {
     throw new PlaybackSessionError("unavailable", { cause: error });
   }
-  if (text.length > MANIFEST_MAX_BYTES || /[\u0000\u000B\u000C\u000E-\u001F\u007F]/u.test(text)) {
+  if (/[\u0000\u000B\u000C\u000E-\u001F\u007F]/u.test(text)) {
     throw new PlaybackSessionError("unavailable");
   }
   const lines = text.replace(/\r\n?/gu, "\n").split("\n");
@@ -374,6 +380,29 @@ function decodeManifest(body: Uint8Array) {
     throw new PlaybackSessionError("unavailable");
   }
   return lines;
+}
+
+function enforceManifestReferenceLimit(lines: readonly string[]) {
+  let references = 0;
+  for (const line of lines) {
+    const compacted = line.trim();
+    if (!compacted || compacted === "#EXTM3U") continue;
+    if (!compacted.startsWith("#")) {
+      references += 1;
+    } else {
+      const remainder = line.replace(/URI="([^"\r\n]{1,16384})"/gu, () => {
+        references += 1;
+        if (references > MAX_PLAYBACK_MANIFEST_REFERENCES) {
+          throw new PlaybackSessionError("unavailable");
+        }
+        return "";
+      });
+      if (/\bURI\s*=/iu.test(remainder)) throw new PlaybackSessionError("unavailable");
+    }
+    if (references > MAX_PLAYBACK_MANIFEST_REFERENCES) {
+      throw new PlaybackSessionError("unavailable");
+    }
+  }
 }
 
 function isManifestTarget(target: JellyfinPlaybackTarget) {
@@ -596,7 +625,11 @@ export class PlaybackSessionService {
     sessionId: string,
     signal?: AbortSignal,
   ) {
-    const { client, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
+    const { client, payload, session } = this.#stream(
+      context,
+      sessionId,
+      MAX_PLAYBACK_MANIFEST_BYTES,
+    );
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
@@ -615,7 +648,11 @@ export class PlaybackSessionService {
     ) {
       throw new PlaybackSessionError("not_found");
     }
-    const { client, now, payload, session } = this.#stream(context, sessionId, MANIFEST_MAX_BYTES);
+    const { client, now, payload, session } = this.#stream(
+      context,
+      sessionId,
+      MAX_PLAYBACK_MANIFEST_BYTES,
+    );
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
@@ -719,6 +756,7 @@ export class PlaybackSessionService {
     }
     if (response.status !== 200) throw new PlaybackSessionError("unavailable");
     const lines = decodeManifest(response.body);
+    enforceManifestReferenceLimit(lines);
     let rewritten: string[];
     try {
       rewritten = this.#database.sqlite
