@@ -142,7 +142,7 @@ export function ConnectorForm({
           ? connectorServicePresentation[service].label
           : current.displayName,
       id: current.id === `${current.service}-primary` ? `${service}-primary` : current.id,
-      publicUiUrl: service === "radarr" || service === "sonarr" ? current.publicUiUrl : "",
+      publicUiUrl: service === current.service ? current.publicUiUrl : "",
       service,
     }));
     setErrors({});
@@ -322,7 +322,7 @@ export function ConnectorForm({
         </Field>
         {fields.service === "radarr" || fields.service === "sonarr" ? (
           <Field
-            description="Optional browser-facing base URL. It is never inferred from the private service URL."
+            description="Optional HTTPS browser-facing base URL. It is never inferred from the private service URL."
             error={errors.publicUiUrl}
             label="Browser URL"
             name={`${formId}-public-ui-url`}

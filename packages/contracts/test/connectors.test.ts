@@ -169,7 +169,22 @@ describe("connector contracts", () => {
         ...base,
         publicUiUrl: "http://radarr.lan/",
       }).success,
-    ).toBe(true);
+    ).toBe(false);
+    const unsupportedBrowserUrl = connectorCreateRequestSchema.safeParse({
+      ...base,
+      credentials: { kind: "none" },
+      publicUiUrl: "https://jellyfin.example.test/",
+      service: "jellyfin",
+    });
+    expect(unsupportedBrowserUrl.success).toBe(false);
+    if (!unsupportedBrowserUrl.success) {
+      expect(unsupportedBrowserUrl.error.issues).toContainEqual(
+        expect.objectContaining({
+          message: "A browser URL is supported only for Radarr and Sonarr.",
+          path: ["publicUiUrl"],
+        }),
+      );
+    }
     for (const publicUiUrl of [
       "javascript:alert(1)",
       "https://operator:private@radarr.example.test/",

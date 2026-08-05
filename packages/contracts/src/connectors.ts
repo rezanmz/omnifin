@@ -183,7 +183,7 @@ export const connectorPublicUiUrlSchema = z
       return;
     }
     if (
-      !["http:", "https:"].includes(url.protocol) ||
+      url.protocol !== "https:" ||
       url.username ||
       url.password ||
       url.search ||
@@ -194,7 +194,7 @@ export const connectorPublicUiUrlSchema = z
       context.addIssue({
         code: "custom",
         message:
-          "Browser URLs must be HTTP(S) origins or base paths without credentials, query strings, or fragments.",
+          "Browser URLs must be HTTPS origins or base paths without credentials, query strings, or fragments.",
       });
     }
   });
@@ -238,6 +238,7 @@ function validateConnectorPolicy(
     baseUrl: string;
     credentials: ConnectorCredentialInput;
     insecureHttpApproved: boolean;
+    publicUiUrl?: string | null | undefined;
     service: ManagedConnectorService;
     tlsCaCertificatePem?: string | undefined;
     tlsPolicy: ConnectorTlsPolicy;
@@ -290,6 +291,18 @@ function validateConnectorPolicy(
       code: "custom",
       path: ["credentials", "kind"],
       message: "The credential kind is not valid for this connector service.",
+    });
+  }
+  if (
+    input.publicUiUrl !== undefined &&
+    input.publicUiUrl !== null &&
+    input.service !== "radarr" &&
+    input.service !== "sonarr"
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["publicUiUrl"],
+      message: "A browser URL is supported only for Radarr and Sonarr.",
     });
   }
 }
