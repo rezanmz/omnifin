@@ -493,7 +493,7 @@ test("person context drawer visual baseline", async ({ page }, testInfo) => {
 async function openRequestComposer(page: Page, advanced = false) {
   await mockDiscoverySearch(page);
   await mockMediaRequestSession(page);
-  if (advanced) await mockMediaRequestRouting(page);
+  await mockMediaRequestRouting(page);
   await page.goto("/");
   const search = page.getByRole("combobox");
   await search.click();
@@ -503,7 +503,7 @@ async function openRequestComposer(page: Page, advanced = false) {
   await requestAction.click();
   const composer = page.getByRole("dialog", { name: "Compose request" });
   await expect(composer).toBeVisible();
-  await expect(composer.getByRole("button", { name: "Send request" })).toBeVisible();
+  await expect(composer.getByRole("button", { name: "Send request" })).toBeEnabled();
   if (advanced) {
     await composer.getByText("Advanced routing").click();
     await expect(composer.getByRole("combobox", { name: /Destination/i })).toBeVisible();

@@ -33,6 +33,7 @@ const requiredTables = [
   "media_issue_operations",
   "media_references",
   "media_download_grants",
+  "media_request_profile_preferences",
   "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
@@ -176,6 +177,7 @@ const requiredColumns = {
     "session_id",
     "started_at",
     "state",
+    "target_digest",
     "user_id",
   ],
   library_removal_previews: [
@@ -247,6 +249,16 @@ const requiredColumns = {
     "response_json",
     "state",
     "user_id",
+  ],
+  media_request_profile_preferences: [
+    "connector_id",
+    "created_at",
+    "destination_id",
+    "is_4k",
+    "kind",
+    "profile_id",
+    "updated_at",
+    "updated_by_user_id",
   ],
   playback_asset_handles: [
     "encrypted_target",
@@ -387,6 +399,7 @@ const requiredIndexes = {
   library_removal_operations: [
     "library_removal_operations_preview_unique",
     "library_removal_operations_reference_idx",
+    "library_removal_operations_running_target_unique",
     "library_removal_operations_state_created_idx",
     "library_removal_operations_user_key_unique",
   ],
@@ -592,8 +605,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0026_library_removal_operations",
-  "Current migration journal must end at migration 0026_library_removal_operations.",
+    currentMigrationTag === "0027_library_removal_operations",
+  "Current migration journal must end at migration 0027_library_removal_operations.",
 );
 
 try {
@@ -688,6 +701,23 @@ try {
       throw new Error(
         "Migration is missing the connector type-bound service identity foreign key.",
       );
+    }
+
+    const requestPreferenceForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_request_profile_preferences)",
+    ) as { from: string; on_delete: string; table: string; to: string }[];
+    for (const [column, table, onDelete] of [
+      ["connector_id", "connector_configs", "CASCADE"],
+      ["updated_by_user_id", "users", "SET NULL"],
+    ] as const) {
+      if (
+        !requestPreferenceForeignKeys.some(
+          ({ from, on_delete: foreignDelete, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id" && foreignDelete === onDelete,
+        )
+      ) {
+        throw new Error(`Migration is missing the request-preference ${column} foreign key.`);
+      }
     }
 
     const mediaReferenceForeignKeys = database.sqlite.pragma(
@@ -795,35 +825,15 @@ try {
 
     const removalOperationForeignKeys = database.sqlite.pragma(
       "foreign_key_list(library_removal_operations)",
-    ) as { from: string; id: number; seq: number; table: string; to: string }[];
-    for (const [column, table] of [
-      ["user_id", "users"],
-      ["media_reference_id", "media_references"],
-    ] as const) {
-      if (
-        !removalOperationForeignKeys.some(
-          ({ from, table: foreignTable, to }) =>
-            from === column && foreignTable === table && to === "id",
-        )
-      ) {
-        throw new Error(`Migration is missing the removal-operation ${column} foreign key.`);
-      }
-    }
-    const removalOperationLinkForeignKeyId = removalOperationForeignKeys.find(
-      ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
-    )?.id;
-    const removalOperationLinkForeignKeyColumns = removalOperationForeignKeys
-      .filter(({ id }) => id === removalOperationLinkForeignKeyId)
-      .sort((left, right) => left.seq - right.seq)
-      .map(({ from, to }) => `${from}:${to}`);
+    ) as { from: string; table: string; to: string }[];
     if (
-      removalOperationLinkForeignKeyColumns.join(",") !==
-      "service_identity_link_id:id,user_id:user_id"
+      removalOperationForeignKeys.length !== 1 ||
+      !removalOperationForeignKeys.some(
+        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+      )
     ) {
-      throw new Error("Migration is missing the user-bound removal-operation link foreign key.");
+      throw new Error("Removal operations must only reference their durable owning user.");
     }
-
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
       "foreign_key_list(discovery_artwork_references)",
     ) as { from: string; table: string; to: string }[];
@@ -1085,7 +1095,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0026.",
+      "Production migration did not advance the historical fixture exactly through migration 0027.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1250,7 +1260,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0026, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0027, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

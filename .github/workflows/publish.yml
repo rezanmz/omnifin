@@ -153,8 +153,7 @@ jobs:
               }
             }
 
-            const candidateTag =
-              `candidate-${version}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+            const candidateTag = `candidate-${version}-${process.env.GITHUB_RUN_ID}`;
             if (candidateTag.length > 128) {
               throw new Error("The release version is too long for an immutable OCI candidate tag.");
             }
@@ -230,7 +229,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Verify connector contracts
         run: pnpm test:contracts
       - name: Rehearse database migrations
@@ -426,14 +425,16 @@ jobs:
         with:
           compression-level: 0
           if-no-files-found: error
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-candidate-${{ github.run_id }}
+          overwrite: true
           path: ${{ runner.temp }}/release-artifacts
           retention-days: 2
       - name: Retain release SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           if-no-files-found: error
-          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}-spdx-sbom
+          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-spdx-sbom
+          overwrite: true
           path: |
             ${{ runner.temp }}/release-artifacts/sbom.spdx.json
             ${{ runner.temp }}/release-artifacts/SBOM_SHA256SUMS
@@ -458,7 +459,7 @@ jobs:
       - name: Download candidate bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-candidate-${{ github.run_id }}
           path: release-artifacts
       - name: Install ORAS
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
@@ -502,13 +503,38 @@ jobs:
             fi
           }
 
-          assert_absent "${IMAGE_NAME}:${RELEASE_VERSION}"
-          assert_absent "${IMAGE_NAME}:${CANDIDATE_TAG}"
-          oras cp --from-oci-layout \
-            "release-artifacts/candidate.oci.tar:${RELEASE_VERSION}" \
-            "${IMAGE_NAME}:${CANDIDATE_TAG}"
+          resolve_optional() {
+            local output
+            local status
+            set +e
+            output=$(oras resolve "$1" 2>&1)
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              printf '%s' "$output"
+              return 0
+            fi
+            if grep --extended-regexp --ignore-case --quiet \
+              'not found|manifest unknown|manifest_unknown|name unknown|name_unknown' <<<"$output"; then
+              return 1
+            fi
+            echo "::error::The registry could not safely resolve $1."
+            exit 1
+          }
 
-          digest=$(oras resolve "${IMAGE_NAME}:${CANDIDATE_TAG}")
+          assert_absent "${IMAGE_NAME}:${RELEASE_VERSION}"
+          if digest=$(resolve_optional "${IMAGE_NAME}:${CANDIDATE_TAG}"); then
+            if [ "$digest" != "$BUILD_DIGEST" ]; then
+              echo "::error::Existing candidate tag does not match this run's built digest."
+              exit 1
+            fi
+          else
+            oras cp --from-oci-layout \
+              "release-artifacts/candidate.oci.tar:${RELEASE_VERSION}" \
+              "${IMAGE_NAME}:${CANDIDATE_TAG}"
+            digest=$(oras resolve "${IMAGE_NAME}:${CANDIDATE_TAG}")
+          fi
+
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::GHCR returned an invalid candidate digest."
             exit 1
@@ -538,10 +564,15 @@ jobs:
       id-token: write
       packages: write
     steps:
+      - name: Check out the verified signing helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
       - name: Download validated SPDX SBOM
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}-spdx-sbom
+          name: omnifin-${{ inputs.version }}-${{ github.run_id }}-spdx-sbom
           path: release-evidence
       - name: Verify SBOM checksum
         run: |
@@ -574,7 +605,7 @@ jobs:
       - name: Sign image digest with keyless identity
         env:
           IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
-        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+        run: node scripts/ci/sign-oci-image.mjs
       - name: Remove registry credentials
         if: always()
         run: docker logout ghcr.io || true

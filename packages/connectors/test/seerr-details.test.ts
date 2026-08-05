@@ -113,7 +113,7 @@ describe("Seerr media details", () => {
           criticsScore: 8.7,
           criticsScoreCount: 2_100_000,
           title: "The Matrix",
-          url: "https://www.imdb.com/title/private",
+          url: "https://www.imdb.com/title/tt0133093/",
         },
         rt: {
           audienceRating: "Upright",
@@ -121,7 +121,7 @@ describe("Seerr media details", () => {
           criticsRating: "Certified Fresh",
           criticsScore: 83,
           title: "The Matrix",
-          url: "https://www.rottentomatoes.com/private",
+          url: "https://www.rottentomatoes.com/m/the_matrix",
           year: 1999,
         },
       }),
@@ -170,6 +170,7 @@ describe("Seerr media details", () => {
             {
               audience: "community",
               label: "TMDB",
+              providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
               scale: 10,
               sentiment: null,
               source: "tmdb",
@@ -179,6 +180,11 @@ describe("Seerr media details", () => {
             {
               audience: "community",
               label: "IMDb",
+              providerReference: {
+                identifier: "tt0133093",
+                mediaKind: "movie",
+                provider: "imdb",
+              },
               scale: 10,
               sentiment: null,
               source: "imdb",
@@ -188,6 +194,11 @@ describe("Seerr media details", () => {
             {
               audience: "critics",
               label: "Tomatometer",
+              providerReference: {
+                identifier: "the_matrix",
+                mediaKind: "movie",
+                provider: "rotten_tomatoes",
+              },
               scale: 100,
               sentiment: "Certified Fresh",
               source: "rotten_tomatoes",
@@ -197,6 +208,11 @@ describe("Seerr media details", () => {
             {
               audience: "audience",
               label: "RT audience",
+              providerReference: {
+                identifier: "the_matrix",
+                mediaKind: "movie",
+                provider: "rotten_tomatoes",
+              },
               scale: 100,
               sentiment: "Upright",
               source: "rotten_tomatoes",
@@ -260,6 +276,51 @@ describe("Seerr media details", () => {
       "/api/v1/movie/603/ratingscombined",
       "/api/v1/movie/603/recommendations",
     ]);
+  });
+
+  it("keeps ratings non-interactive when upstream destinations are not canonical", async () => {
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        credits: { cast: [], crew: [] },
+        genres: [],
+        id: 603,
+        mediaInfo: null,
+        originalTitle: "The Matrix",
+        overview: null,
+        releaseDate: "1999-03-30",
+        runtime: 136,
+        status: "Released",
+        tagline: null,
+        title: "The Matrix",
+        voteAverage: 8.2,
+        voteCount: 27_000,
+      }),
+      jsonResponse({
+        imdb: {
+          criticsScore: 8.7,
+          criticsScoreCount: 2_100_000,
+          url: "https://www.imdb.com.evil.invalid/title/tt0133093",
+        },
+        rt: {
+          criticsRating: "Fresh",
+          criticsScore: 83,
+          url: "https://www.rottentomatoes.com/m/the_matrix?token=private",
+        },
+      }),
+      jsonResponse({ page: 1, results: [], totalPages: 0, totalResults: 0 }),
+    ]);
+
+    const result = await adapter.detail({ kind: "movie", tmdbId: 603 }, { language: "en" });
+
+    expect(result.response.item.intelligence.ratings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "TMDB", providerReference: expect.any(Object) }),
+        expect.objectContaining({ label: "IMDb", providerReference: null }),
+        expect.objectContaining({ label: "Tomatometer", providerReference: null }),
+      ]),
+    );
+    expect(JSON.stringify(result.response)).not.toContain("evil.invalid");
+    expect(JSON.stringify(result.response)).not.toContain("token");
   });
 
   it("retains movie details while truncating an oversized related-video collection", async () => {
@@ -415,6 +476,7 @@ describe("Seerr media details", () => {
         audienceScore: 96,
         criticsRating: "Fresh",
         criticsScore: 96,
+        url: "https://www.rottentomatoes.com/tv/breaking_bad",
       }),
       jsonResponse({ page: 1, results: [], totalPages: 0, totalResults: 0 }),
     ]);
@@ -533,6 +595,7 @@ describe("Seerr media details", () => {
           },
         ],
         creditsState: "ready",
+        creditsTotal: 1,
         deathday: null,
         department: "Acting",
         id: "person:6384",
@@ -548,6 +611,40 @@ describe("Seerr media details", () => {
       "/api/v1/person/6384",
       "/api/v1/person/6384/combined_credits",
     ]);
+  });
+
+  it("returns bounded person-credit pages with stable normalized totals", async () => {
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse({
+        cast: Array.from({ length: 30 }, (_, index) => ({
+          adult: false,
+          character: `Role ${index + 1}`,
+          id: 1_000 + index,
+          mediaInfo: index % 2 === 0 ? { status: 5 } : null,
+          mediaType: index % 3 === 0 ? "tv" : "movie",
+          name: index % 3 === 0 ? `Series ${index + 1}` : null,
+          popularity: 100 - index,
+          releaseDate: index % 3 === 0 ? null : `20${String(index).padStart(2, "0")}-01-01`,
+          title: index % 3 === 0 ? null : `Movie ${index + 1}`,
+          voteAverage: 7,
+        })),
+        crew: [],
+        id: 6384,
+      }),
+    ]);
+
+    const result = await adapter.personCredits({ tmdbId: 6384 }, { language: "en", page: 2 });
+
+    expect(result).toMatchObject({
+      page: 2,
+      pageSize: 24,
+      totalPages: 2,
+      totalResults: 30,
+    });
+    expect(result.items).toHaveLength(6);
+    expect(result.items[0]).toMatchObject({ role: "Role 25", tmdbId: 1024 });
+    expect(requests[0]?.url.pathname).toBe("/api/v1/person/6384/combined_credits");
+    expect(requests[0]?.url.searchParams.get("language")).toBe("en");
   });
 
   it("requires credentials and rejects mismatched upstream identities safely", async () => {

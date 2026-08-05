@@ -102,18 +102,21 @@ export class RadarrAdapter extends ServarrAcquisitionAdapter {
 
   async deleteLibraryMovieFile(rawFileId: number, signal?: AbortSignal): Promise<void> {
     const fileId = z.int().positive().max(2_147_483_647).parse(rawFileId);
-    await this.client.requestText(`${this.apiRoot}/moviefile/${fileId}`, {
+    const response = await this.client.requestText(`${this.apiRoot}/moviefile/${fileId}`, {
       acceptedStatuses: [200, 204],
       headers: { "X-Api-Key": this.apiKey },
       method: "DELETE",
       operation: "library.removal.file_delete",
       ...(signal ? { signal } : {}),
     });
+    if (response.status !== 200 && response.status !== 204) {
+      throw this.client.invalidResponse("library.removal.file_delete");
+    }
   }
 
   async deleteLibraryMovie(rawMediaId: number, signal?: AbortSignal): Promise<void> {
     const mediaId = z.int().positive().max(2_147_483_647).parse(rawMediaId);
-    await this.client.requestText(`${this.apiRoot}/movie/${mediaId}`, {
+    const response = await this.client.requestText(`${this.apiRoot}/movie/${mediaId}`, {
       acceptedStatuses: [200, 204],
       headers: { "X-Api-Key": this.apiKey },
       method: "DELETE",
@@ -121,5 +124,8 @@ export class RadarrAdapter extends ServarrAcquisitionAdapter {
       query: { addImportExclusion: "false", deleteFiles: "true" },
       ...(signal ? { signal } : {}),
     });
+    if (response.status !== 200 && response.status !== 204) {
+      throw this.client.invalidResponse("library.removal.manager_delete");
+    }
   }
 }

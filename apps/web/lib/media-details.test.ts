@@ -1,10 +1,15 @@
 import type {
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonCreditsResponse,
   DiscoveryPersonDetailResponse,
 } from "@omnifin/contracts/discovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { discoveryMediaDetailClient, discoveryPersonDetailClient } from "./media-details";
+import {
+  discoveryMediaDetailClient,
+  discoveryPersonCreditsClient,
+  discoveryPersonDetailClient,
+} from "./media-details";
 
 const response: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
@@ -45,6 +50,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     birthplace: "Beirut, Lebanon",
     credits: [],
     creditsState: "empty",
+    creditsTotal: 0,
     deathday: null,
     department: "Acting",
     id: "person:6384",
@@ -53,6 +59,23 @@ const personResponse: DiscoveryPersonDetailResponse = {
     source: "seerr",
     tmdbId: 6384,
   },
+};
+
+const personCreditsResponse: DiscoveryPersonCreditsResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  items: Array.from({ length: 6 }, (_, index) => ({
+    availability: "available",
+    kind: "movie",
+    role: `Role ${index + 25}`,
+    title: `Movie ${index + 25}`,
+    tmdbId: 1_000 + index,
+    voteAverage: 7,
+    year: 2024,
+  })),
+  page: 2,
+  pageSize: 24,
+  totalPages: 2,
+  totalResults: 30,
 };
 
 afterEach(() => {
@@ -180,6 +203,19 @@ describe("media detail client", () => {
     ).resolves.toEqual(personResponse);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/discovery/people/6384?language=en-CA",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+  });
+
+  it("loads a bounded person-credit page through a same-origin route", async () => {
+    const fetchMock = vi.fn(async () => Response.json(personCreditsResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      discoveryPersonCreditsClient.load({ tmdbId: 6384 }, { language: "en-CA", page: 2 }),
+    ).resolves.toEqual(personCreditsResponse);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/discovery/people/6384/credits?language=en-CA&page=2",
       expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
     );
   });

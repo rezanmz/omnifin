@@ -52,8 +52,10 @@ describe("Media library client", () => {
       media: series.media,
       movie: null,
       playback: null,
+      providerReferences: [],
       seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
       seasonsTruncated: false,
+      seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
     };
     const episodes = {
       generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
@@ -131,6 +133,27 @@ describe("Media library client", () => {
       code: "invalid_reference",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves an opaque library person through the same-origin bridge", async () => {
+    const referenceId = `media_${"p".repeat(22)}`;
+    const response = {
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      name: "Mara Voss",
+      tmdbId: 12_345,
+    };
+    const fetchMock = vi.fn(async () => Response.json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.resolvePerson!(referenceId)).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/people/${referenceId}`,
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      }),
+    );
   });
 
   it("updates playback state with the active session CSRF token and an idempotency key", async () => {
