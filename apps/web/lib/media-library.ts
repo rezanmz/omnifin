@@ -2,6 +2,7 @@ import type {
   LibraryBrowseKind,
   LibraryBrowseResponse,
   LibraryBrowseSort,
+  LibraryConnectedActionsResponse,
   LibraryDownloadPrepareResponse,
   LibraryExtrasResponse,
   LibraryPlaybackStateMutationRequest,
@@ -148,6 +149,10 @@ export interface MediaLibraryClient {
     input?: { cursor?: string; limit?: number },
     signal?: AbortSignal,
   ): Promise<LibraryExtrasResponse>;
+  loadConnectedActions?(
+    referenceId: string,
+    signal?: AbortSignal,
+  ): Promise<LibraryConnectedActionsResponse>;
   loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
   resolvePerson?(
     referenceId: string,
@@ -223,7 +228,9 @@ export const mediaLibraryClient: MediaLibraryClient = {
         "The selected season is invalid.",
       );
     }
-    const parameters = new URLSearchParams({ limit: String(input.limit ?? 30) });
+    const parameters = new URLSearchParams({
+      limit: String(input.limit ?? 30),
+    });
     if (input.cursor) parameters.set("cursor", input.cursor);
     const schemas = (await contractSchemas()).library;
     return fetchLibraryJson(
@@ -234,7 +241,9 @@ export const mediaLibraryClient: MediaLibraryClient = {
   },
   async loadExtras(referenceId, input = {}, signal) {
     assertMediaReference(referenceId);
-    const parameters = new URLSearchParams({ limit: String(input.limit ?? 12) });
+    const parameters = new URLSearchParams({
+      limit: String(input.limit ?? 12),
+    });
     if (input.cursor) parameters.set("cursor", input.cursor);
     const schemas = (await contractSchemas()).library;
     return fetchLibraryJson(
@@ -242,6 +251,23 @@ export const mediaLibraryClient: MediaLibraryClient = {
       schemas.libraryExtrasResponseSchema,
       signal,
     );
+  },
+  async loadConnectedActions(referenceId, signal) {
+    assertMediaReference(referenceId);
+    const schemas = (await contractSchemas()).library;
+    const response = await fetchLibraryJson(
+      `/api/media/library/${referenceId}/actions`,
+      schemas.libraryConnectedActionsResponseSchema,
+      signal,
+    );
+    if (response.referenceId !== referenceId) {
+      throw new MediaLibraryClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway returned actions for a different library title.",
+      );
+    }
+    return response;
   },
   async loadTitle(referenceId, signal) {
     assertMediaReference(referenceId);

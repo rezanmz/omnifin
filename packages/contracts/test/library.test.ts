@@ -9,6 +9,8 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseJsonSchema,
   libraryBrowseResponseSchema,
+  libraryConnectedActionsResponseJsonSchema,
+  libraryConnectedActionsResponseSchema,
   libraryDownloadPrepareRequestJsonSchema,
   libraryDownloadPrepareRequestSchema,
   libraryDownloadPrepareResponseJsonSchema,
@@ -94,7 +96,11 @@ const catalogue = {
     },
   ],
   nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
-  source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+  source: {
+    displayName: "Home Jellyfin",
+    failure: null,
+    status: "healthy" as const,
+  },
   state: "complete" as const,
   totalResults: 46,
 };
@@ -103,7 +109,9 @@ describe("library operation contracts", () => {
   it("binds short-lived original-download grants to one opaque library title", () => {
     expect(libraryDownloadPrepareRequestSchema.parse({})).toEqual({});
     expect(
-      libraryDownloadPrepareRequestSchema.safeParse({ itemId: "private-upstream" }).success,
+      libraryDownloadPrepareRequestSchema.safeParse({
+        itemId: "private-upstream",
+      }).success,
     ).toBe(false);
 
     const prepared = {
@@ -137,8 +145,12 @@ describe("library operation contracts", () => {
         filename: "unsafe\r\nname.mkv",
       }).success,
     ).toBe(false);
-    expect(libraryDownloadPrepareRequestJsonSchema).toMatchObject({ type: "object" });
-    expect(libraryDownloadPrepareResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryDownloadPrepareRequestJsonSchema).toMatchObject({
+      type: "object",
+    });
+    expect(libraryDownloadPrepareResponseJsonSchema).toMatchObject({
+      type: "object",
+    });
   });
 
   it("normalizes attention items without paths or upstream identifiers", () => {
@@ -179,7 +191,9 @@ describe("library operation contracts", () => {
   });
 
   it("coerces bounded paging and defaults safe refresh modes", () => {
-    expect(libraryAttentionQuerySchema.parse({ limit: "25" })).toEqual({ limit: 25 });
+    expect(libraryAttentionQuerySchema.parse({ limit: "25" })).toEqual({
+      limit: 25,
+    });
     expect(libraryAttentionQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
     expect(libraryItemRefreshRequestSchema.parse({})).toEqual({
       imageMode: "missing",
@@ -196,17 +210,27 @@ describe("library operation contracts", () => {
       sort: "recent",
     });
     expect(
-      libraryBrowseQuerySchema.parse({ kind: "series", query: "  Meridian  ", sort: "title" }),
+      libraryBrowseQuerySchema.parse({
+        kind: "series",
+        query: "  Meridian  ",
+        sort: "title",
+      }),
     ).toEqual({ kind: "series", limit: 30, query: "Meridian", sort: "title" });
     expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
     expect(libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 0 }).success).toBe(
       false,
     );
     expect(
-      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 10_000_001 }).success,
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        totalResults: 10_000_001,
+      }).success,
     ).toBe(false);
     expect(
-      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: null }).success,
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        totalResults: null,
+      }).success,
     ).toBe(true);
     expect(
       libraryBrowseResponseSchema.safeParse({
@@ -232,7 +256,11 @@ describe("library operation contracts", () => {
   });
 
   it("models explicit, user-scoped playback-state commands", () => {
-    expect(libraryPlaybackStateMutationRequestSchema.parse({ action: "reset_progress" })).toEqual({
+    expect(
+      libraryPlaybackStateMutationRequestSchema.parse({
+        action: "reset_progress",
+      }),
+    ).toEqual({
       action: "reset_progress",
     });
     expect(
@@ -249,9 +277,18 @@ describe("library operation contracts", () => {
     };
     expect(libraryPlaybackStateMutationResponseSchema.parse(response)).toEqual(response);
     for (const invalid of [
-      { action: "mark_watched", playback: { ...response.playback, played: false } },
-      { action: "mark_unwatched", playback: { ...response.playback, positionSeconds: 10 } },
-      { action: "reset_progress", playback: { ...response.playback, positionSeconds: 10 } },
+      {
+        action: "mark_watched",
+        playback: { ...response.playback, played: false },
+      },
+      {
+        action: "mark_unwatched",
+        playback: { ...response.playback, positionSeconds: 10 },
+      },
+      {
+        action: "reset_progress",
+        playback: { ...response.playback, positionSeconds: 10 },
+      },
     ]) {
       expect(
         libraryPlaybackStateMutationResponseSchema.safeParse({
@@ -275,12 +312,20 @@ describe("library operation contracts", () => {
         },
       ],
       nextCursor: "aGlzdG9yeQ.c2lnbmF0dXJl",
-      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+      source: {
+        displayName: "Home Jellyfin",
+        failure: null,
+        status: "healthy" as const,
+      },
       state: "complete" as const,
     };
     expect(viewingHistoryResponseSchema.parse(history)).toEqual(history);
     expect(
-      viewingHistoryQuerySchema.parse({ kind: "episodes", limit: "20", range: "90_days" }),
+      viewingHistoryQuerySchema.parse({
+        kind: "episodes",
+        limit: "20",
+        range: "90_days",
+      }),
     ).toEqual({ kind: "episodes", limit: 20, range: "90_days", state: "all" });
     expect(viewingHistoryQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
     expect(viewingHistoryCursorSchema.safeParse("c".repeat(1_024)).success).toBe(true);
@@ -320,7 +365,11 @@ describe("library operation contracts", () => {
         generatedAt: catalogue.generatedAt,
         items: [{ ...base, playback: { ...base.playback, played: false } }],
         nextCursor: null,
-        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "healthy",
+        },
         state: "complete",
       }).success,
     ).toBe(false);
@@ -329,7 +378,11 @@ describe("library operation contracts", () => {
         generatedAt: catalogue.generatedAt,
         items: [{ ...base, media: { ...base.media, kind: "series" } }],
         nextCursor: null,
-        source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+        source: {
+          displayName: "Home Jellyfin",
+          failure: null,
+          status: "healthy",
+        },
         state: "complete",
       }).success,
     ).toBe(false);
@@ -436,14 +489,71 @@ describe("library operation contracts", () => {
       movie: null,
       playback: null,
       providerReferences: [
-        { identifier: "tt1234567", mediaKind: "series" as const, provider: "imdb" as const },
-        { identifier: 1396, mediaKind: "series" as const, provider: "tmdb" as const },
+        {
+          identifier: "tt1234567",
+          mediaKind: "series" as const,
+          provider: "imdb" as const,
+        },
+        {
+          identifier: 1396,
+          mediaKind: "series" as const,
+          provider: "tmdb" as const,
+        },
       ],
       seasons: [season],
       seasonsTruncated: false,
-      seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
+      seriesCredits: {
+        cast: [],
+        castTruncated: false,
+        crew: [],
+        crewTruncated: false,
+      },
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+    const connectedActions = {
+      actions: [
+        {
+          href: `/v1/media/library/${seriesReferenceId}/actions/sonarr`,
+          kind: "service_navigation" as const,
+          label: "Open in Sonarr",
+          service: "sonarr" as const,
+        },
+      ],
+      generatedAt: catalogue.generatedAt,
+      mediaKind: "series" as const,
+      referenceId: seriesReferenceId,
+    };
+    expect(libraryConnectedActionsResponseSchema.parse(connectedActions)).toEqual(connectedActions);
+    expect(
+      libraryConnectedActionsResponseSchema.safeParse({
+        ...connectedActions,
+        actions: [
+          {
+            ...connectedActions.actions[0],
+            href: `/v1/media/library/media_${"z".repeat(22)}/actions/sonarr`,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryConnectedActionsResponseSchema.safeParse({
+        ...connectedActions,
+        actions: [
+          {
+            href: `/v1/media/library/${seriesReferenceId}/actions/radarr`,
+            kind: "service_navigation",
+            label: "Open in Radarr",
+            service: "radarr",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryConnectedActionsResponseSchema.safeParse({
+        ...connectedActions,
+        actions: [connectedActions.actions[0], connectedActions.actions[0]],
+      }).success,
+    ).toBe(false);
     expect(
       libraryTitleDetailResponseSchema.safeParse({
         ...detail,
@@ -467,7 +577,12 @@ describe("library operation contracts", () => {
               role: "Dr. Elian Vale",
               type: "cast" as const,
             },
-            { name: "Ari Chen", personReferenceId: null, role: null, type: "writer" as const },
+            {
+              name: "Ari Chen",
+              personReferenceId: null,
+              role: null,
+              type: "writer" as const,
+            },
           ],
           creditsTruncated: false,
           criticRating: 91,
@@ -484,7 +599,11 @@ describe("library operation contracts", () => {
             subtitle: "S02E03",
             title: "The Long Meridian",
           },
-          playback: { durationSeconds: 2_700, played: false, positionSeconds: 900 },
+          playback: {
+            durationSeconds: 2_700,
+            played: false,
+            positionSeconds: 900,
+          },
           studios: ["Northlight Pictures"],
         },
       ],
@@ -493,7 +612,9 @@ describe("library operation contracts", () => {
       titleReferenceId: seriesReferenceId,
     };
     expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(episodes);
-    expect(librarySeasonEpisodesQuerySchema.parse({ limit: "20" })).toEqual({ limit: 20 });
+    expect(librarySeasonEpisodesQuerySchema.parse({ limit: "20" })).toEqual({
+      limit: 20,
+    });
     expect(JSON.stringify({ detail, episodes })).not.toMatch(
       /external|jellyfin\.example|upstream/iu,
     );
@@ -518,7 +639,11 @@ describe("library operation contracts", () => {
             subtitle: "Local extra",
             title: "Building the Meridian",
           },
-          playback: { durationSeconds: 720, played: false, positionSeconds: 120 },
+          playback: {
+            durationSeconds: 720,
+            played: false,
+            positionSeconds: 120,
+          },
           source: "local" as const,
         },
       ],
@@ -539,12 +664,18 @@ describe("library operation contracts", () => {
       },
       onlineState: "ready" as const,
       parentReferenceId: referenceId,
-      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
+      source: {
+        displayName: "Home Jellyfin",
+        failure: null,
+        status: "healthy" as const,
+      },
       state: "complete" as const,
     };
 
     expect(libraryExtrasResponseSchema.parse(response)).toEqual(response);
-    expect(libraryExtrasQuerySchema.parse({ limit: "12" })).toEqual({ limit: 12 });
+    expect(libraryExtrasQuerySchema.parse({ limit: "12" })).toEqual({
+      limit: 12,
+    });
     expect(libraryExtrasQuerySchema.safeParse({ limit: 25 }).success).toBe(false);
     expect(JSON.stringify(response)).not.toMatch(/external|jellyfin\.example|upstream|itemId/iu);
     expect(
@@ -639,8 +770,16 @@ describe("library operation contracts", () => {
       },
       playback: catalogue.items[0]!.playback,
       providerReferences: [
-        { identifier: "tt1234567", mediaKind: "movie" as const, provider: "imdb" as const },
-        { identifier: 98_765, mediaKind: "movie" as const, provider: "tmdb" as const },
+        {
+          identifier: "tt1234567",
+          mediaKind: "movie" as const,
+          provider: "imdb" as const,
+        },
+        {
+          identifier: 98_765,
+          mediaKind: "movie" as const,
+          provider: "tmdb" as const,
+        },
       ],
       seasons: [],
       seasonsTruncated: false,
@@ -667,7 +806,10 @@ describe("library operation contracts", () => {
   it("requires a bounded editable metadata field", () => {
     expect(libraryMetadataUpdateRequestSchema.safeParse({}).success).toBe(false);
     expect(
-      libraryMetadataUpdateRequestSchema.parse({ overview: null, title: "The Far Meridian" }),
+      libraryMetadataUpdateRequestSchema.parse({
+        overview: null,
+        title: "The Far Meridian",
+      }),
     ).toEqual({ overview: null, title: "The Far Meridian" });
     expect(libraryMetadataUpdateRequestSchema.safeParse({ path: "/private/media" }).success).toBe(
       false,
@@ -732,7 +874,11 @@ describe("library operation contracts", () => {
       previewId: removalPreviewId,
       referenceId,
       sizeBytes: 6_979_321_856,
-      source: { kind: "managed" as const, monitored: true, service: "radarr" as const },
+      source: {
+        kind: "managed" as const,
+        monitored: true,
+        service: "radarr" as const,
+      },
       title: "The Long Meridian",
       year: 2026,
     };
@@ -745,7 +891,10 @@ describe("library operation contracts", () => {
         options: [
           {
             ...preview.options[0],
-            effects: { ...preview.options[0]!.effects, reacquisitionRisk: "prevented" },
+            effects: {
+              ...preview.options[0]!.effects,
+              reacquisitionRisk: "prevented",
+            },
           },
           ...preview.options.slice(1),
         ],
@@ -779,7 +928,11 @@ describe("library operation contracts", () => {
       previewId: removalPreviewId,
       referenceId,
       sizeBytes: null,
-      source: { kind: "unmanaged" as const, monitored: null, service: "jellyfin" as const },
+      source: {
+        kind: "unmanaged" as const,
+        monitored: null,
+        service: "jellyfin" as const,
+      },
       title: "The Long Meridian",
       year: null,
     };
@@ -962,14 +1115,21 @@ describe("library operation contracts", () => {
     expect(
       libraryArtworkSearchResponseSchema.safeParse({
         ...response,
-        results: [{ ...response.results[0], previewPath: "https://image.tmdb.org/private" }],
+        results: [
+          {
+            ...response.results[0],
+            previewPath: "https://image.tmdb.org/private",
+          },
+        ],
       }).success,
     ).toBe(false);
   });
 
   it("exports Fastify-compatible response schema", () => {
     expect(libraryAttentionResponseJsonSchema).not.toHaveProperty("$schema");
-    expect(libraryAttentionResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryAttentionResponseJsonSchema).toMatchObject({
+      type: "object",
+    });
     expect(libraryBrowseQueryJsonSchema).not.toHaveProperty("$schema");
     expect(libraryBrowseQueryJsonSchema).toMatchObject({ type: "object" });
     expect(libraryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
@@ -983,8 +1143,14 @@ describe("library operation contracts", () => {
     expect(libraryRemovalOperationJsonSchema).toMatchObject({ type: "object" });
     expect(viewingHistoryQueryJsonSchema).not.toHaveProperty("$schema");
     expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryConnectedActionsResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryConnectedActionsResponseJsonSchema).toMatchObject({
+      type: "object",
+    });
     expect(libraryTitleDetailResponseJsonSchema).not.toHaveProperty("$schema");
-    expect(libraryTitleDetailResponseJsonSchema).toMatchObject({ type: "object" });
+    expect(libraryTitleDetailResponseJsonSchema).toMatchObject({
+      type: "object",
+    });
     expect(libraryExtrasQueryJsonSchema).not.toHaveProperty("$schema");
     expect(libraryExtrasResponseJsonSchema).not.toHaveProperty("$schema");
     expect(librarySeasonEpisodesQueryJsonSchema).not.toHaveProperty("$schema");

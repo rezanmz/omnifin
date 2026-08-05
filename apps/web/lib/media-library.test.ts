@@ -1,5 +1,9 @@
 import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
-import type { LibraryBrowseResponse, LibraryExtrasResponse } from "@omnifin/contracts/library";
+import type {
+  LibraryBrowseResponse,
+  LibraryConnectedActionsResponse,
+  LibraryExtrasResponse,
+} from "@omnifin/contracts/library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { libraryDemoPrincipal } from "./library-care-demo";
@@ -53,9 +57,21 @@ describe("Media library client", () => {
       movie: null,
       playback: null,
       providerReferences: [],
-      seasons: [{ episodeCount: 8, playedEpisodeCount: 3, seasonNumber: 2, title: "Season 2" }],
+      seasons: [
+        {
+          episodeCount: 8,
+          playedEpisodeCount: 3,
+          seasonNumber: 2,
+          title: "Season 2",
+        },
+      ],
       seasonsTruncated: false,
-      seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
+      seriesCredits: {
+        cast: [],
+        castTruncated: false,
+        crew: [],
+        crewTruncated: false,
+      },
     };
     const episodes = {
       generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
@@ -114,10 +130,18 @@ describe("Media library client", () => {
       ],
       nextCursor: null,
       onlineItems: [],
-      onlineSource: { displayName: "Online trailers", failure: null, status: "unconfigured" },
+      onlineSource: {
+        displayName: "Online trailers",
+        failure: null,
+        status: "unconfigured",
+      },
       onlineState: "unconfigured",
       parentReferenceId: parent.id,
-      source: { displayName: "Home Jellyfin", failure: null, status: "healthy" },
+      source: {
+        displayName: "Home Jellyfin",
+        failure: null,
+        status: "healthy",
+      },
       state: "complete",
     };
     const fetchMock = vi.fn(async () => Response.json(extras));
@@ -126,13 +150,62 @@ describe("Media library client", () => {
     await expect(mediaLibraryClient.loadExtras!(parent.id, { limit: 12 })).resolves.toEqual(extras);
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/media/library/${parent.id}/extras?limit=12`,
-      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+      }),
     );
 
     await expect(mediaLibraryClient.loadExtras!("private-jellyfin-item")).rejects.toMatchObject({
       code: "invalid_reference",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads connected actions separately from core title details", async () => {
+    const referenceId = readyMediaLibraryOutcome.feed.items[0]!.media.id;
+    const response: LibraryConnectedActionsResponse = {
+      actions: [
+        {
+          href: `/v1/media/library/${referenceId}/actions/radarr`,
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ],
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      mediaKind: "movie",
+      referenceId,
+    };
+    const fetchMock = vi.fn(async () => Response.json(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(mediaLibraryClient.loadConnectedActions!(referenceId)).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/media/library/${referenceId}/actions`,
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+      }),
+    );
+
+    const otherReferenceId = readyMediaLibraryOutcome.feed.items[1]!.media.id;
+    fetchMock.mockResolvedValueOnce(
+      Response.json({
+        ...response,
+        actions: [
+          {
+            ...response.actions[0]!,
+            href: `/v1/media/library/${otherReferenceId}/actions/radarr`,
+          },
+        ],
+        referenceId: otherReferenceId,
+      }),
+    );
+    await expect(mediaLibraryClient.loadConnectedActions!(referenceId)).rejects.toMatchObject({
+      code: "invalid_response",
+      kind: "invalid_response",
+    });
   });
 
   it("resolves an opaque library person through the same-origin bridge", async () => {
@@ -185,7 +258,9 @@ describe("Media library client", () => {
     const request = fetchMock.mock.calls[1]?.[1];
     const headers = new Headers(request?.headers);
     expect(request?.method).toBe("POST");
-    expect(JSON.parse(String(request?.body))).toEqual({ action: "reset_progress" });
+    expect(JSON.parse(String(request?.body))).toEqual({
+      action: "reset_progress",
+    });
     expect(headers.get("idempotency-key")).toBe("playback-state-browser-0123456789");
     expect(headers.get("x-omnifin-csrf")).toBe(csrfToken);
     expect(String(fetchMock.mock.calls)).not.toContain("jellyfin-user");
@@ -261,7 +336,9 @@ describe("Media library client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
+      mediaLibraryClient.prepareDownload!(referenceId, {
+        csrfToken: "download-csrf",
+      }),
     ).resolves.toEqual(prepared);
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/media/library/${referenceId}/downloads`,
@@ -298,8 +375,13 @@ describe("Media library client", () => {
     );
 
     await expect(
-      mediaLibraryClient.prepareDownload!(referenceId, { csrfToken: "download-csrf" }),
-    ).rejects.toMatchObject({ code: "invalid_response", kind: "invalid_response" });
+      mediaLibraryClient.prepareDownload!(referenceId, {
+        csrfToken: "download-csrf",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_response",
+      kind: "invalid_response",
+    });
   });
 
   it("starts a browser download through the web proxy without retaining the grant in the DOM", () => {
@@ -338,7 +420,10 @@ describe("Media library client", () => {
         sizeBytes: 1_024,
       }),
     ).toThrowError(
-      expect.objectContaining({ code: "invalid_download_path", kind: "invalid_response" }),
+      expect.objectContaining({
+        code: "invalid_download_path",
+        kind: "invalid_response",
+      }),
     );
   });
 
@@ -351,7 +436,10 @@ describe("Media library client", () => {
       mediaLibraryClient.updatePlaybackState!(readyMediaLibraryOutcome.feed.items[0]!.media.id, {
         action: "mark_watched",
       }),
-    ).rejects.toMatchObject({ code: "authentication_required", kind: "signed_out" });
+    ).rejects.toMatchObject({
+      code: "authentication_required",
+      kind: "signed_out",
+    });
 
     const csrfToken = "media_library_csrf_0123456789abcdefghijklmnop";
     vi.stubGlobal(
