@@ -16,7 +16,11 @@ import {
   serviceIdentityLinks,
   users,
 } from "../src/db/schema.js";
-import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "../src/media/playback-limits.js";
+import {
+  MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
+  MAX_PLAYBACK_MANIFEST_BYTES,
+  MAX_PLAYBACK_MANIFEST_REFERENCES,
+} from "../src/media/playback-limits.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:30:00.000Z");
@@ -100,6 +104,13 @@ async function harness(
       return { path: url.pathname.slice("/base/".length), query: url.searchParams.toString() };
     },
   );
+  const createPlaybackClient = vi.fn((_input: { maxResponseBytes?: number }) => ({
+    negotiate,
+    readPlaybackTarget,
+    reportPlaybackEvent,
+    resolvePlaybackTarget,
+    streamPlaybackTarget,
+  }));
   let issueTokenIndex = 0;
   let playbackAssetToken = 0;
   let playbackSessionToken = 0;
@@ -142,13 +153,7 @@ async function harness(
         token.writeUInt32BE(++playbackAssetToken, 12);
         return token.toString("base64url");
       },
-      createClient: () => ({
-        negotiate,
-        readPlaybackTarget,
-        reportPlaybackEvent,
-        resolvePlaybackTarget,
-        streamPlaybackTarget,
-      }),
+      createClient: createPlaybackClient,
       createToken: () => options.playbackSessionTokens?.[playbackSessionToken++] ?? "p".repeat(22),
     },
     playbackIssueDependencies: {
@@ -241,6 +246,7 @@ async function harness(
   };
   return {
     app,
+    createPlaybackClient,
     headers,
     negotiate,
     readPlaybackTarget,
@@ -741,8 +747,15 @@ describe("playback routes", () => {
     }
   });
 
-  it("allocates a long VOD manifest with bounded unique handles", async () => {
-    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+  it("rewrites a realistic nested VOD manifest above one MiB with bounded unique handles", async () => {
+    const {
+      app,
+      createPlaybackClient,
+      headers,
+      readPlaybackTarget,
+      referenceId,
+      resolvePlaybackTarget,
+    } = await harness();
     try {
       const created = await app.inject({
         headers,
@@ -752,11 +765,91 @@ describe("playback routes", () => {
       });
       const playback = playbackNegotiationResponseSchema.parse(created.json());
       const segments = Array.from(
-        { length: 1_200 },
-        (_, index) => `#EXTINF:6.000,\nhls1/main/${index}.m4s?segment=${index}`,
+        { length: 1_624 },
+        (_, index) =>
+          `#EXTINF:6.000,\n${index}.m4s?${realisticJellyfinTranscodeQuery()}`,
       );
+      const nestedBody = new TextEncoder().encode(
+        `#EXTM3U\n#EXT-X-MAP:URI="init.mp4?uri=alternate"\n${segments.join("\n")}\n`,
+      );
+      expect(nestedBody.byteLength).toBeGreaterThan(1 * 1_024 * 1_024);
+      expect(nestedBody.byteLength).toBeLessThanOrEqual(MAX_PLAYBACK_MANIFEST_BYTES);
+      readPlaybackTarget
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode(
+            `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls1/main/index.m3u8?${realisticJellyfinTranscodeQuery()}\n`,
+          ),
+          headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          body: nestedBody,
+          headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+          status: 200,
+        });
+
+      const master = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      const nestedReference = master.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(master.statusCode, master.body).toBe(200);
+      expect(nestedReference).toBeDefined();
+      const nested = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: gatewayPlaybackPath(
+          publicPlaybackPath(`/api/playback/${playback.sessionId}/master.m3u8`, nestedReference!),
+        ),
+      });
+
+      expect(nested.statusCode, nested.body).toBe(200);
+      const handles = nested.body
+        .split("\n")
+        .filter((line) => line.startsWith("./"))
+        .map((line) => line.slice("./".length));
+      expect(handles).toHaveLength(1_624);
+      expect(new Set(handles).size).toBe(1_624);
+      expect(handles.every((handle) => /^asset_h1\.[A-Za-z0-9_-]{22}$/u.test(handle))).toBe(true);
+      expect(nested.body).toMatch(/#EXT-X-MAP:URI="\.\/asset_h1\.[A-Za-z0-9_-]{22}"/u);
+      expect(nested.body).not.toMatch(/DeviceId|MediaSourceId|PlaySessionId|route-private/u);
+      expect(resolvePlaybackTarget).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ path: expect.stringMatching(/hls1\/main\/index\.m3u8$/u) }),
+        expect.stringMatching(/^0\.m4s\?/u),
+      );
+      expect(
+        createPlaybackClient.mock.calls.flatMap(([input]) =>
+          input.maxResponseBytes === undefined ? [] : [input.maxResponseBytes],
+        ),
+      ).toEqual([MAX_PLAYBACK_MANIFEST_BYTES, MAX_PLAYBACK_MANIFEST_BYTES]);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1_626 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects manifests above the playback byte ceiling without allocating handles", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const oversized = new Uint8Array(MAX_PLAYBACK_MANIFEST_BYTES + 1);
+      oversized.set(new TextEncoder().encode("#EXTM3U\n"));
       readPlaybackTarget.mockResolvedValueOnce({
-        body: new TextEncoder().encode(`#EXTM3U\n${segments.join("\n")}\n`),
+        body: oversized,
         headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
         status: 200,
       });
@@ -767,27 +860,61 @@ describe("playback routes", () => {
         url: playback.streamPath,
       });
 
-      expect(manifest.statusCode, manifest.body).toBe(200);
-      const handles = manifest.body
-        .split("\n")
-        .filter((line) => line.startsWith("hls/"))
-        .map((line) => line.slice("hls/".length));
-      expect(handles).toHaveLength(1_200);
-      expect(new Set(handles).size).toBe(1_200);
-      expect(handles.every((handle) => /^asset_h1\.[A-Za-z0-9_-]{22}$/u.test(handle))).toBe(true);
+      expect(manifest.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(manifest.json()).error.code).toBe("playback_unavailable");
       expect(
         app.database.sqlite
           .prepare(
             "select count(*) as count from playback_asset_handles where playback_session_id = ?",
           )
           .get(playback.sessionId),
-      ).toEqual({ count: 1_200 });
+      ).toEqual({ count: 0 });
     } finally {
       await app.close();
     }
   });
 
-  it("rolls back partial handle allocation when a manifest is rejected", async () => {
+  it("rejects excessive repeated manifest references before allocating handles", async () => {
+    const { app, headers, readPlaybackTarget, referenceId } = await harness();
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      const references = Array.from(
+        { length: MAX_PLAYBACK_MANIFEST_REFERENCES + 1 },
+        () => 'URI="0.ts"',
+      ).join(",");
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(`#EXTM3U\n#EXT-X-MEDIA:${references}\n`),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+
+      const manifest = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+
+      expect(manifest.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(manifest.json()).error.code).toBe("playback_unavailable");
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects mixed malformed URI declarations before allocating handles", async () => {
     const { app, headers, readPlaybackTarget, referenceId } = await harness();
     try {
       const created = await app.inject({
@@ -799,7 +926,7 @@ describe("playback routes", () => {
       const playback = playbackNegotiationResponseSchema.parse(created.json());
       readPlaybackTarget.mockResolvedValueOnce({
         body: new TextEncoder().encode(
-          "#EXTM3U\n#EXTINF:4.000,\nhls1/main/0.m4s\n#EXT-X-MAP:URI=unquoted\n",
+          '#EXTM3U\n#EXT-X-MAP:URI="hls1/main/init.mp4",URI=private?ApiKey=secret\n',
         ),
         headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
         status: 200,
@@ -813,6 +940,7 @@ describe("playback routes", () => {
 
       expect(manifest.statusCode).toBe(503);
       expect(apiErrorSchema.parse(manifest.json()).error.code).toBe("playback_unavailable");
+      expect(manifest.body).not.toMatch(/ApiKey|private|secret/u);
       expect(
         app.database.sqlite
           .prepare(
