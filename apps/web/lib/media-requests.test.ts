@@ -44,6 +44,7 @@ const createdRequest: MediaRequestResponse = {
   id: "request:42",
   is4k: true,
   kind: "series",
+  qualityProfile: "Balanced",
   seasons: [1, 2],
   source: "seerr",
   status: "pending",
@@ -157,6 +158,34 @@ describe("media request client", () => {
     expect(JSON.stringify(routingOptions)).not.toContain("/srv/");
   });
 
+  it("saves an opaque routing preference with CSRF protection", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const destination = routingOptions.destinations[0]!;
+    const input = {
+      is4k: false,
+      kind: "movie" as const,
+      routing: {
+        destination: destination.id,
+        languageProfile: null,
+        qualityProfile: destination.qualityProfiles[0]!.id,
+        rootFolder: destination.rootFolders[0]!.id,
+      },
+    };
+
+    await expect(
+      mediaRequestClient.saveRoutingPreference(input, { csrfToken }),
+    ).resolves.toBeUndefined();
+
+    const [path, request] = fetchMock.mock.calls[0]!;
+    expect(path).toBe("/api/requests/routing-preference");
+    expect(request?.method).toBe("PUT");
+    expect(new Headers(request?.headers).get("x-omnifin-csrf")).toBe(csrfToken);
+    expect(JSON.parse(String(request?.body))).toEqual(input);
+  });
+
   it("rejects malformed routing choices and maps expired references", async () => {
     vi.stubGlobal(
       "fetch",
@@ -190,6 +219,32 @@ describe("media request client", () => {
     ).rejects.toMatchObject({
       code: "request_routing_invalid",
       kind: "routing",
+      retryMode: "new_key",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            error: {
+              code: "request_routing_unavailable",
+              message: "No healthy default destination can route the selected format.",
+              requestId: "routing-unavailable",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+    await expect(
+      mediaRequestClient.create(
+        { is4k: true, kind: "movie", tmdbId: 603 },
+        { csrfToken, idempotencyKey: "media-01234567-89ab-cdef-0123-456789abcdef" },
+      ),
+    ).rejects.toMatchObject({
+      code: "request_routing_unavailable",
+      kind: "routing_unavailable",
       retryMode: "new_key",
     });
   });

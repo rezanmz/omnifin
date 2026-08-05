@@ -26,6 +26,11 @@ import { EnvelopeCipher, hashToken, privacyHash } from "../security/crypto.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const REQUEST_IDENTIFIER_PATTERN = /^request:([1-9][0-9]{0,9})$/u;
+const persistedRequestReviewItemSchema = requestReviewItemSchema.or(
+  requestReviewItemSchema
+    .omit({ qualityProfile: true })
+    .transform((request) => ({ ...request, qualityProfile: "Profile unavailable" })),
+);
 
 interface SeerrConnectorRow {
   baseUrl: string;
@@ -395,7 +400,7 @@ export class RequestReviewService {
             try {
               return {
                 kind: "replay" as const,
-                response: requestReviewItemSchema.parse(JSON.parse(existing.responseJson)),
+                response: persistedRequestReviewItemSchema.parse(JSON.parse(existing.responseJson)),
               };
             } catch (error) {
               throw new RequestReviewServiceError("integrity_failure", { cause: error });

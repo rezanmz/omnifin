@@ -3,6 +3,7 @@ name: Release Please
 on:
   workflow_run:
     workflows:
+      - CI
       - Security
     branches:
       - main
@@ -36,13 +37,23 @@ jobs:
           SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           SOURCE_EVENT: ${{ github.event.workflow_run.event }}
           SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
+          case "$SOURCE_WORKFLOW" in
+            CI|Security) ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "No release mutation: this is not a recognized protected-main quality gate."
+              exit 0
+              ;;
+          esac
           if [ "$SOURCE_CONCLUSION" != "success" ] || [ "$SOURCE_EVENT" != "push" ] || \
              [ "$SOURCE_BRANCH" != "main" ] || [ "$SOURCE_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "No release mutation: this is not a successful protected-main Security push run."
+            echo "No release mutation: this is not a successful protected-main quality-gate push run."
             exit 0
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
@@ -59,7 +70,9 @@ jobs:
     if: needs.prerequisite.outputs.eligible == 'true' && needs.prerequisite.outputs.enabled == 'true'
     needs: prerequisite
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.gates.outputs.ready }}
     permissions:
       actions: read
       contents: read
@@ -74,15 +87,18 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Require CI and Security for the exact current main SHA
+        id: gates
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           node scripts/ci/verify-main-gates.mjs
           --sha "${{ github.event.workflow_run.head_sha }}"
-          --require-main-tip --wait-seconds 1800
+          --require-main-tip
+          --trigger-run-id "${{ github.event.workflow_run.id }}"
 
   release:
     name: Prepare or create release
+    if: needs.verify-main-gates.outputs.ready == 'true'
     needs: verify-main-gates
     environment: release
     runs-on: ubuntu-latest

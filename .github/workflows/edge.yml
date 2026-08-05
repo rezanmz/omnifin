@@ -3,6 +3,7 @@ name: Edge image
 on:
   workflow_run:
     workflows:
+      - CI
       - Security
     branches:
       - main
@@ -13,11 +14,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: edge-main
-  cancel-in-progress: true
+  group: edge-main-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 env:
-  CANDIDATE_TAG: edge-candidate-${{ github.event.workflow_run.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+  CANDIDATE_TAG: edge-candidate-${{ github.event.workflow_run.head_sha }}-${{ github.run_id }}
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   NODE_VERSION: "24"
   ORAS_VERSION: "1.3.3"
@@ -30,29 +31,40 @@ jobs:
     outputs:
       eligible: ${{ steps.source.outputs.eligible }}
     steps:
-      - name: Accept only a successful protected-main Security push
+      - name: Accept only a successful protected-main quality gate
         id: source
         env:
           SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
           SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           SOURCE_EVENT: ${{ github.event.workflow_run.event }}
           SOURCE_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          SOURCE_WORKFLOW: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
+          case "$SOURCE_WORKFLOW" in
+            CI|Security) ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "No edge publication: this is not a recognized protected-main quality gate."
+              exit 0
+              ;;
+          esac
           if [ "$SOURCE_CONCLUSION" = "success" ] && [ "$SOURCE_EVENT" = "push" ] && \
              [ "$SOURCE_BRANCH" = "main" ] && [ "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
             echo "eligible=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "eligible=false" >> "$GITHUB_OUTPUT"
-          echo "No edge publication: this is not a successful protected-main Security push run."
+          echo "No edge publication: this is not a successful protected-main quality-gate push."
 
   verify-main-gates:
     name: Verify exact current-main gates
     if: needs.prerequisite.outputs.eligible == 'true'
     needs: prerequisite
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.gates.outputs.ready }}
     permissions:
       actions: read
       contents: read
@@ -67,15 +79,18 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Require CI and Security for the exact current main SHA
+        id: gates
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           node scripts/ci/verify-main-gates.mjs
           --sha "${{ github.event.workflow_run.head_sha }}"
-          --require-main-tip --wait-seconds 1800
+          --require-main-tip
+          --trigger-run-id "${{ github.event.workflow_run.id }}"
 
   build-candidate:
     name: Build immutable edge candidate
+    if: needs.verify-main-gates.outputs.ready == 'true'
     needs: verify-main-gates
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -179,6 +194,11 @@ jobs:
       id-token: write
       packages: write
     steps:
+      - name: Check out the verified signing helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -198,7 +218,7 @@ jobs:
       - name: Sign edge candidate digest
         env:
           IMAGE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
-        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
+        run: node scripts/ci/sign-oci-image.mjs
       - name: Remove registry credentials
         if: always()
         run: docker logout ghcr.io || true
