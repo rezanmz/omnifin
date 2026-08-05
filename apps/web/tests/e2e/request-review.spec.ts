@@ -16,6 +16,7 @@ test("operator confirms one guarded Seerr approval", async ({ page }) => {
         id: "request:184",
         is4k: true,
         kind: "movie",
+        qualityProfile: "4K Opt-in",
         requestedBy: "Mara Chen",
         seasons: null,
         source: "seerr",

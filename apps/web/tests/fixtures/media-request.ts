@@ -95,12 +95,21 @@ export interface MediaRequestCapture {
   idempotencyKey: string;
 }
 
-export async function mockMediaRequestSession(page: Page) {
+export async function mockMediaRequestSession(
+  page: Page,
+  options: { canManageRouting?: boolean } = {},
+) {
   await page.route("**/api/auth/session", async (route) => {
     await route.fulfill({
       body: JSON.stringify({
         csrfToken: mediaRequestCsrfToken,
-        principal: mediaRequestPrincipal,
+        principal: options.canManageRouting
+          ? {
+              ...mediaRequestPrincipal,
+              permissions: [...mediaRequestPrincipal.permissions, "connectors.manage"],
+              role: "admin",
+            }
+          : mediaRequestPrincipal,
       }),
       contentType: "application/json",
       status: 200,
@@ -108,10 +117,43 @@ export async function mockMediaRequestSession(page: Page) {
   });
 }
 
+export async function mockMediaRequestPreference(page: Page) {
+  const capture: { body: unknown; csrfToken: string } = { body: null, csrfToken: "" };
+  await page.route("**/api/requests/routing-preference", async (route) => {
+    const request = route.request();
+    capture.body = request.postDataJSON();
+    capture.csrfToken = request.headers()["x-omnifin-csrf"] ?? "";
+    await route.fulfill({ status: 204 });
+  });
+  return capture;
+}
+
 export async function mockMediaRequestRouting(page: Page) {
   await page.route("**/api/requests/routing-options?*", async (route) => {
+    const is4k = new URL(route.request().url()).searchParams.get("is4k") === "true";
+    const dimension = is4k ? "-4k" : "";
     await route.fulfill({
-      body: JSON.stringify(mediaRequestRoutingOptions),
+      body: JSON.stringify({
+        ...mediaRequestRoutingOptions,
+        destinations: mediaRequestRoutingOptions.destinations.map((destination) => ({
+          ...destination,
+          id: mediaRequestRoutingReference(`radarr-primary${dimension}`),
+          languageProfiles: [],
+          qualityProfiles: destination.qualityProfiles.map((profile, index) => ({
+            ...profile,
+            id: mediaRequestRoutingReference(
+              `${index === 0 ? "quality-balanced" : "quality-remux"}${dimension}`,
+            ),
+          })),
+          rootFolders: destination.rootFolders.map((folder, index) => ({
+            ...folder,
+            id: mediaRequestRoutingReference(
+              `${index === 0 ? "root-cinema" : "root-archive"}${dimension}`,
+            ),
+          })),
+        })),
+        is4k,
+      }),
       contentType: "application/json",
       status: 200,
     });
@@ -131,6 +173,7 @@ export async function mockMediaRequestCreation(page: Page) {
         id: "request:42",
         is4k: false,
         kind: "movie",
+        qualityProfile: "Balanced",
         seasons: null,
         source: "seerr",
         status: "pending",

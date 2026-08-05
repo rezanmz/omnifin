@@ -41,7 +41,7 @@ import {
   type DiscoverySearchClientErrorKind,
 } from "../lib/discovery-search";
 import type { MediaRequestClient } from "../lib/media-requests";
-import type { DiscoveryMediaDetailClient } from "../lib/media-details";
+import type { DiscoveryMediaDetailClient, DiscoveryPersonDetailClient } from "../lib/media-details";
 import {
   captureDocumentScrollPosition,
   focusWithoutDocumentScroll,
@@ -49,7 +49,7 @@ import {
   revealWithinScrollContainer,
   type DocumentScrollPosition,
 } from "../lib/focus-preservation";
-import type { DetailMedia } from "./media-detail-drawer";
+import type { DetailMedia, DetailPerson } from "./media-detail-drawer";
 import type { RequestableMedia } from "./request-composer";
 
 const RequestComposer = dynamic(
@@ -244,6 +244,7 @@ export interface GlobalSearchProperties {
   initialPermissions?: readonly Permission[];
   initialQuery?: string;
   permissionLoader?: CommandPermissionLoader;
+  personClient?: DiscoveryPersonDetailClient;
   requestClient?: MediaRequestClient;
 }
 
@@ -589,6 +590,7 @@ export function GlobalSearch({
   initialPermissions,
   initialQuery = "",
   permissionLoader = loadPalettePermissions,
+  personClient,
   requestClient,
 }: GlobalSearchProperties) {
   const [open, setOpen] = useState(initialOpen);
@@ -598,6 +600,7 @@ export function GlobalSearch({
   const [composerMedia, setComposerMedia] = useState<RequestableMedia | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [detailMedia, setDetailMedia] = useState<DetailMedia | null>(null);
+  const [detailPerson, setDetailPerson] = useState<DetailPerson | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [requestedIds, setRequestedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<SearchState>({ kind: "idle" });
@@ -942,7 +945,24 @@ export function GlobalSearch({
                   <div className="search-preview__footer">
                     <span>Seerr match</span>
                     {selectedResult.kind === "person" ? (
-                      <span>Profile match</span>
+                      <div className="search-preview__actions">
+                        <button
+                          aria-label={`View profile for ${selectedResult.title}`}
+                          className="search-preview__detail-action"
+                          data-directional-item
+                          onClick={() => {
+                            setDetailPerson({
+                              name: selectedResult.title,
+                              tmdbId: selectedResult.tmdbId,
+                            });
+                            setDetailOpen(true);
+                            setOpen(false);
+                          }}
+                          type="button"
+                        >
+                          View profile <UserRound aria-hidden="true" />
+                        </button>
+                      </div>
                     ) : (
                       <div className="search-preview__actions">
                         <button
@@ -982,11 +1002,15 @@ export function GlobalSearch({
       ) : null}
       <MediaDetailDrawer
         {...(detailClient ? { client: detailClient } : {})}
-        key={detailMedia?.id ?? "media-detail"}
+        {...(personClient ? { personClient } : {})}
+        key={detailMedia?.id ?? (detailPerson ? `person:${detailPerson.tmdbId}` : "media-detail")}
         media={detailMedia}
         onOpenChange={(nextOpen) => {
           setDetailOpen(nextOpen);
-          if (!nextOpen) setDetailMedia(null);
+          if (!nextOpen) {
+            setDetailMedia(null);
+            setDetailPerson(null);
+          }
         }}
         onRequest={(media) => {
           setDetailOpen(false);
@@ -995,6 +1019,7 @@ export function GlobalSearch({
           setComposerOpen(true);
         }}
         open={detailOpen}
+        person={detailPerson}
       />
       <RequestComposer
         {...(requestClient ? { client: requestClient } : {})}

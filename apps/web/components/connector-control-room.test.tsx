@@ -155,6 +155,18 @@ describe("ConnectorControlRoom", () => {
     expect(screen.getByRole("status")).toHaveTextContent("saved in standby");
   });
 
+  it("clears a browser destination when changing the service type", async () => {
+    const user = userEvent.setup();
+    render(<ConnectorControlRoom client={client()} initialOutcome={ready([])} />);
+
+    await user.click(await screen.findByRole("button", { name: "Radarr" }));
+    const browserUrl = screen.getByRole("textbox", { name: /Browser URL/ });
+    await user.type(browserUrl, "https://radarr.example.test");
+    await user.click(screen.getByRole("button", { name: "Sonarr" }));
+
+    expect(screen.getByRole("textbox", { name: /Browser URL/ })).toHaveValue("");
+  });
+
   it("probes before bringing a connector online", async () => {
     const user = userEvent.setup();
     const unknown = { ...jellyfin, healthState: "unknown" as const, lastProbe: null };

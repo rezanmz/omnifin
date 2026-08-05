@@ -16,7 +16,6 @@ const sonarrLibrarySeriesSchema = z.object({
   id: z.int().positive().max(2_147_483_647),
   titleSlug: z
     .string()
-    .trim()
     .min(1)
     .max(300)
     .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,299}$/u),
@@ -24,7 +23,9 @@ const sonarrLibrarySeriesSchema = z.object({
   tvdbId: z.int().positive().max(Number.MAX_SAFE_INTEGER).nullish(),
 });
 
-const sonarrLibrarySeriesResponseSchema = z.array(sonarrLibrarySeriesSchema).max(10);
+const sonarrLibrarySeriesResponseSchema = z
+  .array(sonarrLibrarySeriesSchema)
+  .max(10);
 
 export interface SonarrLibrarySeriesNavigation {
   mediaId: number;
@@ -63,10 +64,12 @@ export class SonarrAdapter extends ServarrAcquisitionAdapter {
         (identity.tvdb === null || record.tvdbId === identity.tvdb) &&
         (identity.tmdb === null ||
           record.tmdbId === identity.tmdb ||
-          (identity.tvdb !== null && (record.tmdbId === null || record.tmdbId === undefined))),
+          (identity.tvdb !== null &&
+            (record.tmdbId === null || record.tmdbId === undefined))),
     );
     if (matches.length === 0) return null;
-    if (matches.length !== 1) throw this.client.invalidResponse("media.library.connected_action");
+    if (matches.length !== 1)
+      throw this.client.invalidResponse("media.library.connected_action");
     return { mediaId: matches[0]!.id, titleSlug: matches[0]!.titleSlug };
   }
 }

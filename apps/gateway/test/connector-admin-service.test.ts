@@ -200,7 +200,7 @@ describe("connector administration service", () => {
       const changed = service.update(
         created.id,
         {
-          publicUiUrl: "http://radarr.lan/ui",
+          publicUiUrl: "https://radarr.lan/ui",
           revision: enabled.revision,
         },
         context(),
@@ -209,13 +209,13 @@ describe("connector administration service", () => {
       expect(changed).toMatchObject({
         enabled: true,
         healthState: "healthy",
-        publicUiUrl: "http://radarr.lan/ui/",
+        publicUiUrl: "https://radarr.lan/ui/",
       });
       expect(
         database.sqlite
           .prepare("select public_ui_url as publicUiUrl from connector_configs where id = ?")
           .get(created.id),
-      ).toEqual({ publicUiUrl: "http://radarr.lan/ui/" });
+      ).toEqual({ publicUiUrl: "https://radarr.lan/ui/" });
       const cleared = service.update(
         created.id,
         { publicUiUrl: null, revision: changed.revision },
@@ -229,6 +229,38 @@ describe("connector administration service", () => {
         .get() as { metadataJson: string };
       expect(JSON.parse(audit.metadataJson)).toMatchObject({ changedFields: ["publicUiUrl"] });
       expect(audit.metadataJson).not.toContain("radarr.lan");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects browser destinations for services without connected UI actions", () => {
+    const { database, service } = createHarness();
+    try {
+      const jellyfin = service.create(
+        {
+          baseUrl: "https://jellyfin.example.test",
+          credentials: { kind: "none" },
+          displayName: "Jellyfin",
+          id: "jellyfin-main",
+          insecureHttpApproved: false,
+          service: "jellyfin",
+          tlsPolicy: "strict",
+        },
+        context(),
+      );
+
+      expect(() =>
+        service.update(
+          jellyfin.id,
+          {
+            publicUiUrl: "https://jellyfin.example.test/ui",
+            revision: jellyfin.revision,
+          },
+          context(),
+        ),
+      ).toThrow(expect.objectContaining({ reason: "configuration_invalid" }));
+      expect(service.get(jellyfin.id, context()).publicUiUrl).toBeNull();
     } finally {
       database.close();
     }

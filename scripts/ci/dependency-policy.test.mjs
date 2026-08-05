@@ -71,7 +71,19 @@ test("the shared image does not allocate writable storage implicitly", () => {
   assert.ok(patches >= 0 && patches < install);
 
   assert.match(dockerfile, /npm run build-release/u);
+  const nativeAddonStage = dockerfile.indexOf("FROM toolchain AS native-addon");
+  const applicationSource = dockerfile.indexOf("COPY apps apps");
+  assert.ok(nativeAddonStage >= 0 && nativeAddonStage < applicationSource);
+  assert.match(dockerfile, /\/workspace\/node_modules\/\.pnpm\/\*\/node_modules\/better-sqlite3/u);
+  assert.match(
+    dockerfile,
+    /COPY --from=native-addon \/native\/better_sqlite3\.node \/native\/better_sqlite3\.node/u,
+  );
   assert.match(dockerfile, /\/out\/gateway\/node_modules\/\*\/better-sqlite3/u);
+  assert.match(
+    dockerfile,
+    /install --mode=0755 \/native\/better_sqlite3\.node "\$better_sqlite_dir\/build\/Release\/better_sqlite3\.node"/u,
+  );
   assert.match(dockerfile, /rm -rf "\$better_sqlite_dir\/prebuilds"/u);
   assert.match(dockerfile, /^# syntax=docker\/dockerfile:1\.12@sha256:[a-f0-9]{64}$/mu);
   assert.match(dockerfile, /ARG NODE_IMAGE=node:24\.18\.0-trixie-slim@sha256:[a-f0-9]{64}/u);

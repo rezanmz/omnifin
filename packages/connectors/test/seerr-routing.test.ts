@@ -131,8 +131,12 @@ describe("Seerr request routing", () => {
       createdAt: "2026-07-27T16:30:00.000Z",
       id: 91,
       is4k: false,
+      languageProfileId: null,
       media: { mediaType: "movie", tmdbId: 550 },
+      profileId: 4,
+      rootFolder: "/srv/media/movies",
       seasons: [],
+      serverId: 1,
       status: 2,
       type: "movie",
     };
@@ -155,6 +159,34 @@ describe("Seerr request routing", () => {
       serverId: 1,
     });
     expect(requests[0]?.init.headers.get("x-api-user")).toBe("42");
+  });
+
+  it("rejects an approved request when Seerr drops the selected destination", async () => {
+    const { adapter } = adapterWithResponses([
+      jsonResponse(
+        {
+          createdAt: "2026-07-27T16:30:00.000Z",
+          id: 91,
+          is4k: true,
+          media: { mediaType: "movie", tmdbId: 550 },
+          profileId: null,
+          rootFolder: null,
+          seasons: [],
+          serverId: null,
+          status: 2,
+          type: "movie",
+        },
+        { status: 201 },
+      ),
+    ]);
+
+    await expect(
+      adapter.createMediaRequest({ is4k: true, kind: "movie", tmdbId: 550 }, 42, undefined, {
+        profileId: 9,
+        rootFolder: "/srv/media/movies-4k",
+        serverId: 4,
+      }),
+    ).rejects.toMatchObject({ reason: "routing_unavailable" });
   });
 
   it("fails closed without configured credentials", async () => {

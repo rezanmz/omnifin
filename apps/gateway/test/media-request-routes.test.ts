@@ -1,5 +1,9 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { mediaRequestResponseSchema, type MediaRequestResponse } from "@omnifin/contracts/requests";
+import {
+  mediaRequestResponseSchema,
+  mediaRequestRoutingOptionsResponseSchema,
+  type MediaRequestResponse,
+} from "@omnifin/contracts/requests";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -49,6 +53,7 @@ const createdRequest: MediaRequestResponse = {
   id: "request:101",
   is4k: false,
   kind: "movie",
+  qualityProfile: "Balanced",
   seasons: null,
   source: "seerr",
   status: "pending",
@@ -59,7 +64,7 @@ async function harness(
   options: {
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
     listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
-    role?: "requester" | "viewer";
+    role?: "admin" | "requester" | "viewer";
   } = {},
 ) {
   const config = testConfig();
@@ -70,7 +75,25 @@ async function harness(
   const listRequestRouting =
     options.listRequestRouting ??
     vi.fn<MediaRequestAdapter["listRequestRouting"]>(async (kind, is4k) => ({
-      destinations: [],
+      destinations: [
+        {
+          activeDirectory: "/srv/media/default",
+          activeLanguageProfileId: null,
+          activeProfileId: 4,
+          id: 1,
+          isDefault: true,
+          label: "Default",
+          languageProfiles: [],
+          profiles: [{ id: 4, label: "Balanced" }],
+          rootFolders: [
+            {
+              availableBytes: null,
+              capacityBytes: null,
+              path: "/srv/media/default",
+            },
+          ],
+        },
+      ],
       failures: [],
       is4k,
       kind,
@@ -245,6 +268,94 @@ describe("media request routes", () => {
     }
   });
 
+  it("lets an administrator persist an opaque profile preference", async () => {
+    const { app, headers } = await harness({ role: "admin" });
+    try {
+      const optionsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      const options = mediaRequestRoutingOptionsResponseSchema.parse(optionsResponse.json());
+      const destination = options.destinations[0]!;
+      const payload = {
+        is4k: false,
+        kind: "movie",
+        routing: {
+          destination: destination.id,
+          languageProfile: null,
+          qualityProfile: destination.qualityProfiles[0]!.id,
+          rootFolder: destination.rootFolders[0]!.id,
+        },
+      };
+      const withoutCsrf = Object.fromEntries(
+        Object.entries(headers).filter(([name]) => name !== SESSION_CSRF_HEADER),
+      );
+      const denied = await app.inject({
+        headers: withoutCsrf,
+        method: "PUT",
+        payload,
+        url: "/v1/requests/routing-preference",
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("csrf_denied");
+
+      const response = await app.inject({
+        headers,
+        method: "PUT",
+        payload,
+        url: "/v1/requests/routing-preference",
+      });
+
+      expect(response.statusCode, response.body).toBe(204);
+      expect(
+        app.database.sqlite
+          .prepare("select profile_id as profileId from media_request_profile_preferences")
+          .get(),
+      ).toEqual({ profileId: 4 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies a requester before persisting a profile preference", async () => {
+    const { app, headers } = await harness();
+    try {
+      const optionsResponse = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      const options = mediaRequestRoutingOptionsResponseSchema.parse(optionsResponse.json());
+      const destination = options.destinations[0]!;
+      const response = await app.inject({
+        headers,
+        method: "PUT",
+        payload: {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination: destination.id,
+            languageProfile: null,
+            qualityProfile: destination.qualityProfiles[0]!.id,
+            rootFolder: destination.rootFolders[0]!.id,
+          },
+        },
+        url: "/v1/requests/routing-preference",
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("permission_denied");
+      expect(
+        app.database.sqlite
+          .prepare("select count(*) as count from media_request_profile_preferences")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects an unauthenticated routing reference before an upstream write", async () => {
     const { app, createMediaRequest, headers } = await harness();
     const invalidReference = `routing-v1.v2.${"A".repeat(16)}.${"B".repeat(64)}.${"C".repeat(22)}`;
@@ -377,6 +488,26 @@ describe("media request routes", () => {
         "request_temporarily_unavailable",
       );
       expect(response.body).not.toContain(privateMessage);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns an actionable conflict before writing when no default route exists", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({ destinations: [], failures: [], is4k, kind }),
+    );
+    const { app, createMediaRequest, headers } = await harness({ listRequestRouting });
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { is4k: true, kind: "movie", tmdbId: 278 },
+        url: "/v1/requests",
+      });
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_routing_unavailable");
+      expect(createMediaRequest).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }
