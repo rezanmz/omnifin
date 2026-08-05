@@ -766,8 +766,7 @@ describe("playback routes", () => {
       const playback = playbackNegotiationResponseSchema.parse(created.json());
       const segments = Array.from(
         { length: 1_624 },
-        (_, index) =>
-          `#EXTINF:6.000,\n${index}.m4s?${realisticJellyfinTranscodeQuery()}`,
+        (_, index) => `#EXTINF:6.000,\n${index}.m4s?${realisticJellyfinTranscodeQuery()}`,
       );
       const nestedBody = new TextEncoder().encode(
         `#EXTM3U\n#EXT-X-MAP:URI="init.mp4?uri=alternate"\n${segments.join("\n")}\n`,
