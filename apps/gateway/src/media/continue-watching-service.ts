@@ -2,9 +2,11 @@ import {
   RadarrAdapter,
   type RadarrLibraryMovieOwnership,
 } from "@omnifin/connectors/adapters/radarr";
+import { SonarrAdapter } from "@omnifin/connectors/adapters/sonarr";
 import {
   JellyfinUserMediaClient,
   type JellyfinContinueWatchingResult,
+  type JellyfinLibraryTitleResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import type { ApiKeyConnectorConfig, ConnectorTargetConfig } from "@omnifin/connectors/types";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
@@ -18,6 +20,7 @@ import {
   libraryBrowseQuerySchema,
   libraryBrowseResponseSchema,
   libraryBrowseSortSchema,
+  libraryConnectedActionsResponseSchema,
   libraryExtrasQuerySchema,
   libraryExtrasResponseSchema,
   libraryMutationIdempotencyKeySchema,
@@ -35,6 +38,7 @@ import {
   viewingHistoryStateSchema,
   type LibraryBrowseQuery,
   type LibraryBrowseResponse,
+  type LibraryConnectedActionsResponse,
   type LibraryExtrasQuery,
   type LibraryExtrasResponse,
   type LibraryPlaybackStateMutationRequest,
@@ -44,10 +48,16 @@ import {
   type LibrarySeasonEpisodesQuery,
   type LibrarySeasonEpisodesResponse,
   type LibraryTitleDetailResponse,
+  type LibraryConnectedAction,
+  type LibraryConnectedActionService,
   type ViewingHistoryQuery,
   type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
-import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
+import {
+  connectorCredentialInputSchema,
+  connectorPublicUiUrlSchema,
+  type PartialFailure,
+} from "@omnifin/contracts/connectors";
 import type { DiscoveryTrailer } from "@omnifin/contracts/discovery";
 import { createHash, X509Certificate } from "node:crypto";
 import { z, ZodError } from "zod";
@@ -65,6 +75,7 @@ import {
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UPSTREAM_MEDIA_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const SERVARR_TITLE_SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,299}$/u;
 const MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER = 4_096;
 const STALE_USER_MEDIA_STATE_OPERATION_MS = 5 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -177,7 +188,33 @@ interface LibraryRemovalRadarrRow {
   tlsPolicy: string;
 }
 
-type LibraryRemovalManagedMovie = RadarrLibraryMovieOwnership & { connectorId: string };
+interface LibraryConnectedActionTarget {
+  publicUiUrl: string;
+  titleSlug: string;
+}
+
+const libraryConnectedServiceRowSchema = z.strictObject({
+  baseUrl: z.string().trim().min(1).max(2_048),
+  displayName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(160)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  enabled: z.literal(1),
+  encryptedCredentials: z.string().min(1).max(65_536),
+  id: z.string().regex(IDENTIFIER_PATTERN),
+  insecureHttpApproved: z.union([z.literal(0), z.literal(1)]),
+  publicUiUrl: connectorPublicUiUrlSchema,
+  tlsPolicy: z.enum(["strict", "allow_self_signed"]),
+  type: z.enum(["radarr", "sonarr"]),
+  updatedAt: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
+
+type LibraryRemovalManagedMovie = RadarrLibraryMovieOwnership & {
+  connectorId: string;
+};
+type LibraryConnectedServiceRow = z.infer<typeof libraryConnectedServiceRowSchema>;
 
 interface StoredConnectorSecrets {
   credentials: unknown;
@@ -228,6 +265,12 @@ export interface ContinueWatchingDependencies {
   createRadarrAdapter?: (
     input: ApiKeyConnectorConfig,
   ) => Pick<RadarrAdapter, "resolveLibraryMovie">;
+  createRadarrNavigationAdapter?: (
+    input: ApiKeyConnectorConfig,
+  ) => Pick<RadarrAdapter, "resolveLibraryMovieNavigation">;
+  createSonarrAdapter?: (
+    input: ApiKeyConnectorConfig,
+  ) => Pick<SonarrAdapter, "resolveLibrarySeriesNavigation">;
   mediaReferences?: MediaReferenceDependencies;
   readOnlineExtras?: (
     input: {
@@ -243,6 +286,13 @@ export interface ContinueWatchingDependencies {
     },
     signal?: AbortSignal,
   ) => Promise<LibraryRemovalManagedMovie | null>;
+  resolveConnectedAction?: (
+    input: {
+      identity: JellyfinLibraryTitleResult["managementIdentity"];
+      service: LibraryConnectedActionService;
+    },
+    signal?: AbortSignal,
+  ) => Promise<LibraryConnectedActionTarget | null>;
 }
 
 export class ContinueWatchingError extends Error {
@@ -270,6 +320,19 @@ export class MediaLibraryError extends Error {
       options,
     );
     this.name = "MediaLibraryError";
+    this.reason = reason;
+  }
+}
+
+export type LibraryConnectedActionErrorReason = "not_found" | "unavailable";
+
+export class LibraryConnectedActionError extends Error {
+  public readonly code = "library_connected_action_unavailable";
+  public readonly reason: LibraryConnectedActionErrorReason;
+
+  public constructor(reason: LibraryConnectedActionErrorReason, options?: ErrorOptions) {
+    super("The connected service action is unavailable.", options);
+    this.name = "LibraryConnectedActionError";
     this.reason = reason;
   }
 }
@@ -391,7 +454,10 @@ function connectorSecrets(row: ContinueWatchingSourceRow, cipher: EnvelopeCipher
     }
     const stored = versioned
       ? (record as unknown as StoredConnectorSecrets)
-      : ({ credentials: decoded, schemaVersion: 1 } satisfies StoredConnectorSecrets);
+      : ({
+          credentials: decoded,
+          schemaVersion: 1,
+        } satisfies StoredConnectorSecrets);
     const credentials = connectorCredentialInputSchema.parse(stored.credentials);
     if (credentials.kind !== "none") throw new Error("invalid");
     const tlsCaCertificatePem = stored.tlsCaCertificatePem;
@@ -560,11 +626,18 @@ export class ContinueWatchingService {
   readonly #createClient: NonNullable<ContinueWatchingDependencies["createClient"]>;
   readonly #createRemovalPreviewToken: () => string;
   readonly #createRadarrAdapter: NonNullable<ContinueWatchingDependencies["createRadarrAdapter"]>;
+  readonly #createRadarrNavigationAdapter: NonNullable<
+    ContinueWatchingDependencies["createRadarrNavigationAdapter"]
+  >;
+  readonly #createSonarrAdapter: NonNullable<ContinueWatchingDependencies["createSonarrAdapter"]>;
   readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
   readonly #readOnlineExtras: NonNullable<ContinueWatchingDependencies["readOnlineExtras"]>;
   readonly #resolveManagedMovie: NonNullable<ContinueWatchingDependencies["resolveManagedMovie"]>;
+  readonly #resolveConnectedAction: NonNullable<
+    ContinueWatchingDependencies["resolveConnectedAction"]
+  >;
 
   public constructor(
     database: DatabaseHandle,
@@ -581,6 +654,10 @@ export class ContinueWatchingService {
       dependencies.createRemovalPreviewToken ?? (() => randomToken(16));
     this.#createRadarrAdapter =
       dependencies.createRadarrAdapter ?? ((input) => new RadarrAdapter(input));
+    this.#createRadarrNavigationAdapter =
+      dependencies.createRadarrNavigationAdapter ?? ((input) => new RadarrAdapter(input));
+    this.#createSonarrAdapter =
+      dependencies.createSonarrAdapter ?? ((input) => new SonarrAdapter(input));
     this.#createUserMediaStateOperationToken =
       dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
@@ -597,6 +674,10 @@ export class ContinueWatchingService {
     this.#resolveManagedMovie =
       dependencies.resolveManagedMovie ??
       ((input, signal) => this.#resolveManagedMovieFromConnectors(input.providerIds, signal));
+    this.#resolveConnectedAction =
+      dependencies.resolveConnectedAction ??
+      ((input, signal) =>
+        this.#resolveConnectedActionFromConnectors(input.identity, input.service, signal));
   }
 
   public async read(
@@ -780,6 +861,110 @@ export class ContinueWatchingService {
     }
   }
 
+  public async readConnectedActions(
+    referenceId: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryConnectedActionsResponse> {
+    const principal = requirePermission(context.principal, "acquisition.manage");
+    let row: ContinueWatchingSourceRow;
+    try {
+      row = this.#source(principal);
+    } catch (error) {
+      throw new LibraryConnectedActionError("unavailable", { cause: error });
+    }
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new LibraryConnectedActionError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie" && reference.kind !== "series") {
+      throw new LibraryConnectedActionError("not_found");
+    }
+
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibraryTitle(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (
+        result.item.externalId !== reference.itemId ||
+        result.item.kind !== reference.kind ||
+        result.managementIdentity.kind !== reference.kind
+      ) {
+        throw new MediaReferenceError();
+      }
+      return libraryConnectedActionsResponseSchema.parse({
+        actions: await this.#availableConnectedActions(
+          result.managementIdentity,
+          referenceId,
+          signal,
+        ),
+        generatedAt: this.#clock().toISOString(),
+        mediaKind: result.item.kind,
+        referenceId,
+      });
+    } catch (error) {
+      if (error instanceof LibraryConnectedActionError) throw error;
+      throw new LibraryConnectedActionError("unavailable", { cause: error });
+    }
+  }
+
+  public async openConnectedAction(
+    referenceId: string,
+    service: LibraryConnectedActionService,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<URL> {
+    const principal = requirePermission(context.principal, "acquisition.manage");
+    let row: ContinueWatchingSourceRow;
+    try {
+      row = this.#source(principal);
+    } catch (error) {
+      throw new LibraryConnectedActionError("unavailable", { cause: error });
+    }
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new LibraryConnectedActionError("not_found", { cause: error });
+    }
+    if (
+      (reference.kind !== "movie" && reference.kind !== "series") ||
+      (reference.kind === "movie" ? service !== "radarr" : service !== "sonarr")
+    ) {
+      throw new LibraryConnectedActionError("not_found");
+    }
+
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
+      const result = await client.readLibraryTitle(
+        { itemId: reference.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (
+        result.item.externalId !== reference.itemId ||
+        result.item.kind !== reference.kind ||
+        result.managementIdentity.kind !== reference.kind
+      ) {
+        throw new MediaReferenceError();
+      }
+      const target = await this.#resolveConnectedAction(
+        { identity: result.managementIdentity, service },
+        signal,
+      );
+      if (target === null) throw new LibraryConnectedActionError("not_found");
+      return this.#connectedActionUrl(target, service);
+    } catch (error) {
+      if (error instanceof LibraryConnectedActionError) throw error;
+      throw new LibraryConnectedActionError("unavailable", { cause: error });
+    }
+  }
+
   public async readLibraryExtras(
     referenceId: string,
     rawQuery: LibraryExtrasQuery,
@@ -822,7 +1007,11 @@ export class ContinueWatchingService {
       };
       let onlineState: "empty" | "ready" | "unavailable" | "unconfigured";
       if (result.catalogTmdbId === null) {
-        onlineSource = { displayName: "Online trailers", failure: null, status: "unconfigured" };
+        onlineSource = {
+          displayName: "Online trailers",
+          failure: null,
+          status: "unconfigured",
+        };
         onlineState = "unconfigured";
       } else {
         try {
@@ -839,7 +1028,11 @@ export class ContinueWatchingService {
           onlineState = onlineItems.length > 0 ? "ready" : "empty";
         } catch (error) {
           if (error instanceof DiscoverySearchError && error.reason === "connector_unconfigured") {
-            onlineSource = { displayName: "Seerr", failure: null, status: "unconfigured" };
+            onlineSource = {
+              displayName: "Seerr",
+              failure: null,
+              status: "unconfigured",
+            };
             onlineState = "unconfigured";
           } else {
             onlineSource = {
@@ -907,7 +1100,11 @@ export class ContinueWatchingService {
         items: [],
         nextCursor: null,
         onlineItems: [],
-        onlineSource: { displayName: "Seerr", failure: null, status: "unconfigured" },
+        onlineSource: {
+          displayName: "Seerr",
+          failure: null,
+          status: "unconfigured",
+        },
         onlineState: "unconfigured",
         parentReferenceId: referenceId,
         source: {
@@ -1164,7 +1361,11 @@ export class ContinueWatchingService {
         referenceId,
         sizeBytes: ownership?.sizeBytes ?? result.removal.sizeBytes,
         source: managed
-          ? { kind: "managed", monitored: ownership.monitored, service: "radarr" }
+          ? {
+              kind: "managed",
+              monitored: ownership.monitored,
+              service: "radarr",
+            }
           : { kind: "unmanaged", monitored: null, service: "jellyfin" },
         title: result.item.title,
         year: result.item.year,
@@ -1292,7 +1493,11 @@ export class ContinueWatchingService {
     let reference;
     try {
       reference = this.#references.resolve(
-        { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId },
+        {
+          linkId: row.linkId,
+          linkRevision: row.linkRevision,
+          userId: row.linkUserId,
+        },
         referenceId,
       );
     } catch (error) {
@@ -1390,7 +1595,11 @@ export class ContinueWatchingService {
     occurredAt: Date,
   ) {
     const referenceIds = this.#references.createOrRefresh(
-      { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId },
+      {
+        linkId: row.linkId,
+        linkRevision: row.linkRevision,
+        userId: row.linkUserId,
+      },
       result.items.map((item) => ({
         artwork: {
           backdropItemId: item.artwork.backdrop?.itemId ?? null,
@@ -1452,7 +1661,11 @@ export class ContinueWatchingService {
     occurredAt: Date,
   ) {
     const referenceIds = this.#references.createOrRefresh(
-      { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId },
+      {
+        linkId: row.linkId,
+        linkRevision: row.linkRevision,
+        userId: row.linkUserId,
+      },
       result.items.map((item) => ({
         artwork: {
           backdropItemId: item.artwork.backdrop?.itemId ?? null,
@@ -1729,7 +1942,11 @@ export class ContinueWatchingService {
   }
 
   #referenceContext(row: ContinueWatchingSourceRow) {
-    return { linkId: row.linkId, linkRevision: row.linkRevision, userId: row.linkUserId };
+    return {
+      linkId: row.linkId,
+      linkRevision: row.linkRevision,
+      userId: row.linkUserId,
+    };
   }
 
   async #resolveManagedMovieFromConnectors(
@@ -1758,7 +1975,7 @@ export class ContinueWatchingService {
 
     const matches = await Promise.all(
       rows.map(async (row) => {
-        const { apiKey, tlsCaCertificatePem } = this.#radarrSecrets(row);
+        const { apiKey, tlsCaCertificatePem } = this.#apiKeySecrets(row, "radarr");
         if (
           !IDENTIFIER_PATTERN.test(row.id) ||
           !row.displayName.trim() ||
@@ -1785,6 +2002,166 @@ export class ContinueWatchingService {
     const owned = matches.filter((match): match is LibraryRemovalManagedMovie => match !== null);
     if (owned.length > 1) throw new ContinueWatchingConfigurationError("invalid");
     return owned[0] ?? null;
+  }
+
+  async #availableConnectedActions(
+    identity: JellyfinLibraryTitleResult["managementIdentity"],
+    referenceId: string,
+    signal?: AbortSignal,
+  ): Promise<LibraryConnectedAction[]> {
+    const service = identity.kind === "movie" ? "radarr" : "sonarr";
+    try {
+      const target = await this.#resolveConnectedAction({ identity, service }, signal);
+      if (target === null) return [];
+      return [
+        {
+          href: `/v1/media/library/${referenceId}/actions/${service}`,
+          kind: "service_navigation",
+          label: service === "radarr" ? "Open in Radarr" : "Open in Sonarr",
+          service,
+        },
+      ];
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return [];
+    }
+  }
+
+  async #resolveConnectedActionFromConnectors(
+    identity: JellyfinLibraryTitleResult["managementIdentity"],
+    service: LibraryConnectedActionService,
+    signal?: AbortSignal,
+  ): Promise<LibraryConnectedActionTarget | null> {
+    if (identity.kind === "movie" ? service !== "radarr" : service !== "sonarr") {
+      throw new ContinueWatchingConfigurationError("invalid");
+    }
+    if (
+      (identity.kind === "movie" &&
+        identity.providerIds.imdb === null &&
+        identity.providerIds.tmdb === null) ||
+      (identity.kind === "series" &&
+        identity.providerIds.tvdb === null &&
+        identity.providerIds.tmdb === null)
+    ) {
+      return null;
+    }
+    const rows = this.#connectedServiceRows(service);
+    if (rows.length === 0) return null;
+    if (rows.length > 10) throw new ContinueWatchingConfigurationError("invalid");
+
+    const resolutionController = new AbortController();
+    const resolutionSignal =
+      signal === undefined
+        ? resolutionController.signal
+        : AbortSignal.any([signal, resolutionController.signal]);
+    try {
+      const matches = await Promise.all(
+        rows.map(async (row) => {
+          try {
+            if (row.type !== service) throw new ContinueWatchingConfigurationError("invalid");
+            const { apiKey, tlsCaCertificatePem } = this.#apiKeySecrets(row, service);
+            const config = {
+              apiKey,
+              baseUrl: row.baseUrl,
+              clock: {
+                monotonicNow: () => performance.now(),
+                now: this.#clock,
+              },
+              connectorId: row.id,
+              displayName: row.displayName,
+              insecureHttpApproved: row.insecureHttpApproved === 1,
+              tlsPolicy: row.tlsPolicy,
+              ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
+            } satisfies ApiKeyConnectorConfig;
+            let navigation;
+            if (identity.kind === "movie") {
+              navigation = await this.#createRadarrNavigationAdapter(
+                config,
+              ).resolveLibraryMovieNavigation(identity.providerIds, resolutionSignal);
+            } else {
+              navigation = await this.#createSonarrAdapter(config).resolveLibrarySeriesNavigation(
+                identity.providerIds,
+                resolutionSignal,
+              );
+            }
+            return navigation === null
+              ? null
+              : { connectorId: row.id, titleSlug: navigation.titleSlug };
+          } catch (error) {
+            resolutionController.abort();
+            throw error;
+          }
+        }),
+      );
+      const resolved = matches.filter(
+        (match): match is NonNullable<(typeof matches)[number]> => match !== null,
+      );
+      if (resolved.length > 1) throw new ContinueWatchingConfigurationError("invalid");
+      const selected = resolved[0];
+      if (selected === undefined) return null;
+
+      const currentRows = this.#connectedServiceRows(service);
+      if (
+        currentRows.length !== rows.length ||
+        rows.some((row, index) =>
+          this.#connectedServiceConfigurationChanged(row, currentRows[index]),
+        )
+      ) {
+        throw new ContinueWatchingConfigurationError("invalid");
+      }
+      const current = currentRows.find((row) => row.id === selected.connectorId);
+      if (current === undefined || current.type !== service) {
+        throw new ContinueWatchingConfigurationError("invalid");
+      }
+      return {
+        publicUiUrl: current.publicUiUrl,
+        titleSlug: selected.titleSlug,
+      };
+    } finally {
+      resolutionController.abort();
+    }
+  }
+
+  #connectedServiceRows(service: LibraryConnectedActionService) {
+    return (
+      this.#database.sqlite
+        .prepare(
+          `select id, type, display_name as displayName, base_url as baseUrl, enabled,
+                  encrypted_credentials as encryptedCredentials,
+                  tls_policy as tlsPolicy, insecure_http_approved as insecureHttpApproved,
+                  public_ui_url as publicUiUrl, updated_at as updatedAt
+             from connector_configs
+            where type = ? and enabled = 1 and public_ui_url is not null
+            order by id asc
+            limit 11`,
+        )
+        .all(service) as unknown[]
+    ).map((row) => libraryConnectedServiceRowSchema.parse(row));
+  }
+
+  #connectedServiceConfigurationChanged(
+    previous: LibraryConnectedServiceRow,
+    current: LibraryConnectedServiceRow | undefined,
+  ) {
+    return current === undefined || JSON.stringify(previous) !== JSON.stringify(current);
+  }
+
+  #connectedActionUrl(
+    target: LibraryConnectedActionTarget,
+    service: LibraryConnectedActionService,
+  ) {
+    const base = new URL(connectorPublicUiUrlSchema.parse(target.publicUiUrl));
+    if (!SERVARR_TITLE_SLUG_PATTERN.test(target.titleSlug)) {
+      throw new ContinueWatchingConfigurationError("invalid");
+    }
+    const destination = new URL(
+      `${service === "radarr" ? "movie" : "series"}/${encodeURIComponent(target.titleSlug)}`,
+      base,
+    );
+    if (destination.href.length > 2_304) {
+      throw new ContinueWatchingConfigurationError("invalid");
+    }
+    return destination;
   }
 
   #libraryRemovalPreviewId() {
@@ -1887,10 +2264,13 @@ export class ContinueWatchingService {
     }
   }
 
-  #radarrSecrets(row: LibraryRemovalRadarrRow) {
+  #apiKeySecrets(row: LibraryRemovalRadarrRow, service: LibraryConnectedActionService) {
     try {
       const decoded = JSON.parse(
-        this.#cipher.decrypt(row.encryptedCredentials, `connector_credentials:radarr:${row.id}`),
+        this.#cipher.decrypt(
+          row.encryptedCredentials,
+          `connector_credentials:${service}:${row.id}`,
+        ),
       ) as unknown;
       if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
         throw new Error("invalid");
@@ -1907,7 +2287,10 @@ export class ContinueWatchingService {
       }
       const stored = versioned
         ? (record as unknown as StoredConnectorSecrets)
-        : ({ credentials: decoded, schemaVersion: 1 } satisfies StoredConnectorSecrets);
+        : ({
+            credentials: decoded,
+            schemaVersion: 1,
+          } satisfies StoredConnectorSecrets);
       const credentials = connectorCredentialInputSchema.parse(stored.credentials);
       if (credentials.kind !== "api_key") throw new Error("invalid");
       const tlsCaCertificatePem = stored.tlsCaCertificatePem;
