@@ -3257,11 +3257,7 @@
       "indexes": {
         "media_references_link_item_unique": {
           "name": "media_references_link_item_unique",
-          "columns": [
-            "service_identity_link_id",
-            "link_revision",
-            "item_digest"
-          ],
+          "columns": ["service_identity_link_id", "link_revision", "item_digest"],
           "isUnique": true
         },
         "media_references_user_last_used_idx": {
@@ -4864,12 +4860,7 @@
         },
         "sessions_user_active_idx": {
           "name": "sessions_user_active_idx",
-          "columns": [
-            "user_id",
-            "revoked_at",
-            "expires_at",
-            "absolute_expires_at"
-          ],
+          "columns": ["user_id", "revoked_at", "expires_at", "absolute_expires_at"],
           "isUnique": false
         },
         "sessions_recovery_created_idx": {
@@ -4919,11 +4910,7 @@
           "name": "sessions_oidc_identity_fk",
           "tableFrom": "sessions",
           "tableTo": "external_identities",
-          "columnsFrom": [
-            "external_identity_id",
-            "user_id",
-            "oidc_provider_id"
-          ],
+          "columnsFrom": ["external_identity_id", "user_id", "oidc_provider_id"],
           "columnsTo": ["id", "user_id", "provider_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"

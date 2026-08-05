@@ -12,10 +12,7 @@ const migrationFilenames = readdirSync(migrationDirectory)
 const expectedMigrationCount = migrationFilenames.length;
 
 function applyMigration(database: Database.Database, filename: string) {
-  const migration = readFileSync(
-    path.join(migrationDirectory, filename),
-    "utf8",
-  );
+  const migration = readFileSync(path.join(migrationDirectory, filename), "utf8");
   for (const statement of migration.split("--> statement-breakpoint")) {
     if (statement.trim().length > 0) database.exec(statement);
   }
@@ -24,9 +21,7 @@ function applyMigration(database: Database.Database, filename: string) {
 function applyPreReservationMigrations(database: Database.Database) {
   applyMigration(database, "0000_foundation.sql");
   applyMigration(database, "0001_auth_security_foundation.sql");
-  database.transaction(() =>
-    applyMigration(database, "0002_oidc_runtime_security.sql"),
-  )();
+  database.transaction(() => applyMigration(database, "0002_oidc_runtime_security.sql"))();
 }
 
 function insertPreReservationSession(
@@ -487,9 +482,7 @@ describe("authentication schema upgrades", () => {
         },
       ]);
       expect(
-        database
-          .prepare("select count(*) as count from session_rotation_aliases")
-          .get(),
+        database.prepare("select count(*) as count from session_rotation_aliases").get(),
       ).toEqual({ count: 0 });
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
@@ -567,9 +560,7 @@ describe("authentication schema upgrades", () => {
         database.transaction(() =>
           applyMigration(database, "0003_session_secret_reservations.sql"),
         )(),
-      ).toThrow(
-        /UNIQUE constraint failed: session_secret_reservations\.secret_hash/,
-      );
+      ).toThrow(/UNIQUE constraint failed: session_secret_reservations\.secret_hash/);
 
       expect(
         database
@@ -582,9 +573,7 @@ describe("authentication schema upgrades", () => {
           )
           .all(),
       ).toEqual([]);
-      expect(
-        database.prepare("select count(*) as count from sessions").get(),
-      ).toEqual({
+      expect(database.prepare("select count(*) as count from sessions").get()).toEqual({
         count: 2,
       });
       expect(database.pragma("foreign_key_check")).toEqual([]);
@@ -837,13 +826,9 @@ describe("authentication schema upgrades", () => {
 
       applyMigration(database, "0001_auth_security_foundation.sql");
       database
-        .prepare(
-          "update sessions set encrypted_id_token_hint = ? where id = 'session-oidc'",
-        )
+        .prepare("update sessions set encrypted_id_token_hint = ? where id = 'session-oidc'")
         .run("");
-      database.transaction(() =>
-        applyMigration(database, "0002_oidc_runtime_security.sql"),
-      )();
+      database.transaction(() => applyMigration(database, "0002_oidc_runtime_security.sql"))();
 
       expect(
         database
@@ -948,9 +933,10 @@ describe("authentication schema upgrades", () => {
         { id: "link-alpha", userId: "user-viewer" },
         { id: "link-beta", userId: "user-admin" },
       ]);
-      expect(
-        links.map(({ externalDisplayName }) => externalDisplayName),
-      ).toEqual(["riley", "morgan"]);
+      expect(links.map(({ externalDisplayName }) => externalDisplayName)).toEqual([
+        "riley",
+        "morgan",
+      ]);
       expect(
         links.every(
           ({
@@ -969,16 +955,10 @@ describe("authentication schema upgrades", () => {
             tokenCreatedAt === null,
         ),
       ).toBe(true);
-      expect(
-        new Set(links.map(({ externalServerId }) => externalServerId)).size,
-      ).toBe(2);
+      expect(new Set(links.map(({ externalServerId }) => externalServerId)).size).toBe(2);
       expect(new Set(links.map(({ deviceId }) => deviceId)).size).toBe(2);
       expect(
-        database
-          .prepare(
-            "select id, role_source as roleSource from users order by id",
-          )
-          .all(),
+        database.prepare("select id, role_source as roleSource from users order by id").all(),
       ).toEqual([
         { id: "user-admin", roleSource: "manual" },
         { id: "user-oidc", roleSource: "manual" },
@@ -1051,9 +1031,7 @@ describe("authentication schema upgrades", () => {
           userId: null,
         }),
       ]);
-      expect(
-        migratedSessions.every(({ revokedAt }) => revokedAt !== null),
-      ).toBe(true);
+      expect(migratedSessions.every(({ revokedAt }) => revokedAt !== null)).toBe(true);
       expect(
         database
           .prepare(
@@ -1091,11 +1069,7 @@ describe("authentication schema upgrades", () => {
           .prepare("select count(*) as count from sessions where id = ?")
           .get("session-jellyfin-unlinked"),
       ).toEqual({ count: 0 });
-      expect(
-        database
-          .prepare("select count(*) as count from auth_transactions")
-          .get(),
-      ).toEqual({
+      expect(database.prepare("select count(*) as count from auth_transactions").get()).toEqual({
         count: 0,
       });
       expect(database.pragma("foreign_key_check")).toEqual([]);
@@ -1131,13 +1105,9 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe(
-        "0028_library_removal_operations.sql",
-      );
+      expect(migrationFilenames.at(-1)).toBe("0028_library_removal_operations.sql");
       const tables = database.sqlite
-        .prepare(
-          "select name from sqlite_master where type = 'table' order by name",
-        )
+        .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
       const names = tables.map(({ name }) => name);
       expect(names).not.toContain("quick_connect_transactions");
@@ -1163,9 +1133,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("session_rotation_aliases");
       expect(names).toContain("session_secret_reservations");
       expect(
-        database.sqlite
-          .prepare("select count(*) as count from __drizzle_migrations")
-          .get(),
+        database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
       ).toEqual({ count: expectedMigrationCount });
       expect(
         (
@@ -1208,9 +1176,9 @@ describe("authentication schema invariants", () => {
            )`,
         )
         .all({ windowCutoff: 0 }) as { detail: string }[];
-      expect(
-        recoveryIssuancePlan.map(({ detail }) => detail).join("\n"),
-      ).toContain("sessions_recovery_created_idx");
+      expect(recoveryIssuancePlan.map(({ detail }) => detail).join("\n")).toContain(
+        "sessions_recovery_created_idx",
+      );
       const activeRecoveryPlan = database.sqlite
         .prepare(
           `explain query plan
@@ -1221,9 +1189,9 @@ describe("authentication schema invariants", () => {
              and (@replacingSessionId is null or id <> @replacingSessionId)`,
         )
         .all({ now: 1, replacingSessionId: null }) as { detail: string }[];
-      expect(
-        activeRecoveryPlan.map(({ detail }) => detail).join("\n"),
-      ).toContain("sessions_active_recovery_idx");
+      expect(activeRecoveryPlan.map(({ detail }) => detail).join("\n")).toContain(
+        "sessions_active_recovery_idx",
+      );
       expect(
         database.sqlite
           .prepare(
@@ -1276,9 +1244,7 @@ describe("authentication schema invariants", () => {
       `);
       expect(
         database.sqlite
-          .prepare(
-            "select role, role_source as roleSource, status from users where id = ?",
-          )
+          .prepare("select role, role_source as roleSource, status from users where id = ?")
           .get("jit-default-user"),
       ).toEqual({
         role: "viewer",
@@ -1296,8 +1262,7 @@ describe("authentication schema invariants", () => {
         to: string;
       }[];
       const connectorForeignKeyId = serviceLinkForeignKeys.find(
-        ({ from, table }) =>
-          from === "connector_id" && table === "connector_configs",
+        ({ from, table }) => from === "connector_id" && table === "connector_configs",
       )?.id;
       expect(
         serviceLinkForeignKeys
@@ -1316,22 +1281,14 @@ describe("authentication schema invariants", () => {
         ).map(({ name }) => name),
       ).toContain("connector_configs_id_type_unique");
 
-      const auditIndexes = database.sqlite.pragma(
-        "index_list(audit_events)",
-      ) as {
+      const auditIndexes = database.sqlite.pragma("index_list(audit_events)") as {
         name: string;
       }[];
-      expect(auditIndexes.map(({ name }) => name)).toContain(
-        "audit_events_request_idx",
-      );
-      expect(auditIndexes.map(({ name }) => name)).toContain(
-        "audit_events_actor_session_idx",
-      );
+      expect(auditIndexes.map(({ name }) => name)).toContain("audit_events_request_idx");
+      expect(auditIndexes.map(({ name }) => name)).toContain("audit_events_actor_session_idx");
       expect(
         (
-          database.sqlite.pragma(
-            "index_info(audit_events_actor_session_idx)",
-          ) as {
+          database.sqlite.pragma("index_info(audit_events_actor_session_idx)") as {
             name: string;
           }[]
         ).map(({ name }) => name),
@@ -1440,21 +1397,15 @@ describe("authentication schema invariants", () => {
       ).toThrow(/audit_budget_entry_generation_is_not_current/);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_entries set created_at = 1001 where scope = ?",
-          )
+          .prepare("update audit_budget_entries set created_at = 1001 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_entry_is_immutable/);
       expect(() =>
-        database.sqlite
-          .prepare("delete from audit_budget_entries where scope = ?")
-          .run(scope),
+        database.sqlite.prepare("delete from audit_budget_entries where scope = ?").run(scope),
       ).toThrow(/audit_budget_current_generation_is_persistent/);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_scopes set generation = 3 where scope = ?",
-          )
+          .prepare("update audit_budget_scopes set generation = 3 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_scope_transition_is_invalid/);
 
@@ -1472,9 +1423,7 @@ describe("authentication schema invariants", () => {
         .run(scope);
       expect(
         database.sqlite
-          .prepare(
-            "delete from audit_budget_entries where scope = ? and generation = 1",
-          )
+          .prepare("delete from audit_budget_entries where scope = ? and generation = 1")
           .run(scope).changes,
       ).toBe(1);
       database.sqlite
@@ -1485,15 +1434,11 @@ describe("authentication schema invariants", () => {
         )
         .run(scope, "b".repeat(22));
       database.sqlite
-        .prepare(
-          "update audit_budget_scopes set suppressed_count = 1 where scope = ?",
-        )
+        .prepare("update audit_budget_scopes set suppressed_count = 1 where scope = ?")
         .run(scope);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_scopes set suppressed_count = 0 where scope = ?",
-          )
+          .prepare("update audit_budget_scopes set suppressed_count = 0 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_scope_transition_is_invalid/);
       database.sqlite
@@ -1501,28 +1446,20 @@ describe("authentication schema invariants", () => {
         .run(scope);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_scopes set saturated = 0 where scope = ?",
-          )
+          .prepare("update audit_budget_scopes set saturated = 0 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_scope_transition_is_invalid/);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_scopes set clock_watermark_at = 1999 where scope = ?",
-          )
+          .prepare("update audit_budget_scopes set clock_watermark_at = 1999 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_scope_transition_is_invalid/);
       expect(() =>
-        database.sqlite
-          .prepare("delete from audit_budget_scopes where scope = ?")
-          .run(scope),
+        database.sqlite.prepare("delete from audit_budget_scopes where scope = ?").run(scope),
       ).toThrow(/audit_budget_scope_is_persistent/);
       expect(() =>
         database.sqlite
-          .prepare(
-            "update audit_budget_scopes set generation = 1 where scope = ?",
-          )
+          .prepare("update audit_budget_scopes set generation = 1 where scope = ?")
           .run(scope),
       ).toThrow(/audit_budget_scope_transition_is_invalid/);
       expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
@@ -1657,9 +1594,7 @@ describe("authentication schema invariants", () => {
       ).toThrow(/session_secret_reservations_immutable/);
       expect(() =>
         database.sqlite
-          .prepare(
-            "delete from session_secret_reservations where secret_hash = ?",
-          )
+          .prepare("delete from session_secret_reservations where secret_hash = ?")
           .run("a".repeat(43)),
       ).toThrow(/session_secret_reservations_immutable/);
       expect(() =>
@@ -1674,18 +1609,12 @@ describe("authentication schema invariants", () => {
         update sessions set revoked_at = 27000 where id = 'session-reserved';
       `);
       expect(
-        database.sqlite
-          .prepare("select count(*) as count from session_rotation_aliases")
-          .get(),
+        database.sqlite.prepare("select count(*) as count from session_rotation_aliases").get(),
       ).toEqual({ count: 0 });
 
-      database.sqlite.exec(
-        "delete from sessions where id = 'session-reserved'",
-      );
+      database.sqlite.exec("delete from sessions where id = 'session-reserved'");
       expect(
-        database.sqlite
-          .prepare("select count(*) as count from session_secret_reservations")
-          .get(),
+        database.sqlite.prepare("select count(*) as count from session_secret_reservations").get(),
       ).toEqual({ count: 5 });
       expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
     } finally {
@@ -1884,17 +1813,16 @@ describe("authentication schema invariants", () => {
             consumedAt: null,
             expiresAt: 2000,
             id,
-            redirectUri:
-              "https://omnifin.example.test/api/v1/auth/oidc/callback",
+            redirectUri: "https://omnifin.example.test/api/v1/auth/oidc/callback",
             returnPath: "/library",
             stateHash: id.at(-1)?.repeat(43) ?? "s".repeat(43),
             ...overrides,
           });
 
       insertTransaction("transaction-1", { stateHash: "s".repeat(43) });
-      expect(() =>
-        insertTransaction("transaction-2", { browserBindingHash: "short" }),
-      ).toThrow(/auth_transactions_hashes_check/);
+      expect(() => insertTransaction("transaction-2", { browserBindingHash: "short" })).toThrow(
+        /auth_transactions_hashes_check/,
+      );
       expect(() =>
         insertTransaction("transaction-3", {
           redirectUri: "https://omnifin.example.test/callback#fragment",
@@ -1905,9 +1833,9 @@ describe("authentication schema invariants", () => {
           returnPath: "//attacker.example.test",
         }),
       ).toThrow(/auth_transactions_return_path_check/);
-      expect(() =>
-        insertTransaction("transaction-5", { consumedAt: 2001 }),
-      ).toThrow(/auth_transactions_timestamp_order_check/);
+      expect(() => insertTransaction("transaction-5", { consumedAt: 2001 })).toThrow(
+        /auth_transactions_timestamp_order_check/,
+      );
     } finally {
       database.close();
     }

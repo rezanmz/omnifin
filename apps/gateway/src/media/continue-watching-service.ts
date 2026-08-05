@@ -6,10 +6,7 @@ import {
   JellyfinUserMediaClient,
   type JellyfinContinueWatchingResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
-import type {
-  ApiKeyConnectorConfig,
-  ConnectorTargetConfig,
-} from "@omnifin/connectors/types";
+import type { ApiKeyConnectorConfig, ConnectorTargetConfig } from "@omnifin/connectors/types";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import {
@@ -56,10 +53,7 @@ import {
   type ViewingHistoryQuery,
   type ViewingHistoryResponse,
 } from "@omnifin/contracts/library";
-import {
-  connectorCredentialInputSchema,
-  type PartialFailure,
-} from "@omnifin/contracts/connectors";
+import { connectorCredentialInputSchema, type PartialFailure } from "@omnifin/contracts/connectors";
 import type { DiscoveryTrailer } from "@omnifin/contracts/discovery";
 import { createHash, X509Certificate } from "node:crypto";
 import { z, ZodError } from "zod";
@@ -67,10 +61,7 @@ import { z, ZodError } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import {
-  DiscoverySearchError,
-  DiscoverySearchService,
-} from "../discovery/search-service.js";
+import { DiscoverySearchError, DiscoverySearchService } from "../discovery/search-service.js";
 import {
   constantTimeTextEqual,
   EnvelopeCipher,
@@ -85,13 +76,11 @@ import {
 } from "./media-reference-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-const UPSTREAM_MEDIA_IDENTIFIER_PATTERN =
-  /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const UPSTREAM_MEDIA_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER = 4_096;
 const STALE_USER_MEDIA_STATE_OPERATION_MS = 5 * 60 * 1_000;
 const USER_MEDIA_STATE_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const USER_MEDIA_STATE_OPERATION_ID_PATTERN =
-  /^user_media_state_[A-Za-z0-9_-]{22}$/u;
+const USER_MEDIA_STATE_OPERATION_ID_PATTERN = /^user_media_state_[A-Za-z0-9_-]{22}$/u;
 const LIBRARY_REMOVAL_PREVIEW_TTL_MS = 5 * 60 * 1_000;
 const MAX_LIBRARY_REMOVAL_PREVIEWS_PER_USER = 20;
 const MAX_LIBRARY_REMOVAL_PREVIEW_BYTES = 65_536;
@@ -123,9 +112,7 @@ const libraryExtrasCursorPayloadSchema = z.strictObject({
   startIndex: z.int().nonnegative().max(1_000_000),
   version: z.literal(1),
 });
-type LibraryExtrasCursorPayload = z.infer<
-  typeof libraryExtrasCursorPayloadSchema
->;
+type LibraryExtrasCursorPayload = z.infer<typeof libraryExtrasCursorPayloadSchema>;
 
 const librarySeasonCursorPayloadSchema = z.strictObject({
   limit: z.int().positive().max(50),
@@ -136,9 +123,7 @@ const librarySeasonCursorPayloadSchema = z.strictObject({
   titleReferenceId: z.string().regex(/^media_[A-Za-z0-9_-]{22}$/u),
   version: z.literal(1),
 });
-type LibrarySeasonCursorPayload = z.infer<
-  typeof librarySeasonCursorPayloadSchema
->;
+type LibrarySeasonCursorPayload = z.infer<typeof librarySeasonCursorPayloadSchema>;
 
 const storedLibraryRemovalPreviewShape = {
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
@@ -185,10 +170,10 @@ const storedLibraryRemovalPreviewV2Schema = z.strictObject({
   ]),
 });
 
-const storedLibraryRemovalPreviewSchema = z.discriminatedUnion(
-  "schemaVersion",
-  [storedLibraryRemovalPreviewV1Schema, storedLibraryRemovalPreviewV2Schema],
-);
+const storedLibraryRemovalPreviewSchema = z.discriminatedUnion("schemaVersion", [
+  storedLibraryRemovalPreviewV1Schema,
+  storedLibraryRemovalPreviewV2Schema,
+]);
 
 const viewingHistoryCursorPayloadSchema = z.strictObject({
   afterItemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
@@ -201,9 +186,7 @@ const viewingHistoryCursorPayloadSchema = z.strictObject({
   state: viewingHistoryStateSchema,
   version: z.literal(1),
 });
-type ViewingHistoryCursorPayload = z.infer<
-  typeof viewingHistoryCursorPayloadSchema
->;
+type ViewingHistoryCursorPayload = z.infer<typeof viewingHistoryCursorPayloadSchema>;
 
 interface ContinueWatchingSourceRow {
   baseUrl: string;
@@ -283,9 +266,7 @@ interface LibraryRemovalOperationRow {
   updatedAt: number;
 }
 
-type StoredLibraryRemovalPreview = z.infer<
-  typeof storedLibraryRemovalPreviewSchema
->;
+type StoredLibraryRemovalPreview = z.infer<typeof storedLibraryRemovalPreviewSchema>;
 
 type LibraryRemovalReservation =
   | {
@@ -328,9 +309,7 @@ export interface ContinueWatchingDependencies {
         | "updatePlaybackState"
       >
     >;
-  createRadarrAdapter?: (
-    input: ApiKeyConnectorConfig,
-  ) => LibraryRemovalRadarrAdapter;
+  createRadarrAdapter?: (input: ApiKeyConnectorConfig) => LibraryRemovalRadarrAdapter;
   mediaReferences?: MediaReferenceDependencies;
   readOnlineExtras?: (
     input: {
@@ -357,8 +336,7 @@ export class ContinueWatchingError extends Error {
   }
 }
 
-export type MediaLibraryErrorReason =
-  "cursor_invalid" | "not_found" | "unavailable";
+export type MediaLibraryErrorReason = "cursor_invalid" | "not_found" | "unavailable";
 
 export class MediaLibraryError extends Error {
   public readonly code = "media_library_unavailable";
@@ -385,10 +363,7 @@ export class LibraryRemovalPreviewError extends Error {
   public readonly code = "library_removal_preview_unavailable";
   public readonly reason: LibraryRemovalPreviewErrorReason;
 
-  public constructor(
-    reason: LibraryRemovalPreviewErrorReason,
-    options?: ErrorOptions,
-  ) {
+  public constructor(reason: LibraryRemovalPreviewErrorReason, options?: ErrorOptions) {
     super("The library removal preview is unavailable.", options);
     this.name = "LibraryRemovalPreviewError";
     this.reason = reason;
@@ -413,10 +388,7 @@ export class LibraryRemovalError extends Error {
   public readonly code = "library_removal_failed";
   public readonly reason: LibraryRemovalErrorReason;
 
-  public constructor(
-    reason: LibraryRemovalErrorReason,
-    options?: ErrorOptions,
-  ) {
+  public constructor(reason: LibraryRemovalErrorReason, options?: ErrorOptions) {
     super("The library title could not be removed safely.", options);
     this.name = "LibraryRemovalError";
     this.reason = reason;
@@ -440,10 +412,7 @@ export type MediaPlaybackStateErrorReason =
 export class MediaPlaybackStateError extends Error {
   public readonly reason: MediaPlaybackStateErrorReason;
 
-  public constructor(
-    reason: MediaPlaybackStateErrorReason,
-    options?: ErrorOptions,
-  ) {
+  public constructor(reason: MediaPlaybackStateErrorReason, options?: ErrorOptions) {
     super("The Jellyfin playback state could not be updated.", options);
     this.name = "MediaPlaybackStateError";
     this.reason = reason;
@@ -460,10 +429,7 @@ export type ViewingHistoryErrorReason = "cursor_invalid" | "unavailable";
 export class ViewingHistoryError extends Error {
   public readonly reason: ViewingHistoryErrorReason;
 
-  public constructor(
-    reason: ViewingHistoryErrorReason,
-    options?: ErrorOptions,
-  ) {
+  public constructor(reason: ViewingHistoryErrorReason, options?: ErrorOptions) {
     super(
       reason === "cursor_invalid"
         ? "The viewing-history cursor is invalid or no longer current."
@@ -505,10 +471,7 @@ function credentialsContext(connectorId: string) {
 
 function accessToken(row: ContinueWatchingSourceRow, cipher: EnvelopeCipher) {
   try {
-    return cipher.decrypt(
-      row.encryptedAccessToken,
-      accessTokenContext(row.linkId),
-    );
+    return cipher.decrypt(row.encryptedAccessToken, accessTokenContext(row.linkId));
   } catch (error) {
     throw new ContinueWatchingConfigurationError("invalid", { cause: error });
   }
@@ -519,22 +482,12 @@ function safeDisplayName(value: string) {
   return (cleaned || "Jellyfin").slice(0, 160);
 }
 
-function connectorSecrets(
-  row: ContinueWatchingSourceRow,
-  cipher: EnvelopeCipher,
-) {
+function connectorSecrets(row: ContinueWatchingSourceRow, cipher: EnvelopeCipher) {
   try {
     const decoded = JSON.parse(
-      cipher.decrypt(
-        row.encryptedCredentials,
-        credentialsContext(row.connectorId),
-      ),
+      cipher.decrypt(row.encryptedCredentials, credentialsContext(row.connectorId)),
     ) as unknown;
-    if (
-      typeof decoded !== "object" ||
-      decoded === null ||
-      Array.isArray(decoded)
-    ) {
+    if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
       throw new Error("invalid");
     }
     const record = decoded as Record<string, unknown>;
@@ -542,10 +495,7 @@ function connectorSecrets(
     if (
       versioned &&
       Object.keys(record).some(
-        (key) =>
-          !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(
-            key,
-          ),
+        (key) => !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(key),
       )
     ) {
       throw new Error("invalid");
@@ -556,24 +506,17 @@ function connectorSecrets(
           credentials: decoded,
           schemaVersion: 1,
         } satisfies StoredConnectorSecrets);
-    const credentials = connectorCredentialInputSchema.parse(
-      stored.credentials,
-    );
+    const credentials = connectorCredentialInputSchema.parse(stored.credentials);
     if (credentials.kind !== "none") throw new Error("invalid");
     const tlsCaCertificatePem = stored.tlsCaCertificatePem;
     if (tlsCaCertificatePem !== undefined) {
-      if (
-        typeof tlsCaCertificatePem !== "string" ||
-        row.tlsPolicy !== "allow_self_signed"
-      ) {
+      if (typeof tlsCaCertificatePem !== "string" || row.tlsPolicy !== "allow_self_signed") {
         throw new Error("invalid");
       }
       const certificate = new X509Certificate(tlsCaCertificatePem);
       if (!certificate.ca) throw new Error("invalid");
     }
-    return typeof tlsCaCertificatePem === "string"
-      ? { tlsCaCertificatePem }
-      : {};
+    return typeof tlsCaCertificatePem === "string" ? { tlsCaCertificatePem } : {};
   } catch (error) {
     throw new ContinueWatchingConfigurationError("invalid", { cause: error });
   }
@@ -584,8 +527,7 @@ function defaultClient(input: ContinueWatchingClientFactoryInput) {
   return new JellyfinUserMediaClient({ accessToken, deviceId, target });
 }
 
-type UserMediaOperation =
-  "media.continue_watching" | "media.library" | "media.viewing_history";
+type UserMediaOperation = "media.continue_watching" | "media.library" | "media.viewing_history";
 
 function safeFailure(
   error: unknown,
@@ -608,8 +550,7 @@ function safeFailure(
   if (error instanceof ZodError) {
     return {
       code: "response_invalid",
-      message:
-        "Jellyfin returned media data that could not be safely interpreted.",
+      message: "Jellyfin returned media data that could not be safely interpreted.",
       occurredAt: occurredAt.toISOString(),
       operation,
       retryable: false,
@@ -620,8 +561,7 @@ function safeFailure(
     code: "upstream_error",
     message: mediaOperationFailureMessage(error, operation),
     occurredAt: occurredAt.toISOString(),
-    operation:
-      error instanceof MediaReferenceError ? "media.reference" : operation,
+    operation: error instanceof MediaReferenceError ? "media.reference" : operation,
     retryable: true,
     service: "jellyfin",
   };
@@ -641,27 +581,21 @@ function onlineExtrasFailure(error: unknown, occurredAt: Date): PartialFailure {
     operation: "discovery.detail",
     retryable: code !== "configuration_invalid" && code !== "response_invalid",
     service: "seerr",
-    ...(error instanceof SafeConnectorError &&
-    error.retryAfterSeconds !== undefined
+    ...(error instanceof SafeConnectorError && error.retryAfterSeconds !== undefined
       ? { retryAfterSeconds: error.retryAfterSeconds }
       : {}),
   };
 }
 
-function mediaOperationFailureMessage(
-  error: unknown,
-  operation: UserMediaOperation,
-) {
+function mediaOperationFailureMessage(error: unknown, operation: UserMediaOperation) {
   if (error instanceof MediaReferenceError) {
-    if (operation === "media.library")
-      return "Library references are temporarily unavailable.";
+    if (operation === "media.library") return "Library references are temporarily unavailable.";
     if (operation === "media.viewing_history") {
       return "Viewing history references are temporarily unavailable.";
     }
     return "Continue Watching references are temporarily unavailable.";
   }
-  if (operation === "media.library")
-    return "The Jellyfin library is temporarily unavailable.";
+  if (operation === "media.library") return "The Jellyfin library is temporarily unavailable.";
   if (operation === "media.viewing_history") {
     return "Jellyfin viewing history is temporarily unavailable.";
   }
@@ -712,10 +646,7 @@ function playbackStateFailure(error: unknown): MediaPlaybackStateErrorReason {
   if (error instanceof SafeConnectorError) {
     if (error.status === 404) return "not_found";
     if (error.status === 403) return "permission_denied";
-    if (
-      error.code === "response_invalid" ||
-      error.code === "unsupported_version"
-    ) {
+    if (error.code === "response_invalid" || error.code === "unsupported_version") {
       return "response_invalid";
     }
     return "unavailable";
@@ -740,23 +671,15 @@ export class ContinueWatchingService {
   readonly #clock: () => Date;
   readonly #config: AppConfig;
   readonly #createAuditToken: () => string;
-  readonly #createClient: NonNullable<
-    ContinueWatchingDependencies["createClient"]
-  >;
+  readonly #createClient: NonNullable<ContinueWatchingDependencies["createClient"]>;
   readonly #createRemovalOperationToken: () => string;
   readonly #createRemovalPreviewToken: () => string;
-  readonly #createRadarrAdapter: NonNullable<
-    ContinueWatchingDependencies["createRadarrAdapter"]
-  >;
+  readonly #createRadarrAdapter: NonNullable<ContinueWatchingDependencies["createRadarrAdapter"]>;
   readonly #createUserMediaStateOperationToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
-  readonly #readOnlineExtras: NonNullable<
-    ContinueWatchingDependencies["readOnlineExtras"]
-  >;
-  readonly #resolveManagedMovie: NonNullable<
-    ContinueWatchingDependencies["resolveManagedMovie"]
-  >;
+  readonly #readOnlineExtras: NonNullable<ContinueWatchingDependencies["readOnlineExtras"]>;
+  readonly #resolveManagedMovie: NonNullable<ContinueWatchingDependencies["resolveManagedMovie"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -767,8 +690,7 @@ export class ContinueWatchingService {
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
-    this.#createAuditToken =
-      dependencies.createAuditToken ?? (() => randomToken(16));
+    this.#createAuditToken = dependencies.createAuditToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#createRemovalOperationToken =
       dependencies.createRemovalOperationToken ?? (() => randomToken(16));
@@ -777,15 +699,9 @@ export class ContinueWatchingService {
     this.#createRadarrAdapter =
       dependencies.createRadarrAdapter ?? ((input) => new RadarrAdapter(input));
     this.#createUserMediaStateOperationToken =
-      dependencies.createUserMediaStateOperationToken ??
-      (() => randomToken(16));
-    this.#references = new MediaReferenceService(
-      database,
-      config,
-      dependencies.mediaReferences,
-    );
-    if (dependencies.readOnlineExtras)
-      this.#readOnlineExtras = dependencies.readOnlineExtras;
+      dependencies.createUserMediaStateOperationToken ?? (() => randomToken(16));
+    this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
+    if (dependencies.readOnlineExtras) this.#readOnlineExtras = dependencies.readOnlineExtras;
     else {
       const discovery = new DiscoverySearchService(database, config);
       this.#readOnlineExtras = (input, signal) =>
@@ -797,8 +713,7 @@ export class ContinueWatchingService {
     }
     this.#resolveManagedMovie =
       dependencies.resolveManagedMovie ??
-      ((input, signal) =>
-        this.#resolveManagedMovieFromConnectors(input.providerIds, signal));
+      ((input, signal) => this.#resolveManagedMovieFromConnectors(input.providerIds, signal));
   }
 
   public async read(
@@ -830,9 +745,7 @@ export class ContinueWatchingService {
     const query = libraryBrowseQuerySchema.parse(rawQuery);
     const row = this.#source(principal);
     const occurredAt = this.#clock();
-    const startIndex = query.cursor
-      ? this.#decodeLibraryCursor(query.cursor, query, row)
-      : 0;
+    const startIndex = query.cursor ? this.#decodeLibraryCursor(query.cursor, query, row) : 0;
     try {
       const client = this.#client(row);
       if (!client.readLibrary) throw new ContinueWatchingConfigurationError();
@@ -862,22 +775,16 @@ export class ContinueWatchingService {
     context: ContinueWatchingContext,
     signal?: AbortSignal,
   ): Promise<ViewingHistoryResponse> {
-    const principal = requirePermission(
-      context.principal,
-      "playback.history.self.manage",
-    );
+    const principal = requirePermission(context.principal, "playback.history.self.manage");
     const query = viewingHistoryQuerySchema.parse(rawQuery);
     const row = this.#source(principal);
     const occurredAt = this.#clock();
-    const cursor = query.cursor
-      ? this.#decodeViewingHistoryCursor(query.cursor, query, row)
-      : null;
+    const cursor = query.cursor ? this.#decodeViewingHistoryCursor(query.cursor, query, row) : null;
     const since = cursor?.since ?? viewingHistorySince(query.range, occurredAt);
 
     try {
       const client = this.#client(row);
-      if (!client.readViewingHistory)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readViewingHistory) throw new ContinueWatchingConfigurationError();
       const result = await client.readViewingHistory(
         {
           ...(cursor === null ? {} : { afterItemId: cursor.afterItemId }),
@@ -889,15 +796,8 @@ export class ContinueWatchingService {
         },
         signal,
       );
-      if (!result.boundaryFound)
-        throw new ViewingHistoryError("cursor_invalid");
-      return this.#viewingHistoryResponse(
-        row,
-        query,
-        result,
-        since,
-        occurredAt,
-      );
+      if (!result.boundaryFound) throw new ViewingHistoryError("cursor_invalid");
+      return this.#viewingHistoryResponse(row, query, result, since, occurredAt);
     } catch (error) {
       if (error instanceof ViewingHistoryError) throw error;
       return viewingHistoryResponseSchema.parse({
@@ -924,10 +824,7 @@ export class ContinueWatchingService {
     const occurredAt = this.#clock();
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new MediaLibraryError("not_found", { cause: error });
     }
@@ -936,42 +833,29 @@ export class ContinueWatchingService {
     }
     try {
       const client = this.#client(row);
-      if (!client.readLibraryTitle)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
       const result = await client.readLibraryTitle(
         { itemId: reference.itemId, userId: row.externalUserId },
         signal,
       );
-      if (
-        result.item.externalId !== reference.itemId ||
-        result.item.kind !== reference.kind
-      ) {
+      if (result.item.externalId !== reference.itemId || result.item.kind !== reference.kind) {
         throw new MediaReferenceError();
       }
-      const [refreshedReferenceId] = this.#references.createOrRefresh(
-        this.#referenceContext(row),
-        [this.#titleReferenceInput(result.item)],
-      );
+      const [refreshedReferenceId] = this.#references.createOrRefresh(this.#referenceContext(row), [
+        this.#titleReferenceInput(result.item),
+      ]);
       if (refreshedReferenceId !== referenceId) throw new MediaReferenceError();
       const titleCredits = result.movie ?? result.seriesCredits;
       const personReferences = this.#personReferences(
         row,
-        titleCredits === null
-          ? []
-          : [...titleCredits.cast, ...titleCredits.crew],
+        titleCredits === null ? [] : [...titleCredits.cast, ...titleCredits.crew],
       );
-      const publicCredit = (
-        credit: NonNullable<typeof titleCredits>["cast"][number],
-      ) => ({
+      const publicCredit = (credit: NonNullable<typeof titleCredits>["cast"][number]) => ({
         imagePath:
-          credit.image === null
-            ? null
-            : this.#personImagePath(referenceId, credit.image.itemId),
+          credit.image === null ? null : this.#personImagePath(referenceId, credit.image.itemId),
         name: credit.name,
         personReferenceId:
-          credit.person === null
-            ? null
-            : (personReferences.get(credit.person.itemId) ?? null),
+          credit.person === null ? null : (personReferences.get(credit.person.itemId) ?? null),
         role: credit.role,
         type: credit.type,
       });
@@ -1025,10 +909,7 @@ export class ContinueWatchingService {
     const occurredAt = this.#clock();
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new MediaLibraryError("not_found", { cause: error });
     }
@@ -1040,8 +921,7 @@ export class ContinueWatchingService {
       : 0;
     try {
       const client = this.#client(row);
-      if (!client.readLibraryExtras)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibraryExtras) throw new ContinueWatchingConfigurationError();
       const result = await client.readLibraryExtras(
         {
           itemId: reference.itemId,
@@ -1079,10 +959,7 @@ export class ContinueWatchingService {
           };
           onlineState = onlineItems.length > 0 ? "ready" : "empty";
         } catch (error) {
-          if (
-            error instanceof DiscoverySearchError &&
-            error.reason === "connector_unconfigured"
-          ) {
+          if (error instanceof DiscoverySearchError && error.reason === "connector_unconfigured") {
             onlineSource = {
               displayName: "Seerr",
               failure: null,
@@ -1181,27 +1058,22 @@ export class ContinueWatchingService {
     const row = this.#source(principal);
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new MediaLibraryError("not_found", { cause: error });
     }
     if (reference.kind !== "person") throw new MediaLibraryError("not_found");
     try {
       const client = this.#client(row);
-      if (!client.readLibraryPerson)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibraryPerson) throw new ContinueWatchingConfigurationError();
       const person = await client.readLibraryPerson(
         { itemId: reference.itemId, userId: row.externalUserId },
         signal,
       );
       if (person.itemId !== reference.itemId) throw new MediaReferenceError();
-      const [refreshedReferenceId] = this.#references.createOrRefresh(
-        this.#referenceContext(row),
-        [this.#personReferenceInput(person.itemId, person.name)],
-      );
+      const [refreshedReferenceId] = this.#references.createOrRefresh(this.#referenceContext(row), [
+        this.#personReferenceInput(person.itemId, person.name),
+      ]);
       if (refreshedReferenceId !== referenceId) throw new MediaReferenceError();
       return libraryPersonProfileLinkResponseSchema.parse({
         generatedAt: this.#clock().toISOString(),
@@ -1227,33 +1099,19 @@ export class ContinueWatchingService {
     const occurredAt = this.#clock();
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new MediaLibraryError("not_found", { cause: error });
     }
-    if (
-      reference.kind !== "series" ||
-      !Number.isSafeInteger(seasonNumber) ||
-      seasonNumber < 0
-    ) {
+    if (reference.kind !== "series" || !Number.isSafeInteger(seasonNumber) || seasonNumber < 0) {
       throw new MediaLibraryError("not_found");
     }
     const startIndex = query.cursor
-      ? this.#decodeLibrarySeasonCursor(
-          query.cursor,
-          query,
-          row,
-          referenceId,
-          seasonNumber,
-        )
+      ? this.#decodeLibrarySeasonCursor(query.cursor, query, row, referenceId, seasonNumber)
       : 0;
     try {
       const client = this.#client(row);
-      if (!client.readLibrarySeasonEpisodes)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibrarySeasonEpisodes) throw new ContinueWatchingConfigurationError();
       const result = await client.readLibrarySeasonEpisodes(
         {
           limit: query.limit,
@@ -1289,9 +1147,7 @@ export class ContinueWatchingService {
         credits: item.credits.map((credit) => ({
           name: credit.name,
           personReferenceId:
-            credit.person === null
-              ? null
-              : (personReferences.get(credit.person.itemId) ?? null),
+            credit.person === null ? null : (personReferences.get(credit.person.itemId) ?? null),
           role: credit.role,
           type: credit.type,
         })),
@@ -1340,10 +1196,7 @@ export class ContinueWatchingService {
     const generatedAt = this.#clock();
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new LibraryRemovalPreviewError("not_found", { cause: error });
     }
@@ -1353,8 +1206,7 @@ export class ContinueWatchingService {
 
     try {
       const client = this.#client(row);
-      if (!client.readLibraryTitle)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
       const result = await client.readLibraryTitle(
         { itemId: reference.itemId, userId: row.externalUserId },
         signal,
@@ -1376,10 +1228,7 @@ export class ContinueWatchingService {
         { providerIds: result.removal.providerIds },
         signal,
       );
-      if (
-        ownership !== null &&
-        (!ownership.hasFile || ownership.fileId === null)
-      ) {
+      if (ownership !== null && (!ownership.hasFile || ownership.fileId === null)) {
         throw new LibraryRemovalPreviewError("unavailable");
       }
       const commonEffects = {
@@ -1389,8 +1238,7 @@ export class ContinueWatchingService {
         storageReclamation: "may_be_delayed" as const,
       };
       const managed = ownership !== null;
-      if (principal.userId === null)
-        throw new LibraryRemovalPreviewError("unavailable");
+      if (principal.userId === null) throw new LibraryRemovalPreviewError("unavailable");
       const previewId = this.#libraryRemovalPreviewId();
       const preview = libraryRemovalPreviewSchema.parse({
         confirmation: {
@@ -1398,9 +1246,7 @@ export class ContinueWatchingService {
           kind: "exact_title",
           recentAuthenticationRequired: true,
         },
-        expiresAt: new Date(
-          generatedAt.valueOf() + LIBRARY_REMOVAL_PREVIEW_TTL_MS,
-        ).toISOString(),
+        expiresAt: new Date(generatedAt.valueOf() + LIBRARY_REMOVAL_PREVIEW_TTL_MS).toISOString(),
         generatedAt: generatedAt.toISOString(),
         options: managed
           ? [
@@ -1501,11 +1347,9 @@ export class ContinueWatchingService {
     signal?: AbortSignal,
   ): Promise<LibraryRemovalResult> {
     const principal = requirePermission(context.principal, "library.delete");
-    if (principal.userId === null)
-      throw new LibraryRemovalError("identity_changed");
+    if (principal.userId === null) throw new LibraryRemovalError("identity_changed");
     const request = libraryRemovalCommitRequestSchema.parse(rawRequest);
-    const idempotencyKey =
-      libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
+    const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
     const startedAt = this.#clock();
     const issuedAt = Date.parse(principal.issuedAt);
     if (
@@ -1533,10 +1377,7 @@ export class ContinueWatchingService {
     if (replay !== null) return { operation: replay, replayed: true };
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new LibraryRemovalError("not_found", { cause: error });
     }
@@ -1557,15 +1398,12 @@ export class ContinueWatchingService {
 
     let operation = reservation.operation;
     const payload = reservation.payload;
-    let titleResult: Awaited<
-      ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>
-    >;
+    let titleResult: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>;
     let ownership: LibraryRemovalManagedMovie | null;
     let radarrAdapter: LibraryRemovalRadarrAdapter | null = null;
     try {
       const client = this.#client(row);
-      if (!client.readLibraryTitle)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
       titleResult = await client.readLibraryTitle(
         { itemId: payload.itemId, userId: row.externalUserId },
         signal,
@@ -1581,11 +1419,7 @@ export class ContinueWatchingService {
       ) {
         return {
           operation: this.#finishLibraryRemovalOperation(
-            this.#setLibraryRemovalStage(
-              operation,
-              "source_revalidation",
-              "failed",
-            ),
+            this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
             "failed",
             "source_changed",
             context,
@@ -1594,11 +1428,10 @@ export class ContinueWatchingService {
         };
       }
       if (payload.source.kind === "managed") {
-        const resolution =
-          await this.#resolveManagedMovieSnapshotFromConnectors(
-            titleResult.removal.providerIds,
-            signal,
-          );
+        const resolution = await this.#resolveManagedMovieSnapshotFromConnectors(
+          titleResult.removal.providerIds,
+          signal,
+        );
         ownership = resolution?.ownership ?? null;
         radarrAdapter = resolution?.adapter ?? null;
       } else {
@@ -1610,11 +1443,7 @@ export class ContinueWatchingService {
     } catch (_error) {
       return {
         operation: this.#finishLibraryRemovalOperation(
-          this.#setLibraryRemovalStage(
-            operation,
-            "source_revalidation",
-            "failed",
-          ),
+          this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
           "failed",
           "connector_unavailable",
           context,
@@ -1626,11 +1455,7 @@ export class ContinueWatchingService {
     if (!this.#libraryRemovalSourceMatches(payload, ownership)) {
       return {
         operation: this.#finishLibraryRemovalOperation(
-          this.#setLibraryRemovalStage(
-            operation,
-            "source_revalidation",
-            "failed",
-          ),
+          this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
           "failed",
           "source_changed",
           context,
@@ -1638,50 +1463,28 @@ export class ContinueWatchingService {
         replayed: false,
       };
     }
-    operation = this.#setLibraryRemovalStage(
-      operation,
-      "source_revalidation",
-      "succeeded",
-    );
+    operation = this.#setLibraryRemovalStage(operation, "source_revalidation", "succeeded");
     this.#persistLibraryRemovalOperation(operation);
 
-    let attemptedStage:
-      | "manager_record_removal"
-      | "monitoring_change"
-      | "organized_file_deletion" = "organized_file_deletion";
+    let attemptedStage: "manager_record_removal" | "monitoring_change" | "organized_file_deletion" =
+      "organized_file_deletion";
     try {
       if (payload.source.kind === "unmanaged") {
-        operation = this.#setLibraryRemovalStage(
-          operation,
-          "organized_file_deletion",
-          "uncertain",
-        );
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "uncertain");
         this.#persistLibraryRemovalOperation(operation);
         attemptedStage = "organized_file_deletion";
         const client = this.#client(row);
-        if (!client.deleteLibraryItem)
-          throw new ContinueWatchingConfigurationError();
+        if (!client.deleteLibraryItem) throw new ContinueWatchingConfigurationError();
         await client.deleteLibraryItem(payload.itemId, signal);
-        operation = this.#setLibraryRemovalStage(
-          operation,
-          "organized_file_deletion",
-          "succeeded",
-        );
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "succeeded");
       } else {
         if (payload.schemaVersion !== 2 || radarrAdapter === null) {
           throw new ContinueWatchingConfigurationError();
         }
         const adapter = radarrAdapter;
-        if (
-          request.mode === "delete_files_and_unmonitor" &&
-          payload.source.monitored
-        ) {
+        if (request.mode === "delete_files_and_unmonitor" && payload.source.monitored) {
           attemptedStage = "monitoring_change";
-          operation = this.#setLibraryRemovalStage(
-            operation,
-            "monitoring_change",
-            "uncertain",
-          );
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "uncertain");
           this.#persistLibraryRemovalOperation(operation);
           const updated = await adapter.updateAcquisitionMonitoring(
             {
@@ -1700,27 +1503,15 @@ export class ContinueWatchingService {
           ) {
             throw new ContinueWatchingConfigurationError();
           }
-          operation = this.#setLibraryRemovalStage(
-            operation,
-            "monitoring_change",
-            "succeeded",
-          );
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "succeeded");
           this.#persistLibraryRemovalOperation(operation);
         } else if (request.mode === "delete_files_and_unmonitor") {
-          operation = this.#setLibraryRemovalStage(
-            operation,
-            "monitoring_change",
-            "succeeded",
-          );
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "succeeded");
           this.#persistLibraryRemovalOperation(operation);
         }
 
         attemptedStage = "organized_file_deletion";
-        operation = this.#setLibraryRemovalStage(
-          operation,
-          "organized_file_deletion",
-          "uncertain",
-        );
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "uncertain");
         if (request.mode === "remove_from_radarr_and_delete_files") {
           operation = this.#setLibraryRemovalStage(
             operation,
@@ -1740,28 +1531,15 @@ export class ContinueWatchingService {
         } else {
           await adapter.deleteLibraryMovieFile(payload.source.fileId, signal);
         }
-        operation = this.#setLibraryRemovalStage(
-          operation,
-          "organized_file_deletion",
-          "succeeded",
-        );
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "succeeded");
       }
 
       return {
-        operation: this.#finishLibraryRemovalOperation(
-          operation,
-          "succeeded",
-          undefined,
-          context,
-        ),
+        operation: this.#finishLibraryRemovalOperation(operation, "succeeded", undefined, context),
         replayed: false,
       };
     } catch (_error) {
-      operation = this.#setLibraryRemovalStage(
-        operation,
-        attemptedStage,
-        "uncertain",
-      );
+      operation = this.#setLibraryRemovalStage(operation, attemptedStage, "uncertain");
       return {
         operation: this.#finishLibraryRemovalOperation(
           operation,
@@ -1779,8 +1557,7 @@ export class ContinueWatchingService {
     context: ContinueWatchingContext,
   ): LibraryRemovalOperation {
     const principal = requirePermission(context.principal, "library.delete");
-    if (principal.userId === null)
-      throw new LibraryRemovalError("identity_changed");
+    if (principal.userId === null) throw new LibraryRemovalError("identity_changed");
     const operationId = libraryRemovalOperationIdSchema.parse(rawOperationId);
     const row = this.#database.sqlite
       .prepare(
@@ -1790,19 +1567,12 @@ export class ContinueWatchingService {
           limit 1`,
       )
       .get(operationId, principal.userId) as
-      | Pick<LibraryRemovalOperationRow, "responseJson" | "state" | "updatedAt">
-      | undefined;
+      Pick<LibraryRemovalOperationRow, "responseJson" | "state" | "updatedAt"> | undefined;
     if (!row) throw new LibraryRemovalError("not_found");
     try {
-      const operation = libraryRemovalOperationSchema.parse(
-        JSON.parse(row.responseJson),
-      );
+      const operation = libraryRemovalOperationSchema.parse(JSON.parse(row.responseJson));
       return row.state === "running"
-        ? this.#recoverStaleLibraryRemovalOperation(
-            operation,
-            row.updatedAt,
-            context,
-          )
+        ? this.#recoverStaleLibraryRemovalOperation(operation, row.updatedAt, context)
         : operation;
     } catch (error) {
       throw new LibraryRemovalError("storage_failure", { cause: error });
@@ -1815,22 +1585,14 @@ export class ContinueWatchingService {
     context: ContinueWatchingContext,
     signal?: AbortSignal,
   ): Promise<MediaPlaybackStateMutationResult> {
-    const principal = requirePermission(
-      context.principal,
-      "playback.history.self.manage",
-    );
-    if (!principal.userId)
-      throw new MediaPlaybackStateError("permission_denied");
+    const principal = requirePermission(context.principal, "playback.history.self.manage");
+    if (!principal.userId) throw new MediaPlaybackStateError("permission_denied");
     const request = libraryPlaybackStateMutationRequestSchema.parse(rawRequest);
-    const idempotencyKey =
-      libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
+    const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
     const row = this.#source(principal);
     let reference;
     try {
-      reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
     } catch (error) {
       throw new MediaPlaybackStateError("not_found", { cause: error });
     }
@@ -1838,9 +1600,7 @@ export class ContinueWatchingService {
       throw new MediaPlaybackStateError("not_found");
     }
 
-    const keyHash = hashToken(
-      `${principal.userId}\0media_playback_state\0${idempotencyKey}`,
-    );
+    const keyHash = hashToken(`${principal.userId}\0media_playback_state\0${idempotencyKey}`);
     const fingerprintHash = hashToken(
       JSON.stringify({
         action: request.action,
@@ -1868,8 +1628,7 @@ export class ContinueWatchingService {
 
     try {
       const client = this.#client(row);
-      if (!client.updatePlaybackState)
-        throw new ContinueWatchingConfigurationError();
+      if (!client.updatePlaybackState) throw new ContinueWatchingConfigurationError();
       const playback = await client.updatePlaybackState(
         {
           action: request.action,
@@ -1893,12 +1652,7 @@ export class ContinueWatchingService {
       return { replayed: false, response };
     } catch (error) {
       const reason = playbackStateFailure(error);
-      this.#failUserMediaStateOperation(
-        reservation.operationId,
-        reason,
-        context,
-        request.action,
-      );
+      this.#failUserMediaStateOperation(reservation.operationId, reason, context, request.action);
       throw new MediaPlaybackStateError(reason, { cause: error });
     }
   }
@@ -1925,9 +1679,7 @@ export class ContinueWatchingService {
       throw new MediaArtworkError("not_found", { cause: error });
     }
     const itemId =
-      kind === "poster"
-        ? reference.artwork.posterItemId
-        : reference.artwork.backdropItemId;
+      kind === "poster" ? reference.artwork.posterItemId : reference.artwork.backdropItemId;
     if (itemId === null) throw new MediaArtworkError("not_found");
 
     try {
@@ -1937,10 +1689,7 @@ export class ContinueWatchingService {
         ...(signal === undefined ? {} : { signal }),
         type: kind === "poster" ? "Primary" : "Backdrop",
       });
-      const digest = createHash("sha256")
-        .update(image.body)
-        .digest("base64url")
-        .slice(0, 22);
+      const digest = createHash("sha256").update(image.body).digest("base64url").slice(0, 22);
       return Object.freeze({
         body: image.body,
         contentType: image.contentType,
@@ -1961,17 +1710,12 @@ export class ContinueWatchingService {
     const row = this.#source(principal);
     let itemId: string;
     try {
-      const reference = this.#references.resolve(
-        this.#referenceContext(row),
-        referenceId,
-      );
+      const reference = this.#references.resolve(this.#referenceContext(row), referenceId);
       if (reference.kind !== "movie" && reference.kind !== "series") {
         throw new MediaReferenceError();
       }
       itemId = libraryPersonImagePayloadSchema.parse(
-        JSON.parse(
-          this.#cipher.decrypt(token, this.#personImageContext(referenceId)),
-        ),
+        JSON.parse(this.#cipher.decrypt(token, this.#personImageContext(referenceId))),
       ).itemId;
     } catch (error) {
       throw new MediaArtworkError("not_found", { cause: error });
@@ -1984,10 +1728,7 @@ export class ContinueWatchingService {
         ...(signal === undefined ? {} : { signal }),
         type: "Primary",
       });
-      const digest = createHash("sha256")
-        .update(image.body)
-        .digest("base64url")
-        .slice(0, 22);
+      const digest = createHash("sha256").update(image.body).digest("base64url").slice(0, 22);
       return Object.freeze({
         body: image.body,
         contentType: image.contentType,
@@ -2055,15 +1796,9 @@ export class ContinueWatchingService {
         media: {
           artwork: {
             accentColor: item.artwork.accentColor,
-            backdropPath:
-              item.artwork.backdrop === null
-                ? null
-                : `/v1/media/${id}/images/backdrop`,
+            backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
             blurHash: item.artwork.blurHash,
-            posterPath:
-              item.artwork.poster === null
-                ? null
-                : `/v1/media/${id}/images/poster`,
+            posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
           },
           availability: "available" as const,
           contentRating: item.contentRating,
@@ -2076,8 +1811,7 @@ export class ContinueWatchingService {
           year: item.year,
         },
         positionSeconds: item.positionSeconds,
-        progressPercent:
-          Math.round((item.positionSeconds / item.runtimeSeconds) * 1_000) / 10,
+        progressPercent: Math.round((item.positionSeconds / item.runtimeSeconds) * 1_000) / 10,
       };
     });
     return continueWatchingResponseSchema.parse({
@@ -2219,21 +1953,15 @@ export class ContinueWatchingService {
   }
 
   #libraryMedia(
-    item: Awaited<
-      ReturnType<JellyfinUserMediaClient["readLibrary"]>
-    >["items"][number],
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibrary"]>>["items"][number],
     id: string,
   ) {
     return {
       artwork: {
         accentColor: item.artwork.accentColor,
-        backdropPath:
-          item.artwork.backdrop === null
-            ? null
-            : `/v1/media/${id}/images/backdrop`,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
         blurHash: item.artwork.blurHash,
-        posterPath:
-          item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
       },
       availability: "available" as const,
       contentRating: item.contentRating,
@@ -2241,9 +1969,7 @@ export class ContinueWatchingService {
       kind: item.kind,
       overview: item.overview,
       runtimeMinutes:
-        item.runtimeSeconds === null
-          ? null
-          : Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
+        item.runtimeSeconds === null ? null : Math.max(1, Math.ceil(item.runtimeSeconds / 60)),
       subtitle: null,
       title: item.title,
       year: item.year,
@@ -2259,13 +1985,9 @@ export class ContinueWatchingService {
     return {
       artwork: {
         accentColor: item.artwork.accentColor,
-        backdropPath:
-          item.artwork.backdrop === null
-            ? null
-            : `/v1/media/${id}/images/backdrop`,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
         blurHash: item.artwork.blurHash,
-        posterPath:
-          item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
       },
       availability: "available" as const,
       contentRating: item.contentRating,
@@ -2280,21 +2002,15 @@ export class ContinueWatchingService {
   }
 
   #viewingHistoryMedia(
-    item: Awaited<
-      ReturnType<JellyfinUserMediaClient["readViewingHistory"]>
-    >["items"][number],
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readViewingHistory"]>>["items"][number],
     id: string,
   ) {
     return {
       artwork: {
         accentColor: item.artwork.accentColor,
-        backdropPath:
-          item.artwork.backdrop === null
-            ? null
-            : `/v1/media/${id}/images/backdrop`,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
         blurHash: item.artwork.blurHash,
-        posterPath:
-          item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
       },
       availability: "available" as const,
       contentRating: item.contentRating,
@@ -2309,21 +2025,15 @@ export class ContinueWatchingService {
   }
 
   #libraryExtraMedia(
-    item: Awaited<
-      ReturnType<JellyfinUserMediaClient["readLibraryExtras"]>
-    >["items"][number],
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryExtras"]>>["items"][number],
     id: string,
   ) {
     return {
       artwork: {
         accentColor: item.artwork.accentColor,
-        backdropPath:
-          item.artwork.backdrop === null
-            ? null
-            : `/v1/media/${id}/images/backdrop`,
+        backdropPath: item.artwork.backdrop === null ? null : `/v1/media/${id}/images/backdrop`,
         blurHash: item.artwork.blurHash,
-        posterPath:
-          item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
+        posterPath: item.artwork.poster === null ? null : `/v1/media/${id}/images/poster`,
       },
       availability: "available" as const,
       contentRating: item.contentRating,
@@ -2338,9 +2048,7 @@ export class ContinueWatchingService {
   }
 
   #titleReferenceInput(
-    item: Awaited<
-      ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>
-    >["item"],
+    item: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>["item"],
   ) {
     return {
       artwork: {
@@ -2402,9 +2110,7 @@ export class ContinueWatchingService {
 
   #personImagePath(referenceId: string, itemId: string) {
     const token = this.#cipher.encrypt(
-      JSON.stringify(
-        libraryPersonImagePayloadSchema.parse({ itemId, version: 1 }),
-      ),
+      JSON.stringify(libraryPersonImagePayloadSchema.parse({ itemId, version: 1 })),
       this.#personImageContext(referenceId),
     );
     return `/v1/media/${referenceId}/images/people/${token}`;
@@ -2423,12 +2129,8 @@ export class ContinueWatchingService {
     signal?: AbortSignal,
   ): Promise<LibraryRemovalManagedMovie | null> {
     return (
-      (
-        await this.#resolveManagedMovieSnapshotFromConnectors(
-          providerIds,
-          signal,
-        )
-      )?.ownership ?? null
+      (await this.#resolveManagedMovieSnapshotFromConnectors(providerIds, signal))?.ownership ??
+      null
     );
   }
 
@@ -2478,10 +2180,7 @@ export class ContinueWatchingService {
           tlsPolicy: row.tlsPolicy,
           ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
         });
-        const ownership = await adapter.resolveLibraryMovie(
-          providerIds,
-          signal,
-        );
+        const ownership = await adapter.resolveLibraryMovie(providerIds, signal);
         return ownership === null
           ? null
           : { adapter, ownership: { ...ownership, connectorId: row.id } };
@@ -2490,8 +2189,7 @@ export class ContinueWatchingService {
     const owned = matches.filter(
       (match): match is LibraryRemovalManagedResolution => match !== null,
     );
-    if (owned.length > 1)
-      throw new ContinueWatchingConfigurationError("invalid");
+    if (owned.length > 1) throw new ContinueWatchingConfigurationError("invalid");
     return owned[0] ?? null;
   }
 
@@ -2524,19 +2222,14 @@ export class ContinueWatchingService {
       JSON.stringify(payload),
       `library_removal_preview:${preview.previewId}`,
     );
-    if (
-      Buffer.byteLength(encryptedPayload, "utf8") >
-      MAX_LIBRARY_REMOVAL_PREVIEW_BYTES
-    ) {
+    if (Buffer.byteLength(encryptedPayload, "utf8") > MAX_LIBRARY_REMOVAL_PREVIEW_BYTES) {
       throw new LibraryRemovalPreviewError("unavailable");
     }
     try {
       this.#database.sqlite
         .transaction(() => {
           this.#database.sqlite
-            .prepare(
-              "delete from library_removal_previews where expires_at <= ?",
-            )
+            .prepare("delete from library_removal_previews where expires_at <= ?")
             .run(now);
           const { count } = this.#database.sqlite
             .prepare(
@@ -2588,11 +2281,7 @@ export class ContinueWatchingService {
                 source: preview.source.service,
               }),
               context.ipAddress
-                ? privacyHash(
-                    "ip_address",
-                    context.ipAddress,
-                    this.#config.encryptionKey,
-                  )
+                ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
                 : null,
               now,
             );
@@ -2629,11 +2318,7 @@ export class ContinueWatchingService {
     context: ContinueWatchingContext,
   ) {
     const keyHash = hashToken(`${userId}\0library_removal\0${idempotencyKey}`);
-    const fingerprintHash = this.#libraryRemovalFingerprint(
-      row,
-      referenceId,
-      request,
-    );
+    const fingerprintHash = this.#libraryRemovalFingerprint(row, referenceId, request);
     const existing = this.#database.sqlite
       .prepare(
         `select fingerprint_hash as fingerprintHash, response_json as responseJson, state,
@@ -2648,9 +2333,7 @@ export class ContinueWatchingService {
       throw new LibraryRemovalError("idempotency_conflict");
     }
     try {
-      const operation = libraryRemovalOperationSchema.parse(
-        JSON.parse(existing.responseJson),
-      );
+      const operation = libraryRemovalOperationSchema.parse(JSON.parse(existing.responseJson));
       if (existing.state !== "running") return operation;
       const recovered = this.#recoverStaleLibraryRemovalOperation(
         operation,
@@ -2678,11 +2361,7 @@ export class ContinueWatchingService {
   ): LibraryRemovalReservation {
     const now = startedAt.getTime();
     const keyHash = hashToken(`${userId}\0library_removal\0${idempotencyKey}`);
-    const fingerprintHash = this.#libraryRemovalFingerprint(
-      row,
-      referenceId,
-      request,
-    );
+    const fingerprintHash = this.#libraryRemovalFingerprint(row, referenceId, request);
     try {
       return this.#database.sqlite
         .transaction((): LibraryRemovalReservation => {
@@ -2694,15 +2373,10 @@ export class ContinueWatchingService {
                 limit 1`,
             )
             .get(userId, keyHash) as
-            | Pick<
-                LibraryRemovalOperationRow,
-                "fingerprintHash" | "responseJson" | "state"
-              >
+            | Pick<LibraryRemovalOperationRow, "fingerprintHash" | "responseJson" | "state">
             | undefined;
           if (existing) {
-            if (
-              !constantTimeTextEqual(existing.fingerprintHash, fingerprintHash)
-            ) {
+            if (!constantTimeTextEqual(existing.fingerprintHash, fingerprintHash)) {
               throw new LibraryRemovalError("idempotency_conflict");
             }
             if (existing.state === "running") {
@@ -2710,9 +2384,7 @@ export class ContinueWatchingService {
             }
             return {
               kind: "replay",
-              operation: libraryRemovalOperationSchema.parse(
-                JSON.parse(existing.responseJson),
-              ),
+              operation: libraryRemovalOperationSchema.parse(JSON.parse(existing.responseJson)),
             };
           }
 
@@ -2723,9 +2395,7 @@ export class ContinueWatchingService {
             )
             .run(now - LIBRARY_REMOVAL_OPERATION_RETENTION_MS);
           const { count } = this.#database.sqlite
-            .prepare(
-              "select count(*) as count from library_removal_operations where user_id = ?",
-            )
+            .prepare("select count(*) as count from library_removal_operations where user_id = ?")
             .get(userId) as { count: number };
           if (count >= MAX_LIBRARY_REMOVAL_OPERATIONS_PER_USER) {
             throw new LibraryRemovalError("operation_limit_reached");
@@ -2746,10 +2416,8 @@ export class ContinueWatchingService {
           if (!previewRow || previewRow.userId !== userId) {
             throw new LibraryRemovalError("not_found");
           }
-          if (previewRow.expiresAt <= now)
-            throw new LibraryRemovalError("preview_expired");
-          if (previewRow.consumedAt !== null)
-            throw new LibraryRemovalError("not_found");
+          if (previewRow.expiresAt <= now) throw new LibraryRemovalError("preview_expired");
+          if (previewRow.consumedAt !== null) throw new LibraryRemovalError("not_found");
           if (
             previewRow.sessionId !== context.principal.sessionId ||
             previewRow.serviceIdentityLinkId !== row.linkId ||
@@ -2780,22 +2448,15 @@ export class ContinueWatchingService {
           ) {
             throw new LibraryRemovalError("identity_changed");
           }
-          if (
-            payload.schemaVersion === 1 &&
-            payload.source.kind === "managed"
-          ) {
+          if (payload.schemaVersion === 1 && payload.source.kind === "managed") {
             throw new LibraryRemovalError("source_changed");
           }
-          if (
-            !constantTimeTextEqual(request.confirmationTitle, payload.title)
-          ) {
+          if (!constantTimeTextEqual(request.confirmationTitle, payload.title)) {
             throw new LibraryRemovalError("confirmation_mismatch");
           }
           if (
-            (payload.source.kind === "managed" &&
-              request.mode === "delete_unmanaged_files") ||
-            (payload.source.kind === "unmanaged" &&
-              request.mode !== "delete_unmanaged_files") ||
+            (payload.source.kind === "managed" && request.mode === "delete_unmanaged_files") ||
+            (payload.source.kind === "unmanaged" && request.mode !== "delete_unmanaged_files") ||
             (payload.source.kind === "managed" &&
               !payload.source.monitored &&
               request.mode === "delete_files_keep_monitored")
@@ -2803,10 +2464,7 @@ export class ContinueWatchingService {
             throw new LibraryRemovalError("invalid_mode");
           }
 
-          const targetDigest = this.#libraryRemovalTargetDigest(
-            payload,
-            row.connectorId,
-          );
+          const targetDigest = this.#libraryRemovalTargetDigest(payload, row.connectorId);
           const runningTarget = this.#database.sqlite
             .prepare(
               `select response_json as responseJson, updated_at as updatedAt, user_id as userId
@@ -2815,18 +2473,16 @@ export class ContinueWatchingService {
                 limit 1`,
             )
             .get(targetDigest) as
-            | { responseJson: string; updatedAt: number; userId: string }
-            | undefined;
+            { responseJson: string; updatedAt: number; userId: string } | undefined;
           if (runningTarget) {
             const runningOperation = libraryRemovalOperationSchema.parse(
               JSON.parse(runningTarget.responseJson),
             );
-            const recovered =
-              this.#recoverStaleLibraryRemovalOperationInTransaction(
-                runningOperation,
-                runningTarget.updatedAt,
-                runningTarget.userId === userId ? context : undefined,
-              );
+            const recovered = this.#recoverStaleLibraryRemovalOperationInTransaction(
+              runningOperation,
+              runningTarget.updatedAt,
+              runningTarget.userId === userId ? context : undefined,
+            );
             if (recovered.state === "running") {
               throw new LibraryRemovalError("idempotency_in_progress");
             }
@@ -2843,10 +2499,7 @@ export class ContinueWatchingService {
             JSON.stringify(payload),
             `library_removal_operation:${operationId}`,
           );
-          if (
-            Buffer.byteLength(encryptedPayload, "utf8") >
-            MAX_LIBRARY_REMOVAL_PREVIEW_BYTES
-          ) {
+          if (Buffer.byteLength(encryptedPayload, "utf8") > MAX_LIBRARY_REMOVAL_PREVIEW_BYTES) {
             throw new LibraryRemovalError("storage_failure");
           }
           this.#database.sqlite
@@ -2883,8 +2536,7 @@ export class ContinueWatchingService {
                 where id = ? and consumed_at is null and expires_at > ?`,
             )
             .run(now, now, request.previewId, now);
-          if (consumed.changes !== 1)
-            throw new LibraryRemovalError("preview_expired");
+          if (consumed.changes !== 1) throw new LibraryRemovalError("preview_expired");
           this.#insertLibraryRemovalAudit(
             "library.removal.requested",
             "success",
@@ -2918,18 +2570,13 @@ export class ContinueWatchingService {
         { kind: "source_revalidation", state: "pending" },
         {
           kind: "monitoring_change",
-          state:
-            request.mode === "delete_files_and_unmonitor"
-              ? "pending"
-              : "not_applicable",
+          state: request.mode === "delete_files_and_unmonitor" ? "pending" : "not_applicable",
         },
         { kind: "organized_file_deletion", state: "pending" },
         {
           kind: "manager_record_removal",
           state:
-            request.mode === "remove_from_radarr_and_delete_files"
-              ? "pending"
-              : "not_applicable",
+            request.mode === "remove_from_radarr_and_delete_files" ? "pending" : "not_applicable",
         },
         { kind: "jellyfin_reconciliation", state: "not_applicable" },
       ],
@@ -2945,9 +2592,7 @@ export class ContinueWatchingService {
   ) {
     return libraryRemovalOperationSchema.parse({
       ...operation,
-      stages: operation.stages.map((stage) =>
-        stage.kind === kind ? { ...stage, state } : stage,
-      ),
+      stages: operation.stages.map((stage) => (stage.kind === kind ? { ...stage, state } : stage)),
     });
   }
 
@@ -3042,11 +2687,7 @@ export class ContinueWatchingService {
     try {
       return this.#database.sqlite
         .transaction(() =>
-          this.#recoverStaleLibraryRemovalOperationInTransaction(
-            operation,
-            updatedAt,
-            context,
-          ),
+          this.#recoverStaleLibraryRemovalOperationInTransaction(operation, updatedAt, context),
         )
         .immediate();
     } catch (error) {
@@ -3097,12 +2738,9 @@ export class ContinueWatchingService {
       .prepare(
         "select response_json as responseJson from library_removal_operations where id = ? limit 1",
       )
-      .get(operation.operationId) as
-      Pick<LibraryRemovalOperationRow, "responseJson"> | undefined;
+      .get(operation.operationId) as Pick<LibraryRemovalOperationRow, "responseJson"> | undefined;
     if (!current) throw new LibraryRemovalError("not_found");
-    return libraryRemovalOperationSchema.parse(
-      JSON.parse(current.responseJson),
-    );
+    return libraryRemovalOperationSchema.parse(JSON.parse(current.responseJson));
   }
 
   #insertLibraryRemovalAudit(
@@ -3135,11 +2773,7 @@ export class ContinueWatchingService {
           state: operation.state,
         }),
         context?.ipAddress
-          ? privacyHash(
-              "ip_address",
-              context.ipAddress,
-              this.#config.encryptionKey,
-            )
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
           : null,
         now,
       );
@@ -3161,10 +2795,7 @@ export class ContinueWatchingService {
     );
   }
 
-  #libraryRemovalTargetDigest(
-    payload: StoredLibraryRemovalPreview,
-    connectorId: string,
-  ) {
+  #libraryRemovalTargetDigest(payload: StoredLibraryRemovalPreview, connectorId: string) {
     const target =
       payload.source.kind === "unmanaged"
         ? { connectorId, itemId: payload.itemId, kind: "unmanaged", version: 1 }
@@ -3191,9 +2822,7 @@ export class ContinueWatchingService {
         throw new LibraryRemovalError("storage_failure");
       }
       const exists = this.#database.sqlite
-        .prepare(
-          "select 1 from library_removal_operations where id = ? limit 1",
-        )
+        .prepare("select 1 from library_removal_operations where id = ? limit 1")
         .get(candidate);
       if (!exists) return candidate;
     }
@@ -3203,16 +2832,9 @@ export class ContinueWatchingService {
   #radarrSecrets(row: LibraryRemovalRadarrRow) {
     try {
       const decoded = JSON.parse(
-        this.#cipher.decrypt(
-          row.encryptedCredentials,
-          `connector_credentials:radarr:${row.id}`,
-        ),
+        this.#cipher.decrypt(row.encryptedCredentials, `connector_credentials:radarr:${row.id}`),
       ) as unknown;
-      if (
-        typeof decoded !== "object" ||
-        decoded === null ||
-        Array.isArray(decoded)
-      ) {
+      if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
         throw new Error("invalid");
       }
       const record = decoded as Record<string, unknown>;
@@ -3220,10 +2842,7 @@ export class ContinueWatchingService {
       if (
         versioned &&
         Object.keys(record).some(
-          (key) =>
-            !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(
-              key,
-            ),
+          (key) => !["credentials", "schemaVersion", "tlsCaCertificatePem"].includes(key),
         )
       ) {
         throw new Error("invalid");
@@ -3234,16 +2853,11 @@ export class ContinueWatchingService {
             credentials: decoded,
             schemaVersion: 1,
           } satisfies StoredConnectorSecrets);
-      const credentials = connectorCredentialInputSchema.parse(
-        stored.credentials,
-      );
+      const credentials = connectorCredentialInputSchema.parse(stored.credentials);
       if (credentials.kind !== "api_key") throw new Error("invalid");
       const tlsCaCertificatePem = stored.tlsCaCertificatePem;
       if (tlsCaCertificatePem !== undefined) {
-        if (
-          typeof tlsCaCertificatePem !== "string" ||
-          row.tlsPolicy !== "allow_self_signed"
-        ) {
+        if (typeof tlsCaCertificatePem !== "string" || row.tlsPolicy !== "allow_self_signed") {
           throw new Error("invalid");
         }
         const certificate = new X509Certificate(tlsCaCertificatePem);
@@ -3251,9 +2865,7 @@ export class ContinueWatchingService {
       }
       return {
         apiKey: credentials.apiKey,
-        ...(typeof tlsCaCertificatePem === "string"
-          ? { tlsCaCertificatePem }
-          : {}),
+        ...(typeof tlsCaCertificatePem === "string" ? { tlsCaCertificatePem } : {}),
       };
     } catch (error) {
       throw new ContinueWatchingConfigurationError("invalid", { cause: error });
@@ -3265,24 +2877,15 @@ export class ContinueWatchingService {
   }
 
   #encodeLibraryExtrasCursor(value: LibraryExtrasCursorPayload) {
-    return this.#cipher.encrypt(
-      JSON.stringify(value),
-      "media_library_extras_cursor",
-    );
+    return this.#cipher.encrypt(JSON.stringify(value), "media_library_extras_cursor");
   }
 
   #encodeViewingHistoryCursor(value: ViewingHistoryCursorPayload) {
-    return this.#cipher.encrypt(
-      JSON.stringify(value),
-      "media_viewing_history_cursor",
-    );
+    return this.#cipher.encrypt(JSON.stringify(value), "media_viewing_history_cursor");
   }
 
   #encodeLibrarySeasonCursor(value: LibrarySeasonCursorPayload) {
-    return this.#cipher.encrypt(
-      JSON.stringify(value),
-      "media_library_season_cursor",
-    );
+    return this.#cipher.encrypt(JSON.stringify(value), "media_library_season_cursor");
   }
 
   #decodeLibrarySeasonCursor(
@@ -3335,11 +2938,7 @@ export class ContinueWatchingService {
     }
   }
 
-  #decodeLibraryCursor(
-    value: string,
-    query: LibraryBrowseQuery,
-    row: ContinueWatchingSourceRow,
-  ) {
+  #decodeLibraryCursor(value: string, query: LibraryBrowseQuery, row: ContinueWatchingSourceRow) {
     try {
       const decoded = libraryCursorPayloadSchema.parse(
         JSON.parse(this.#cipher.decrypt(value, "media_library_cursor")),
@@ -3435,15 +3034,12 @@ export class ContinueWatchingService {
                  where id = ? and fingerprint_hash = ?`,
               )
               .run(now, now, existing.id, fingerprintHash);
-            if (updated.changes !== 1)
-              throw new MediaPlaybackStateError("storage_failure");
+            if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
             return { kind: "reserved" as const, operationId: existing.id };
           }
 
           const count = this.#database.sqlite
-            .prepare(
-              "select count(*) as count from user_media_state_operations where user_id = ?",
-            )
+            .prepare("select count(*) as count from user_media_state_operations where user_id = ?")
             .get(userId) as { count: number };
           if (count.count >= MAX_USER_MEDIA_STATE_OPERATIONS_PER_USER) {
             throw new MediaPlaybackStateError("operation_limit_reached");
@@ -3456,15 +3052,7 @@ export class ContinueWatchingService {
                  fingerprint_hash, state, created_at, updated_at
                ) values (?, ?, ?, ?, ?, 'pending', ?, ?)`,
             )
-            .run(
-              operationId,
-              userId,
-              referenceId,
-              keyHash,
-              fingerprintHash,
-              now,
-              now,
-            );
+            .run(operationId, userId, referenceId, keyHash, fingerprintHash, now, now);
           return { kind: "reserved" as const, operationId };
         })
         .immediate();
@@ -3492,15 +3080,8 @@ export class ContinueWatchingService {
                where id = ? and state = 'pending'`,
             )
             .run(JSON.stringify(response), now, now, operationId);
-          if (updated.changes !== 1)
-            throw new MediaPlaybackStateError("storage_failure");
-          this.#auditUserMediaStateOperation(
-            operationId,
-            "success",
-            { action },
-            context,
-            now,
-          );
+          if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
+          this.#auditUserMediaStateOperation(operationId, "success", { action }, context, now);
         })
         .immediate();
     } catch (error) {
@@ -3527,8 +3108,7 @@ export class ContinueWatchingService {
                where id = ? and state = 'pending'`,
             )
             .run(failureCode, now, now, operationId);
-          if (updated.changes !== 1)
-            throw new MediaPlaybackStateError("storage_failure");
+          if (updated.changes !== 1) throw new MediaPlaybackStateError("storage_failure");
           this.#auditUserMediaStateOperation(
             operationId,
             "failure",
@@ -3554,8 +3134,7 @@ export class ContinueWatchingService {
     context: ContinueWatchingContext,
     createdAt: number,
   ) {
-    if (!context.principal.userId)
-      throw new MediaPlaybackStateError("storage_failure");
+    if (!context.principal.userId) throw new MediaPlaybackStateError("storage_failure");
     this.#database.sqlite
       .prepare(
         `insert into audit_events (
@@ -3575,11 +3154,7 @@ export class ContinueWatchingService {
         context.requestId ?? null,
         JSON.stringify(metadata),
         context.ipAddress
-          ? privacyHash(
-              "ip_address",
-              context.ipAddress,
-              this.#config.encryptionKey,
-            )
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
           : null,
         createdAt,
       );
@@ -3615,9 +3190,7 @@ export class ContinueWatchingService {
         throw new MediaPlaybackStateError("storage_failure");
       }
       const exists = this.#database.sqlite
-        .prepare(
-          "select 1 from user_media_state_operations where id = ? limit 1",
-        )
+        .prepare("select 1 from user_media_state_operations where id = ? limit 1")
         .get(candidate);
       if (!exists) return candidate;
     }
@@ -3626,9 +3199,7 @@ export class ContinueWatchingService {
 
   #source(principal: SessionPrincipal) {
     const userId = principal.userId;
-    const linkedService = principal.linkedServices.find(
-      ({ service }) => service === "jellyfin",
-    );
+    const linkedService = principal.linkedServices.find(({ service }) => service === "jellyfin");
     if (!userId || !linkedService) throw new ContinueWatchingError();
     const row = this.#database.sqlite
       .prepare(
