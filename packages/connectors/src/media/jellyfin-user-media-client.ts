@@ -1,8 +1,10 @@
 import { z } from "zod";
+import type { TitleProviderReference } from "@omnifin/contracts/discovery";
 import {
   LIBRARY_EPISODE_MAX_CREDITS,
   LIBRARY_EPISODE_MAX_GENRES,
   LIBRARY_EPISODE_MAX_STUDIOS,
+  LIBRARY_BROWSE_MAX_TOTAL_RESULTS,
   LIBRARY_EXTRAS_MAX_ITEMS,
   LIBRARY_MOVIE_MAX_AUDIO_TRACKS,
   LIBRARY_MOVIE_MAX_CAST,
@@ -43,6 +45,7 @@ const JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES = 20;
 const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
 const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
 const JELLYFIN_LIBRARY_EXTRAS_UPSTREAM_LIMIT = 256;
+const JELLYFIN_PERSON_LOOKUP_BATCH_SIZE = 40;
 const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
@@ -192,12 +195,35 @@ const jellyfinLibraryItemSchema = z.object({
     .catch(null),
 });
 
-const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
-  Type: z.enum(["Episode", "Movie"]),
-});
+const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema
+  .pick({
+    CanDownload: true,
+    Container: true,
+    Etag: true,
+    Id: true,
+    IndexNumber: true,
+    Name: true,
+    ParentIndexNumber: true,
+    ProductionYear: true,
+    SeriesName: true,
+  })
+  .extend({
+    MediaSources: z
+      .array(
+        z.object({
+          Container: z.string().trim().min(1).max(64).nullish(),
+          Id: z.string().trim().min(1).max(256),
+          Size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+        }),
+      )
+      .max(64)
+      .nullish(),
+    Type: z.enum(["Episode", "Movie"]),
+  });
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
+  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullish(),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -265,6 +291,7 @@ const jellyfinLibraryEpisodeSchema = z.object({
   People: z
     .array(
       z.object({
+        Id: z.string().trim().min(1).max(256).nullish(),
         Name: z.string().max(160).nullish(),
         Role: z.string().max(200).nullish(),
         Type: z.string().max(64).nullish(),
@@ -289,6 +316,21 @@ const jellyfinLibraryEpisodeSchema = z.object({
       PlaybackPositionTicks: z.int().nonnegative().max(MAX_RUNTIME_TICKS).nullish(),
     })
     .nullish(),
+});
+
+const jellyfinPersonItemSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  Name: z.string().trim().min(1).max(160),
+  ProviderIds: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(256))
+    .refine((ids) => Object.keys(ids).length <= 32)
+    .nullish()
+    .catch(null),
+  Type: z.literal("Person"),
+});
+
+const jellyfinPersonItemsResponseSchema = z.object({
+  Items: z.array(jellyfinPersonItemSchema).max(JELLYFIN_PERSON_LOOKUP_BATCH_SIZE),
 });
 
 const jellyfinLibraryEpisodesResponseSchema = z.object({
@@ -505,6 +547,7 @@ export interface JellyfinLibraryItem {
 export interface JellyfinLibraryResult {
   items: JellyfinLibraryItem[];
   nextStartIndex: number | null;
+  totalResults: number | null;
   truncated: boolean;
 }
 
@@ -518,9 +561,11 @@ export interface JellyfinLibrarySeason {
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
   movie: JellyfinLibraryMovieDetail | null;
+  providerReferences: TitleProviderReference[];
   removal?: JellyfinLibraryRemovalFacts | null;
   seasons: JellyfinLibrarySeason[];
   seasonsTruncated: boolean;
+  seriesCredits: JellyfinLibraryTitleCredits | null;
 }
 
 export interface JellyfinOriginalDownloadMetadata {
@@ -573,6 +618,21 @@ export interface JellyfinLibraryRemovalFacts {
 export interface JellyfinLibraryMovieCredit extends LibraryMovieCredit {
   image: JellyfinArtworkSource | null;
   imagePath: null;
+  person: JellyfinLibraryPersonIdentity | null;
+  personItemId: string | null;
+  personReferenceId: null;
+}
+
+export interface JellyfinLibraryPersonIdentity {
+  itemId: string;
+  tmdbId: number;
+}
+
+export interface JellyfinLibraryTitleCredits {
+  cast: JellyfinLibraryMovieCredit[];
+  castTruncated: boolean;
+  crew: JellyfinLibraryMovieCredit[];
+  crewTruncated: boolean;
 }
 
 export interface JellyfinLibraryMovieDetail {
@@ -616,13 +676,25 @@ export interface JellyfinLibraryEpisode extends Omit<
 > {
   airDate: string | null;
   communityRating: number | null;
-  credits: LibraryEpisodeCredit[];
+  credits: JellyfinLibraryEpisodeCredit[];
   creditsTruncated: boolean;
   criticRating: number | null;
   genres: string[];
   kind: "episode";
   played: boolean;
   studios: string[];
+}
+
+export interface JellyfinLibraryEpisodeCredit extends LibraryEpisodeCredit {
+  person: JellyfinLibraryPersonIdentity | null;
+  personItemId: string | null;
+  personReferenceId: null;
+}
+
+export interface JellyfinLibraryPerson {
+  itemId: string;
+  name: string;
+  tmdbId: number;
 }
 
 export interface JellyfinImageResult {
@@ -678,7 +750,7 @@ function uniqueText(
 function episodeCredits(
   people: z.infer<typeof jellyfinLibraryEpisodeSchema>["People"],
 ): Pick<JellyfinLibraryEpisode, "credits" | "creditsTruncated"> {
-  const normalized: LibraryEpisodeCredit[] = [];
+  const normalized: JellyfinLibraryEpisodeCredit[] = [];
   const seen = new Set<string>();
   for (const person of people ?? []) {
     const upstreamType = person.Type?.toLocaleLowerCase("en-US").replace(/[\s_-]+/gu, "");
@@ -694,10 +766,19 @@ function episodeCredits(
     const name = compactText(person.Name, 160);
     if (!name) continue;
     const role = compactText(person.Role, 200);
-    const key = `${type}:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
+    const key = person.Id
+      ? `${type}:id:${person.Id}`
+      : `${type}:name:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    normalized.push({ name, role, type });
+    normalized.push({
+      name,
+      person: null,
+      personItemId: person.Id ?? null,
+      personReferenceId: null,
+      role,
+      type,
+    });
   }
   return {
     credits: normalized.slice(0, LIBRARY_EPISODE_MAX_CREDITS),
@@ -749,7 +830,9 @@ function movieCredits(
     const name = compactText(person.Name, 160);
     if (!name) continue;
     const role = compactText(person.Role, 200);
-    const key = `${type}:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
+    const key = person.Id
+      ? `${type}:id:${person.Id}`
+      : `${type}:name:${name.toLocaleLowerCase("en-US")}:${role?.toLocaleLowerCase("en-US") ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const image =
@@ -758,6 +841,9 @@ function movieCredits(
       image,
       imagePath: null,
       name,
+      person: null,
+      personItemId: person.Id ?? null,
+      personReferenceId: null,
       role,
       type,
     } satisfies JellyfinLibraryMovieCredit;
@@ -893,6 +979,84 @@ function normalizedProviderId(
     ([key]) => key.toLocaleLowerCase("en-US") === provider,
   )?.[1];
   return value?.trim() ?? null;
+}
+
+function normalizedTmdbPersonId(providerIds: Record<string, string> | null | undefined) {
+  const value = normalizedProviderId(providerIds, "tmdb");
+  if (value === null || !/^[1-9][0-9]{0,9}$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= 2_147_483_647 ? parsed : null;
+}
+
+function resolvedCredit<T extends { personItemId: string | null }>(
+  credit: T,
+  people: ReadonlyMap<string, JellyfinLibraryPersonIdentity>,
+): T & { person: JellyfinLibraryPersonIdentity | null } {
+  return {
+    ...credit,
+    person: credit.personItemId === null ? null : (people.get(credit.personItemId) ?? null),
+  };
+}
+
+function resolvedTitleCredits(
+  credits: JellyfinLibraryTitleCredits,
+  people: ReadonlyMap<string, JellyfinLibraryPersonIdentity>,
+): JellyfinLibraryTitleCredits {
+  return {
+    ...credits,
+    cast: credits.cast.map((credit) => resolvedCredit(credit, people)),
+    crew: credits.crew.map((credit) => resolvedCredit(credit, people)),
+  };
+}
+
+function normalizedRottenTomatoesIdentifier(
+  providerIds: Record<string, string> | null | undefined,
+  mediaKind: TitleProviderReference["mediaKind"],
+) {
+  const rawValue = Object.entries(providerIds ?? {}).find(([key]) =>
+    ["rottentomatoes", "rotten tomatoes"].includes(key.toLocaleLowerCase("en-US")),
+  )?.[1];
+  const value = rawValue?.trim();
+  if (!value) return null;
+  if (/^[a-z0-9](?:[a-z0-9_-]{0,199})$/u.test(value)) return value;
+  try {
+    const url = new URL(value);
+    const segments = url.pathname.split("/").filter(Boolean);
+    const expectedCollection = mediaKind === "movie" ? "m" : "tv";
+    return url.origin === "https://www.rottentomatoes.com" &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password &&
+      segments.length === 2 &&
+      segments[0] === expectedCollection &&
+      /^[a-z0-9](?:[a-z0-9_-]{0,199})$/u.test(segments[1] ?? "")
+      ? segments[1]!
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTitleProviderReferences(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+): TitleProviderReference[] {
+  const mediaKind = item.Type === "Movie" ? ("movie" as const) : ("series" as const);
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
+  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,9}$/u.test(tmdb) ? Number(tmdb) : null;
+  const rottenTomatoes = normalizedRottenTomatoesIdentifier(item.ProviderIds, mediaKind);
+  return [
+    ...(imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb)
+      ? [{ identifier: imdb, mediaKind, provider: "imdb" as const }]
+      : []),
+    ...(parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb <= 2_147_483_647
+      ? [{ identifier: parsedTmdb, mediaKind, provider: "tmdb" as const }]
+      : []),
+    ...(rottenTomatoes === null
+      ? []
+      : [{ identifier: rottenTomatoes, mediaKind, provider: "rotten_tomatoes" as const }]),
+  ];
 }
 
 function normalizeMovieRemovalFacts(
@@ -1527,7 +1691,7 @@ export class JellyfinUserMediaClient {
         operation: "media.library",
         query: {
           EnableImageTypes: "Primary,Backdrop",
-          EnableTotalRecordCount: "false",
+          EnableTotalRecordCount: "true",
           EnableUserData: "true",
           Fields: "Overview,ProductionYear,OfficialRating,ImageBlurHashes",
           ImageTypeLimit: "1",
@@ -1543,14 +1707,90 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    const truncated = response.Items.length > input.limit;
+    const reportedTotalResults = response.TotalRecordCount ?? null;
+    const totalResults =
+      reportedTotalResults !== null &&
+      reportedTotalResults >= input.startIndex + response.Items.length
+        ? reportedTotalResults
+        : null;
+    const consumed = Math.min(response.Items.length, input.limit);
+    const nextStartIndex =
+      totalResults === null
+        ? response.Items.length > input.limit
+          ? input.startIndex + consumed
+          : null
+        : input.startIndex + consumed < totalResults
+          ? input.startIndex + consumed
+          : null;
+    if (nextStartIndex !== null && consumed === 0) {
+      throw this.#client.invalidResponse("media.library");
+    }
     return {
       items: response.Items.slice(0, input.limit)
         .map(normalizeLibraryItem)
         .filter((item): item is JellyfinLibraryItem => item !== null),
-      nextStartIndex: truncated ? input.startIndex + input.limit : null,
-      truncated,
+      nextStartIndex,
+      totalResults,
+      truncated: nextStartIndex !== null,
     };
+  }
+
+  async #readPersonIdentities(
+    personItemIds: readonly string[],
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<Map<string, JellyfinLibraryPersonIdentity>> {
+    const uniqueIds = [...new Set(personItemIds)];
+    const identities = new Map<string, JellyfinLibraryPersonIdentity>();
+    for (let offset = 0; offset < uniqueIds.length; offset += JELLYFIN_PERSON_LOOKUP_BATCH_SIZE) {
+      const batch = uniqueIds.slice(offset, offset + JELLYFIN_PERSON_LOOKUP_BATCH_SIZE);
+      const expected = new Set(batch);
+      const response = await this.#client.requestJson("Items", jellyfinPersonItemsResponseSchema, {
+        headers: { authorization: this.#authorization },
+        operation: "media.library.people",
+        query: {
+          EnableImages: "false",
+          EnableTotalRecordCount: "false",
+          EnableUserData: "false",
+          Fields: "ProviderIds",
+          Ids: batch.join(","),
+          IncludeItemTypes: "Person",
+          Limit: String(batch.length),
+          UserId: userId,
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      for (const person of response.Items) {
+        if (!expected.has(person.Id) || identities.has(person.Id)) {
+          throw this.#client.invalidResponse("media.library.people");
+        }
+        const tmdbId = normalizedTmdbPersonId(person.ProviderIds);
+        if (tmdbId !== null) identities.set(person.Id, { itemId: person.Id, tmdbId });
+      }
+    }
+    return identities;
+  }
+
+  public async readLibraryPerson(
+    rawInput: { itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<JellyfinLibraryPerson> {
+    const input = jellyfinLibraryTitleQuerySchema.parse(rawInput);
+    const person = await this.#client.requestJson(
+      `Items/${input.itemId}`,
+      jellyfinPersonItemSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.library.people",
+        query: { Fields: "ProviderIds", UserId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    const tmdbId = normalizedTmdbPersonId(person.ProviderIds);
+    if (person.Id !== input.itemId || tmdbId === null) {
+      throw this.#client.invalidResponse("media.library.people");
+    }
+    return { itemId: person.Id, name: person.Name, tmdbId };
   }
 
   public async readLibraryTitle(
@@ -1575,13 +1815,23 @@ export class JellyfinUserMediaClient {
     const item = normalizeLibraryItem(itemResponse);
     if (!item || item.externalId !== input.itemId)
       throw this.#client.invalidResponse("media.library");
+    const rawCredits = movieCredits(itemResponse.People);
+    const personIds = [...rawCredits.cast, ...rawCredits.crew].flatMap(({ personItemId }) =>
+      personItemId === null ? [] : [personItemId],
+    );
+    const credits = resolvedTitleCredits(
+      rawCredits,
+      await this.#readPersonIdentities(personIds, input.userId, signal),
+    );
     if (item.kind === "movie") {
       return {
         item,
-        movie: normalizeMovieDetail(itemResponse),
+        movie: { ...normalizeMovieDetail(itemResponse), ...credits },
+        providerReferences: normalizeTitleProviderReferences(itemResponse),
         removal: normalizeMovieRemovalFacts(itemResponse),
         seasons: [],
         seasonsTruncated: false,
+        seriesCredits: null,
       };
     }
 
@@ -1637,10 +1887,12 @@ export class JellyfinUserMediaClient {
     return {
       item,
       movie: null,
+      providerReferences: normalizeTitleProviderReferences(itemResponse),
       seasons: seasonItems.map((season) =>
         normalizeLibrarySeason(season, fallbackProgress.get(season.Id)),
       ),
       seasonsTruncated: seasonsResponse.Items.length > JELLYFIN_LIBRARY_SEASON_LIMIT,
+      seriesCredits: credits,
     };
   }
 
@@ -1659,18 +1911,26 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    if (!response.Name || response.Id !== input.itemId) {
+    const matchingSources = (response.MediaSources ?? []).filter(
+      (candidate) => candidate.Id === input.itemId,
+    );
+    const source = matchingSources.length === 1 ? matchingSources[0]! : null;
+    const canDownload = response.CanDownload === true;
+    if (
+      !response.Name ||
+      response.Id !== input.itemId ||
+      (canDownload && (!source || !source.Size))
+    ) {
       throw this.#client.invalidResponse("media.original_download.metadata");
     }
-    const source = response.MediaSources?.[0];
     const episodeTitle =
       response.Type === "Episode"
         ? [response.SeriesName, episodeLabel(response)].filter(Boolean).join(" - ")
         : response.Name;
     return {
-      canDownload: response.CanDownload === true,
+      canDownload,
       container:
-        compactText(response.Container ?? source?.Container, 64)?.toLocaleLowerCase("en-US") ??
+        compactText(source?.Container ?? response.Container, 64)?.toLocaleLowerCase("en-US") ??
         null,
       etag: response.Etag ?? null,
       externalId: response.Id,
@@ -1868,10 +2128,18 @@ export class JellyfinUserMediaClient {
       },
     );
     const truncated = response.Items.length > input.limit;
+    const items = response.Items.slice(0, input.limit)
+      .map(normalizeLibraryEpisode)
+      .filter((item): item is JellyfinLibraryEpisode => item !== null);
+    const personIds = items.flatMap(({ credits }) =>
+      credits.flatMap(({ personItemId }) => (personItemId === null ? [] : [personItemId])),
+    );
+    const people = await this.#readPersonIdentities(personIds, input.userId, signal);
     return {
-      items: response.Items.slice(0, input.limit)
-        .map(normalizeLibraryEpisode)
-        .filter((item): item is JellyfinLibraryEpisode => item !== null),
+      items: items.map((item) => ({
+        ...item,
+        credits: item.credits.map((credit) => resolvedCredit(credit, people)),
+      })),
       nextStartIndex: truncated ? input.startIndex + input.limit : null,
       truncated,
     };

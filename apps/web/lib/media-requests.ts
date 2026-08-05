@@ -4,6 +4,7 @@ import type {
   MediaRequestInput,
   MediaRequestResponse,
   MediaRequestRoutingOptionsResponse,
+  MediaRequestRoutingPreferenceInput,
 } from "@omnifin/contracts/requests";
 
 const CSRF_HEADER = "x-omnifin-csrf";
@@ -48,6 +49,7 @@ export type MediaRequestClientErrorKind =
   | "pending"
   | "rate_limited"
   | "routing"
+  | "routing_unavailable"
   | "signed_out"
   | "unavailable";
 
@@ -146,6 +148,9 @@ function mappedError(status: number, code: string, message: string): MediaReques
   if (code === "request_routing_invalid") {
     return new MediaRequestClientError("routing", code, message, "new_key");
   }
+  if (code === "request_routing_unavailable") {
+    return new MediaRequestClientError("routing_unavailable", code, message, "new_key");
+  }
   if (code === "request_configuration_unavailable") {
     return new MediaRequestClientError("configuration", code, message, "new_key");
   }
@@ -203,6 +208,10 @@ export interface MediaRequestClient {
     is4k: boolean,
     signal?: AbortSignal,
   ): Promise<MediaRequestRoutingOptionsResponse>;
+  saveRoutingPreference(
+    input: MediaRequestRoutingPreferenceInput,
+    options: { csrfToken: string; signal?: AbortSignal },
+  ): Promise<void>;
 }
 
 export const mediaRequestClient: MediaRequestClient = {
@@ -294,5 +303,20 @@ export const mediaRequestClient: MediaRequestClient = {
       );
     }
     return parsed.data;
+  },
+
+  async saveRoutingPreference(input, options) {
+    const schemas = await contractSchemas();
+    const body = schemas.requests.mediaRequestRoutingPreferenceInputSchema.parse(input);
+    const response = await fetchSameOrigin("/api/requests/routing-preference", {
+      body: JSON.stringify(body),
+      headers: {
+        "content-type": "application/json",
+        [CSRF_HEADER]: options.csrfToken,
+      },
+      method: "PUT",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!response.ok) throw await responseError(response);
   },
 };

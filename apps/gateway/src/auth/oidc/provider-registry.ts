@@ -1311,11 +1311,12 @@ export class OidcProviderRegistry {
     }
 
     const promise = this.#discoverUncached(record, fingerprint, cacheTime);
-    this.#inFlightDiscoveries.set(providerId, { fingerprint, promise });
+    const discovery = { fingerprint, promise };
+    this.#inFlightDiscoveries.set(providerId, discovery);
     try {
       return await promise;
     } finally {
-      if (this.#inFlightDiscoveries.get(providerId)?.promise === promise) {
+      if (this.#inFlightDiscoveries.get(providerId) === discovery) {
         this.#inFlightDiscoveries.delete(providerId);
       }
     }

@@ -6,6 +6,7 @@ import type {
   LibraryExtrasResponse,
   LibraryPlaybackStateMutationRequest,
   LibraryPlaybackStateMutationResponse,
+  LibraryPersonProfileLinkResponse,
   LibrarySeasonEpisodesResponse,
   LibraryTitleDetailResponse,
 } from "@omnifin/contracts/library";
@@ -148,6 +149,10 @@ export interface MediaLibraryClient {
     signal?: AbortSignal,
   ): Promise<LibraryExtrasResponse>;
   loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
+  resolvePerson?(
+    referenceId: string,
+    signal?: AbortSignal,
+  ): Promise<LibraryPersonProfileLinkResponse>;
   loadDownloadEligibility?(signal?: AbortSignal): Promise<MediaDownloadEligibility>;
   prepareDownload?(
     referenceId: string,
@@ -244,6 +249,15 @@ export const mediaLibraryClient: MediaLibraryClient = {
     return fetchLibraryJson(
       `/api/media/library/${referenceId}`,
       schemas.libraryTitleDetailResponseSchema,
+      signal,
+    );
+  },
+  async resolvePerson(referenceId, signal) {
+    assertMediaReference(referenceId);
+    const schemas = (await contractSchemas()).library;
+    return fetchLibraryJson(
+      `/api/media/people/${referenceId}`,
+      schemas.libraryPersonProfileLinkResponseSchema,
       signal,
     );
   },
