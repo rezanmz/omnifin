@@ -45,7 +45,7 @@ export type RequestableMedia = DiscoveryMovieResult | DiscoverySeriesResult;
 type SubmissionState =
   | { kind: "idle" }
   | { kind: "submitting" }
-  | { creation: MediaRequestCreation; kind: "success"; profileLabel: string }
+  | { creation: MediaRequestCreation; kind: "success" }
   | { error: MediaRequestClientError; kind: "error" };
 
 type RoutingState =
@@ -58,6 +58,8 @@ type RoutingState =
       unavailableFormats: ("4K" | "standard")[];
     }
   | { kind: "error"; requestKey: string };
+
+type RoutingPreferenceState = "idle" | "saving" | "saved" | "stale" | "error";
 
 interface RequestQualityProfileChoice {
   destination: MediaRequestRoutingDestination;
@@ -285,6 +287,8 @@ export function RequestComposer({
   );
   const [routingState, setRoutingState] = useState<RoutingState>({ kind: "idle" });
   const [routingAttempt, setRoutingAttempt] = useState(0);
+  const [routingPreferenceState, setRoutingPreferenceState] =
+    useState<RoutingPreferenceState>("idle");
   const routingRequestKey = media
     ? `${media.kind}:${media.tmdbId}:${routingAttempt}`
     : `closed:${routingAttempt}`;
@@ -367,7 +371,37 @@ export function RequestComposer({
     idempotencyKeyReference.current = null;
     setIs4k(nextIs4k);
     setRoutingSelection(selection);
+    setRoutingPreferenceState("idle");
     setSubmission({ kind: "idle" });
+  }
+
+  async function setHouseholdDefault() {
+    if (
+      !media ||
+      eligibility.status !== "ready" ||
+      !eligibility.snapshot.principal.permissions.includes("connectors.manage") ||
+      !routingSelection ||
+      routingPreferenceState === "saving"
+    ) {
+      return;
+    }
+    setRoutingPreferenceState("saving");
+    try {
+      await client.saveRoutingPreference(
+        { is4k, kind: media.kind, routing: routingSelection },
+        { csrfToken: eligibility.snapshot.csrfToken },
+      );
+      setRoutingPreferenceState("saved");
+    } catch (error) {
+      if (error instanceof MediaRequestClientError && error.kind === "routing") {
+        setRoutingSelection(null);
+        setRoutingState({ kind: "loading", requestKey: routingRequestKey });
+        setRoutingPreferenceState("stale");
+        setRoutingAttempt((attempt) => attempt + 1);
+      } else {
+        setRoutingPreferenceState("error");
+      }
+    }
   }
 
   function updateSeasonMode(mode: "all" | "specific") {
@@ -429,7 +463,6 @@ export function RequestComposer({
       setSubmission({
         creation,
         kind: "success",
-        profileLabel: selectedQuality?.label ?? "Verified profile",
       });
       onCreated?.(creation);
     } catch (error) {
@@ -488,6 +521,9 @@ export function RequestComposer({
   const routingSummary = selectedProfileChoice?.label ?? "Profile route unavailable";
   const routeUnavailable = !selectedDestination || !selectedQuality || !routingSelection;
   const routingFailures = availableRoutingOptions.flatMap((options) => options.failures);
+  const canManageRoutingPreference =
+    eligibility.status === "ready" &&
+    eligibility.snapshot.principal.permissions.includes("connectors.manage");
 
   return (
     <dialog
@@ -596,7 +632,7 @@ export function RequestComposer({
                 </div>
                 <div>
                   <dt>Profile</dt>
-                  <dd>{submission.profileLabel}</dd>
+                  <dd>{submission.creation.request.qualityProfile}</dd>
                 </div>
                 <div>
                   <dt>State</dt>
@@ -661,6 +697,30 @@ export function RequestComposer({
                     Live from {media.kind === "movie" ? "Radarr" : "Sonarr"} through enabled Seerr
                     destinations.
                   </small>
+                  {canManageRoutingPreference ? (
+                    <div className="request-composer__profile-default">
+                      <button
+                        disabled={routeUnavailable || routingPreferenceState === "saving"}
+                        onClick={() => void setHouseholdDefault()}
+                        type="button"
+                      >
+                        {routingPreferenceState === "saving" ? (
+                          <>
+                            <LoaderCircle aria-hidden="true" /> Saving default…
+                          </>
+                        ) : (
+                          "Set household default"
+                        )}
+                      </button>
+                      {routingPreferenceState === "saved" ? (
+                        <span role="status">Household default updated.</span>
+                      ) : routingPreferenceState === "stale" ? (
+                        <span role="alert">Profiles changed. Review the fresh selection.</span>
+                      ) : routingPreferenceState === "error" ? (
+                        <span role="alert">Default could not be updated. Try again.</span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </fieldset>
 

@@ -436,6 +436,56 @@
   line-height: 1.45;
 }
 
+.request-composer__profile-default {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 10px;
+  grid-column: 2;
+}
+
+.request-composer__profile-default button {
+  align-items: center;
+  background: var(--fill-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  color: var(--paper-1);
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.62rem;
+  font-weight: 670;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.request-composer__profile-default button:hover:not(:disabled) {
+  background: var(--fill-hover);
+  border-color: color-mix(in srgb, var(--acid) 30%, var(--line-soft));
+}
+
+.request-composer__profile-default button:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acid) 17%, transparent);
+  outline: none;
+}
+
+.request-composer__profile-default button:disabled {
+  cursor: progress;
+  opacity: 0.62;
+}
+
+.request-composer__profile-default button svg {
+  animation: search-console-spin 900ms linear infinite;
+  height: 13px;
+  width: 13px;
+}
+
+.request-composer__profile-default span {
+  color: var(--paper-2);
+  font-size: 0.59rem;
+  line-height: 1.4;
+}
+
 .request-composer__segments {
   background: color-mix(in srgb, var(--ink-0) 15%, transparent);
   border: 1px solid var(--line-soft);

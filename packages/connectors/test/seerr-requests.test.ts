@@ -32,12 +32,14 @@ const userList = {
       id: 18,
       jellyfinUserId: "another-jellyfin-user",
       jellyfinUsername: "another-user",
+      permissions: 2,
     },
     {
       email: "viewer@example.test",
       id: 42,
       jellyfinUserId: "jellyfin-user-1",
       jellyfinUsername: "viewer",
+      permissions: 2,
     },
   ],
 };
@@ -92,6 +94,22 @@ describe("Seerr media requests", () => {
       mediaId: 550,
       mediaType: "movie",
     });
+  });
+
+  it("rejects a routing dimension the resolved Seerr user cannot request", async () => {
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        ...userList,
+        results: [{ ...userList.results[1], permissions: 32 }],
+      }),
+    ]);
+
+    await expect(
+      adapter.resolveUser(
+        { jellyfinUserId: "jellyfin-user-1", jellyfinUsername: "viewer" },
+        { is4k: true, kind: "movie" },
+      ),
+    ).rejects.toMatchObject({ reason: "request_denied" });
   });
 
   it("submits canonical series fields without browser-controlled administration data", async () => {
@@ -242,6 +260,7 @@ describe("Seerr media requests", () => {
           id: "request:101",
           is4k: false,
           kind: "movie",
+          qualityProfile: "Removed profile",
           requestedBy: "alex",
           seasons: null,
           source: "seerr",
@@ -256,6 +275,7 @@ describe("Seerr media requests", () => {
           id: "request:100",
           is4k: true,
           kind: "series",
+          qualityProfile: "Removed profile",
           requestedBy: "sam",
           seasons: [1, 3],
           source: "seerr",
@@ -278,6 +298,54 @@ describe("Seerr media requests", () => {
     expect(requests[0]?.url.searchParams.get("take")).toBe("2");
     expect(requests[0]?.url.searchParams.get("skip")).toBe("0");
     expect(JSON.stringify(result)).not.toContain("not-forwarded@example.test");
+  });
+
+  it("resolves the current quality profile for request review", async () => {
+    const request = {
+      createdAt: "2026-07-28T16:30:00.000Z",
+      id: 101,
+      is4k: false,
+      media: { mediaType: "movie", tmdbId: 550 },
+      profileId: 4,
+      requestedBy: { jellyfinUsername: "alex" },
+      seasons: [],
+      serverId: 1,
+      status: 1,
+      updatedAt: "2026-07-28T16:35:00.000Z",
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse({
+        pageInfo: { page: 1, pageSize: 1, pages: 1, results: 1 },
+        results: [request],
+      }),
+      jsonResponse({ releaseDate: "2026-07-01", title: "The Long Meridian" }),
+      jsonResponse({
+        languageProfiles: null,
+        profiles: [{ id: 4, name: "1080p" }],
+        rootFolders: [{ freeSpace: null, path: "/srv/media/movies", totalSpace: null }],
+        server: {
+          activeDirectory: "/srv/media/movies",
+          activeProfileId: 4,
+          id: 1,
+          is4k: false,
+          isDefault: true,
+          name: "Cinema",
+        },
+      }),
+    ]);
+
+    const result = await adapter.listMediaRequests({
+      cursor: null,
+      limit: 1,
+      status: "pending",
+    });
+
+    expect(result.items[0]?.qualityProfile).toBe("1080p");
+    expect(requests.map((entry) => entry.url.pathname)).toEqual([
+      "/api/v1/request",
+      "/api/v1/movie/550",
+      "/api/v1/service/radarr/1",
+    ]);
   });
 
   it("approves an opaque request target and verifies the returned decision", async () => {

@@ -95,17 +95,37 @@ export interface MediaRequestCapture {
   idempotencyKey: string;
 }
 
-export async function mockMediaRequestSession(page: Page) {
+export async function mockMediaRequestSession(
+  page: Page,
+  options: { canManageRouting?: boolean } = {},
+) {
   await page.route("**/api/auth/session", async (route) => {
     await route.fulfill({
       body: JSON.stringify({
         csrfToken: mediaRequestCsrfToken,
-        principal: mediaRequestPrincipal,
+        principal: options.canManageRouting
+          ? {
+              ...mediaRequestPrincipal,
+              permissions: [...mediaRequestPrincipal.permissions, "connectors.manage"],
+              role: "admin",
+            }
+          : mediaRequestPrincipal,
       }),
       contentType: "application/json",
       status: 200,
     });
   });
+}
+
+export async function mockMediaRequestPreference(page: Page) {
+  const capture: { body: unknown; csrfToken: string } = { body: null, csrfToken: "" };
+  await page.route("**/api/requests/routing-preference", async (route) => {
+    const request = route.request();
+    capture.body = request.postDataJSON();
+    capture.csrfToken = request.headers()["x-omnifin-csrf"] ?? "";
+    await route.fulfill({ status: 204 });
+  });
+  return capture;
 }
 
 export async function mockMediaRequestRouting(page: Page) {
@@ -153,6 +173,7 @@ export async function mockMediaRequestCreation(page: Page) {
         id: "request:42",
         is4k: false,
         kind: "movie",
+        qualityProfile: "Balanced",
         seasons: null,
         source: "seerr",
         status: "pending",

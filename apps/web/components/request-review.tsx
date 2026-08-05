@@ -396,6 +396,8 @@ function RequestCard({
         <p>
           <span>{seasonLabel(item)}</span>
           <i aria-hidden="true" />
+          <span>Profile {item.qualityProfile}</span>
+          <i aria-hidden="true" />
           <span>Requested by {item.requestedBy}</span>
         </p>
       </div>

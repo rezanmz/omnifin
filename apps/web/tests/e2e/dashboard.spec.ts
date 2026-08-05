@@ -26,6 +26,7 @@ import {
   mediaRequestCsrfToken,
   mediaRequestRoutingReference,
   mockMediaRequestCreation,
+  mockMediaRequestPreference,
   mockMediaRequestRouting,
   mockMediaRequestSession,
 } from "../fixtures/media-request";
@@ -674,6 +675,11 @@ test("request composer delegates a bounded request through the verified session"
   const composer = page.getByRole("dialog", { name: "Compose request" });
   await expect(composer).toBeVisible();
   await expect(composer.getByText("Mina’s Jellyfin")).toBeVisible();
+  expect(
+    await composer
+      .locator(".request-composer__body")
+      .evaluate((body) => body.scrollWidth <= body.clientWidth + 1),
+  ).toBe(true);
   const submitAction = composer.getByRole("button", { name: /Send request/i });
   await expectStationaryPointerTarget(submitAction);
   const rootScrollBeforeSubmission = await page.evaluate(() => document.documentElement.scrollTop);
@@ -744,6 +750,38 @@ test("request composer delegates opaque advanced routing without exposing storag
   });
   expect(JSON.stringify(capture.body)).not.toContain("/srv/");
   await expect(composer).not.toContainText("/srv/");
+});
+
+test("request composer lets an administrator save an opaque household profile default", async ({
+  page,
+}) => {
+  await mockDiscoverySearch(page);
+  await mockMediaRequestSession(page, { canManageRouting: true });
+  await mockMediaRequestRouting(page);
+  const capture = await mockMediaRequestPreference(page);
+  await page.goto("/");
+
+  await page.getByRole("combobox").fill("matrix");
+  await page.getByRole("button", { name: "Request The Matrix" }).click();
+  const composer = page.getByRole("dialog", { name: "Compose request" });
+  await composer
+    .getByRole("combobox", { name: "Quality profile", exact: true })
+    .selectOption(mediaRequestRoutingReference("quality-remux"));
+  await composer.getByRole("button", { name: "Set household default" }).click();
+
+  await expect(composer.getByRole("status")).toHaveText("Household default updated.");
+  expect(capture.csrfToken).toBe(mediaRequestCsrfToken);
+  expect(capture.body).toEqual({
+    is4k: false,
+    kind: "movie",
+    routing: {
+      destination: mediaRequestRoutingReference("radarr-primary"),
+      languageProfile: null,
+      qualityProfile: mediaRequestRoutingReference("quality-remux"),
+      rootFolder: mediaRequestRoutingReference("root-cinema"),
+    },
+  });
+  expect(JSON.stringify(capture.body)).not.toContain("/srv/");
 });
 
 test("production-first onboarding remains a complete route", async ({ page }) => {

@@ -120,6 +120,7 @@ function client(
       id: "request:42",
       is4k: input.is4k,
       kind: input.kind,
+      qualityProfile: "Balanced",
       seasons: input.kind === "series" && input.seasons !== "all" ? input.seasons : null,
       source: "seerr",
       status: "pending",
@@ -152,7 +153,12 @@ function client(
     };
   },
 ): MediaRequestClient {
-  return { create, loadEligibility, loadRoutingOptions };
+  return {
+    create,
+    loadEligibility,
+    loadRoutingOptions,
+    saveRoutingPreference: async () => undefined,
+  };
 }
 
 const meta = {

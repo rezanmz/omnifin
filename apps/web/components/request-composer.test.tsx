@@ -157,6 +157,7 @@ function response(input: {
   return {
     createdAt: "2026-07-27T12:01:00.000Z",
     id: "request:42",
+    qualityProfile: "Server-confirmed profile",
     source: "seerr",
     status: "pending",
     ...input,
@@ -176,8 +177,9 @@ function client(
   loadEligibility: MediaRequestClient["loadEligibility"] = async () => eligibility,
   loadRoutingOptions: MediaRequestClient["loadRoutingOptions"] = async (kind, is4k) =>
     routingOptionsFor(kind, is4k),
+  saveRoutingPreference: MediaRequestClient["saveRoutingPreference"] = async () => undefined,
 ): MediaRequestClient {
-  return { create, loadEligibility, loadRoutingOptions };
+  return { create, loadEligibility, loadRoutingOptions, saveRoutingPreference };
 }
 
 describe("request composer", () => {
@@ -228,6 +230,7 @@ describe("request composer", () => {
 
     expect(await screen.findByText("Mina Jellyfin")).toBeVisible();
     await screen.findByRole("option", { name: /Balanced.*4K route/i });
+    expect(screen.queryByRole("button", { name: "Set household default" })).not.toBeInTheDocument();
     await user.selectOptions(screen.getByRole("combobox", { name: "Quality profile" }), [
       routingReference("quality-1-4k"),
     ]);
@@ -263,6 +266,7 @@ describe("request composer", () => {
     );
     expect(await screen.findByRole("heading", { name: "Request received" })).toBeVisible();
     expect(screen.getByText("#42")).toBeVisible();
+    expect(screen.getByText("Server-confirmed profile")).toBeVisible();
     expect(onCreated).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(onOpenChange).toHaveBeenCalledOnce();
@@ -326,6 +330,167 @@ describe("request composer", () => {
       tmdbId: 1396,
     });
     expect(JSON.stringify(create.mock.calls[0]?.[0])).not.toContain("/srv/");
+  });
+
+  it("lets an administrator set the selected profile as the household default", async () => {
+    const saveRoutingPreference = vi.fn<MediaRequestClient["saveRoutingPreference"]>();
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(
+          undefined,
+          async () => ({
+            ...eligibility,
+            snapshot: {
+              ...eligibility.snapshot,
+              principal: {
+                ...eligibility.snapshot.principal,
+                permissions: [...ROLE_PERMISSIONS.admin],
+                role: "admin",
+              },
+            },
+          }),
+          undefined,
+          saveRoutingPreference,
+        )}
+        media={series}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    const profileSelect = await screen.findByRole("combobox", { name: "Quality profile" });
+    await waitFor(() => expect(profileSelect).toBeEnabled());
+    await user.selectOptions(profileSelect, [routingReference("quality-2")]);
+    await user.click(screen.getByRole("button", { name: "Set household default" }));
+
+    expect(saveRoutingPreference).toHaveBeenCalledWith(
+      {
+        is4k: false,
+        kind: "series",
+        routing: expect.objectContaining({ qualityProfile: routingReference("quality-2") }),
+      },
+      { csrfToken },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Household default updated");
+  });
+
+  it("announces when a household default cannot be updated", async () => {
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(
+          undefined,
+          async () => ({
+            ...eligibility,
+            snapshot: {
+              ...eligibility.snapshot,
+              principal: {
+                ...eligibility.snapshot.principal,
+                permissions: [...ROLE_PERMISSIONS.admin],
+                role: "admin",
+              },
+            },
+          }),
+          undefined,
+          async () => Promise.reject(new Error("private failure")),
+        )}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: "Set household default" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Default could not be updated");
+    expect(screen.queryByText("private failure")).not.toBeInTheDocument();
+  });
+
+  it("refreshes stale profile references before an administrator retries", async () => {
+    const loadRoutingOptions = vi.fn<MediaRequestClient["loadRoutingOptions"]>(async (kind, is4k) =>
+      routingOptionsFor(kind, is4k),
+    );
+    const saveRoutingPreference = vi
+      .fn<MediaRequestClient["saveRoutingPreference"]>()
+      .mockRejectedValue(
+        new MediaRequestClientError(
+          "routing",
+          "request_routing_invalid",
+          "The selected route expired.",
+          "new_key",
+        ),
+      );
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(
+          undefined,
+          async () => ({
+            ...eligibility,
+            snapshot: {
+              ...eligibility.snapshot,
+              principal: {
+                ...eligibility.snapshot.principal,
+                permissions: [...ROLE_PERMISSIONS.admin],
+                role: "admin",
+              },
+            },
+          }),
+          loadRoutingOptions,
+          saveRoutingPreference,
+        )}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: "Set household default" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Profiles changed. Review the fresh selection",
+    );
+    await waitFor(() => expect(loadRoutingOptions).toHaveBeenCalledTimes(4));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Quality profile" })).toBeEnabled(),
+    );
+  });
+
+  it("keeps long profile labels accessible and the selector keyboard reachable", async () => {
+    const longLabel = `Archive ${"quality profile ".repeat(9)}`.trim();
+    const user = userEvent.setup();
+    render(
+      <RequestComposer
+        client={client(undefined, undefined, async (kind, is4k) => {
+          const options = routingOptionsFor(kind, is4k);
+          if (is4k) return { ...options, destinations: [] };
+          return {
+            ...options,
+            destinations: options.destinations.map((destination) => ({
+              ...destination,
+              qualityProfiles: destination.qualityProfiles.map((profile, index) =>
+                index === 0 ? { ...profile, label: longLabel } : profile,
+              ),
+            })),
+          };
+        })}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    await screen.findByRole("option", { name: `${longLabel} · Series archive` });
+    const profileSelect = screen.getByRole("combobox", { name: "Quality profile" });
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Close request composer" })).toHaveFocus();
+    await user.tab();
+    expect(profileSelect).toHaveFocus();
   });
 
   it("keeps healthy profiles usable when one routing dimension is unavailable", async () => {

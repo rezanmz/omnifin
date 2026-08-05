@@ -42,7 +42,7 @@ function testConfig(): AppConfig {
 }
 
 function principal(
-  role: "requester" | "viewer" = "requester",
+  role: "admin" | "requester" | "viewer" = "requester",
   userId = "viewer-user",
   linkId = "viewer-link",
 ): SessionPrincipal {
@@ -78,6 +78,7 @@ const createdRequest: MediaRequestResponse = {
   id: "request:91",
   is4k: false,
   kind: "series",
+  qualityProfile: "1080p",
   seasons: [1, 3],
   source: "seerr",
   status: "approved",
@@ -268,6 +269,257 @@ describe("media request service", () => {
         undefined,
         { profileId: 4, rootFolder: "/srv/media/movies", serverId: 1 },
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a profile removed after selection before contacting Seerr", async () => {
+    let catalogLoad = 0;
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => {
+        catalogLoad += 1;
+        return {
+          destinations: [
+            {
+              activeDirectory: "/srv/media/movies",
+              activeLanguageProfileId: null,
+              activeProfileId: catalogLoad === 1 ? 4 : 7,
+              id: 1,
+              isDefault: true,
+              label: "Cinema",
+              languageProfiles: [],
+              profiles:
+                catalogLoad === 1 ? [{ id: 4, label: "1080p" }] : [{ id: 7, label: "Balanced" }],
+              rootFolders: [
+                {
+                  availableBytes: null,
+                  capacityBytes: null,
+                  path: "/srv/media/movies",
+                },
+              ],
+            },
+          ],
+          failures: [],
+          is4k,
+          kind,
+        };
+      },
+    );
+    const { createMediaRequest, database, service } = harness({ listRequestRouting });
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const destination = options.destinations[0]!;
+
+      await expect(
+        service.create(
+          {
+            is4k: false,
+            kind: "movie",
+            routing: {
+              destination: destination.id,
+              languageProfile: null,
+              qualityProfile: destination.qualityProfiles[0]!.id,
+              rootFolder: destination.rootFolders[0]!.id,
+            },
+            tmdbId: 550,
+          },
+          "request-key-routing-removed",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "routing_invalid" });
+      expect(listRequestRouting).toHaveBeenCalledTimes(2);
+      expect(createMediaRequest).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns and audits the current upstream profile label after a rename", async () => {
+    let catalogLoad = 0;
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => {
+        catalogLoad += 1;
+        return {
+          destinations: [
+            {
+              activeDirectory: "/srv/media/movies",
+              activeLanguageProfileId: null,
+              activeProfileId: 4,
+              id: 1,
+              isDefault: true,
+              label: "Cinema",
+              languageProfiles: [],
+              profiles: [{ id: 4, label: catalogLoad === 1 ? "1080p" : "Balanced" }],
+              rootFolders: [
+                {
+                  availableBytes: null,
+                  capacityBytes: null,
+                  path: "/srv/media/movies",
+                },
+              ],
+            },
+          ],
+          failures: [],
+          is4k,
+          kind,
+        };
+      },
+    );
+    const { database, service } = harness({ listRequestRouting });
+    try {
+      const options = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      const destination = options.destinations[0]!;
+      const result = await service.create(
+        {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination: destination.id,
+            languageProfile: null,
+            qualityProfile: destination.qualityProfiles[0]!.id,
+            rootFolder: destination.rootFolders[0]!.id,
+          },
+          tmdbId: 550,
+        },
+        "request-key-routing-renamed",
+        context(),
+      );
+
+      expect(result.request.qualityProfile).toBe("Balanced");
+      const audit = database.sqlite
+        .prepare(
+          "select metadata_json as metadataJson from audit_events where event_type = 'media.request.created'",
+        )
+        .get() as { metadataJson: string };
+      expect(JSON.parse(audit.metadataJson)).toMatchObject({ qualityProfile: "Balanced" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("applies an administrator profile preference without persisting browser references", async () => {
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({
+        destinations: [
+          {
+            activeDirectory: "/srv/media/movies",
+            activeLanguageProfileId: null,
+            activeProfileId: 4,
+            id: 1,
+            isDefault: true,
+            label: "Cinema",
+            languageProfiles: [],
+            profiles: [
+              { id: 4, label: "1080p" },
+              { id: 7, label: "Balanced" },
+            ],
+            rootFolders: [
+              {
+                availableBytes: null,
+                capacityBytes: null,
+                path: "/srv/media/movies",
+              },
+            ],
+          },
+        ],
+        failures: [],
+        is4k,
+        kind,
+      }),
+    );
+    const { database, service } = harness({ listRequestRouting });
+    try {
+      const adminContext = { ...context(), principal: principal("admin") };
+      const initial = await service.routingOptions({ is4k: false, kind: "movie" }, adminContext);
+      const destination = initial.destinations[0]!;
+      await service.setRoutingPreference(
+        {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination: destination.id,
+            languageProfile: null,
+            qualityProfile: destination.qualityProfiles[1]!.id,
+            rootFolder: destination.rootFolders[0]!.id,
+          },
+        },
+        adminContext,
+      );
+
+      const preferred = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+      expect(preferred.destinations[0]?.qualityProfiles).toEqual([
+        expect.objectContaining({ isDefault: false, label: "1080p" }),
+        expect.objectContaining({ isDefault: true, label: "Balanced" }),
+      ]);
+      const stored = database.sqlite
+        .prepare(
+          "select connector_id as connectorId, destination_id as destinationId, profile_id as profileId from media_request_profile_preferences",
+        )
+        .get();
+      expect(stored).toEqual({ connectorId: "seerr-main", destinationId: 1, profileId: 7 });
+      expect(JSON.stringify(stored)).not.toContain("routing-v1");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("falls back to the current upstream default when a saved profile is removed", async () => {
+    let includePreferredProfile = true;
+    const listRequestRouting = vi.fn<MediaRequestAdapter["listRequestRouting"]>(
+      async (kind, is4k) => ({
+        destinations: [
+          {
+            activeDirectory: "/srv/media/movies",
+            activeLanguageProfileId: null,
+            activeProfileId: 4,
+            id: 1,
+            isDefault: true,
+            label: "Cinema",
+            languageProfiles: [],
+            profiles: [
+              { id: 4, label: "1080p" },
+              ...(includePreferredProfile ? [{ id: 7, label: "Balanced" }] : []),
+            ],
+            rootFolders: [
+              {
+                availableBytes: null,
+                capacityBytes: null,
+                path: "/srv/media/movies",
+              },
+            ],
+          },
+        ],
+        failures: [],
+        is4k,
+        kind,
+      }),
+    );
+    const { database, service } = harness({ listRequestRouting });
+    try {
+      const adminContext = { ...context(), principal: principal("admin") };
+      const initial = await service.routingOptions({ is4k: false, kind: "movie" }, adminContext);
+      const destination = initial.destinations[0]!;
+      await service.setRoutingPreference(
+        {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination: destination.id,
+            languageProfile: null,
+            qualityProfile: destination.qualityProfiles[1]!.id,
+            rootFolder: destination.rootFolders[0]!.id,
+          },
+        },
+        adminContext,
+      );
+
+      includePreferredProfile = false;
+      const fallback = await service.routingOptions({ is4k: false, kind: "movie" }, context());
+
+      expect(fallback.destinations[0]?.qualityProfiles).toEqual([
+        expect.objectContaining({ isDefault: true, label: "1080p" }),
+      ]);
     } finally {
       database.close();
     }
@@ -515,6 +767,7 @@ describe("media request service", () => {
       expect(resolveUser).toHaveBeenCalledTimes(1);
       expect(resolveUser).toHaveBeenCalledWith(
         { jellyfinUserId: "jellyfin-user-1", jellyfinUsername: "viewer" },
+        { is4k: false, kind: "series" },
         undefined,
       );
       expect(createMediaRequest).toHaveBeenCalledTimes(1);
@@ -546,9 +799,49 @@ describe("media request service", () => {
       expect(JSON.parse(audit.metadataJson!)).toEqual({
         is4k: false,
         kind: "series",
+        qualityProfile: "1080p",
         tmdbId: 1399,
       });
       expect(JSON.stringify({ audit, operation })).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("replays a success persisted before profile labels were recorded", async () => {
+    const { createMediaRequest, database, service } = harness();
+    try {
+      await service.create(
+        { is4k: false, kind: "series", seasons: [1, 3], tmdbId: 1399 },
+        "request-key-legacy-response",
+        context(),
+      );
+      database.sqlite
+        .prepare("update media_request_operations set response_json = ? where state = 'succeeded'")
+        .run(
+          JSON.stringify({
+            createdAt: createdRequest.createdAt,
+            id: createdRequest.id,
+            is4k: createdRequest.is4k,
+            kind: createdRequest.kind,
+            seasons: createdRequest.seasons,
+            source: createdRequest.source,
+            status: createdRequest.status,
+            tmdbId: createdRequest.tmdbId,
+          }),
+        );
+
+      await expect(
+        service.create(
+          { is4k: false, kind: "series", seasons: [1, 3], tmdbId: 1399 },
+          "request-key-legacy-response",
+          context(),
+        ),
+      ).resolves.toMatchObject({
+        replayed: true,
+        request: { qualityProfile: "Profile unavailable" },
+      });
+      expect(createMediaRequest).toHaveBeenCalledOnce();
     } finally {
       database.close();
     }
