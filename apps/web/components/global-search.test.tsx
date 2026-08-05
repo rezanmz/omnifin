@@ -1,5 +1,6 @@
 import type {
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -8,7 +9,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
-import type { DiscoveryMediaDetailClient } from "../lib/media-details";
+import type { DiscoveryMediaDetailClient, DiscoveryPersonDetailClient } from "../lib/media-details";
 import { GlobalSearch } from "./global-search";
 import { GlobalSearchLoader } from "./global-search-loader";
 
@@ -85,6 +86,35 @@ const detailResponse: DiscoveryMediaDetailResponse = {
   },
 };
 
+const personResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    biography: "An actor and producer known for character-driven films.",
+    birthday: "1963-12-18",
+    birthplace: "Shawnee, Oklahoma",
+    credits: [
+      {
+        availability: "available",
+        kind: "movie",
+        role: "Tyler Durden",
+        title: "Fight Club",
+        tmdbId: 550,
+        voteAverage: 8.4,
+        year: 1999,
+      },
+    ],
+    creditsState: "ready",
+    creditsTotal: 1,
+    deathday: null,
+    department: "Acting",
+    id: "person:287",
+    name: "Brad Pitt",
+    profilePath: null,
+    source: "seerr",
+    tmdbId: 287,
+  },
+};
+
 function client(
   search: DiscoverySearchClient["search"] = async () => searchResponse,
 ): DiscoverySearchClient {
@@ -140,12 +170,87 @@ describe("global search", () => {
       await waitFor(() =>
         expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
       );
+      fireEvent.scroll(window);
       await waitFor(() => expect(scrollTop).toBe(1_200));
 
-      // WebKit can apply one more sticky-focus adjustment after the replacement input mounts.
-      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      // WebKit can apply another sticky-focus adjustment after the lazy handoff settles.
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
       scrollTop = 88;
+      fireEvent.scroll(window);
       await waitFor(() => expect(scrollTop).toBe(1_200));
+
+      fireEvent.wheel(window);
+      scrollTop = 72;
+      fireEvent.scroll(window);
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+      expect(scrollTop).toBe(72);
+    } finally {
+      vi.mocked(window.scrollTo).mockReset();
+      if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
+      if (originalScrollY) Object.defineProperty(window, "scrollY", originalScrollY);
+    }
+  });
+
+  it("honors scroll intent while the lazy search implementation loads", async () => {
+    let scrollTop = 1_200;
+    const originalScrollX = Object.getOwnPropertyDescriptor(window, "scrollX");
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, get: () => 0 },
+      scrollY: { configurable: true, get: () => scrollTop },
+    });
+    vi.mocked(window.scrollTo).mockImplementation(((_left: number, top?: number) => {
+      scrollTop = top ?? scrollTop;
+    }) as typeof window.scrollTo);
+
+    try {
+      render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+      fireEvent.wheel(window);
+      scrollTop = 72;
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      scrollTop = 31;
+      fireEvent.scroll(window);
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+      expect(scrollTop).toBe(31);
+    } finally {
+      vi.mocked(window.scrollTo).mockReset();
+      if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
+      if (originalScrollY) Object.defineProperty(window, "scrollY", originalScrollY);
+    }
+  });
+
+  it("rearms scroll stabilization after a new activation during lazy loading", async () => {
+    let scrollTop = 1_200;
+    const originalScrollX = Object.getOwnPropertyDescriptor(window, "scrollX");
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, get: () => 0 },
+      scrollY: { configurable: true, get: () => scrollTop },
+    });
+    vi.mocked(window.scrollTo).mockImplementation(((_left: number, top?: number) => {
+      scrollTop = top ?? scrollTop;
+    }) as typeof window.scrollTo);
+
+    try {
+      render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+      fireEvent.wheel(window);
+      scrollTop = 72;
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      scrollTop = 31;
+      fireEvent.scroll(window);
+      await waitFor(() => expect(scrollTop).toBe(72));
+      fireEvent.wheel(window);
     } finally {
       vi.mocked(window.scrollTo).mockReset();
       if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
@@ -156,16 +261,45 @@ describe("global search", () => {
   it("retains focus after the complete pointer gesture hands off the lazy search", async () => {
     render(<GlobalSearchLoader client={client()} debounceMs={0} />);
     const placeholder = screen.getByRole("combobox");
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    placeholder.setPointerCapture = setPointerCapture;
+    placeholder.hasPointerCapture = () => true;
+    placeholder.releasePointerCapture = releasePointerCapture;
+    vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ height: 40, width: 100 }),
+    );
 
-    fireEvent.pointerDown(placeholder);
+    fireEvent.pointerDown(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
     expect(placeholder).toHaveFocus();
     expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
-    fireEvent.pointerUp(placeholder);
+    fireEvent.pointerUp(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
 
     await waitFor(() =>
       expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
     );
     expect(screen.getByRole("combobox")).toHaveFocus();
+  });
+
+  it("does not activate when a captured pointer is released outside search", async () => {
+    render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const placeholder = screen.getByRole("combobox");
+    placeholder.setPointerCapture = vi.fn();
+    placeholder.hasPointerCapture = () => true;
+    placeholder.releasePointerCapture = vi.fn();
+    vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ height: 40, width: 100 }),
+    );
+
+    fireEvent.pointerDown(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    fireEvent.pointerUp(placeholder, { clientX: 150, clientY: 20, pointerId: 7 });
+    fireEvent.click(placeholder);
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
+    expect(placeholder.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
   it("falls back to click activation after a canceled pointer gesture", async () => {
@@ -233,6 +367,33 @@ describe("global search", () => {
     expect(within(dialog).getByRole("heading", { name: "The Matrix" })).toBeVisible();
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("opens a normalized person profile directly from global search", async () => {
+    const user = userEvent.setup();
+    const loadPerson = vi.fn<DiscoveryPersonDetailClient["load"]>(async () => personResponse);
+    render(
+      <GlobalSearch
+        client={client()}
+        debounceMs={0}
+        initialOpen
+        initialQuery="matrix"
+        personClient={{ load: loadPerson }}
+      />,
+    );
+
+    await user.click(await screen.findByRole("option", { name: /Brad Pitt/i }));
+    await user.click(screen.getByRole("button", { name: "View profile for Brad Pitt" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Brad Pitt person context" });
+    expect(within(dialog).getByRole("heading", { name: "Brad Pitt" })).toBeVisible();
+    expect(within(dialog).getByText(personResponse.item.biography!)).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+    expect(loadPerson).toHaveBeenCalledWith(
+      { tmdbId: 287 },
+      { language: expect.any(String) },
+      expect.any(AbortSignal),
+    );
   });
 
   it("opens a keyboard-guided prompt without requesting one-character queries", async () => {

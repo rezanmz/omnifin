@@ -56,75 +56,36 @@ See the [compatibility matrix](docs/compatibility.md) for validation status.
 
 ## Architecture at a glance
 
-Omnifin is a TypeScript monorepo with a Next.js application, a Fastify gateway,
-and shared contract and connector packages. The first interface primitives remain
-app-local until the design-system API stabilizes during Phase 2. The current
-development checkpoint provides storage-backed health checks, browser-safe provider
-discovery, an OIDC Authorization Code flow with PKCE, opaque local sessions,
-break-glass recovery, direct Jellyfin password and Quick Connect authentication with
-encrypted identity links, a recovery-bound first-administrator bootstrap, CSRF-protected password
-and Quick Connect pairing for pending OIDC users,
-RP-initiated provider logout and provider-initiated back- and front-channel logout,
-normalized contracts, connector probes, migration tooling, and the application shell
-and sign-in experience. The gateway also provides a permission-checked connector
-administration API with encrypted credentials, guarded transport policy, capability
-snapshots, optimistic revisions, and audited lifecycle changes.
-The user access directory adds normalized role provenance and session visibility, provider-owned
-OIDC authority, review-before-apply role and suspension controls, final-admin protection, and
-atomic session revocation without exposing immutable external identities or Jellyfin credentials.
-A live administrator setup guide separates the verified Jellyfin core from recommended OIDC and
-optional media-stack extensions, adds a private four-point deployment flight check, preserves partial
-readiness during control-plane degradation, and links each incomplete capability to the exact safe
-configuration surface without exposing recovery, connector addresses, credentials, external
-identifiers, or raw upstream payloads.
-Phase 3 adds a permission-checked live Seerr dashboard with partial-failure rails and
-user-bound protected artwork, discovery search and details, requests, acquisition recovery,
-Prowlarr intelligence, a read-only Radarr/Sonarr release calendar, explicit whole-title monitoring,
-and qBittorrent/SABnzbd queue reads with exact-item and current-view bulk pause/resume,
-downloaded-file-preserving removal, durable partial results, and crash-safe replay through
-normalized, browser-safe contracts and responsive operational workspaces. An
-operator-only system-health workspace combines bounded Radarr, Sonarr, and Prowlarr health signals
-with path-free Radarr/Sonarr capacity telemetry, preserves verified partial results, and receives
-shared bounded live snapshots with an explicit foreground-polling fallback.
-The interface supports light, dark, and live system appearance preferences through an
-adaptive liquid-material hierarchy that keeps navigation and floating controls
-translucent while preserving solid, readable content surfaces. Continue Watching uses
-strictly validated Jellyfin BlurHash metadata to derive tone-bounded artwork accents without
-fetching full images for palette analysis; invalid or neutral colour data falls back without
-blocking the media feed.
+Omnifin keeps the browser simple and puts every privileged operation behind one gateway:
 
-All upstream access crosses the gateway boundary. The current Phase 1 implementation runs a
-pinned, isolated Authentik authorization, role-mapping, RP-logout, and back-channel logout gate. A
-separate digest-pinned standards-generic provider gate verifies discovery, S256 PKCE, immutable
-identity reuse, JIT provisioning, explicit role mapping, and safe local logout fallback;
-the public compatibility baseline remains pending until protected live evidence records exact
-versions and dates. Permission checks cover every implemented administrative and self-service
-surface, including a deliberately Jellyfin-only recovery path. The browser connector control room,
-identity-delegated media requests, Radarr/Sonarr acquisition provenance, exact-target automatic
-and manual release recovery, Prowlarr Indexer Intelligence, and a read-only multi-client download
-queue and acquisition calendar are available as pre-release development surfaces. Phase 4 also
-provides Jellyfin playback negotiation and protected media proxying, progress reporting and
-Continue Watching, a paired-user `/library` catalogue with protected artwork and lazy theater
-playback, player issue reports, Bazarr subtitle operations, and guarded Jellyfin library
-maintenance at `/operations/library`. Operator request review and the unified player/Seerr issue
-lifecycle are also
-available as guarded pre-release surfaces. Explicit whole-movie and whole-series monitoring is
-available to operators. Exact stalled Radarr/Sonarr queue recovery uses a short-lived opaque
-reference, typed confirmation, revalidation, blocklisting, and idempotent audit; broader
-acquisition mutations remain later pre-release work.
-Reusable upstream credentials, token responses, identity assertions, and raw upstream
-API payloads stay behind the gateway boundary. During OIDC sign-in, the browser does
-carry the provider's transient, one-time `code`, `state`, or error parameters to the
-callback; PKCE, one-shot transaction consumption, `no-store` responses, and the
-restrictive referrer policy limit that exposure. Reverse proxies must not persist
-authentication callback query strings in access logs.
+```mermaid
+flowchart LR
+    Client["Browser or TV client"] -->|"same-origin HTTPS"| Web["Next.js web"]
 
-The default deployment is a single-node Docker Compose installation backed by
-SQLite. One immutable image contains both process entry points, allowing the web and
-gateway services to be upgraded together without introducing an external database.
+    subgraph Omnifin
+        Web -->|"normalized API"| Gateway["Fastify gateway"]
+        Gateway --> DB[("SQLite")]
+        Contracts["Shared contracts + connectors"] -.-> Web
+        Contracts -.-> Gateway
+    end
 
-Read the [architecture overview](docs/architecture.md) for trust boundaries and
-design decisions.
+    Gateway --> Identity["OIDC providers"]
+    Gateway --> Jellyfin
+    Gateway --> Automation["Seerr + media automation"]
+    Gateway --> Downloads["Download clients"]
+```
+
+- **Web:** renders the interface and receives only normalized, role-filtered data.
+- **Gateway:** owns sessions, permissions, credentials, connector traffic, media proxying,
+  migrations, and audits.
+- **Shared packages:** validate browser contracts and isolate version-specific upstream behavior.
+
+The browser never connects directly to an upstream service. Each connector can fail independently,
+so one degraded service does not have to collapse the rest of the application. The default Compose
+deployment runs the web and gateway from one immutable image, with SQLite owned by the gateway.
+
+Read the [architecture overview](docs/architecture.md) for trust boundaries and design decisions,
+and the [roadmap](docs/roadmap.md) for current implementation status.
 
 ## Install a tagged release
 

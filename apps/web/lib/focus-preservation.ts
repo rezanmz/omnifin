@@ -27,36 +27,58 @@ export function restoreDocumentScrollPosition(position: DocumentScrollPosition |
 
 export function stabilizeDocumentScrollPosition(
   position: DocumentScrollPosition | null,
-  frameLimit = 24,
+  onStop: () => void = () => undefined,
 ) {
-  if (!position || frameLimit < 1) return () => undefined;
+  if (!position) return () => undefined;
 
   let active = true;
-  let frame = 0;
   let frameRequest = 0;
   const stop = () => {
     if (!active) return;
     active = false;
     window.cancelAnimationFrame(frameRequest);
+    window.removeEventListener("keydown", stopForDocumentScrollKey);
+    window.removeEventListener("scroll", restore);
     window.removeEventListener("pointerdown", stop);
     window.removeEventListener("touchmove", stop);
     window.removeEventListener("wheel", stop);
+    onStop();
   };
-  const restore = () => {
-    if (!active) return;
-    restoreImmediately(position);
-    frame += 1;
-    if (frame >= frameLimit) {
+  const stopForDocumentScrollKey = (event: KeyboardEvent) => {
+    if (event.key === "PageDown" || event.key === "PageUp" || event.key === "Tab") {
       stop();
       return;
     }
-    frameRequest = window.requestAnimationFrame(restore);
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    )
+      return;
+    if (
+      [" ", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "End", "Enter", "Home"].includes(
+        event.key,
+      )
+    )
+      stop();
+  };
+  const restore = () => {
+    window.cancelAnimationFrame(frameRequest);
+    frameRequest = window.requestAnimationFrame(() => {
+      frameRequest = 0;
+      if (!active || (window.scrollX === position.left && window.scrollY === position.top)) return;
+      restoreImmediately(position);
+    });
   };
 
+  window.addEventListener("keydown", stopForDocumentScrollKey);
+  window.addEventListener("scroll", restore, { passive: true });
   window.addEventListener("pointerdown", stop, { passive: true });
   window.addEventListener("touchmove", stop, { passive: true });
   window.addEventListener("wheel", stop, { passive: true });
-  restore();
+  restoreImmediately(position);
   return stop;
 }
 

@@ -91,6 +91,7 @@ const catalogue = {
   nextCursor: "bGlicmFyeQ.c2lnbmF0dXJl",
   source: { displayName: "Home Jellyfin", failure: null, status: "healthy" as const },
   state: "complete" as const,
+  totalResults: 46,
 };
 
 describe("library operation contracts", () => {
@@ -193,6 +194,36 @@ describe("library operation contracts", () => {
       libraryBrowseQuerySchema.parse({ kind: "series", query: "  Meridian  ", sort: "title" }),
     ).toEqual({ kind: "series", limit: 30, query: "Meridian", sort: "title" });
     expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 10_000_001 }).success,
+    ).toBe(false);
+    expect(
+      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: null }).success,
+    ).toBe(true);
+    expect(
+      libraryBrowseResponseSchema.safeParse({
+        ...catalogue,
+        items: [],
+        nextCursor: null,
+        source: {
+          displayName: "Jellyfin",
+          failure: {
+            code: "unreachable",
+            message: "Jellyfin is temporarily unavailable.",
+            occurredAt: "2026-07-28T05:30:00.000Z",
+            operation: "media.library",
+            retryable: true,
+            service: "jellyfin",
+          },
+          status: "unavailable",
+        },
+        state: "unavailable",
+        totalResults: 46,
+      }).success,
+    ).toBe(false);
   });
 
   it("models explicit, user-scoped playback-state commands", () => {
@@ -399,10 +430,24 @@ describe("library operation contracts", () => {
       media: seriesMedia,
       movie: null,
       playback: null,
+      providerReferences: [
+        { identifier: "tt1234567", mediaKind: "series" as const, provider: "imdb" as const },
+        { identifier: 1396, mediaKind: "series" as const, provider: "tmdb" as const },
+      ],
       seasons: [season],
       seasonsTruncated: false,
+      seriesCredits: { cast: [], castTruncated: false, crew: [], crewTruncated: false },
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+    expect(
+      libraryTitleDetailResponseSchema.safeParse({
+        ...detail,
+        providerReferences: [
+          { identifier: 1396, mediaKind: "movie", provider: "tmdb" },
+          { identifier: 1397, mediaKind: "series", provider: "tmdb" },
+        ],
+      }).success,
+    ).toBe(false);
 
     const episodes = {
       generatedAt: catalogue.generatedAt,
@@ -411,8 +456,13 @@ describe("library operation contracts", () => {
           airDate: "2025-02-14",
           communityRating: 8.4,
           credits: [
-            { name: "Mara Voss", role: "Dr. Elian Vale", type: "cast" as const },
-            { name: "Ari Chen", role: null, type: "writer" as const },
+            {
+              name: "Mara Voss",
+              personReferenceId: null,
+              role: "Dr. Elian Vale",
+              type: "cast" as const,
+            },
+            { name: "Ari Chen", personReferenceId: null, role: null, type: "writer" as const },
           ],
           creditsTruncated: false,
           criticRating: 91,
@@ -521,13 +571,22 @@ describe("library operation contracts", () => {
           {
             imagePath: `/v1/media/${media.id}/images/people/${"p".repeat(64)}`,
             name: "Mara Voss",
+            personReferenceId: `media_${"p".repeat(22)}`,
             role: "Iris Vale",
             type: "cast" as const,
           },
         ],
         castTruncated: false,
         communityRating: 8.4,
-        crew: [{ imagePath: null, name: "Jon Bell", role: null, type: "director" as const }],
+        crew: [
+          {
+            imagePath: null,
+            name: "Jon Bell",
+            personReferenceId: null,
+            role: null,
+            type: "director" as const,
+          },
+        ],
         crewTruncated: false,
         criticRating: 91,
         genres: ["Drama", "Science fiction"],
@@ -574,8 +633,13 @@ describe("library operation contracts", () => {
         tagline: "The horizon remembers.",
       },
       playback: catalogue.items[0]!.playback,
+      providerReferences: [
+        { identifier: "tt1234567", mediaKind: "movie" as const, provider: "imdb" as const },
+        { identifier: 98_765, mediaKind: "movie" as const, provider: "tmdb" as const },
+      ],
       seasons: [],
       seasonsTruncated: false,
+      seriesCredits: null,
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
     expect(JSON.stringify(detail)).not.toMatch(/jellyfin|upstream|\/private\//iu);

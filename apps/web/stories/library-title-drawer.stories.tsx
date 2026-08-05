@@ -62,11 +62,38 @@ export const MovieDetails: Story = {
     expect(canvas.getByRole("button", { name: "Resume movie" })).toBeVisible();
     expect(canvas.getByText("The horizon remembers.")).toBeVisible();
     expect(canvas.getByText("Mara Voss")).toBeVisible();
+    expect(canvas.getByRole("link", { name: /IMDb/iu })).toHaveAttribute(
+      "href",
+      "https://www.imdb.com/title/tt0133093/",
+    );
+    expect(canvas.getByRole("link", { name: /TMDB/iu })).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org/movie/603",
+    );
+    expect(canvas.getByRole("link", { name: /IMDb/iu })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
     await userEvent.click(canvas.getByText("Media information"));
     await waitFor(() =>
       expect(canvas.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible(),
     );
     expect(canvas.getByText("Playback starts only when you ask.")).toBeVisible();
+  },
+};
+
+export const OwnedSeriesPersonProfile: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    const libraryDialog = await canvas.findByRole("dialog", { name: "Northern Lights details" });
+    await userEvent.click(
+      await within(libraryDialog).findByRole("button", { name: "View Mara Voss profile" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("dialog", { name: /(?:Mara Voss person context|Person context)/u }),
+      ).toBeVisible(),
+    );
   },
 };
 

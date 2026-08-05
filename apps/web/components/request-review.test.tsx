@@ -52,6 +52,7 @@ describe("RequestReview", () => {
       screen.getByRole("heading", { level: 1, name: "Decide what enters the library." }),
     ).toBeVisible();
     expect(screen.getByText("A House of Dynamite")).toBeVisible();
+    expect(screen.getByText("Profile 4K Opt-in")).toBeVisible();
     expect(screen.getByText("Requested by Mara Chen")).toBeVisible();
     expect(screen.getByText("Secret boundary intact")).toBeVisible();
     expect(document.body.textContent).not.toContain("operator-external");
