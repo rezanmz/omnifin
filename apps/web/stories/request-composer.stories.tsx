@@ -212,9 +212,7 @@ export const AdvancedRouting: Story = {
         routingReference("destination"),
       ),
     );
-    await expect(
-      canvas.getByText("Remux · Series archive", { selector: "small" }),
-    ).toBeVisible();
+    await expect(canvas.getByText("Remux · Series archive", { selector: "small" })).toBeVisible();
   },
 };
 
