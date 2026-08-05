@@ -532,6 +532,44 @@ Media proxy responses enforce an approved upstream origin, safe content types, b
 authorization on every request, and cache rules that do not expose one user's protected content to
 another.
 
+## Household and parental-policy boundary
+
+Household profiles are not yet a public runtime capability. Their implementation is gated on one
+versioned policy evaluator and the following controls; route-specific filters or client-only hiding
+do not satisfy this boundary.
+
+- **Spoofing:** a normal household identity remains an authenticated Omnifin user with its own
+  proven Jellyfin link. A shared-device chooser is only a constrained convenience layer over those
+  identities. A local profile PIN cannot establish OIDC identity, create an administrator session,
+  or satisfy administrative step-up.
+- **Tampering:** policy input is schema-bounded, normalized, versioned, and evaluated again when a
+  mutation commits. Policy and identity-link revisions invalidate stale references, grants, cached
+  results, and pending child-visible work instead of trusting a previously rendered card.
+- **Repudiation:** profile creation, policy changes, pairing changes, protected transitions, failed
+  unlocks, and resulting grant revocations require safe audit events. Audit metadata identifies the
+  operation and outcome without recording a blocked title, raw upstream identity, PIN, or policy
+  secret.
+- **Information disclosure:** child policy is applied before titles, credits, artwork references,
+  suggestions, notifications, counts, or timing-dependent pagination state are allocated. Public
+  child denials collapse to one nonjudgmental unavailable outcome; detailed rule matches remain
+  inside the trusted evaluator.
+- **Denial of service:** policy lists and labels are strictly bounded, normalized once, and evaluated
+  without connector I/O. PIN verification requires a memory-hard hash, attempt budgets, progressive
+  backoff, lockout, and a shared-device idle relock before it can be enabled.
+- **Elevation of privilege:** profile switching replaces and rotates the session and CSRF context,
+  clears user-scoped client/server state, and derives permissions from the selected identity. A
+  profile session never inherits the base session's operator or administrator permissions. OIDC
+  reauthentication remains mandatory for policy, pairing, role, device-grant, connector, deletion,
+  and recovery changes.
+
+The conservative child default blocks unknown certifications, limits certification age to twelve,
+and requires approval for requests. Request mutations must intersect existing local permission with
+the profile request mode at commit time; an approval-required result is valid only when the request
+is forced into review rather than accepted through upstream auto-approval. Omnifin policy can only
+further restrict the paired Jellyfin identity; it can never broaden upstream access. Every
+content-producing and content-mutating route must use the same evaluator before this feature can
+advance from foundation to runtime support.
+
 ## Operational controls
 
 Future supported deployments should place Omnifin on a segmented network with only
