@@ -423,6 +423,7 @@ async function main(options) {
     const proxy = spawnRuntime("node", [proxyScript], {
       OMNIFIN_FIXTURE_AUTHENTIK_TLS_PORT: String(authentikTlsPort),
       OMNIFIN_FIXTURE_AUTHENTIK_UPSTREAM_PORT: String(authentikHttpPort),
+      OMNIFIN_FIXTURE_PUBLIC_HOST: host,
       OMNIFIN_FIXTURE_TLS_CERT: certificates.serverCertificate,
       OMNIFIN_FIXTURE_TLS_KEY: certificates.serverKey,
       OMNIFIN_FIXTURE_WEB_TLS_PORT: String(webTlsPort),

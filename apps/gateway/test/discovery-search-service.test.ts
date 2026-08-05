@@ -12,6 +12,7 @@ import {
 import type {
   DiscoveryFeedRailKind,
   DiscoveryMediaDetailResponse,
+  DiscoveryPersonCreditsResponse,
   DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -158,6 +159,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     birthplace: "Beirut, Lebanon",
     credits: [],
     creditsState: "empty",
+    creditsTotal: 0,
     deathday: null,
     department: "Acting",
     id: "person:6384",
@@ -166,6 +168,23 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     source: "seerr",
     tmdbId: 6384,
   },
+};
+
+const normalizedPersonCreditsResponse: DiscoveryPersonCreditsResponse = {
+  generatedAt: now.toISOString(),
+  items: Array.from({ length: 6 }, (_, index) => ({
+    availability: "available",
+    kind: "movie",
+    role: `Role ${index + 25}`,
+    title: `Movie ${index + 25}`,
+    tmdbId: 1_000 + index,
+    voteAverage: 7,
+    year: 2024,
+  })),
+  page: 2,
+  pageSize: 24,
+  totalPages: 2,
+  totalResults: 30,
 };
 
 function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-main") {
@@ -229,6 +248,7 @@ function harness(
     profilePath: null as string | null,
     response: normalizedPersonResponse,
   }));
+  const personCredits = vi.fn(async () => normalizedPersonCreditsResponse);
   const discover = vi.fn(async (kind: DiscoveryFeedRailKind): Promise<SeerrDiscoveryFeedPage> => ({
     items: [
       {
@@ -291,6 +311,7 @@ function harness(
     detail,
     ...(options.withFeed === false ? {} : { discover }),
     personDetail,
+    personCredits,
     ...(options.withArtwork === false ? {} : { readDiscoveryArtwork }),
     search,
   }));
@@ -306,6 +327,7 @@ function harness(
     detail,
     discover,
     personDetail,
+    personCredits,
     readDiscoveryArtwork,
     search,
     service,
@@ -401,6 +423,53 @@ describe("discovery search service", () => {
         /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
       );
       expect(JSON.stringify(response)).not.toContain("/private/");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("bounds an upstream browse page ceiling without discarding valid results", async () => {
+    const { browse, database, service } = harness();
+    browse.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            availability: "unavailable",
+            id: "movie:603",
+            kind: "movie",
+            originalTitle: null,
+            overview: "A valid result from a very large catalogue.",
+            source: "seerr",
+            title: "Large catalogue result",
+            tmdbId: 603,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        },
+      ],
+      page: 1,
+      totalPages: 61_307,
+      totalResults: 1_226_132,
+    });
+    try {
+      await expect(
+        service.browse(
+          {
+            availability: "any",
+            kind: "movie",
+            locale: "en-CA",
+            page: 1,
+            sort: "popularity",
+          },
+          { principal: principal() },
+        ),
+      ).resolves.toMatchObject({
+        items: [{ id: "movie:603" }],
+        page: 1,
+        totalPages: 500,
+        totalResults: 1_226_132,
+      });
     } finally {
       database.close();
     }
@@ -718,6 +787,26 @@ describe("discovery search service", () => {
       ).resolves.toEqual(normalizedPersonResponse);
       expect(personDetail).toHaveBeenCalledWith({ tmdbId: 6384 }, { language: "en-CA" }, undefined);
       expect(JSON.stringify(normalizedPersonResponse)).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("authorizes and returns one bounded person-credit page", async () => {
+    const { database, personCredits, service } = harness();
+    try {
+      await expect(
+        service.personCredits(
+          { tmdbId: 6384 },
+          { language: "en-CA", page: 2 },
+          { principal: principal() },
+        ),
+      ).resolves.toEqual(normalizedPersonCreditsResponse);
+      expect(personCredits).toHaveBeenCalledWith(
+        { tmdbId: 6384 },
+        { language: "en-CA", page: 2 },
+        undefined,
+      );
     } finally {
       database.close();
     }

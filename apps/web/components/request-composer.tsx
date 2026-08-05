@@ -345,7 +345,11 @@ export function RequestComposer({
         });
       })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === "AbortError")
+        )
+          return;
         setRoutingSelection(null);
         setRoutingState({ kind: "error", requestKey: routingRequestKey });
       });

@@ -56,7 +56,7 @@ const storedMediaReferenceV3Schema = z
     artwork: artworkSchema,
     episodeNumber: episodeNumberSchema,
     itemId: itemIdSchema,
-    kind: z.enum(["movie", "series", "episode", "extra", "other"]),
+    kind: z.enum(["movie", "series", "episode", "extra", "other", "person"]),
     schemaVersion: z.literal(3),
     seasonNumber: episodeNumberSchema,
     title: referenceTitleSchema,
@@ -87,7 +87,7 @@ export interface MediaReferenceInput {
   };
   episodeNumber: number | null;
   itemId: string;
-  kind: "episode" | "extra" | "movie" | "other" | "series";
+  kind: "episode" | "extra" | "movie" | "other" | "person" | "series";
   seasonNumber: number | null;
   title: string;
   year: number | null;
@@ -104,7 +104,7 @@ export interface ResolvedMediaReference {
   episodeNumber: number | null;
   id: string;
   itemId: string;
-  kind: "episode" | "extra" | "movie" | "other" | "series";
+  kind: "episode" | "extra" | "movie" | "other" | "person" | "series";
   schemaVersion: 1 | 2 | 3;
   seasonNumber: number | null;
   title: string | null;

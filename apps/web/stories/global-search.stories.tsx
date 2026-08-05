@@ -1,9 +1,13 @@
-import type { DiscoverySearchResponse } from "@omnifin/contracts/discovery";
+import type {
+  DiscoveryPersonDetailResponse,
+  DiscoverySearchResponse,
+} from "@omnifin/contracts/discovery";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { GlobalSearch } from "../components/global-search";
 import { DiscoverySearchClientError, type DiscoverySearchClient } from "../lib/discovery-search";
+import type { DiscoveryPersonDetailClient } from "../lib/media-details";
 
 const readyResponse: DiscoverySearchResponse = {
   generatedAt: "2026-07-27T08:00:00.000Z",
@@ -50,6 +54,35 @@ const readyResponse: DiscoverySearchResponse = {
   totalResults: 3,
 };
 
+const personResponse: DiscoveryPersonDetailResponse = {
+  generatedAt: "2026-07-28T20:00:00.000Z",
+  item: {
+    biography: "An actor and producer known for character-driven films.",
+    birthday: "1963-12-18",
+    birthplace: "Shawnee, Oklahoma",
+    credits: [
+      {
+        availability: "available",
+        kind: "movie",
+        role: "Tyler Durden",
+        title: "Fight Club",
+        tmdbId: 550,
+        voteAverage: 8.4,
+        year: 1999,
+      },
+    ],
+    creditsState: "ready",
+    creditsTotal: 1,
+    deathday: null,
+    department: "Acting",
+    id: "person:287",
+    name: "Brad Pitt",
+    profilePath: null,
+    source: "seerr",
+    tmdbId: 287,
+  },
+};
+
 function client(search: DiscoverySearchClient["search"]): DiscoverySearchClient {
   return { search };
 }
@@ -94,6 +127,23 @@ export const Results: Story = {
     const result = await canvas.findByRole("option", { name: /The Matrix/i });
     await waitFor(() => expect(result).toBeVisible());
     await waitFor(() => expect(canvas.getByRole("heading", { name: "The Matrix" })).toBeVisible());
+  },
+};
+
+export const PersonProfile: Story = {
+  args: {
+    personClient: {
+      load: async () => personResponse,
+    } satisfies DiscoveryPersonDetailClient,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("option", { name: /Brad Pitt/i }));
+    await userEvent.click(canvas.getByRole("button", { name: "View profile for Brad Pitt" }));
+    const dialog = await canvas.findByRole("dialog", { name: "Brad Pitt person context" });
+    await waitFor(() =>
+      expect(within(dialog).getByRole("heading", { name: "Brad Pitt" })).toBeVisible(),
+    );
   },
 };
 

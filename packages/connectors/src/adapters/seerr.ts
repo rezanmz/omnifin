@@ -5,6 +5,7 @@ import type {
 } from "@omnifin/contracts/connectors";
 import {
   DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE,
+  DISCOVERY_BROWSE_MAX_PAGES,
   DISCOVERY_DETAIL_MAX_CAST,
   DISCOVERY_DETAIL_MAX_CREW,
   DISCOVERY_DETAIL_MAX_RATINGS,
@@ -21,6 +22,8 @@ import {
   discoveryPersonDetailParamsSchema,
   discoveryPersonDetailQuerySchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
   type DiscoveryAvailability,
@@ -33,6 +36,8 @@ import {
   type DiscoveryPersonDetailParams,
   type DiscoveryPersonDetailQuery,
   type DiscoveryPersonDetailResponse,
+  type DiscoveryPersonCreditsQuery,
+  type DiscoveryPersonCreditsResponse,
   type DiscoveryRating,
   type DiscoveryTrailer,
   type DiscoverySearchQuery,
@@ -206,11 +211,13 @@ const upstreamRtRatingSchema = z.object({
   audienceScore: z.number().finite().min(0).max(100).nullish(),
   criticsRating: z.string().trim().min(1).max(80),
   criticsScore: z.number().finite().min(0).max(100),
+  url: z.string().trim().max(500).nullish().catch(null),
 });
 
 const upstreamImdbRatingSchema = z.object({
   criticsScore: z.number().finite().min(0).max(10),
   criticsScoreCount: z.int().nonnegative().max(1_000_000_000).nullish(),
+  url: z.string().trim().max(500).nullish().catch(null),
 });
 
 const upstreamCombinedRatingSchema = z.object({
@@ -233,13 +240,13 @@ const upstreamSeriesRecommendationPageSchema = z.object({
 const upstreamMovieFeedPageSchema = z.object({
   page: z.int().min(1).max(500),
   results: z.array(upstreamMovieRecommendationSchema).max(100).default([]),
-  totalPages: z.int().min(0).max(500),
+  totalPages: z.int().min(0).max(10_000_000),
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 const upstreamSeriesFeedPageSchema = z.object({
   page: z.int().min(1).max(500),
   results: z.array(upstreamSeriesRecommendationSchema).max(100).default([]),
-  totalPages: z.int().min(0).max(500),
+  totalPages: z.int().min(0).max(10_000_000),
   totalResults: z.int().nonnegative().max(10_000_000),
 });
 
@@ -616,6 +623,8 @@ function normalizedTrailers(videos: readonly z.infer<typeof upstreamRelatedVideo
 }
 
 function tmdbRating(
+  kind: DiscoveryMediaDetailParams["kind"],
+  tmdbId: number,
   value: number | null | undefined,
   voteCount: number | null | undefined,
 ): DiscoveryRating[] {
@@ -624,6 +633,7 @@ function tmdbRating(
     {
       audience: "community",
       label: "TMDB",
+      providerReference: { identifier: tmdbId, mediaKind: kind, provider: "tmdb" },
       scale: 10,
       sentiment: null,
       source: "tmdb",
@@ -633,15 +643,52 @@ function tmdbRating(
   ];
 }
 
+function canonicalRatingReference(
+  provider: "imdb" | "rotten_tomatoes",
+  mediaKind: DiscoveryMediaDetailParams["kind"],
+  rawUrl: string | null | undefined,
+): DiscoveryRating["providerReference"] {
+  if (!rawUrl) return null;
+  try {
+    const url = new URL(rawUrl);
+    if (url.search || url.hash || url.username || url.password) return null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (provider === "imdb") {
+      if (
+        url.origin !== "https://www.imdb.com" ||
+        segments.length !== 2 ||
+        segments[0] !== "title" ||
+        !/^tt[0-9]{5,12}$/u.test(segments[1] ?? "")
+      ) {
+        return null;
+      }
+      return { identifier: segments[1]!, mediaKind, provider };
+    }
+    const expectedCollection = mediaKind === "movie" ? "m" : "tv";
+    if (
+      url.origin !== "https://www.rottentomatoes.com" ||
+      segments.length !== 2 ||
+      segments[0] !== expectedCollection ||
+      !/^[a-z0-9](?:[a-z0-9_-]{0,199})$/u.test(segments[1] ?? "")
+    ) {
+      return null;
+    }
+    return { identifier: segments[1]!, mediaKind, provider };
+  } catch {
+    return null;
+  }
+}
+
 function normalizedMovieRatings(
   detail: UpstreamMovieDetail,
   response: z.infer<typeof upstreamCombinedRatingSchema> | null,
 ) {
-  const ratings = tmdbRating(detail.voteAverage, detail.voteCount);
+  const ratings = tmdbRating("movie", detail.id, detail.voteAverage, detail.voteCount);
   if (response?.imdb) {
     ratings.push({
       audience: "community",
       label: "IMDb",
+      providerReference: canonicalRatingReference("imdb", "movie", response.imdb.url),
       scale: 10,
       sentiment: null,
       source: "imdb",
@@ -653,6 +700,7 @@ function normalizedMovieRatings(
     ratings.push({
       audience: "critics",
       label: "Tomatometer",
+      providerReference: canonicalRatingReference("rotten_tomatoes", "movie", response.rt.url),
       scale: 100,
       sentiment: response.rt.criticsRating,
       source: "rotten_tomatoes",
@@ -663,6 +711,7 @@ function normalizedMovieRatings(
       ratings.push({
         audience: "audience",
         label: "RT audience",
+        providerReference: canonicalRatingReference("rotten_tomatoes", "movie", response.rt.url),
         scale: 100,
         sentiment: optionalText(response.rt.audienceRating),
         source: "rotten_tomatoes",
@@ -675,15 +724,17 @@ function normalizedMovieRatings(
 }
 
 function normalizedSeriesRatings(
+  tmdbId: number,
   value: number | null | undefined,
   voteCount: number | null | undefined,
   response: z.infer<typeof upstreamRtRatingSchema> | null,
 ) {
-  const ratings = tmdbRating(value, voteCount);
+  const ratings = tmdbRating("series", tmdbId, value, voteCount);
   if (response) {
     ratings.push({
       audience: "critics",
       label: "Tomatometer",
+      providerReference: canonicalRatingReference("rotten_tomatoes", "series", response.url),
       scale: 100,
       sentiment: response.criticsRating,
       source: "rotten_tomatoes",
@@ -694,6 +745,7 @@ function normalizedSeriesRatings(
       ratings.push({
         audience: "audience",
         label: "RT audience",
+        providerReference: canonicalRatingReference("rotten_tomatoes", "series", response.url),
         scale: 100,
         sentiment: optionalText(response.audienceRating),
         source: "rotten_tomatoes",
@@ -775,6 +827,8 @@ export interface SeerrDiscoveryPersonDetail {
   profilePath: string | null;
   response: DiscoveryPersonDetailResponse;
 }
+
+export type SeerrDiscoveryPersonCredits = DiscoveryPersonCreditsResponse;
 
 function feedMovie(
   result: z.infer<typeof upstreamMovieRecommendationSchema>,
@@ -972,8 +1026,7 @@ function normalizedPersonCredits(response: z.infer<typeof upstreamPersonCreditsS
           ),
         },
       ];
-    })
-    .slice(0, DISCOVERY_PERSON_MAX_CREDITS);
+    });
 }
 
 function runtimeMinutes(values: readonly number[]) {
@@ -1231,7 +1284,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       return {
         items: locallyFilteredBrowseItems(items, criteria),
         page: response.page,
-        totalPages: response.totalPages,
+        totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
         totalResults: response.totalResults,
       };
     }
@@ -1280,7 +1333,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       return {
         items: locallyFilteredBrowseItems(response.results.map(feedMovie), criteria),
         page: response.page,
-        totalPages: response.totalPages,
+        totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
         totalResults: response.totalResults,
       };
     }
@@ -1292,7 +1345,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     return {
       items: locallyFilteredBrowseItems(response.results.map(feedSeries), criteria),
       page: response.page,
-      totalPages: response.totalPages,
+      totalPages: Math.min(response.totalPages, DISCOVERY_BROWSE_MAX_PAGES),
       totalResults: response.totalResults,
     };
   }
@@ -1540,6 +1593,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       recommendationsPromise,
     ]);
     const ratings = normalizedSeriesRatings(
+      response.id,
       response.voteAverage,
       response.voteCount,
       ratingResult.value,
@@ -1631,7 +1685,8 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     if (creditsResult.value && creditsResult.value.id !== params.tmdbId) {
       throw invalidDetailResponse();
     }
-    const credits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
+    const allCredits = creditsResult.value ? normalizedPersonCredits(creditsResult.value) : [];
+    const credits = allCredits.slice(0, DISCOVERY_PERSON_MAX_CREDITS);
     const normalized = discoveryPersonDetailResponseSchema.parse({
       generatedAt: this.clock.now().toISOString(),
       item: {
@@ -1640,6 +1695,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         birthplace: optionalText(response.placeOfBirth),
         credits,
         creditsState: intelligenceState(creditsResult.state, credits),
+        creditsTotal: allCredits.length,
         deathday: normalizedDate(response.deathday),
         department: optionalText(response.knownForDepartment),
         id: `person:${response.id}`,
@@ -1650,6 +1706,45 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       },
     });
     return { profilePath: response.profilePath ?? null, response: normalized };
+  }
+
+  async personCredits(
+    paramsInput: DiscoveryPersonDetailParams,
+    queryInput: DiscoveryPersonCreditsQuery,
+    signal?: AbortSignal,
+  ): Promise<SeerrDiscoveryPersonCredits> {
+    if (!this.#apiKey) {
+      throw new SafeConnectorError({
+        code: "configuration_invalid",
+        message: "Seerr person credits require configured credentials.",
+        operation: "discovery.person.credits",
+        retryable: false,
+        service: this.service,
+      });
+    }
+    const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
+    const query = discoveryPersonCreditsQuerySchema.parse(queryInput);
+    const response = await this.client.requestJson(
+      `api/v1/person/${params.tmdbId}/combined_credits`,
+      upstreamPersonCreditsSchema,
+      {
+        headers: { "X-Api-Key": this.#apiKey },
+        operation: "discovery.person.credits",
+        query: new URLSearchParams({ language: query.language }),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (response.id !== params.tmdbId) throw invalidDetailResponse();
+    const allCredits = normalizedPersonCredits(response);
+    const offset = (query.page - 1) * DISCOVERY_PERSON_MAX_CREDITS;
+    return discoveryPersonCreditsResponseSchema.parse({
+      generatedAt: this.clock.now().toISOString(),
+      items: allCredits.slice(offset, offset + DISCOVERY_PERSON_MAX_CREDITS),
+      page: query.page,
+      pageSize: DISCOVERY_PERSON_MAX_CREDITS,
+      totalPages: Math.ceil(allCredits.length / DISCOVERY_PERSON_MAX_CREDITS),
+      totalResults: allCredits.length,
+    });
   }
 
   async resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number> {

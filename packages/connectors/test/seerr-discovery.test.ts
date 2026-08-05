@@ -259,6 +259,69 @@ describe("Seerr discovery", () => {
     },
   );
 
+  it("accepts valid large Seerr page totals while bounding public navigation", async () => {
+    const moviePage = {
+      page: 1,
+      results: [searchResponse.results[0]],
+      totalPages: 61_307,
+      totalResults: 1_226_132,
+    };
+    const seriesPage = {
+      page: 1,
+      results: [searchResponse.results[1]],
+      totalPages: 11_416,
+      totalResults: 228_307,
+    };
+    const { adapter } = adapterWithResponses([
+      jsonResponse(moviePage),
+      jsonResponse(seriesPage),
+      jsonResponse(moviePage),
+      jsonResponse(seriesPage),
+    ]);
+
+    await expect(adapter.discover("popular_movies", { language: "en-CA" })).resolves.toMatchObject({
+      items: [{ media: { id: "movie:550" } }],
+      totalResults: 1_226_132,
+    });
+    await expect(adapter.discover("popular_series", { language: "en-CA" })).resolves.toMatchObject({
+      items: [{ media: { id: "series:1399" } }],
+      totalResults: 228_307,
+    });
+    await expect(
+      adapter.browse({
+        availability: "any",
+        kind: "movie",
+        locale: "en-CA",
+        page: 1,
+        sort: "popularity",
+      }),
+    ).resolves.toMatchObject({ page: 1, totalPages: 500, totalResults: 1_226_132 });
+    await expect(
+      adapter.browse({
+        availability: "any",
+        kind: "series",
+        locale: "en-CA",
+        page: 1,
+        sort: "popularity",
+      }),
+    ).resolves.toMatchObject({ page: 1, totalPages: 500, totalResults: 228_307 });
+  });
+
+  it.each([-1, 1.5, 10_000_001])("rejects malformed upstream page total %s", async (totalPages) => {
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        page: 1,
+        results: [searchResponse.results[0]],
+        totalPages,
+        totalResults: 1,
+      }),
+    ]);
+
+    await expect(adapter.discover("popular_movies", { language: "en-CA" })).rejects.toMatchObject({
+      code: "response_invalid",
+    });
+  });
+
   it("deduplicates discovery media without copying person or collection results", async () => {
     const { adapter } = adapterWithResponses([
       jsonResponse({
