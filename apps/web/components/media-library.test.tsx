@@ -89,7 +89,9 @@ describe("MediaLibrary", () => {
       screen.queryByRole("button", { name: /View details for Ember Coast/u }),
     ).not.toBeInTheDocument();
 
-    const search = screen.getByRole("searchbox", { name: "Search your library" });
+    const search = screen.getByRole("searchbox", {
+      name: "Search your library",
+    });
     await user.type(search, "atlas");
     await user.keyboard("{Enter}");
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
@@ -169,14 +171,18 @@ describe("MediaLibrary", () => {
     render(libraryScreen(<MediaLibrary client={{ load }} />));
 
     expect(
-      await screen.findByRole("button", { name: /View details for Ember Coast/u }),
+      await screen.findByRole("button", {
+        name: /View details for Ember Coast/u,
+      }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "1 of 46 titles loaded" })).toBeVisible();
     expect(within(screen.getByText("Total").closest("div")!).getByText("46")).toBeVisible();
     expect(within(screen.getByText("Loaded").closest("div")!).getByText("1")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Reveal more" }));
     expect(
-      await screen.findByRole("button", { name: /View details for Northern Lights/u }),
+      await screen.findByRole("button", {
+        name: /View details for Northern Lights/u,
+      }),
     ).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "2 of 46 titles loaded" })).toBeVisible();
@@ -232,7 +238,9 @@ describe("MediaLibrary", () => {
       ),
     );
 
-    const trigger = screen.getByRole("button", { name: /View details for Ember Coast/u });
+    const trigger = screen.getByRole("button", {
+      name: /View details for Ember Coast/u,
+    });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
     expect(screen.getByText("The horizon remembers.")).toBeVisible();
@@ -249,10 +257,14 @@ describe("MediaLibrary", () => {
     expect(playbackClient.prepare).not.toHaveBeenCalled();
 
     await user.click(
-      screen.getByRole("button", { name: "Play local extra Ember Coast — Official trailer" }),
+      screen.getByRole("button", {
+        name: "Play local extra Ember Coast — Official trailer",
+      }),
     );
     expect(
-      await screen.findByRole("dialog", { name: "Ember Coast — Official trailer" }),
+      await screen.findByRole("dialog", {
+        name: "Ember Coast — Official trailer",
+      }),
     ).toBeVisible();
     expect(playbackClient.prepare).toHaveBeenCalledWith(
       `media_${"x".repeat(22)}`,
@@ -287,6 +299,83 @@ describe("MediaLibrary", () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it("renders connected-service navigation as a same-origin accessible new-tab action", async () => {
+    const user = userEvent.setup();
+    const item = mediaLibraryDemoItems.find(({ media }) => media.kind === "movie")!;
+    const client = {
+      ...mediaLibraryDemoClient,
+      loadConnectedActions: async (referenceId: string) => ({
+        actions: [
+          {
+            href: `/v1/media/library/${referenceId}/actions/radarr`,
+            kind: "service_navigation" as const,
+            label: "Open in Radarr",
+            service: "radarr" as const,
+          },
+        ],
+        generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+        mediaKind: "movie" as const,
+        referenceId,
+      }),
+    };
+    render(
+      libraryScreen(
+        <MediaLibrary client={client} initialOutcome={readyMediaLibraryOutcome} live={false} />,
+      ),
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: new RegExp(`^View details for ${item.media.title}`, "u"),
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: `${item.media.title} details`,
+    });
+    const action = await within(dialog).findByRole("link", {
+      name: "Open in Radarr in a new tab",
+    });
+    expect(action).toHaveAttribute("href", `/api/media/library/${item.media.id}/actions/radarr`);
+    expect(action).toHaveAttribute("target", "_blank");
+    expect(action).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("renders title details while action discovery is pending and aborts it on close", async () => {
+    const user = userEvent.setup();
+    let actionSignal: AbortSignal | undefined;
+    const loadConnectedActions = vi.fn(
+      (_referenceId: string, signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          actionSignal = signal;
+          signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Stopped", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+    render(
+      libraryScreen(
+        <MediaLibrary
+          client={{ ...mediaLibraryDemoClient, loadConnectedActions }}
+          initialOutcome={readyMediaLibraryOutcome}
+          live={false}
+        />,
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Ember Coast details",
+    });
+    expect(await within(dialog).findByRole("heading", { name: "Ember Coast" })).toBeVisible();
+    expect(loadConnectedActions).toHaveBeenCalledOnce();
+    expect(within(dialog).queryByRole("link", { name: /Open in Radarr/u })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close title details" }));
+    await waitFor(() => expect(actionSignal?.aborted).toBe(true));
+  });
+
   it("updates saved Jellyfin progress separately from one-time playback position", async () => {
     const user = userEvent.setup();
     const referenceId = `media_${"a".repeat(22)}`;
@@ -307,7 +396,9 @@ describe("MediaLibrary", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
-    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
+    const detail = await screen.findByRole("dialog", {
+      name: "Ember Coast details",
+    });
     expect(within(detail).getByRole("button", { name: "Play movie from beginning" })).toBeVisible();
     await user.click(within(detail).getByRole("button", { name: "Reset saved progress" }));
 
@@ -319,7 +410,9 @@ describe("MediaLibrary", () => {
     expect(within(detail).getByText("Saved progress reset in Jellyfin.")).toBeVisible();
     expect(within(detail).getByRole("button", { name: "Play movie" })).toBeVisible();
     expect(
-      within(detail).queryByRole("button", { name: "Play movie from beginning" }),
+      within(detail).queryByRole("button", {
+        name: "Play movie from beginning",
+      }),
     ).not.toBeInTheDocument();
     expect(within(detail).getByRole("button", { name: "Mark watched" })).toBeVisible();
   });
@@ -358,7 +451,9 @@ describe("MediaLibrary", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
-    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
+    const detail = await screen.findByRole("dialog", {
+      name: "Ember Coast details",
+    });
     await user.click(await within(detail).findByRole("button", { name: "Download" }));
 
     await waitFor(() =>
@@ -425,8 +520,12 @@ describe("MediaLibrary", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /View details for Ember Coast/u }));
-    const detail = await screen.findByRole("dialog", { name: "Ember Coast details" });
-    const download = await within(detail).findByRole("button", { name: "Download" });
+    const detail = await screen.findByRole("dialog", {
+      name: "Ember Coast details",
+    });
+    const download = await within(detail).findByRole("button", {
+      name: "Download",
+    });
 
     await user.click(download);
     expect(
@@ -456,7 +555,10 @@ describe("MediaLibrary", () => {
       prepare: vi.fn(async () => ({
         canManageLibrary: false,
         csrfToken: "library_playback_csrf_0123456789abcdefghijkl",
-        session: { ...playbackSession, mediaReferenceId: `media_${"i".repeat(22)}` },
+        session: {
+          ...playbackSession,
+          mediaReferenceId: `media_${"i".repeat(22)}`,
+        },
       })),
       report: vi.fn(async (_sessionId, request) => ({
         acceptedAt: "2026-07-30T12:30:00.000Z",
@@ -483,7 +585,9 @@ describe("MediaLibrary", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /View details for Northern Lights/u }));
-    const detail = await screen.findByRole("dialog", { name: "Northern Lights details" });
+    const detail = await screen.findByRole("dialog", {
+      name: "Northern Lights details",
+    });
     expect(within(detail).getByRole("heading", { name: "Northern Lights" })).toBeVisible();
     const seasonOne = within(detail).getByRole("tab", { name: /Season 1/u });
     expect(seasonOne).toHaveAttribute("aria-selected", "true");
@@ -497,10 +601,14 @@ describe("MediaLibrary", () => {
     expect(seasonTwo).toHaveFocus();
     expect(seasonTwo).toHaveAttribute("aria-selected", "true");
     expect(
-      await within(detail).findByRole("button", { name: "Resume The Long Meridian" }),
+      await within(detail).findByRole("button", {
+        name: "Resume The Long Meridian",
+      }),
     ).toBeVisible();
     await user.click(
-      within(detail).getByRole("button", { name: "View details for The Long Meridian" }),
+      within(detail).getByRole("button", {
+        name: "View details for The Long Meridian",
+      }),
     );
     const episodeDetail = within(detail).getByRole("region", {
       name: "The Long Meridian episode details",

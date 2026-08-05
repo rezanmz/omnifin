@@ -425,7 +425,11 @@ const jellyfinOriginalDownloadInputSchema = z
       (end !== null && !Number.isSafeInteger(end)) ||
       (start !== null && end !== null && start > end)
     ) {
-      context.addIssue({ code: "custom", message: "The byte range is invalid.", path: ["range"] });
+      context.addIssue({
+        code: "custom",
+        message: "The byte range is invalid.",
+        path: ["range"],
+      });
     }
   });
 
@@ -577,6 +581,15 @@ export interface JellyfinLibrarySeason {
 
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
+  managementIdentity:
+    | {
+        kind: "movie";
+        providerIds: { imdb: string | null; tmdb: number | null };
+      }
+    | {
+        kind: "series";
+        providerIds: { tmdb: number | null; tvdb: number | null };
+      };
   movie: JellyfinLibraryMovieDetail | null;
   providerReferences: TitleProviderReference[];
   removal?: JellyfinLibraryRemovalFacts | null;
@@ -990,12 +1003,46 @@ function normalizeMovieDetail(
 
 function normalizedProviderId(
   providerIds: Record<string, string> | null | undefined,
-  provider: "imdb" | "tmdb",
+  provider: "imdb" | "tmdb" | "tvdb",
 ) {
   const value = Object.entries(providerIds ?? {}).find(
     ([key]) => key.toLocaleLowerCase("en-US") === provider,
   )?.[1];
   return value?.trim() ?? null;
+}
+
+function normalizedPositiveProviderNumber(
+  providerIds: Record<string, string> | null | undefined,
+  provider: "tmdb" | "tvdb",
+) {
+  const value = normalizedProviderId(providerIds, provider);
+  if (value === null || !/^[1-9][0-9]{0,15}$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeTitleManagementIdentity(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+  kind: "movie" | "series",
+): JellyfinLibraryTitleResult["managementIdentity"] {
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
+  if (kind === "series") {
+    return {
+      kind,
+      providerIds: {
+        tmdb,
+        tvdb: normalizedPositiveProviderNumber(item.ProviderIds, "tvdb"),
+      },
+    };
+  }
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  return {
+    kind,
+    providerIds: {
+      imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
+      tmdb,
+    },
+  };
 }
 
 function normalizedTmdbPersonId(providerIds: Record<string, string> | null | undefined) {
@@ -1072,7 +1119,13 @@ function normalizeTitleProviderReferences(
       : []),
     ...(rottenTomatoes === null
       ? []
-      : [{ identifier: rottenTomatoes, mediaKind, provider: "rotten_tomatoes" as const }]),
+      : [
+          {
+            identifier: rottenTomatoes,
+            mediaKind,
+            provider: "rotten_tomatoes" as const,
+          },
+        ]),
   ];
 }
 
@@ -1080,8 +1133,7 @@ function normalizeMovieRemovalFacts(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
 ): JellyfinLibraryRemovalFacts {
   const imdb = normalizedProviderId(item.ProviderIds, "imdb");
-  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
-  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,15}$/u.test(tmdb) ? Number(tmdb) : null;
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
   const sizes = (item.MediaSources ?? []).map(({ Size }) => Size ?? null);
   const sizeBytes =
     sizes.length > 0 && sizes.every((size): size is number => size !== null)
@@ -1091,10 +1143,7 @@ function normalizeMovieRemovalFacts(
     canDelete: item.CanDelete === true,
     providerIds: {
       imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
-      tmdb:
-        parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0
-          ? parsedTmdb
-          : null,
+      tmdb,
     },
     sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : null,
   };
@@ -1537,7 +1586,10 @@ function viewingHistoryItemTypes(kind: ViewingHistoryKind) {
 function librarySort(sort: JellyfinLibraryBrowseInput["sort"]) {
   if (sort === "title") return { SortBy: "SortName", SortOrder: "Ascending" };
   if (sort === "year") {
-    return { SortBy: "ProductionYear,SortName", SortOrder: "Descending,Ascending" };
+    return {
+      SortBy: "ProductionYear,SortName",
+      SortOrder: "Descending,Ascending",
+    };
   }
   return { SortBy: "DateCreated", SortOrder: "Descending" };
 }
@@ -1843,6 +1895,7 @@ export class JellyfinUserMediaClient {
     if (item.kind === "movie") {
       return {
         item,
+        managementIdentity: normalizeTitleManagementIdentity(itemResponse, "movie"),
         movie: { ...normalizeMovieDetail(itemResponse), ...credits },
         providerReferences: normalizeTitleProviderReferences(itemResponse),
         removal: normalizeMovieRemovalFacts(itemResponse),
@@ -1903,6 +1956,7 @@ export class JellyfinUserMediaClient {
     }
     return {
       item,
+      managementIdentity: normalizeTitleManagementIdentity(itemResponse, "series"),
       movie: null,
       providerReferences: normalizeTitleProviderReferences(itemResponse),
       seasons: seasonItems.map((season) =>
@@ -2058,7 +2112,12 @@ export class JellyfinUserMediaClient {
   }
 
   public async readLibraryExtras(
-    rawInput: { itemId: string; limit: number; startIndex: number; userId: string },
+    rawInput: {
+      itemId: string;
+      limit: number;
+      startIndex: number;
+      userId: string;
+    },
     signal?: AbortSignal,
   ): Promise<JellyfinLibraryExtrasResult> {
     const input = jellyfinLibraryExtrasQuerySchema.parse(rawInput);

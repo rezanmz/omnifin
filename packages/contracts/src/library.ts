@@ -22,6 +22,7 @@ export const LIBRARY_MOVIE_MAX_STUDIOS = 12;
 export const LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS = 64;
 export const LIBRARY_SEASON_EPISODES_MAX_ITEMS = 50;
 export const LIBRARY_TITLE_MAX_SEASONS = 100;
+export const LIBRARY_TITLE_MAX_CONNECTED_ACTIONS = 2;
 export const VIEWING_HISTORY_MAX_ITEMS = 50;
 
 const safeTextSchema = z
@@ -395,6 +396,60 @@ export const libraryMovieDetailSchema = z.strictObject({
   tagline: safeTextSchema.max(500).nullable(),
 });
 export type LibraryMovieDetail = z.infer<typeof libraryMovieDetailSchema>;
+
+export const libraryConnectedActionServiceSchema = z.enum(["radarr", "sonarr"]);
+export type LibraryConnectedActionService = z.infer<typeof libraryConnectedActionServiceSchema>;
+
+export const libraryConnectedActionSchema = z.strictObject({
+  href: z
+    .string()
+    .max(256)
+    .regex(/^\/v1\/media\/library\/media_[A-Za-z0-9_-]{22}\/actions\/(?:radarr|sonarr)$/u),
+  kind: z.literal("service_navigation"),
+  label: safeTextSchema.max(80),
+  service: libraryConnectedActionServiceSchema,
+});
+export type LibraryConnectedAction = z.infer<typeof libraryConnectedActionSchema>;
+
+export const libraryConnectedActionsResponseSchema = z
+  .strictObject({
+    actions: z.array(libraryConnectedActionSchema).max(LIBRARY_TITLE_MAX_CONNECTED_ACTIONS),
+    generatedAt: timestampSchema,
+    mediaKind: z.enum(["movie", "series"]),
+    referenceId: mediaReferenceIdSchema,
+  })
+  .superRefine((response, context) => {
+    const connectedServices = new Set<string>();
+    for (const [index, action] of response.actions.entries()) {
+      const expectedHref = `/v1/media/library/${response.referenceId}/actions/${action.service}`;
+      if (action.href !== expectedHref) {
+        context.addIssue({
+          code: "custom",
+          message: "Connected actions must belong to the requested opaque media reference.",
+          path: ["actions", index, "href"],
+        });
+      }
+      if (connectedServices.has(action.service)) {
+        context.addIssue({
+          code: "custom",
+          message: "Connected actions must use unique services.",
+          path: ["actions", index, "service"],
+        });
+      }
+      connectedServices.add(action.service);
+      if (
+        (response.mediaKind === "movie" && action.service !== "radarr") ||
+        (response.mediaKind === "series" && action.service !== "sonarr")
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Connected actions must match the library title kind.",
+          path: ["actions", index, "service"],
+        });
+      }
+    }
+  });
+export type LibraryConnectedActionsResponse = z.infer<typeof libraryConnectedActionsResponseSchema>;
 
 export const libraryTitleDetailResponseSchema = z
   .strictObject({
@@ -1452,6 +1507,9 @@ export const viewingHistoryQueryJsonSchema = withoutSchemaDialect(viewingHistory
 export const viewingHistoryResponseJsonSchema = withoutSchemaDialect(viewingHistoryResponseSchema);
 export const libraryTitleDetailResponseJsonSchema = withoutSchemaDialect(
   libraryTitleDetailResponseSchema,
+);
+export const libraryConnectedActionsResponseJsonSchema = withoutSchemaDialect(
+  libraryConnectedActionsResponseSchema,
 );
 export const libraryExtrasQueryJsonSchema = withoutSchemaDialect(libraryExtrasQuerySchema);
 export const libraryExtrasResponseJsonSchema = withoutSchemaDialect(libraryExtrasResponseSchema);

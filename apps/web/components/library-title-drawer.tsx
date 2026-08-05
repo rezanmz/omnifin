@@ -5,6 +5,7 @@ import "./library-title-drawer.css";
 
 import type {
   LibraryBrowseItem,
+  LibraryConnectedAction,
   LibraryDownloadPrepareResponse,
   LibraryExtra,
   LibraryExtrasResponse,
@@ -251,7 +252,9 @@ function PlaybackActions({
   onPlay: (startPositionSeconds?: number) => void;
   playback: LibraryPlaybackState;
 }) {
-  const [mutation, setMutation] = useState<PlaybackMutationState>({ kind: "idle" });
+  const [mutation, setMutation] = useState<PlaybackMutationState>({
+    kind: "idle",
+  });
   const pending = mutation.kind === "pending";
   const watchedAction = playback.played ? "mark_unwatched" : "mark_watched";
 
@@ -271,7 +274,10 @@ function PlaybackActions({
               : "Saved progress reset in Jellyfin.",
       });
     } catch (error) {
-      setMutation({ kind: "error", message: playbackMutationErrorMessage(error) });
+      setMutation({
+        kind: "error",
+        message: playbackMutationErrorMessage(error),
+      });
     }
   }
 
@@ -348,6 +354,32 @@ function PlaybackActions({
             : ""}
       </p>
     </div>
+  );
+}
+
+function ConnectedServiceActions({ actions }: { actions: LibraryConnectedAction[] }) {
+  const safeActions = actions.flatMap((action) => {
+    const href = sameOriginMediaPath(action.href);
+    return href === undefined ? [] : [{ ...action, href }];
+  });
+  if (safeActions.length === 0) return null;
+  return (
+    <nav aria-label="Connected services" className="library-title__connected-actions">
+      {safeActions.map((action) => (
+        <a
+          aria-label={`${action.label} in a new tab`}
+          className="button button--glass"
+          data-directional-item
+          href={action.href}
+          key={action.service}
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          <ExternalLink aria-hidden="true" />
+          {action.label}
+        </a>
+      ))}
+    </nav>
   );
 }
 
@@ -802,7 +834,10 @@ function MovieInformation({
 
 const EXTRA_GROUPS = [
   { label: "Trailers & clips", types: ["trailer", "clip"] },
-  { label: "Featurettes & behind the scenes", types: ["featurette", "behind_the_scenes"] },
+  {
+    label: "Featurettes & behind the scenes",
+    types: ["featurette", "behind_the_scenes"],
+  },
   { label: "Deleted scenes", types: ["deleted_scene", "scene"] },
   { label: "Interviews", types: ["interview"] },
   { label: "Shorts & samples", types: ["short", "sample"] },
@@ -918,7 +953,12 @@ function ExtrasSection({
                         <button
                           aria-label={`${action} local extra ${extra.media.title}`}
                           data-directional-item
-                          onClick={() => onPlay({ media: extra.media, playback: extra.playback })}
+                          onClick={() =>
+                            onPlay({
+                              media: extra.media,
+                              playback: extra.playback,
+                            })
+                          }
                           type="button"
                         >
                           <span
@@ -1358,6 +1398,10 @@ export function LibraryTitleDrawer({
 }: LibraryTitleDrawerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const [attempt, setAttempt] = useState(0);
+  const [connectedActions, setConnectedActions] = useState<{
+    actions: LibraryConnectedAction[];
+    requestKey: string;
+  } | null>(null);
   const [episodeAttempt, setEpisodeAttempt] = useState(0);
   const [episodeState, setEpisodeState] = useState<EpisodeState | null>(null);
   const [extrasAttempt, setExtrasAttempt] = useState(0);
@@ -1365,7 +1409,10 @@ export function LibraryTitleDrawer({
   const personRequestReference = useRef<AbortController | null>(null);
   const [personAnnouncement, setPersonAnnouncement] = useState("");
   const [personMessage, setPersonMessage] = useState<string | null>(null);
-  const [personProfile, setPersonProfile] = useState<{ name: string; tmdbId: number } | null>(null);
+  const [personProfile, setPersonProfile] = useState<{
+    name: string;
+    tmdbId: number;
+  } | null>(null);
   const [resolvingPersonReferenceId, setResolvingPersonReferenceId] = useState<string | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
@@ -1455,7 +1502,11 @@ export function LibraryTitleDrawer({
       })
       .catch((error: unknown) => {
         if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
-        setTitleState({ kind: "error", message: detailErrorMessage(error), requestKey });
+        setTitleState({
+          kind: "error",
+          message: detailErrorMessage(error),
+          requestKey,
+        });
       });
     return () => {
       current = false;
@@ -1468,6 +1519,32 @@ export function LibraryTitleDrawer({
     return titleState;
   }, [item, open, requestKey, titleState]);
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
+
+  useEffect(() => {
+    if (!open || !item || detail?.media.id !== item.media.id || !client.loadConnectedActions) {
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    void client
+      .loadConnectedActions(item.media.id, controller.signal)
+      .then((response) => {
+        if (current) {
+          setConnectedActions({
+            actions: response.mediaKind === detail.media.kind ? response.actions : [],
+            requestKey,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+        setConnectedActions({ actions: [], requestKey });
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [client, detail, item, open, requestKey]);
 
   useEffect(() => {
     if (!open || !item || detail?.media.id !== item.media.id) return;
@@ -1591,7 +1668,10 @@ export function LibraryTitleDrawer({
       const response: LibrarySeasonEpisodesResponse = await client.loadSeasonEpisodes(
         item.media.id,
         activeSeasonNumber,
-        { cursor: nextCursor, limit: 30 },
+        {
+          cursor: nextCursor,
+          limit: 30,
+        },
       );
       const known = new Set(currentState.items.map((episode) => episode.media.id));
       setEpisodeState({
@@ -1832,6 +1912,11 @@ export function LibraryTitleDrawer({
                     {detail!.media.kind === "movie" ? (
                       <OriginalMediaDownloadAction client={client} media={detail!.media} />
                     ) : null}
+                    <ConnectedServiceActions
+                      actions={
+                        connectedActions?.requestKey === requestKey ? connectedActions.actions : []
+                      }
+                    />
                   </div>
                 </section>
 

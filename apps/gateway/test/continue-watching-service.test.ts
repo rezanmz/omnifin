@@ -17,6 +17,7 @@ import {
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import {
   libraryBrowseResponseSchema,
+  libraryConnectedActionsResponseSchema,
   libraryExtrasResponseSchema,
   libraryRemovalOperationSchema,
   libraryRemovalPreviewSchema,
@@ -34,6 +35,7 @@ import {
   ContinueWatchingError,
   ContinueWatchingService,
   type ContinueWatchingClientFactoryInput,
+  LibraryConnectedActionError,
   type MediaArtworkError,
 } from "../src/media/continue-watching-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
@@ -42,6 +44,16 @@ const now = new Date("2026-07-28T05:00:00.000Z");
 const privateAccessToken = "private-jellyfin-access-token";
 const privateItemId = "private-upstream-episode";
 const privateSeriesId = "private-upstream-series";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
 
 function testConfig(): AppConfig {
   return {
@@ -187,6 +199,35 @@ function insertRadarr(database: DatabaseHandle, config: AppConfig) {
     .run();
 }
 
+function insertSonarrNavigationConnector(
+  database: DatabaseHandle,
+  config: AppConfig,
+  id = "sonarr-main",
+) {
+  database.db
+    .insert(connectorConfigs)
+    .values({
+      baseUrl: "https://sonarr.example.test/",
+      capabilitySnapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      createdAt: now,
+      displayName: "Home Sonarr",
+      enabled: true,
+      encryptedCredentials: new EnvelopeCipher(config.encryptionKey).encrypt(
+        JSON.stringify({
+          credentials: { apiKey: "private-sonarr-key", kind: "api_key" },
+          schemaVersion: 1,
+        }),
+        `connector_credentials:sonarr:${id}`,
+      ),
+      healthState: "healthy",
+      id,
+      publicUiUrl: "https://television.example.test/sonarr/",
+      type: "sonarr",
+      updatedAt: now,
+    })
+    .run();
+}
+
 function resumeResult(): JellyfinContinueWatchingResult {
   return {
     items: [
@@ -255,6 +296,15 @@ function harness(
     >;
     createRemovalOperationToken?: () => string;
     createRemovalPreviewToken?: () => string;
+    resolveLibrarySeriesNavigation?: (
+      input: { tmdb: number | null; tvdb: number | null },
+      signal?: AbortSignal,
+      connectorId?: string,
+    ) => Promise<{ mediaId: number; titleSlug: string } | null>;
+    resolveConnectedAction?: () => Promise<{
+      publicUiUrl: string;
+      titleSlug: string;
+    } | null>;
     resolveManagedMovie?: (input: {
       providerIds: { imdb: string | null; tmdb: number | null };
     }) => Promise<
@@ -278,6 +328,10 @@ function harness(
   const readLibrary = vi.fn(async () => libraryResult());
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
     item: libraryResult().items[0]!,
+    managementIdentity: {
+      kind: "series",
+      providerIds: { tmdb: 1_042, tvdb: 401_337 },
+    },
     movie: null,
     providerReferences: [],
     seasons: [
@@ -424,6 +478,17 @@ function harness(
     ...(options.resolveManagedMovie === undefined
       ? {}
       : { resolveManagedMovie: options.resolveManagedMovie }),
+    ...(options.resolveConnectedAction === undefined
+      ? {}
+      : { resolveConnectedAction: options.resolveConnectedAction }),
+    ...(options.resolveLibrarySeriesNavigation === undefined
+      ? {}
+      : {
+          createSonarrAdapter: (config) => ({
+            resolveLibrarySeriesNavigation: (input, signal) =>
+              options.resolveLibrarySeriesNavigation!(input, signal, config.connectorId),
+          }),
+        }),
   });
   return {
     config,
@@ -521,6 +586,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: {
         cast: [],
         castTruncated: false,
@@ -694,6 +763,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -991,6 +1064,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: null, tmdb: null },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1153,6 +1230,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1283,6 +1364,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1381,6 +1466,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1494,6 +1583,10 @@ describe("ContinueWatchingService", () => {
     });
     fixture.readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1589,6 +1682,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -1749,6 +1846,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValue({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: null,
       providerReferences: [],
       removal: {
@@ -2160,6 +2261,314 @@ describe("ContinueWatchingService", () => {
     }
   });
 
+  it("discovers exact connected actions separately and reauthorizes their redirect", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://television.example.test/sonarr/",
+      titleSlug: "northern-lights",
+    }));
+    const { database, service } = harness({ resolveConnectedAction });
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+
+      const viewerDetail = await service.readLibraryTitle(referenceId, {
+        principal: principal(),
+      });
+      expect(libraryTitleDetailResponseSchema.parse(viewerDetail)).toEqual(viewerDetail);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+
+      const operatorDetail = await service.readLibraryTitle(referenceId, {
+        principal: adminPrincipal(),
+      });
+      expect(libraryTitleDetailResponseSchema.parse(operatorDetail)).toEqual(operatorDetail);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+
+      const actions = await service.readConnectedActions(referenceId, {
+        principal: adminPrincipal(),
+      });
+      expect(libraryConnectedActionsResponseSchema.parse(actions)).toEqual({
+        actions: [
+          {
+            href: `/v1/media/library/${referenceId}/actions/sonarr`,
+            kind: "service_navigation",
+            label: "Open in Sonarr",
+            service: "sonarr",
+          },
+        ],
+        generatedAt: now.toISOString(),
+        mediaKind: "series",
+        referenceId,
+      });
+      expect(JSON.stringify(actions)).not.toContain("television.example.test");
+
+      const destination = await service.openConnectedAction(referenceId, "sonarr", {
+        principal: adminPrincipal(),
+      });
+      expect(destination.href).toBe(
+        "https://television.example.test/sonarr/series/northern-lights",
+      );
+      await expect(
+        service.openConnectedAction(referenceId, "radarr", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("withholds a connected action when its exact service lookup is unavailable", async () => {
+    const { database, service } = harness({
+      resolveConnectedAction: async () => {
+        throw new Error("private connector failure");
+      },
+    });
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const actions = await service.readConnectedActions(catalogue.items[0]!.media.id, {
+        principal: adminPrincipal(),
+      });
+      expect(actions.actions).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("maps paired-source lookup failures to the stable connected-action error", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://television.example.test/sonarr/",
+      titleSlug: "northern-lights",
+    }));
+    const { database, service } = harness({ resolveConnectedAction });
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      database.sqlite
+        .prepare("update connector_configs set enabled = 0 where id = 'jellyfin-main'")
+        .run();
+
+      for (const action of [
+        () =>
+          service.readConnectedActions(referenceId, {
+            principal: adminPrincipal(),
+          }),
+        () =>
+          service.openConnectedAction(referenceId, "sonarr", {
+            principal: adminPrincipal(),
+          }),
+      ]) {
+        const pending = action();
+        await expect(pending).rejects.toBeInstanceOf(LibraryConnectedActionError);
+        await expect(pending).rejects.toMatchObject({ reason: "unavailable" });
+      }
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps operator title details available when no browser-facing service is configured", async () => {
+    const { database, service } = harness();
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const actions = await service.readConnectedActions(catalogue.items[0]!.media.id, {
+        principal: adminPrincipal(),
+      });
+      expect(actions.actions).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns not found for an unmapped title and rejects unsafe navigation targets", async () => {
+    const unmapped = harness({ resolveConnectedAction: async () => null });
+    try {
+      const catalogue = await unmapped.service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const actions = await unmapped.service.readConnectedActions(referenceId, {
+        principal: adminPrincipal(),
+      });
+      expect(actions.actions).toEqual([]);
+      await expect(
+        unmapped.service.openConnectedAction(referenceId, "sonarr", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+    } finally {
+      unmapped.database.close();
+    }
+
+    const unsafe = harness({
+      resolveConnectedAction: async () => ({
+        publicUiUrl: "https://television.example.test/sonarr/",
+        titleSlug: "../private",
+      }),
+    });
+    try {
+      const catalogue = await unsafe.service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      await expect(
+        unsafe.service.openConnectedAction(catalogue.items[0]!.media.id, "sonarr", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+    } finally {
+      unsafe.database.close();
+    }
+
+    const insecure = harness({
+      resolveConnectedAction: async () => ({
+        publicUiUrl: "http://television.example.test/sonarr/",
+        titleSlug: "northern-lights",
+      }),
+    });
+    try {
+      const catalogue = await insecure.service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: principal() },
+      );
+      await expect(
+        insecure.service.openConnectedAction(catalogue.items[0]!.media.id, "sonarr", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+    } finally {
+      insecure.database.close();
+    }
+  });
+
+  it("keeps core title details independent from pending connected-action discovery", async () => {
+    const resolveConnectedAction = vi.fn(() => new Promise<never>(() => undefined));
+    const { database, service } = harness({ resolveConnectedAction });
+    try {
+      const catalogue = await service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const detail = await service.readLibraryTitle(catalogue.items[0]!.media.id, {
+        principal: adminPrincipal(),
+      });
+
+      expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when connector navigation configuration changes during resolution", async () => {
+    const mutations = [
+      (database: DatabaseHandle) =>
+        database.sqlite
+          .prepare(
+            "update connector_configs set public_ui_url = null, updated_at = ? where id = 'sonarr-main'",
+          )
+          .run(now.getTime() + 1),
+      (database: DatabaseHandle) =>
+        database.sqlite
+          .prepare(
+            "update connector_configs set enabled = 0, updated_at = ? where id = 'sonarr-main'",
+          )
+          .run(now.getTime() + 1),
+      (database: DatabaseHandle) =>
+        database.sqlite
+          .prepare(
+            `update connector_configs
+                set base_url = 'https://replacement-sonarr.example.test/',
+                    public_ui_url = 'https://replacement.example.test/sonarr/', updated_at = ?
+              where id = 'sonarr-main'`,
+          )
+          .run(now.getTime() + 1),
+    ];
+
+    for (const mutate of mutations) {
+      const navigation = deferred<{
+        mediaId: number;
+        titleSlug: string;
+      } | null>();
+      const started = deferred<void>();
+      const test = harness({
+        resolveLibrarySeriesNavigation: async () => {
+          started.resolve(undefined);
+          return navigation.promise;
+        },
+      });
+      insertSonarrNavigationConnector(test.database, test.config);
+      try {
+        const catalogue = await test.service.browse(
+          { kind: "series", limit: 30, sort: "title" },
+          { principal: adminPrincipal() },
+        );
+        const pending = test.service.openConnectedAction(catalogue.items[0]!.media.id, "sonarr", {
+          principal: adminPrincipal(),
+        });
+        await started.promise;
+        mutate(test.database);
+        navigation.resolve({ mediaId: 42, titleSlug: "northern-lights" });
+
+        await expect(pending).rejects.toMatchObject({ reason: "unavailable" });
+      } finally {
+        test.database.close();
+      }
+    }
+  });
+
+  it("cancels sibling connector navigation when one resolver fails", async () => {
+    const siblingStarted = deferred<void>();
+    const siblingAborted = deferred<void>();
+    const test = harness({
+      resolveLibrarySeriesNavigation: async (_input, signal, connectorId) => {
+        if (connectorId === "sonarr-main") {
+          await siblingStarted.promise;
+          throw new Error("private connector failure");
+        }
+        siblingStarted.resolve(undefined);
+        return new Promise<never>((_resolve, reject) => {
+          const abort = () => {
+            siblingAborted.resolve(undefined);
+            reject(signal?.reason ?? new Error("aborted"));
+          };
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        });
+      },
+    });
+    insertSonarrNavigationConnector(test.database, test.config);
+    insertSonarrNavigationConnector(test.database, test.config, "sonarr-sibling");
+    try {
+      const catalogue = await test.service.browse(
+        { kind: "series", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+
+      await expect(
+        test.service.openConnectedAction(catalogue.items[0]!.media.id, "sonarr", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(siblingAborted.promise).resolves.toBeUndefined();
+    } finally {
+      test.database.close();
+    }
+  });
+
   it("pages parent-scoped local extras without exposing Jellyfin identities", async () => {
     const { database, readLibraryExtras, readOnlineExtras, service } = harness();
     try {
@@ -2443,6 +2852,10 @@ describe("ContinueWatchingService", () => {
     });
     readLibraryTitle.mockResolvedValueOnce({
       item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
       movie: {
         cast: [
           {

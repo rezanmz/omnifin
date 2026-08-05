@@ -171,6 +171,24 @@
   color: var(--danger);
 }
 
+.library-title__connected-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.library-title__connected-actions .button {
+  color: var(--paper-1);
+  min-height: 44px;
+  text-decoration: none;
+}
+
+.library-title__connected-actions svg {
+  height: 16px;
+  width: 16px;
+}
+
 .library-title__download {
   align-items: center;
   background:
