@@ -161,6 +161,4 @@ export const householdRequestPolicyDecisionSchema = z.discriminatedUnion("reason
     requiresApproval: z.literal(false),
   }),
 ]);
-export type HouseholdRequestPolicyDecision = z.infer<
-  typeof householdRequestPolicyDecisionSchema
->;
+export type HouseholdRequestPolicyDecision = z.infer<typeof householdRequestPolicyDecisionSchema>;
