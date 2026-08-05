@@ -22,9 +22,7 @@ function config(service: "radarr" | "sonarr", responses: Response[]) {
   };
   return {
     adapter:
-      service === "radarr"
-        ? new RadarrAdapter(adapterConfig)
-        : new SonarrAdapter(adapterConfig),
+      service === "radarr" ? new RadarrAdapter(adapterConfig) : new SonarrAdapter(adapterConfig),
     requests: mock.requests,
   };
 }
@@ -45,9 +43,7 @@ describe("Servarr library navigation", () => {
       ]),
     ]);
 
-    const navigation = await (
-      adapter as RadarrAdapter
-    ).resolveLibraryMovieNavigation({
+    const navigation = await (adapter as RadarrAdapter).resolveLibraryMovieNavigation({
       imdb: "tt1234567",
       tmdb: 98_765,
     });
@@ -77,9 +73,7 @@ describe("Servarr library navigation", () => {
     expect(exact.requests[0]?.url.pathname).toBe("/api/v3/series");
     expect(exact.requests[0]?.url.searchParams.get("tvdbId")).toBe("401337");
 
-    const ambiguous = config("sonarr", [
-      jsonResponse([record, { ...record, id: 18 }]),
-    ]);
+    const ambiguous = config("sonarr", [jsonResponse([record, { ...record, id: 18 }])]);
     await expect(
       (ambiguous.adapter as SonarrAdapter).resolveLibrarySeriesNavigation({
         tmdb: 1_042,

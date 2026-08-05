@@ -19,11 +19,7 @@
   aspect-ratio: 2 / 3;
   background:
     radial-gradient(circle at 68% 18%, var(--glass-specular), transparent 22%),
-    linear-gradient(
-      150deg,
-      color-mix(in srgb, var(--acid) 52%, #52717a),
-      var(--ink-0)
-    );
+    linear-gradient(150deg, color-mix(in srgb, var(--acid) 52%, #52717a), var(--ink-0));
   border: 1px solid var(--glass-edge);
   border-radius: 25px;
   box-shadow:
@@ -429,11 +425,7 @@
   aspect-ratio: 4 / 5;
   background:
     radial-gradient(circle at 70% 15%, var(--glass-specular), transparent 24%),
-    linear-gradient(
-      150deg,
-      color-mix(in srgb, var(--accent) 28%, var(--fill-hover)),
-      var(--ink-0)
-    );
+    linear-gradient(150deg, color-mix(in srgb, var(--accent) 28%, var(--fill-hover)), var(--ink-0));
   border: 1px solid var(--glass-edge);
   border-radius: 19px;
   box-shadow:
@@ -818,8 +810,7 @@
     radial-gradient(ellipse at 18% 0%, var(--glass-specular), transparent 52%),
     color-mix(in srgb, var(--glass-strong) 82%, transparent);
   border-color: var(--accent-line);
-  box-shadow: 0 14px 30px
-    color-mix(in srgb, var(--glass-cast-shadow) 46%, transparent);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--glass-cast-shadow) 46%, transparent);
   transform: translateY(-2px);
 }
 
@@ -843,11 +834,7 @@
   aspect-ratio: 16 / 9;
   background:
     radial-gradient(circle at 72% 18%, var(--glass-specular), transparent 25%),
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--accent) 26%, var(--fill-hover)),
-      var(--ink-0)
-    );
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 26%, var(--fill-hover)), var(--ink-0));
   border: 1px solid var(--glass-edge);
   border-radius: 13px;
   display: flex;
@@ -971,12 +958,7 @@
 .library-title__extras-skeleton > span {
   animation: library-title-pulse 1.5s ease-in-out infinite;
   aspect-ratio: 16 / 11;
-  background: linear-gradient(
-    110deg,
-    var(--fill-subtle),
-    var(--fill-hover),
-    var(--fill-subtle)
-  );
+  background: linear-gradient(110deg, var(--fill-subtle), var(--fill-hover), var(--fill-subtle));
   background-size: 220% 100%;
   border-radius: 19px;
 }
@@ -1112,11 +1094,7 @@
   aspect-ratio: 16 / 9;
   background:
     radial-gradient(circle at 72% 18%, var(--glass-specular), transparent 24%),
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--accent) 28%, var(--fill-hover)),
-      var(--ink-0)
-    );
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 28%, var(--fill-hover)), var(--ink-0));
   border: 1px solid var(--glass-edge);
   border-radius: 14px;
   display: flex;
@@ -1182,19 +1160,13 @@
 
 .library-title__episode-copy-heading > span,
 .library-title__episode-copy
-  > span:not(
-    .library-title__episode-copy-heading,
-    .library-title__episode-progress
-  ) {
+  > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
   color: var(--paper-2);
   font-size: 0.7rem;
 }
 
 .library-title__episode-copy
-  > span:not(
-    .library-title__episode-copy-heading,
-    .library-title__episode-progress
-  ) {
+  > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
   display: -webkit-box;
   line-height: 1.45;
   overflow: hidden;
@@ -1543,12 +1515,7 @@
 .library-title__skeleton > span,
 .library-title__episode-skeleton span {
   animation: library-title-pulse 1.5s ease-in-out infinite;
-  background: linear-gradient(
-    110deg,
-    var(--fill-subtle),
-    var(--fill-hover),
-    var(--fill-subtle)
-  );
+  background: linear-gradient(110deg, var(--fill-subtle), var(--fill-hover), var(--fill-subtle));
   background-size: 220% 100%;
 }
 
@@ -1711,10 +1678,7 @@
   }
 
   .library-title__episode-copy
-    > span:not(
-      .library-title__episode-copy-heading,
-      .library-title__episode-progress
-    ) {
+    > span:not(.library-title__episode-copy-heading, .library-title__episode-progress) {
     -webkit-line-clamp: 1;
   }
 }

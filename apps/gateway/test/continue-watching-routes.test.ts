@@ -23,16 +23,9 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import {
-  SESSION_COOKIE_NAME,
-  SESSION_CSRF_HEADER,
-} from "../src/auth/session-cookie.js";
+import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
-import {
-  connectorConfigs,
-  serviceIdentityLinks,
-  users,
-} from "../src/db/schema.js";
+import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T05:30:00.000Z");
@@ -96,9 +89,7 @@ async function harness(
       input: { imdb: string | null; tmdb: number | null },
       signal?: AbortSignal,
     ) => Promise<
-      | ((
-          { fileId: number; hasFile: true } | { fileId: null; hasFile: false }
-        ) & {
+      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
           mediaId: number;
           monitored: boolean;
           sizeBytes: number | null;
@@ -106,9 +97,7 @@ async function harness(
       | null
     >;
     resolveManagedMovie?: () => Promise<
-      | ((
-          { fileId: number; hasFile: true } | { fileId: null; hasFile: false }
-        ) & {
+      | (({ fileId: number; hasFile: true } | { fileId: null; hasFile: false }) & {
           connectorId: string;
           mediaId: number;
           monitored: boolean;
@@ -174,38 +163,36 @@ async function harness(
     body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
     contentType: "image/png" as const,
   }));
-  const readLibraryTitle = vi.fn(
-    async (): Promise<JellyfinLibraryTitleResult> => ({
-      item: (await readLibrary()).items[0]!,
-      managementIdentity: {
-        kind: "movie",
-        providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
-      },
-      movie: {
-        cast: [],
-        castTruncated: false,
-        communityRating: null,
-        crew: [],
-        crewTruncated: false,
-        criticRating: null,
-        genres: [],
-        mediaSources: [],
-        mediaSourcesTruncated: false,
-        premiereDate: null,
-        studios: [],
-        tagline: null,
-      },
-      providerReferences: [],
-      removal: {
-        canDelete: options.canDelete ?? true,
-        providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
-        sizeBytes: 6_979_321_856,
-      },
-      seasons: [],
-      seasonsTruncated: false,
-      seriesCredits: null,
-    }),
-  );
+  const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
+    item: (await readLibrary()).items[0]!,
+    managementIdentity: {
+      kind: "movie",
+      providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
+    },
+    movie: {
+      cast: [],
+      castTruncated: false,
+      communityRating: null,
+      crew: [],
+      crewTruncated: false,
+      criticRating: null,
+      genres: [],
+      mediaSources: [],
+      mediaSourcesTruncated: false,
+      premiereDate: null,
+      studios: [],
+      tagline: null,
+    },
+    providerReferences: [],
+    removal: {
+      canDelete: options.canDelete ?? true,
+      providerIds: options.providerIds ?? { imdb: "tt1234567", tmdb: 98_765 },
+      sizeBytes: 6_979_321_856,
+    },
+    seasons: [],
+    seasonsTruncated: false,
+    seriesCredits: null,
+  }));
   const readLibrarySeasonEpisodes = vi.fn(
     async (): Promise<JellyfinLibrarySeasonEpisodesResult> => ({
       items: [],
@@ -218,49 +205,45 @@ async function harness(
     name: "Mara Voss",
     tmdbId: 12_345,
   }));
-  const readLibraryExtras = vi.fn(
-    async (): Promise<JellyfinLibraryExtrasResult> => ({
-      catalogTmdbId: null,
-      items: [
-        {
-          artwork: {
-            accentColor: "#775544",
-            backdrop: null,
-            blurHash: null,
-            poster: { itemId: "route-private-extra", type: "Primary" },
-          },
-          contentRating: null,
-          externalId: "route-private-extra",
-          extraType: "trailer",
-          overview: "A local trailer.",
-          played: false,
-          positionSeconds: 0,
-          runtimeSeconds: 118,
-          title: "Official trailer",
-          year: 2026,
+  const readLibraryExtras = vi.fn(async (): Promise<JellyfinLibraryExtrasResult> => ({
+    catalogTmdbId: null,
+    items: [
+      {
+        artwork: {
+          accentColor: "#775544",
+          backdrop: null,
+          blurHash: null,
+          poster: { itemId: "route-private-extra", type: "Primary" },
         },
-      ],
-      nextStartIndex: 12,
-    }),
-  );
+        contentRating: null,
+        externalId: "route-private-extra",
+        extraType: "trailer",
+        overview: "A local trailer.",
+        played: false,
+        positionSeconds: 0,
+        runtimeSeconds: 118,
+        title: "Official trailer",
+        year: 2026,
+      },
+    ],
+    nextStartIndex: 12,
+  }));
   const updatePlaybackState = vi.fn(async () => ({
     durationSeconds: 7_200,
     played: true,
     positionSeconds: 0,
   }));
-  const readViewingHistory = vi.fn(
-    async (): Promise<JellyfinViewingHistoryResult> => ({
-      boundaryFound: true,
-      items: [
-        {
-          ...result.items[0]!,
-          kind: "movie",
-          played: false,
-        },
-      ],
-      nextAfterItemId: null,
-    }),
-  );
+  const readViewingHistory = vi.fn(async (): Promise<JellyfinViewingHistoryResult> => ({
+    boundaryFound: true,
+    items: [
+      {
+        ...result.items[0]!,
+        kind: "movie",
+        played: false,
+      },
+    ],
+    nextAfterItemId: null,
+  }));
   let mediaReferenceIndex = 0;
   let stateOperationIndex = 0;
   const app = await createApp({
@@ -286,8 +269,7 @@ async function harness(
               resolveLibraryMovie: options.resolveLibraryMovie!,
             }),
           }),
-      createUserMediaStateOperationToken: () =>
-        String(++stateOperationIndex).padStart(22, "o"),
+      createUserMediaStateOperationToken: () => String(++stateOperationIndex).padStart(22, "o"),
       mediaReferences: {
         clock: () => now,
         createToken: () => (mediaReferenceIndex++ === 0 ? "r" : "e").repeat(22),
@@ -333,9 +315,7 @@ async function harness(
           createdAt: now,
           displayName: "Home Radarr",
           enabled: options.radarrEnabled ?? true,
-          encryptedCredentials: new EnvelopeCipher(
-            config.encryptionKey,
-          ).encrypt(
+          encryptedCredentials: new EnvelopeCipher(config.encryptionKey).encrypt(
             JSON.stringify({
               credentials: {
                 apiKey: "route-private-radarr-key",
@@ -422,9 +402,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(
-        continueWatchingResponseSchema.parse(response.json()),
-      ).toMatchObject({
+      expect(continueWatchingResponseSchema.parse(response.json())).toMatchObject({
         items: [
           {
             media: {
@@ -467,9 +445,7 @@ describe("Continue Watching routes", () => {
       });
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.vary).toContain("Cookie");
-      expect(response.body).not.toMatch(
-        /route-private|viewer-external|jellyfin\.example/iu,
-      );
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
       expect(readViewingHistory).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "movies",
@@ -497,9 +473,7 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/history?kind=all&limit=24&range=all&state=all",
       });
-      const cursor = viewingHistoryResponseSchema.parse(
-        first.json(),
-      ).nextCursor!;
+      const cursor = viewingHistoryResponseSchema.parse(first.json()).nextCursor!;
       readViewingHistory.mockResolvedValueOnce({
         boundaryFound: false,
         items: [],
@@ -511,9 +485,7 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/history?kind=all&limit=24&range=all&state=all&cursor=${encodeURIComponent(cursor)}`,
       });
       expect(stale.statusCode).toBe(400);
-      expect(apiErrorSchema.parse(stale.json()).error.code).toBe(
-        "viewing_history_cursor_invalid",
-      );
+      expect(apiErrorSchema.parse(stale.json()).error.code).toBe("viewing_history_cursor_invalid");
       expect(stale.body).not.toContain(cursor);
 
       app.database.sqlite
@@ -527,9 +499,7 @@ describe("Continue Watching routes", () => {
         url: "/v1/media/history",
       });
       expect(unavailable.statusCode, unavailable.body).toBe(200);
-      expect(
-        viewingHistoryResponseSchema.parse(unavailable.json()),
-      ).toMatchObject({
+      expect(viewingHistoryResponseSchema.parse(unavailable.json())).toMatchObject({
         items: [],
         source: {
           failure: { code: "configuration_invalid" },
@@ -551,9 +521,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode).toBe(401);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
-        "authentication_required",
-      );
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readContinueWatching).not.toHaveBeenCalled();
     } finally {
       await app.close();
@@ -594,9 +562,7 @@ describe("Continue Watching routes", () => {
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.pragma).toBe("no-cache");
       expect(response.headers.vary).toBe("Cookie");
-      expect(response.body).not.toMatch(
-        /route-private|viewer-external|jellyfin\.example/iu,
-      );
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
       expect(readLibrary).toHaveBeenCalledWith(
         {
           kind: "movies",
@@ -625,23 +591,15 @@ describe("Continue Watching routes", () => {
   });
 
   it("serves rich movie details and cast artwork through an opaque same-origin grant", async () => {
-    const {
-      app,
-      readImage,
-      readLibrary,
-      readLibraryPerson,
-      readLibraryTitle,
-      viewer,
-    } = await harness();
+    const { app, readImage, readLibrary, readLibraryPerson, readLibraryTitle, viewer } =
+      await harness();
     try {
       const catalogueResponse = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const catalogue = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      );
+      const catalogue = libraryBrowseResponseSchema.parse(catalogueResponse.json());
       const referenceId = catalogue.items[0]!.media.id;
       const rawItem = (await readLibrary.mock.results[0]!.value).items[0]!;
       readLibraryTitle.mockResolvedValueOnce({
@@ -690,22 +648,16 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library/${referenceId}`,
       });
       expect(detailResponse.statusCode, detailResponse.body).toBe(200);
-      const detail = libraryTitleDetailResponseSchema.parse(
-        detailResponse.json(),
-      );
+      const detail = libraryTitleDetailResponseSchema.parse(detailResponse.json());
       const personPath = detail.movie?.cast[0]?.imagePath;
       const personReferenceId = detail.movie?.cast[0]?.personReferenceId;
       expect(detail.providerReferences).toEqual([
         { identifier: "tt1234567", mediaKind: "movie", provider: "imdb" },
         { identifier: 98_765, mediaKind: "movie", provider: "tmdb" },
       ]);
-      expect(personPath).toMatch(
-        new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`),
-      );
+      expect(personPath).toMatch(new RegExp(`^/v1/media/${referenceId}/images/people/v2\\.`));
       expect(personReferenceId).toMatch(/^media_[A-Za-z0-9_-]{22}$/u);
-      expect(detailResponse.body).not.toMatch(
-        /route-private-person|viewer-external/iu,
-      );
+      expect(detailResponse.body).not.toMatch(/route-private-person|viewer-external/iu);
 
       const profile = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
@@ -717,17 +669,13 @@ describe("Continue Watching routes", () => {
         name: "Mara Voss",
         tmdbId: 12_345,
       });
-      expect(profile.body).not.toMatch(
-        /route-private-person|viewer-external/iu,
-      );
+      expect(profile.body).not.toMatch(/route-private-person|viewer-external/iu);
       expect(readLibraryPerson).toHaveBeenCalledWith(
         { itemId: "route-private-person", userId: "viewer-external" },
         expect.any(AbortSignal),
       );
 
-      readLibraryPerson.mockRejectedValueOnce(
-        new Error("route-private-profile-failure"),
-      );
+      readLibraryPerson.mockRejectedValueOnce(new Error("route-private-profile-failure"));
       const unavailableProfile = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -737,9 +685,7 @@ describe("Continue Watching routes", () => {
       expect(apiErrorSchema.parse(unavailableProfile.json()).error.code).toBe(
         "media_library_person_unavailable",
       );
-      expect(unavailableProfile.body).not.toContain(
-        "route-private-profile-failure",
-      );
+      expect(unavailableProfile.body).not.toContain("route-private-profile-failure");
 
       const anonymousImage = await app.inject({
         method: "GET",
@@ -778,9 +724,7 @@ describe("Continue Watching routes", () => {
       );
 
       app.database.sqlite
-        .prepare(
-          "update service_identity_links set revision = revision + 1 where id = ?",
-        )
+        .prepare("update service_identity_links set revision = revision + 1 where id = ?")
         .run("viewer-link");
       const staleProfile = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
@@ -808,18 +752,15 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const detail = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
         url: `/v1/media/library/${referenceId}`,
       });
       expect(detail.statusCode, detail.body).toBe(200);
-      expect(
-        libraryTitleDetailResponseSchema.parse(detail.json()).media.id,
-      ).toBe(referenceId);
+      expect(libraryTitleDetailResponseSchema.parse(detail.json()).media.id).toBe(referenceId);
       expect(resolveConnectedAction).not.toHaveBeenCalled();
 
       const discovery = await app.inject({
@@ -828,9 +769,7 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library/${referenceId}/actions`,
       });
       expect(discovery.statusCode, discovery.body).toBe(200);
-      expect(
-        libraryConnectedActionsResponseSchema.parse(discovery.json()),
-      ).toEqual({
+      expect(libraryConnectedActionsResponseSchema.parse(discovery.json())).toEqual({
         actions: [
           {
             href: `/v1/media/library/${referenceId}/actions/radarr`,
@@ -884,9 +823,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const denied = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -919,9 +857,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -960,32 +897,22 @@ describe("Continue Watching routes", () => {
     });
     const downstream = new AbortController();
     let actionResponse: ServerResponse | undefined;
-    const captureActionResponse = (
-      request: IncomingMessage,
-      response: ServerResponse,
-    ) => {
+    const captureActionResponse = (request: IncomingMessage, response: ServerResponse) => {
       if (request.url?.endsWith("/actions")) actionResponse = response;
     };
     app.server.prependListener("request", captureActionResponse);
     try {
       const address = await app.listen({ host: "127.0.0.1", port: 0 });
       const cookie = `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`;
-      const catalogueResponse = await fetch(
-        `${address}/v1/media/library?kind=movies&sort=title`,
-        {
-          headers: { cookie },
-        },
-      );
-      const referenceId = libraryBrowseResponseSchema.parse(
-        await catalogueResponse.json(),
-      ).items[0]!.media.id;
-      const pending = fetch(
-        `${address}/v1/media/library/${referenceId}/actions`,
-        {
-          headers: { cookie },
-          signal: downstream.signal,
-        },
-      ).catch(() => undefined);
+      const catalogueResponse = await fetch(`${address}/v1/media/library?kind=movies&sort=title`, {
+        headers: { cookie },
+      });
+      const referenceId = libraryBrowseResponseSchema.parse(await catalogueResponse.json())
+        .items[0]!.media.id;
+      const pending = fetch(`${address}/v1/media/library/${referenceId}/actions`, {
+        headers: { cookie },
+        signal: downstream.signal,
+      }).catch(() => undefined);
 
       await started.promise;
       expect(actionResponse).toBeDefined();
@@ -1009,9 +936,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const parentReferenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const parentReferenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json())
+        .items[0]!.media.id;
 
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
@@ -1039,9 +965,7 @@ describe("Continue Watching routes", () => {
       expect(extras.nextCursor).toMatch(/^v2\./u);
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.vary).toContain("Cookie");
-      expect(response.body).not.toMatch(
-        /route-private|viewer-external|jellyfin\.example/iu,
-      );
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
       expect(readLibraryExtras).toHaveBeenCalledWith(
         {
           itemId: privateItemId,
@@ -1101,9 +1025,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1122,9 +1045,7 @@ describe("Continue Watching routes", () => {
       });
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.vary).toBe("Cookie");
-      expect(response.body).not.toMatch(
-        /route-private|viewer-external|tt1234567|98765/iu,
-      );
+      expect(response.body).not.toMatch(/route-private|viewer-external|tt1234567|98765/iu);
       expect(resolveLibraryMovie).toHaveBeenCalledWith(
         { imdb: "tt1234567", tmdb: 98_765 },
         expect.any(AbortSignal),
@@ -1146,9 +1067,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1156,9 +1076,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode).toBe(403);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
-        "permission_denied",
-      );
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("permission_denied");
       expect(resolveManagedMovie).not.toHaveBeenCalled();
     } finally {
       await app.close();
@@ -1178,9 +1096,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1216,9 +1133,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1247,9 +1163,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1274,9 +1189,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1305,9 +1219,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1315,9 +1228,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(
-        libraryRemovalPreviewSchema.parse(response.json()).source.kind,
-      ).toBe("unmanaged");
+      expect(libraryRemovalPreviewSchema.parse(response.json()).source.kind).toBe("unmanaged");
       expect(resolveLibraryMovie).toHaveBeenCalledOnce();
     } finally {
       await app.close();
@@ -1337,9 +1248,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1372,9 +1282,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const response = await app.inject({
         headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
         method: "GET",
@@ -1389,13 +1298,8 @@ describe("Continue Watching routes", () => {
   });
 
   it("opens series details before serving an explicitly selected season", async () => {
-    const {
-      app,
-      readLibrary,
-      readLibrarySeasonEpisodes,
-      readLibraryTitle,
-      viewer,
-    } = await harness();
+    const { app, readLibrary, readLibrarySeasonEpisodes, readLibraryTitle, viewer } =
+      await harness();
     const series = {
       artwork: {
         accentColor: "#557799",
@@ -1486,9 +1390,7 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=series&sort=title",
       });
-      const catalogue = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      );
+      const catalogue = libraryBrowseResponseSchema.parse(catalogueResponse.json());
       const referenceId = catalogue.items[0]!.media.id;
 
       const detailResponse = await app.inject({
@@ -1497,9 +1399,7 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library/${referenceId}`,
       });
       expect(detailResponse.statusCode, detailResponse.body).toBe(200);
-      expect(
-        libraryTitleDetailResponseSchema.parse(detailResponse.json()),
-      ).toMatchObject({
+      expect(libraryTitleDetailResponseSchema.parse(detailResponse.json())).toMatchObject({
         media: { id: referenceId, kind: "series", title: "Northern Lights" },
         playback: null,
         seasons: [{ seasonNumber: 2, title: "Season 2" }],
@@ -1511,9 +1411,7 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library/${referenceId}/seasons/2/episodes?limit=30`,
       });
       expect(episodesResponse.statusCode, episodesResponse.body).toBe(200);
-      expect(
-        librarySeasonEpisodesResponseSchema.parse(episodesResponse.json()),
-      ).toMatchObject({
+      expect(librarySeasonEpisodesResponseSchema.parse(episodesResponse.json())).toMatchObject({
         items: [
           {
             credits: [{ name: "Mara Voss", personReferenceId: null }],
@@ -1544,9 +1442,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const request = {
         headers: {
           cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
@@ -1568,9 +1465,7 @@ describe("Continue Watching routes", () => {
         headers: headersWithoutOrigin,
       });
       expect(missingOrigin.statusCode).toBe(403);
-      expect(apiErrorSchema.parse(missingOrigin.json()).error.code).toBe(
-        "origin_denied",
-      );
+      expect(apiErrorSchema.parse(missingOrigin.json()).error.code).toBe("origin_denied");
 
       const headersWithoutCsrf: Record<string, string> = { ...request.headers };
       delete headersWithoutCsrf[SESSION_CSRF_HEADER];
@@ -1579,9 +1474,7 @@ describe("Continue Watching routes", () => {
         headers: headersWithoutCsrf,
       });
       expect(missingCsrf.statusCode).toBe(403);
-      expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe(
-        "csrf_denied",
-      );
+      expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe("csrf_denied");
 
       const response = await app.inject(request);
       expect(response.statusCode, response.body).toBe(200);
@@ -1593,9 +1486,7 @@ describe("Continue Watching routes", () => {
       });
       expect(response.headers["idempotency-replayed"]).toBe("false");
       expect(response.headers["cache-control"]).toBe("no-store");
-      expect(response.body).not.toMatch(
-        /route-private|viewer-external|jellyfin\.example/iu,
-      );
+      expect(response.body).not.toMatch(/route-private|viewer-external|jellyfin\.example/iu);
       expect(updatePlaybackState).toHaveBeenCalledWith(
         {
           action: "mark_watched",
@@ -1622,9 +1513,8 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?kind=movies&sort=title",
       });
-      const referenceId = libraryBrowseResponseSchema.parse(
-        catalogueResponse.json(),
-      ).items[0]!.media.id;
+      const referenceId = libraryBrowseResponseSchema.parse(catalogueResponse.json()).items[0]!
+        .media.id;
       const request = (key: string, action = "mark_watched") => ({
         headers: {
           cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
@@ -1637,24 +1527,16 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library/${referenceId}/playback-state`,
       });
 
-      expect((await app.inject(request("route-conflict"))).statusCode).toBe(
-        200,
-      );
-      const conflict = await app.inject(
-        request("route-conflict", "mark_unwatched"),
-      );
+      expect((await app.inject(request("route-conflict"))).statusCode).toBe(200);
+      const conflict = await app.inject(request("route-conflict", "mark_unwatched"));
       expect(conflict.statusCode).toBe(409);
-      expect(apiErrorSchema.parse(conflict.json()).error.code).toBe(
-        "idempotency_key_conflict",
-      );
+      expect(apiErrorSchema.parse(conflict.json()).error.code).toBe("idempotency_key_conflict");
 
       const missing = await app.inject({
         ...request("route-missing"),
         url: `/v1/media/library/media_${"z".repeat(22)}/playback-state`,
       });
-      expect(apiErrorSchema.parse(missing.json()).error.code).toBe(
-        "media_library_title_not_found",
-      );
+      expect(apiErrorSchema.parse(missing.json()).error.code).toBe("media_library_title_not_found");
       expect(missing.statusCode).toBe(404);
 
       updatePlaybackState.mockResolvedValueOnce({
@@ -1684,17 +1566,15 @@ describe("Continue Watching routes", () => {
         "media_playback_state_permission_denied",
       );
 
-      updatePlaybackState.mockRejectedValueOnce(
-        new Error("private upstream failure"),
-      );
+      updatePlaybackState.mockRejectedValueOnce(new Error("private upstream failure"));
       const unavailable = await app.inject(request("route-unavailable"));
       expect(unavailable.statusCode).toBe(503);
       expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
         "media_playback_state_unavailable",
       );
-      expect(
-        conflict.body + invalid.body + denied.body + unavailable.body,
-      ).not.toMatch(/private upstream/iu);
+      expect(conflict.body + invalid.body + denied.body + unavailable.body).not.toMatch(
+        /private upstream/iu,
+      );
 
       let resolvePending!: (playback: {
         durationSeconds: number;
@@ -1708,9 +1588,7 @@ describe("Continue Watching routes", () => {
           }),
       );
       const firstPending = app.inject(request("route-pending"));
-      await vi.waitFor(() =>
-        expect(updatePlaybackState).toHaveBeenCalledTimes(5),
-      );
+      await vi.waitFor(() => expect(updatePlaybackState).toHaveBeenCalledTimes(5));
       const pending = await app.inject(request("route-pending"));
       expect(pending.statusCode).toBe(409);
       expect(pending.headers["retry-after"]).toBe("2");
@@ -1747,9 +1625,7 @@ describe("Continue Watching routes", () => {
         url: "/v1/media/library",
       });
       expect(denied.statusCode).toBe(403);
-      expect(apiErrorSchema.parse(denied.json()).error.code).toBe(
-        "permission_denied",
-      );
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("permission_denied");
       expect(readLibrary).not.toHaveBeenCalled();
 
       const first = await app.inject({
@@ -1757,9 +1633,7 @@ describe("Continue Watching routes", () => {
         method: "GET",
         url: "/v1/media/library?limit=1",
       });
-      const cursor = libraryBrowseResponseSchema.parse(
-        first.json(),
-      ).nextCursor!;
+      const cursor = libraryBrowseResponseSchema.parse(first.json()).nextCursor!;
       const calls = readLibrary.mock.calls.length;
       const tampered = `${cursor.slice(0, -1)}${cursor.endsWith("a") ? "b" : "a"}`;
       const rejected = await app.inject({
@@ -1768,9 +1642,7 @@ describe("Continue Watching routes", () => {
         url: `/v1/media/library?cursor=${encodeURIComponent(tampered)}&limit=1`,
       });
       expect(rejected.statusCode).toBe(400);
-      expect(apiErrorSchema.parse(rejected.json()).error.code).toBe(
-        "media_library_cursor_invalid",
-      );
+      expect(apiErrorSchema.parse(rejected.json()).error.code).toBe("media_library_cursor_invalid");
       expect(rejected.body).not.toContain(cursor);
       expect(readLibrary).toHaveBeenCalledTimes(calls);
     } finally {
@@ -1794,9 +1666,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(response.rawPayload).toEqual(
-        Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-      );
+      expect(response.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
       expect(response.headers["content-type"]).toMatch(/^image\/png/u);
       expect(response.headers["cache-control"]).toBe(
         "private, max-age=3600, stale-while-revalidate=86400",
@@ -1836,9 +1706,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode).toBe(404);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
-        "media_artwork_not_found",
-      );
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("media_artwork_not_found");
       expect(response.body).not.toContain(privateItemId);
       expect(readImage).not.toHaveBeenCalled();
     } finally {
@@ -1855,9 +1723,7 @@ describe("Continue Watching routes", () => {
       });
 
       expect(response.statusCode).toBe(401);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
-        "authentication_required",
-      );
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readImage).not.toHaveBeenCalled();
     } finally {
       await app.close();

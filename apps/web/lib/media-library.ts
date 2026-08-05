@@ -48,11 +48,7 @@ export class MediaLibraryClientError extends Error {
   public readonly code: string;
   public readonly kind: MediaLibraryClientErrorKind;
 
-  public constructor(
-    kind: MediaLibraryClientErrorKind,
-    code: string,
-    message: string,
-  ) {
+  public constructor(kind: MediaLibraryClientErrorKind, code: string, message: string) {
     super(message);
     this.name = "MediaLibraryClientError";
     this.kind = kind;
@@ -84,9 +80,7 @@ async function safeJson(response: Response): Promise<unknown> {
   }
 }
 
-async function responseError(
-  response: Response,
-): Promise<MediaLibraryClientError> {
+async function responseError(response: Response): Promise<MediaLibraryClientError> {
   if (response.status === 401) {
     return new MediaLibraryClientError(
       "signed_out",
@@ -117,10 +111,7 @@ async function responseError(
   );
 }
 
-async function parsedResponse<T>(
-  response: Response,
-  schema: ResponseSchema<T>,
-): Promise<T> {
+async function parsedResponse<T>(response: Response, schema: ResponseSchema<T>): Promise<T> {
   if (!response.ok) throw await responseError(response);
   const parsed = schema.safeParse(await safeJson(response));
   if (!parsed.success) {
@@ -146,10 +137,7 @@ function requestParameters(input: MediaLibraryParameters) {
 }
 
 export interface MediaLibraryClient {
-  load(
-    input: MediaLibraryParameters,
-    signal?: AbortSignal,
-  ): Promise<LibraryBrowseResponse>;
+  load(input: MediaLibraryParameters, signal?: AbortSignal): Promise<LibraryBrowseResponse>;
   loadSeasonEpisodes?(
     referenceId: string,
     seasonNumber: number,
@@ -165,17 +153,12 @@ export interface MediaLibraryClient {
     referenceId: string,
     signal?: AbortSignal,
   ): Promise<LibraryConnectedActionsResponse>;
-  loadTitle?(
-    referenceId: string,
-    signal?: AbortSignal,
-  ): Promise<LibraryTitleDetailResponse>;
+  loadTitle?(referenceId: string, signal?: AbortSignal): Promise<LibraryTitleDetailResponse>;
   resolvePerson?(
     referenceId: string,
     signal?: AbortSignal,
   ): Promise<LibraryPersonProfileLinkResponse>;
-  loadDownloadEligibility?(
-    signal?: AbortSignal,
-  ): Promise<MediaDownloadEligibility>;
+  loadDownloadEligibility?(signal?: AbortSignal): Promise<MediaDownloadEligibility>;
   prepareDownload?(
     referenceId: string,
     options: { csrfToken: string; signal?: AbortSignal },
@@ -200,11 +183,7 @@ function assertMediaReference(referenceId: string) {
   }
 }
 
-async function fetchLibraryJson<T>(
-  path: string,
-  schema: ResponseSchema<T>,
-  signal?: AbortSignal,
-) {
+async function fetchLibraryJson<T>(path: string, schema: ResponseSchema<T>, signal?: AbortSignal) {
   const response = await fetchLibraryResponse(
     path,
     { headers: { accept: "application/json" } },
@@ -213,11 +192,7 @@ async function fetchLibraryJson<T>(
   return parsedResponse(response, schema);
 }
 
-async function fetchLibraryResponse(
-  path: string,
-  init: RequestInit = {},
-  signal?: AbortSignal,
-) {
+async function fetchLibraryResponse(path: string, init: RequestInit = {}, signal?: AbortSignal) {
   try {
     return await fetch(path, {
       cache: "no-store",
@@ -226,8 +201,7 @@ async function fetchLibraryResponse(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError")
-      throw error;
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new MediaLibraryClientError(
       "unavailable",
       "service_unavailable",
@@ -247,11 +221,7 @@ export const mediaLibraryClient: MediaLibraryClient = {
   },
   async loadSeasonEpisodes(referenceId, seasonNumber, input = {}, signal) {
     assertMediaReference(referenceId);
-    if (
-      !Number.isSafeInteger(seasonNumber) ||
-      seasonNumber < 0 ||
-      seasonNumber > 100_000
-    ) {
+    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0 || seasonNumber > 100_000) {
       throw new MediaLibraryClientError(
         "invalid_response",
         "invalid_season",
@@ -326,17 +296,12 @@ export const mediaLibraryClient: MediaLibraryClient = {
         signal,
       );
       if (!response.ok) {
-        return response.status === 401
-          ? { status: "signed_out" }
-          : { status: "unavailable" };
+        return response.status === 401 ? { status: "signed_out" } : { status: "unavailable" };
       }
-      const session = schemas.auth.sessionResponseSchema.safeParse(
-        await safeJson(response),
-      );
+      const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(response));
       if (!session.success) return { status: "unavailable" };
       const { csrfToken, principal } = session.data;
-      if (principal === null || csrfToken === null)
-        return { status: "signed_out" };
+      if (principal === null || csrfToken === null) return { status: "signed_out" };
       if (
         principal.accountState !== "active" ||
         !principal.permissions.includes("media.download")
@@ -345,8 +310,7 @@ export const mediaLibraryClient: MediaLibraryClient = {
       }
       return { snapshot: { csrfToken }, status: "ready" };
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError")
-        throw error;
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
       return { status: "unavailable" };
     }
   },
@@ -380,41 +344,25 @@ export const mediaLibraryClient: MediaLibraryClient = {
     }
     return prepared;
   },
-  async updatePlaybackState(
-    referenceId,
-    request,
-    signal,
-    idempotencyKey = crypto.randomUUID(),
-  ) {
+  async updatePlaybackState(referenceId, request, signal, idempotencyKey = crypto.randomUUID()) {
     assertMediaReference(referenceId);
     const schemas = await contractSchemas();
-    const body =
-      schemas.library.libraryPlaybackStateMutationRequestSchema.parse(request);
+    const body = schemas.library.libraryPlaybackStateMutationRequestSchema.parse(request);
     const sessionResponse = await fetchLibraryResponse(
       "/api/auth/session",
       { headers: { accept: "application/json" } },
       signal,
     );
     if (!sessionResponse.ok) throw await responseError(sessionResponse);
-    const session = schemas.auth.sessionResponseSchema.safeParse(
-      await safeJson(sessionResponse),
-    );
-    if (
-      !session.success ||
-      session.data.principal === null ||
-      session.data.csrfToken === null
-    ) {
+    const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(sessionResponse));
+    if (!session.success || session.data.principal === null || session.data.csrfToken === null) {
       throw new MediaLibraryClientError(
         "signed_out",
         "authentication_required",
         "Your session ended. Sign in again to update Jellyfin.",
       );
     }
-    if (
-      !session.data.principal.permissions.includes(
-        "playback.history.self.manage",
-      )
-    ) {
+    if (!session.data.principal.permissions.includes("playback.history.self.manage")) {
       throw new MediaLibraryClientError(
         "forbidden",
         "permission_denied",
@@ -435,10 +383,7 @@ export const mediaLibraryClient: MediaLibraryClient = {
       },
       signal,
     );
-    return parsedResponse(
-      response,
-      schemas.library.libraryPlaybackStateMutationResponseSchema,
-    );
+    return parsedResponse(response, schemas.library.libraryPlaybackStateMutationResponseSchema);
   },
 };
 
@@ -446,8 +391,7 @@ export function mediaLibraryOutcomeFromError(
   error: unknown,
 ): Exclude<MediaLibraryLoadOutcome["status"], "loading" | "ready"> {
   if (error instanceof MediaLibraryClientError) {
-    if (error.kind === "forbidden" || error.kind === "signed_out")
-      return error.kind;
+    if (error.kind === "forbidden" || error.kind === "signed_out") return error.kind;
   }
   return "unavailable";
 }

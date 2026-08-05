@@ -39,10 +39,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
-import {
-  sessionCookieName,
-  writeSessionCookie,
-} from "../auth/session-cookie.js";
+import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import {
   ContinueWatchingError,
@@ -137,28 +134,20 @@ const personArtworkParamsJsonSchema = {
   },
 } as const;
 
-async function noStore(
-  _request: FastifyRequest,
-  reply: FastifyReply,
-  payload: unknown,
-) {
+async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: unknown) {
   reply.header("cache-control", "no-store");
   reply.header("pragma", "no-cache");
   reply.header("vary", "Cookie");
   return payload;
 }
 
-function playbackStateError(
-  error: MediaPlaybackStateError,
-  reply: FastifyReply,
-) {
+function playbackStateError(error: MediaPlaybackStateError, reply: FastifyReply) {
   switch (error.reason) {
     case "idempotency_conflict":
       return new SafeHttpError({
         cause: error,
         code: "idempotency_key_conflict",
-        message:
-          "The idempotency key was already used for another playback-state change.",
+        message: "The idempotency key was already used for another playback-state change.",
         statusCode: 409,
       });
     case "idempotency_in_progress":
@@ -166,24 +155,21 @@ function playbackStateError(
       return new SafeHttpError({
         cause: error,
         code: "media_playback_state_outcome_pending",
-        message:
-          "The outcome of this playback-state change is still being determined.",
+        message: "The outcome of this playback-state change is still being determined.",
         statusCode: 409,
       });
     case "not_found":
       return new SafeHttpError({
         cause: error,
         code: "media_library_title_not_found",
-        message:
-          "The library item is no longer available to this Jellyfin account.",
+        message: "The library item is no longer available to this Jellyfin account.",
         statusCode: 404,
       });
     case "permission_denied":
       return new SafeHttpError({
         cause: error,
         code: "media_playback_state_permission_denied",
-        message:
-          "This account cannot change the selected Jellyfin playback state.",
+        message: "This account cannot change the selected Jellyfin playback state.",
         statusCode: 403,
       });
     case "operation_limit_reached":
@@ -191,8 +177,7 @@ function playbackStateError(
       return new SafeHttpError({
         cause: error,
         code: "media_playback_state_limit_reached",
-        message:
-          "Too many playback-state operations are retained for this account.",
+        message: "Too many playback-state operations are retained for this account.",
         statusCode: 429,
       });
     case "response_invalid":
@@ -217,14 +202,11 @@ export interface ContinueWatchingRoutesOptions {
   dependencies?: ContinueWatchingDependencies;
 }
 
-export const continueWatchingRoutes: FastifyPluginAsync<
-  ContinueWatchingRoutesOptions
-> = async (app, options) => {
-  const service = new ContinueWatchingService(
-    app.database,
-    app.appConfig,
-    options.dependencies,
-  );
+export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOptions> = async (
+  app,
+  options,
+) => {
+  const service = new ContinueWatchingService(app.database, app.appConfig, options.dependencies);
 
   app.get(
     "/v1/media/continue-watching",
@@ -301,22 +283,15 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           await service.browse(query, { principal }, controller.signal),
         );
       } catch (error) {
-        if (
-          error instanceof MediaLibraryError &&
-          error.reason === "cursor_invalid"
-        ) {
+        if (error instanceof MediaLibraryError && error.reason === "cursor_invalid") {
           throw new SafeHttpError({
             cause: error,
             code: "media_library_cursor_invalid",
-            message:
-              "The library continuation cursor is invalid or no longer current.",
+            message: "The library continuation cursor is invalid or no longer current.",
             statusCode: 400,
           });
         }
-        if (
-          error instanceof ContinueWatchingError ||
-          error instanceof MediaLibraryError
-        ) {
+        if (error instanceof ContinueWatchingError || error instanceof MediaLibraryError) {
           throw new SafeHttpError({
             cause: error,
             code: "media_library_unavailable",
@@ -353,39 +328,25 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           session.absoluteExpiresAt,
         );
       }
-      const principal = requirePermission(
-        session?.principal,
-        "playback.history.self.manage",
-      );
+      const principal = requirePermission(session?.principal, "playback.history.self.manage");
       const query = viewingHistoryQuerySchema.parse(request.query);
       const controller = new AbortController();
       const abort = () => controller.abort();
       request.raw.once("aborted", abort);
       try {
         return viewingHistoryResponseSchema.parse(
-          await service.readViewingHistory(
-            query,
-            { principal },
-            controller.signal,
-          ),
+          await service.readViewingHistory(query, { principal }, controller.signal),
         );
       } catch (error) {
-        if (
-          error instanceof ViewingHistoryError &&
-          error.reason === "cursor_invalid"
-        ) {
+        if (error instanceof ViewingHistoryError && error.reason === "cursor_invalid") {
           throw new SafeHttpError({
             cause: error,
             code: "viewing_history_cursor_invalid",
-            message:
-              "The viewing-history cursor is invalid or no longer current.",
+            message: "The viewing-history cursor is invalid or no longer current.",
             statusCode: 400,
           });
         }
-        if (
-          error instanceof ContinueWatchingError ||
-          error instanceof ViewingHistoryError
-        ) {
+        if (error instanceof ContinueWatchingError || error instanceof ViewingHistoryError) {
           throw new SafeHttpError({
             cause: error,
             code: "viewing_history_unavailable",
@@ -490,11 +451,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
       request.raw.once("aborted", abort);
       try {
         return libraryTitleDetailResponseSchema.parse(
-          await service.readLibraryTitle(
-            referenceId,
-            { principal },
-            controller.signal,
-          ),
+          await service.readLibraryTitle(referenceId, { principal }, controller.signal),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -540,10 +497,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           session.absoluteExpiresAt,
         );
       }
-      const principal = requirePermission(
-        session?.principal,
-        "acquisition.manage",
-      );
+      const principal = requirePermission(session?.principal, "acquisition.manage");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
       const controller = new AbortController();
       const abort = () => controller.abort();
@@ -551,11 +505,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
       reply.raw.once("close", abort);
       try {
         return libraryConnectedActionsResponseSchema.parse(
-          await service.readConnectedActions(
-            referenceId,
-            { principal },
-            controller.signal,
-          ),
+          await service.readConnectedActions(referenceId, { principal }, controller.signal),
         );
       } catch (error) {
         if (error instanceof LibraryConnectedActionError) {
@@ -599,12 +549,10 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           session.absoluteExpiresAt,
         );
       }
-      const principal = requirePermission(
-        session?.principal,
-        "acquisition.manage",
+      const principal = requirePermission(session?.principal, "acquisition.manage");
+      const { referenceId, service: connectedService } = libraryConnectedActionParamsSchema.parse(
+        request.params,
       );
-      const { referenceId, service: connectedService } =
-        libraryConnectedActionParamsSchema.parse(request.params);
       const controller = new AbortController();
       const abort = () => controller.abort();
       request.raw.once("aborted", abort);
@@ -670,11 +618,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
       request.raw.once("aborted", abort);
       try {
         return libraryPersonProfileLinkResponseSchema.parse(
-          await service.readLibraryPersonProfile(
-            referenceId,
-            { principal },
-            controller.signal,
-          ),
+          await service.readLibraryPersonProfile(referenceId, { principal }, controller.signal),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -729,12 +673,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
       request.raw.once("aborted", abort);
       try {
         return libraryExtrasResponseSchema.parse(
-          await service.readLibraryExtras(
-            referenceId,
-            query,
-            { principal },
-            controller.signal,
-          ),
+          await service.readLibraryExtras(referenceId, query, { principal }, controller.signal),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -786,9 +725,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const { referenceId, seasonNumber } = librarySeasonParamsSchema.parse(
-        request.params,
-      );
+      const { referenceId, seasonNumber } = librarySeasonParamsSchema.parse(request.params);
       const query = librarySeasonEpisodesQuerySchema.parse(request.query);
       const controller = new AbortController();
       const abort = () => controller.abort();
@@ -846,15 +783,11 @@ export const continueWatchingRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const principal = requirePermission(
-        app.sessionService.resolveValidatedSessionPrincipal(
-          request.validatedSession,
-        ),
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
         "playback.history.self.manage",
       );
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const body = libraryPlaybackStateMutationRequestSchema.parse(
-        request.body,
-      );
+      const body = libraryPlaybackStateMutationRequestSchema.parse(request.body);
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
@@ -870,12 +803,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           controller.signal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
-        return libraryPlaybackStateMutationResponseSchema.parse(
-          result.response,
-        );
+        return libraryPlaybackStateMutationResponseSchema.parse(result.response);
       } catch (error) {
-        if (error instanceof MediaPlaybackStateError)
-          throw playbackStateError(error, reply);
+        if (error instanceof MediaPlaybackStateError) throw playbackStateError(error, reply);
         throw error;
       } finally {
         request.raw.off("aborted", abort);
@@ -913,10 +843,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           params.token,
           controller.signal,
         );
-        reply.header(
-          "cache-control",
-          "private, max-age=3600, stale-while-revalidate=86400",
-        );
+        reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
         reply.header("content-disposition", "inline");
         reply.header("etag", artwork.etag);
         reply.header("vary", "Cookie, Accept");
@@ -984,10 +911,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<
           params.kind,
           controller.signal,
         );
-        reply.header(
-          "cache-control",
-          "private, max-age=3600, stale-while-revalidate=86400",
-        );
+        reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
         reply.header("content-disposition", "inline");
         reply.header("etag", artwork.etag);
         reply.header("vary", "Cookie, Accept");

@@ -53,10 +53,7 @@ import {
   type MediaDownloadEligibility,
   type MediaLibraryClient,
 } from "../lib/media-library";
-import {
-  titleProviderHref,
-  titleProviderLabel,
-} from "../lib/title-provider-reference";
+import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
 
 const MediaDetailDrawer = dynamic(() =>
   import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
@@ -109,8 +106,7 @@ function detailErrorMessage(error: unknown) {
   if (error instanceof MediaLibraryClientError) {
     if (error.kind === "signed_out")
       return "Your session ended. Sign in again to inspect this title.";
-    if (error.kind === "forbidden")
-      return "Your account can no longer inspect this library.";
+    if (error.kind === "forbidden") return "Your account can no longer inspect this library.";
   }
   return "Jellyfin could not provide this title right now. Your library was not changed.";
 }
@@ -147,10 +143,7 @@ function formatBytes(value: number | null) {
   if (value === null) return null;
   if (value === 0) return "0 B";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  const exponent = Math.min(
-    Math.floor(Math.log(value) / Math.log(1_024)),
-    units.length - 1,
-  );
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1_024)), units.length - 1);
   const amount = value / 1_024 ** exponent;
   return `${amount >= 10 || exponent === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[exponent]}`;
 }
@@ -198,20 +191,14 @@ function TitleSkeleton({ title }: { title: string }) {
         <i />
         <i />
       </div>
-      <span className="sr-only">
-        Loading title information and season hierarchy.
-      </span>
+      <span className="sr-only">Loading title information and season hierarchy.</span>
     </div>
   );
 }
 
 function EpisodeSkeleton() {
   return (
-    <div
-      aria-label="Loading episodes"
-      className="library-title__episode-skeleton"
-      role="status"
-    >
+    <div aria-label="Loading episodes" className="library-title__episode-skeleton" role="status">
       {Array.from({ length: 4 }, (_, index) => (
         <span key={index} />
       ))}
@@ -219,13 +206,7 @@ function EpisodeSkeleton() {
   );
 }
 
-function ErrorState({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <section className="library-title__error" role="status">
       <span aria-hidden="true">
@@ -249,10 +230,8 @@ type PlaybackMutationState =
 
 function playbackMutationErrorMessage(error: unknown) {
   if (error instanceof MediaLibraryClientError) {
-    if (error.kind === "signed_out")
-      return "Your session ended. Sign in again to make changes.";
-    if (error.kind === "forbidden")
-      return "Your account cannot change Jellyfin watch history.";
+    if (error.kind === "signed_out") return "Your session ended. Sign in again to make changes.";
+    if (error.kind === "forbidden") return "Your account cannot change Jellyfin watch history.";
   }
   return "Jellyfin could not save that change. Nothing else was altered.";
 }
@@ -340,10 +319,7 @@ function PlaybackActions({
             type="button"
           >
             {pending && mutation.action === watchedAction ? (
-              <LoaderCircle
-                aria-hidden="true"
-                className="library-title__spinner"
-              />
+              <LoaderCircle aria-hidden="true" className="library-title__spinner" />
             ) : playback.played ? (
               <RotateCcw aria-hidden="true" />
             ) : (
@@ -360,10 +336,7 @@ function PlaybackActions({
               type="button"
             >
               {pending && mutation.action === "reset_progress" ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="library-title__spinner"
-                />
+                <LoaderCircle aria-hidden="true" className="library-title__spinner" />
               ) : (
                 <RotateCcw aria-hidden="true" />
               )}
@@ -372,11 +345,7 @@ function PlaybackActions({
           ) : null}
         </div>
       ) : null}
-      <p
-        aria-live="polite"
-        className="library-title__history-status"
-        data-state={mutation.kind}
-      >
+      <p aria-live="polite" className="library-title__history-status" data-state={mutation.kind}>
         {mutation.kind === "pending"
           ? "Saving to Jellyfin…"
           : mutation.kind === "success" || mutation.kind === "error"
@@ -387,21 +356,14 @@ function PlaybackActions({
   );
 }
 
-function ConnectedServiceActions({
-  actions,
-}: {
-  actions: LibraryConnectedAction[];
-}) {
+function ConnectedServiceActions({ actions }: { actions: LibraryConnectedAction[] }) {
   const safeActions = actions.flatMap((action) => {
     const href = sameOriginMediaPath(action.href);
     return href === undefined ? [] : [{ ...action, href }];
   });
   if (safeActions.length === 0) return null;
   return (
-    <nav
-      aria-label="Connected services"
-      className="library-title__connected-actions"
-    >
+    <nav aria-label="Connected services" className="library-title__connected-actions">
       {safeActions.map((action) => (
         <a
           aria-label={`${action.label} in a new tab`}
@@ -428,10 +390,8 @@ type OriginalDownloadState =
 
 function originalDownloadErrorMessage(error: unknown) {
   if (error instanceof MediaLibraryClientError) {
-    if (error.kind === "signed_out")
-      return "Your session ended. Sign in again to download.";
-    if (error.kind === "forbidden")
-      return "This account cannot download original media.";
+    if (error.kind === "signed_out") return "Your session ended. Sign in again to download.";
+    if (error.kind === "forbidden") return "This account cannot download original media.";
     if (error.code === "original_download_busy") {
       return "Another original-file download is active. Try again when it finishes.";
     }
@@ -451,16 +411,12 @@ export function OriginalMediaDownloadAction({
   media: Pick<LibraryBrowseItem["media"], "id" | "title">;
   onStartDownload?: (prepared: LibraryDownloadPrepareResponse) => void;
 }) {
-  const [eligibility, setEligibility] = useState<
-    MediaDownloadEligibility | { status: "loading" }
-  >({
+  const [eligibility, setEligibility] = useState<MediaDownloadEligibility | { status: "loading" }>({
     status: "loading",
   });
   const [state, setState] = useState<OriginalDownloadState>({ kind: "idle" });
   const prepareController = useRef<AbortController | null>(null);
-  const available = Boolean(
-    client.loadDownloadEligibility && client.prepareDownload,
-  );
+  const available = Boolean(client.loadDownloadEligibility && client.prepareDownload);
 
   useEffect(() => {
     if (!available || !client.loadDownloadEligibility) return;
@@ -469,8 +425,7 @@ export function OriginalMediaDownloadAction({
       .loadDownloadEligibility(controller.signal)
       .then(setEligibility)
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError")
-          return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         setEligibility({ status: "unavailable" });
       });
     return () => controller.abort();
@@ -486,11 +441,7 @@ export function OriginalMediaDownloadAction({
   if (!available || eligibility.status !== "ready") return null;
 
   async function prepare() {
-    if (
-      eligibility.status !== "ready" ||
-      !client.prepareDownload ||
-      state.kind === "preparing"
-    ) {
+    if (eligibility.status !== "ready" || !client.prepareDownload || state.kind === "preparing") {
       return;
     }
     prepareController.current?.abort();
@@ -509,16 +460,12 @@ export function OriginalMediaDownloadAction({
       if (error instanceof DOMException && error.name === "AbortError") return;
       setState({ kind: "error", message: originalDownloadErrorMessage(error) });
     } finally {
-      if (prepareController.current === controller)
-        prepareController.current = null;
+      if (prepareController.current === controller) prepareController.current = null;
     }
   }
 
   return (
-    <section
-      aria-label={`Original file for ${media.title}`}
-      className="library-title__download"
-    >
+    <section aria-label={`Original file for ${media.title}`} className="library-title__download">
       <span aria-hidden="true" className="library-title__download-icon">
         <Download />
       </span>
@@ -565,11 +512,7 @@ export function OriginalMediaDownloadAction({
   );
 }
 
-function PersonPortrait({
-  credit,
-}: {
-  credit: LibraryMovieDetail["cast"][number];
-}) {
+function PersonPortrait({ credit }: { credit: LibraryMovieDetail["cast"][number] }) {
   const source = sameOriginMediaPath(credit.imagePath);
   return (
     <span
@@ -599,9 +542,7 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
   const bitrate = formatBitrate(source.bitrateKbps);
   const video = source.video;
   const resolution =
-    video?.width && video.height
-      ? `${video.width} × ${video.height}`
-      : (video?.height ?? null);
+    video?.width && video.height ? `${video.width} × ${video.height}` : (video?.height ?? null);
   return (
     <article className="library-title__source-card">
       <header>
@@ -611,34 +552,24 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
           </span>
           <div>
             <h4>{source.label}</h4>
-            <p>
-              {[size, bitrate].filter(Boolean).join(" · ") ||
-                "Technical details unavailable"}
-            </p>
+            <p>{[size, bitrate].filter(Boolean).join(" · ") || "Technical details unavailable"}</p>
           </div>
         </div>
         {source.container ? <span>{source.container}</span> : null}
       </header>
 
       {video ? (
-        <dl
-          className="library-title__technical-grid"
-          aria-label="Video information"
-        >
+        <dl className="library-title__technical-grid" aria-label="Video information">
           {resolution ? (
             <div>
               <dt>Picture</dt>
-              <dd>
-                {typeof resolution === "number" ? `${resolution}p` : resolution}
-              </dd>
+              <dd>{typeof resolution === "number" ? `${resolution}p` : resolution}</dd>
             </div>
           ) : null}
           {video.codec ? (
             <div>
               <dt>Video</dt>
-              <dd>
-                {[video.codec, video.profile].filter(Boolean).join(" · ")}
-              </dd>
+              <dd>{[video.codec, video.profile].filter(Boolean).join(" · ")}</dd>
             </div>
           ) : null}
           {video.bitDepth ? (
@@ -671,12 +602,8 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
               </p>
               <ul>
                 {source.audio.map((track, index) => (
-                  <li
-                    key={`${track.language ?? "audio"}:${track.codec ?? "unknown"}:${index}`}
-                  >
-                    <strong>
-                      {track.title ?? track.language ?? `Track ${index + 1}`}
-                    </strong>
+                  <li key={`${track.language ?? "audio"}:${track.codec ?? "unknown"}:${index}`}>
+                    <strong>{track.title ?? track.language ?? `Track ${index + 1}`}</strong>
                     <span>
                       {[
                         track.codec,
@@ -689,9 +616,7 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
                   </li>
                 ))}
               </ul>
-              {source.audioTruncated ? (
-                <small>Additional audio tracks are available.</small>
-              ) : null}
+              {source.audioTruncated ? <small>Additional audio tracks are available.</small> : null}
             </section>
           ) : null}
           {source.subtitles.length > 0 ? (
@@ -701,12 +626,8 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
               </p>
               <ul>
                 {source.subtitles.map((track, index) => (
-                  <li
-                    key={`${track.language ?? "subtitle"}:${track.codec ?? "unknown"}:${index}`}
-                  >
-                    <strong>
-                      {track.title ?? track.language ?? `Track ${index + 1}`}
-                    </strong>
+                  <li key={`${track.language ?? "subtitle"}:${track.codec ?? "unknown"}:${index}`}>
+                    <strong>{track.title ?? track.language ?? `Track ${index + 1}`}</strong>
                     <span>
                       {[
                         track.codec,
@@ -742,30 +663,22 @@ function TitleCredits({
   return (
     <>
       {credits.cast.length > 0 ? (
-        <section
-          className="library-title__people"
-          aria-labelledby="library-title-cast-heading"
-        >
+        <section className="library-title__people" aria-labelledby="library-title-cast-heading">
           <div className="library-title__section-heading library-title__section-heading--compact">
             <div>
               <p className="eyebrow">Principal cast</p>
               <h3 id="library-title-cast-heading">On screen</h3>
             </div>
-            {credits.castTruncated ? (
-              <span>Showing the first 24 credits</span>
-            ) : null}
+            {credits.castTruncated ? <span>Showing the first 24 credits</span> : null}
           </div>
           <ul aria-label="Cast">
             {credits.cast.map((credit, index) => {
-              const resolving =
-                resolvingReferenceId === credit.personReferenceId;
+              const resolving = resolvingReferenceId === credit.personReferenceId;
               const content = (
                 <>
                   <PersonPortrait credit={credit} />
                   <strong>{credit.name}</strong>
-                  <span>
-                    {resolving ? "Opening profile…" : (credit.role ?? "Cast")}
-                  </span>
+                  <span>{resolving ? "Opening profile…" : (credit.role ?? "Cast")}</span>
                 </>
               );
               return (
@@ -797,11 +710,8 @@ function TitleCredits({
           <p className="eyebrow">Behind the title</p>
           <dl>
             {credits.crew.map((credit, index) => {
-              const label =
-                credit.type[0]!.toLocaleUpperCase("en-US") +
-                credit.type.slice(1);
-              const resolving =
-                resolvingReferenceId === credit.personReferenceId;
+              const label = credit.type[0]!.toLocaleUpperCase("en-US") + credit.type.slice(1);
+              const resolving = resolvingReferenceId === credit.personReferenceId;
               return (
                 <div key={`${credit.name}:${credit.type}:${index}`}>
                   <dt>{label}</dt>
@@ -827,9 +737,7 @@ function TitleCredits({
               );
             })}
           </dl>
-          {credits.crewTruncated ? (
-            <small>Showing the first 16 key crew credits.</small>
-          ) : null}
+          {credits.crewTruncated ? <small>Showing the first 16 key crew credits.</small> : null}
         </section>
       ) : null}
     </>
@@ -855,21 +763,16 @@ function MovieInformation({
   return (
     <div className="library-title__movie-information">
       {hasEditorialFacts ? (
-        <section
-          className="library-title__editorial-facts"
-          aria-label="Movie information"
-        >
+        <section className="library-title__editorial-facts" aria-label="Movie information">
           {movie.communityRating !== null ? (
             <span>
-              <Star aria-hidden="true" fill="currentColor" />{" "}
-              {movie.communityRating.toFixed(1)}
+              <Star aria-hidden="true" fill="currentColor" /> {movie.communityRating.toFixed(1)}
               <small>/10 community</small>
             </span>
           ) : null}
           {movie.criticRating !== null ? (
             <span>
-              <Gauge aria-hidden="true" /> {movie.criticRating}%
-              <small>critics</small>
+              <Gauge aria-hidden="true" /> {movie.criticRating}%<small>critics</small>
             </span>
           ) : null}
           {premiereDate ? (
@@ -917,16 +820,10 @@ function MovieInformation({
         <div className="library-title__media-information-body">
           {movie.mediaSources.length > 0 ? (
             movie.mediaSources.map((source, index) => (
-              <MediaSourceCard
-                key={`${source.label}:${index}`}
-                source={source}
-              />
+              <MediaSourceCard key={`${source.label}:${index}`} source={source} />
             ))
           ) : (
-            <p>
-              Playback is available, but this Jellyfin item has no reviewed
-              media-source facts.
-            </p>
+            <p>Playback is available, but this Jellyfin item has no reviewed media-source facts.</p>
           )}
         </div>
       </details>
@@ -947,9 +844,7 @@ const EXTRA_GROUPS = [
 ] as const;
 
 function extraTypeLabel(
-  extraType:
-    | LibraryExtra["extraType"]
-    | LibraryExtrasResponse["onlineItems"][number]["type"],
+  extraType: LibraryExtra["extraType"] | LibraryExtrasResponse["onlineItems"][number]["type"],
 ) {
   return extraType
     .split("_")
@@ -959,9 +854,7 @@ function extraTypeLabel(
 
 function onlineExtraUrl(id: string) {
   const match = /^youtube:([A-Za-z0-9_-]{6,32})$/u.exec(id);
-  return match
-    ? `https://www.youtube.com/watch?v=${encodeURIComponent(match[1]!)}`
-    : null;
+  return match ? `https://www.youtube.com/watch?v=${encodeURIComponent(match[1]!)}` : null;
 }
 
 function ExtrasSkeleton() {
@@ -1000,10 +893,7 @@ function ExtrasSection({
 }) {
   if (state.kind === "error") {
     return (
-      <section
-        aria-labelledby="library-title-extras-heading"
-        className="library-title__extras"
-      >
+      <section aria-labelledby="library-title-extras-heading" className="library-title__extras">
         <div className="library-title__section-heading">
           <div>
             <p className="eyebrow">Bonus shelf</p>
@@ -1016,11 +906,7 @@ function ExtrasSection({
             <strong>Local extras are temporarily out of reach.</strong>
             <p>{state.message}</p>
           </div>
-          <button
-            className="button button--glass"
-            onClick={onRetry}
-            type="button"
-          >
+          <button className="button button--glass" onClick={onRetry} type="button">
             <RotateCcw aria-hidden="true" /> Retry extras
           </button>
         </div>
@@ -1029,10 +915,7 @@ function ExtrasSection({
   }
 
   return (
-    <section
-      aria-labelledby="library-title-extras-heading"
-      className="library-title__extras"
-    >
+    <section aria-labelledby="library-title-extras-heading" className="library-title__extras">
       <div className="library-title__section-heading">
         <div>
           <p className="eyebrow">Bonus shelf</p>
@@ -1049,9 +932,7 @@ function ExtrasSection({
         <div className="library-title__extra-groups">
           {EXTRA_GROUPS.map((group) => {
             const items = state.items.filter((extra) =>
-              (group.types as readonly LibraryExtra["extraType"][]).includes(
-                extra.extraType,
-              ),
+              (group.types as readonly LibraryExtra["extraType"][]).includes(extra.extraType),
             );
             if (items.length === 0) return null;
             return (
@@ -1060,16 +941,12 @@ function ExtrasSection({
                 <ul>
                   {items.map((extra) => {
                     const artwork = sameOriginMediaPath(
-                      extra.media.artwork.posterPath ??
-                        extra.media.artwork.backdropPath,
+                      extra.media.artwork.posterPath ?? extra.media.artwork.backdropPath,
                     );
                     const progress = Math.round(
-                      (extra.playback.positionSeconds /
-                        extra.playback.durationSeconds) *
-                        100,
+                      (extra.playback.positionSeconds / extra.playback.durationSeconds) * 100,
                     );
-                    const action =
-                      extra.playback.positionSeconds > 0 ? "Resume" : "Play";
+                    const action = extra.playback.positionSeconds > 0 ? "Resume" : "Play";
                     return (
                       <li key={extra.media.id}>
                         <button
@@ -1085,25 +962,15 @@ function ExtrasSection({
                         >
                           <span
                             className="library-title__extra-artwork"
-                            data-artwork-source={
-                              artwork ? "remote" : "generated"
-                            }
+                            data-artwork-source={artwork ? "remote" : "generated"}
                           >
                             <Clapperboard aria-hidden="true" />
                             {artwork ? (
                               // Extra artwork stays on the authenticated Omnifin media route.
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                alt=""
-                                decoding="async"
-                                loading="lazy"
-                                src={artwork}
-                              />
+                              <img alt="" decoding="async" loading="lazy" src={artwork} />
                             ) : null}
-                            <span
-                              className="library-title__extra-play"
-                              aria-hidden="true"
-                            >
+                            <span className="library-title__extra-play" aria-hidden="true">
                               <Play fill="currentColor" />
                             </span>
                             {progress > 0 && !extra.playback.played ? (
@@ -1145,10 +1012,7 @@ function ExtrasSection({
           type="button"
         >
           {state.loadingMore ? (
-            <LoaderCircle
-              aria-hidden="true"
-              className="library-title__spinner"
-            />
+            <LoaderCircle aria-hidden="true" className="library-title__spinner" />
           ) : (
             <ChevronRight aria-hidden="true" />
           )}
@@ -1174,10 +1038,7 @@ function ExtrasSection({
                     >
                       <span className="library-title__extra-artwork">
                         <Clapperboard aria-hidden="true" />
-                        <span
-                          className="library-title__extra-play"
-                          aria-hidden="true"
-                        >
+                        <span className="library-title__extra-play" aria-hidden="true">
                           <Play fill="currentColor" />
                         </span>
                       </span>
@@ -1187,9 +1048,7 @@ function ExtrasSection({
                           {extraTypeLabel(extra.type)}
                           {extra.resolution ? ` · ${extra.resolution}p` : ""}
                         </span>
-                        <small>
-                          External · {state.onlineSource.displayName}
-                        </small>
+                        <small>External · {state.onlineSource.displayName}</small>
                       </span>
                     </a>
                   </li>
@@ -1200,8 +1059,7 @@ function ExtrasSection({
         </div>
       ) : state.onlineState === "unavailable" ? (
         <p className="library-title__online-extras-state" role="status">
-          Online trailers are temporarily unavailable. Local extras remain
-          ready.
+          Online trailers are temporarily unavailable. Local extras remain ready.
         </p>
       ) : null}
     </section>
@@ -1267,10 +1125,7 @@ function EpisodeDetail({
           <p className="eyebrow">Episode brief</p>
           <h4>{episode.media.title}</h4>
         </div>
-        <div
-          aria-label="Episode facts"
-          className="library-title__episode-detail-facts"
-        >
+        <div aria-label="Episode facts" className="library-title__episode-detail-facts">
           {airDate ? (
             <span>
               <CalendarDays aria-hidden="true" /> {airDate}
@@ -1278,21 +1133,16 @@ function EpisodeDetail({
           ) : null}
           {episode.communityRating !== null ? (
             <span>
-              <Star aria-hidden="true" fill="currentColor" />{" "}
-              {episode.communityRating.toFixed(1)}
+              <Star aria-hidden="true" fill="currentColor" /> {episode.communityRating.toFixed(1)}
               /10
             </span>
           ) : null}
-          {episode.criticRating !== null ? (
-            <span>{episode.criticRating}% critics</span>
-          ) : null}
+          {episode.criticRating !== null ? <span>{episode.criticRating}% critics</span> : null}
         </div>
       </div>
 
       {episode.media.overview ? (
-        <p className="library-title__episode-detail-overview">
-          {episode.media.overview}
-        </p>
+        <p className="library-title__episode-detail-overview">{episode.media.overview}</p>
       ) : (
         <p className="library-title__episode-detail-quiet">
           Jellyfin has no episode synopsis for this title yet.
@@ -1318,16 +1168,11 @@ function EpisodeDetail({
                       </>
                     ) : (
                       <button
-                        aria-busy={
-                          resolvingReferenceId === credit.personReferenceId ||
-                          undefined
-                        }
+                        aria-busy={resolvingReferenceId === credit.personReferenceId || undefined}
                         aria-label={`View ${credit.name} profile`}
                         className="library-title__episode-person-action"
                         data-directional-item
-                        disabled={
-                          resolvingReferenceId === credit.personReferenceId
-                        }
+                        disabled={resolvingReferenceId === credit.personReferenceId}
                         onClick={() => onInspectPerson(credit)}
                         type="button"
                       >
@@ -1354,24 +1199,17 @@ function EpisodeDetail({
                   <div
                     key={`${credit.personReferenceId ?? "unlinked"}:${credit.name}:${credit.type}:${credit.role ?? ""}:${index}`}
                   >
-                    <dt>
-                      {credit.type === "director" ? "Director" : "Writer"}
-                    </dt>
+                    <dt>{credit.type === "director" ? "Director" : "Writer"}</dt>
                     <dd>
                       {credit.personReferenceId === null ? (
                         credit.name
                       ) : (
                         <button
-                          aria-busy={
-                            resolvingReferenceId === credit.personReferenceId ||
-                            undefined
-                          }
+                          aria-busy={resolvingReferenceId === credit.personReferenceId || undefined}
                           aria-label={`View ${credit.name} profile`}
                           className="library-title__crew-action"
                           data-directional-item
-                          disabled={
-                            resolvingReferenceId === credit.personReferenceId
-                          }
+                          disabled={resolvingReferenceId === credit.personReferenceId}
                           onClick={() => onInspectPerson(credit)}
                           type="button"
                         >
@@ -1388,9 +1226,7 @@ function EpisodeDetail({
             </section>
           ) : null}
           {episode.creditsTruncated ? (
-            <p className="library-title__episode-detail-note">
-              Showing the first 24 credits.
-            </p>
+            <p className="library-title__episode-detail-note">Showing the first 24 credits.</p>
           ) : null}
         </div>
       ) : null}
@@ -1443,25 +1279,17 @@ function EpisodeList({
   client: MediaLibraryClient;
   onLoadMore: () => void;
   onInspectPerson: (credit: InspectableCredit) => void;
-  onPlaybackChange: (
-    episode: LibrarySeasonEpisode,
-    playback: LibraryPlaybackState,
-  ) => void;
+  onPlaybackChange: (episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) => void;
   onPlay: (selection: PlayableLibrarySelection) => void;
   resolvingReferenceId: string | null;
   state: Extract<EpisodeState, { kind: "ready" }>;
 }) {
-  const [expandedEpisodeId, setExpandedEpisodeId] = useState<string | null>(
-    null,
-  );
+  const [expandedEpisodeId, setExpandedEpisodeId] = useState<string | null>(null);
   if (state.items.length === 0) {
     return (
       <div className="library-title__episodes-empty" role="status">
         <Layers3 aria-hidden="true" />
-        <p>
-          No playable episodes are available in this season for the paired
-          Jellyfin account.
-        </p>
+        <p>No playable episodes are available in this season for the paired Jellyfin account.</p>
       </div>
     );
   }
@@ -1470,9 +1298,7 @@ function EpisodeList({
       <ol aria-label="Episodes">
         {state.items.map((episode) => {
           const progress = Math.round(
-            (episode.playback.positionSeconds /
-              episode.playback.durationSeconds) *
-              100,
+            (episode.playback.positionSeconds / episode.playback.durationSeconds) * 100,
           );
           const expanded = expandedEpisodeId === episode.media.id;
           const detailId = `library-title-episode-${episode.media.id}`;
@@ -1484,9 +1310,7 @@ function EpisodeList({
                 aria-label={`${expanded ? "Hide" : "View"} details for ${episode.media.title}`}
                 className="library-title__episode-summary"
                 data-directional-item
-                onClick={() =>
-                  setExpandedEpisodeId(expanded ? null : episode.media.id)
-                }
+                onClick={() => setExpandedEpisodeId(expanded ? null : episode.media.id)}
                 type="button"
               >
                 <EpisodeArtwork episode={episode} />
@@ -1502,19 +1326,14 @@ function EpisodeList({
                         : ""}
                     </span>
                   </span>
-                  {episode.media.overview ? (
-                    <span>{episode.media.overview}</span>
-                  ) : null}
+                  {episode.media.overview ? <span>{episode.media.overview}</span> : null}
                   {progress > 0 && !episode.playback.played ? (
                     <span className="library-title__episode-progress">
                       <i style={{ width: `${progress}%` }} />
                     </span>
                   ) : null}
                 </span>
-                <ChevronDown
-                  aria-hidden="true"
-                  className="library-title__episode-expand"
-                />
+                <ChevronDown aria-hidden="true" className="library-title__episode-expand" />
               </button>
               {episode.playback.played ? (
                 <span className="library-title__episode-watched">
@@ -1535,16 +1354,12 @@ function EpisodeList({
                   client={client}
                   episode={episode}
                   onInspectPerson={onInspectPerson}
-                  onPlaybackChange={(playback) =>
-                    onPlaybackChange(episode, playback)
-                  }
+                  onPlaybackChange={(playback) => onPlaybackChange(episode, playback)}
                   onPlay={(startPositionSeconds) =>
                     onPlay({
                       media: episode.media,
                       playback: episode.playback,
-                      ...(startPositionSeconds === undefined
-                        ? {}
-                        : { startPositionSeconds }),
+                      ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
                     })
                   }
                   resolvingReferenceId={resolvingReferenceId}
@@ -1562,10 +1377,7 @@ function EpisodeList({
           type="button"
         >
           {state.loadingMore ? (
-            <LoaderCircle
-              aria-hidden="true"
-              className="library-title__spinner"
-            />
+            <LoaderCircle aria-hidden="true" className="library-title__spinner" />
           ) : (
             <ChevronRight aria-hidden="true" />
           )}
@@ -1600,9 +1412,7 @@ export function LibraryTitleDrawer({
     name: string;
     tmdbId: number;
   } | null>(null);
-  const [resolvingPersonReferenceId, setResolvingPersonReferenceId] = useState<
-    string | null
-  >(null);
+  const [resolvingPersonReferenceId, setResolvingPersonReferenceId] = useState<string | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
   const referenceId = item?.media.id ?? "none";
@@ -1639,10 +1449,7 @@ export function LibraryTitleDrawer({
     setPersonAnnouncement(`Opening ${credit.name} profile.`);
     setResolvingPersonReferenceId(personReferenceId);
     try {
-      const person = await client.resolvePerson(
-        personReferenceId,
-        controller.signal,
-      );
+      const person = await client.resolvePerson(personReferenceId, controller.signal);
       if (controller.signal.aborted) return;
       setPersonProfile({ name: person.name, tmdbId: person.tmdbId });
       setPersonAnnouncement(`Opened ${person.name} profile.`);
@@ -1693,11 +1500,7 @@ export function LibraryTitleDrawer({
         if (current) setTitleState({ detail, kind: "ready", requestKey });
       })
       .catch((error: unknown) => {
-        if (
-          !current ||
-          (error instanceof DOMException && error.name === "AbortError")
-        )
-          return;
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
         setTitleState({
           kind: "error",
           message: detailErrorMessage(error),
@@ -1714,16 +1517,10 @@ export function LibraryTitleDrawer({
     if (!open || !item || titleState?.requestKey !== requestKey) return null;
     return titleState;
   }, [item, open, requestKey, titleState]);
-  const detail =
-    visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
+  const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
 
   useEffect(() => {
-    if (
-      !open ||
-      !item ||
-      detail?.media.id !== item.media.id ||
-      !client.loadConnectedActions
-    ) {
+    if (!open || !item || detail?.media.id !== item.media.id || !client.loadConnectedActions) {
       return;
     }
     const controller = new AbortController();
@@ -1733,18 +1530,13 @@ export function LibraryTitleDrawer({
       .then((response) => {
         if (current) {
           setConnectedActions({
-            actions:
-              response.mediaKind === detail.media.kind ? response.actions : [],
+            actions: response.mediaKind === detail.media.kind ? response.actions : [],
             requestKey,
           });
         }
       })
       .catch((error: unknown) => {
-        if (
-          !current ||
-          (error instanceof DOMException && error.name === "AbortError")
-        )
-          return;
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
         setConnectedActions({ actions: [], requestKey });
       });
     return () => {
@@ -1791,11 +1583,7 @@ export function LibraryTitleDrawer({
         });
       })
       .catch((error: unknown) => {
-        if (
-          !current ||
-          (error instanceof DOMException && error.name === "AbortError")
-        )
-          return;
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
         setExtrasState({
           kind: "error",
           message: extrasErrorMessage(error),
@@ -1809,24 +1597,16 @@ export function LibraryTitleDrawer({
   }, [client, detail, extrasRequestKey, item, open]);
 
   const recommendedSeason =
-    detail?.seasons.find(
-      (season) => season.playedEpisodeCount < season.episodeCount,
-    ) ?? detail?.seasons[0];
+    detail?.seasons.find((season) => season.playedEpisodeCount < season.episodeCount) ??
+    detail?.seasons[0];
   const activeSeasonNumber =
-    detail?.seasons.some((season) => season.seasonNumber === seasonNumber) ===
-    true
+    detail?.seasons.some((season) => season.seasonNumber === seasonNumber) === true
       ? seasonNumber
       : (recommendedSeason?.seasonNumber ?? null);
   const episodeRequestKey = `${referenceId}:${activeSeasonNumber ?? "none"}:${episodeAttempt}`;
 
   useEffect(() => {
-    if (
-      !open ||
-      !item ||
-      item.media.kind !== "series" ||
-      activeSeasonNumber === null
-    )
-      return;
+    if (!open || !item || item.media.kind !== "series" || activeSeasonNumber === null) return;
     const controller = new AbortController();
     let current = true;
     const request = client.loadSeasonEpisodes
@@ -1856,11 +1636,7 @@ export function LibraryTitleDrawer({
         }
       })
       .catch((error: unknown) => {
-        if (
-          !current ||
-          (error instanceof DOMException && error.name === "AbortError")
-        )
-          return;
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
         setEpisodeState({
           kind: "error",
           message: detailErrorMessage(error),
@@ -1874,8 +1650,7 @@ export function LibraryTitleDrawer({
   }, [activeSeasonNumber, client, episodeRequestKey, item, open]);
 
   async function loadMoreEpisodes() {
-    const nextCursor =
-      episodeState?.kind === "ready" ? episodeState.nextCursor : null;
+    const nextCursor = episodeState?.kind === "ready" ? episodeState.nextCursor : null;
     if (
       !item ||
       activeSeasonNumber === null ||
@@ -1889,14 +1664,15 @@ export function LibraryTitleDrawer({
     const currentState = episodeState;
     setEpisodeState({ ...currentState, loadingMore: true });
     try {
-      const response: LibrarySeasonEpisodesResponse =
-        await client.loadSeasonEpisodes(item.media.id, activeSeasonNumber, {
+      const response: LibrarySeasonEpisodesResponse = await client.loadSeasonEpisodes(
+        item.media.id,
+        activeSeasonNumber,
+        {
           cursor: nextCursor,
           limit: 30,
-        });
-      const known = new Set(
-        currentState.items.map((episode) => episode.media.id),
+        },
       );
+      const known = new Set(currentState.items.map((episode) => episode.media.id));
       setEpisodeState({
         ...currentState,
         items: [
@@ -1916,8 +1692,7 @@ export function LibraryTitleDrawer({
   }
 
   async function loadMoreExtras() {
-    const nextCursor =
-      extrasState?.kind === "ready" ? extrasState.nextCursor : null;
+    const nextCursor = extrasState?.kind === "ready" ? extrasState.nextCursor : null;
     if (
       !item ||
       !client.loadExtras ||
@@ -1930,15 +1705,11 @@ export function LibraryTitleDrawer({
     const currentState = extrasState;
     setExtrasState({ ...currentState, loadingMore: true });
     try {
-      const response: LibraryExtrasResponse = await client.loadExtras(
-        item.media.id,
-        {
-          cursor: nextCursor,
-          limit: 12,
-        },
-      );
-      if (response.state === "unavailable")
-        throw new Error("extras unavailable");
+      const response: LibraryExtrasResponse = await client.loadExtras(item.media.id, {
+        cursor: nextCursor,
+        limit: 12,
+      });
+      if (response.state === "unavailable") throw new Error("extras unavailable");
       const known = new Set(currentState.items.map((extra) => extra.media.id));
       setExtrasState({
         ...currentState,
@@ -1960,19 +1731,14 @@ export function LibraryTitleDrawer({
 
   function updateMoviePlayback(playback: LibraryPlaybackState) {
     setTitleState((state) => {
-      if (state?.kind !== "ready" || state.detail.media.id !== referenceId)
-        return state;
+      if (state?.kind !== "ready" || state.detail.media.id !== referenceId) return state;
       return { ...state, detail: { ...state.detail, playback } };
     });
   }
 
-  function updateEpisodePlayback(
-    episode: LibrarySeasonEpisode,
-    playback: LibraryPlaybackState,
-  ) {
+  function updateEpisodePlayback(episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) {
     setEpisodeState((state) => {
-      if (state?.kind !== "ready" || state.requestKey !== episodeRequestKey)
-        return state;
+      if (state?.kind !== "ready" || state.requestKey !== episodeRequestKey) return state;
       return {
         ...state,
         items: state.items.map((item) =>
@@ -1980,15 +1746,10 @@ export function LibraryTitleDrawer({
         ),
       };
     });
-    if (
-      episode.playback.played === playback.played ||
-      activeSeasonNumber === null
-    )
-      return;
+    if (episode.playback.played === playback.played || activeSeasonNumber === null) return;
     const playedDelta = playback.played ? 1 : -1;
     setTitleState((state) => {
-      if (state?.kind !== "ready" || state.detail.media.id !== referenceId)
-        return state;
+      if (state?.kind !== "ready" || state.detail.media.id !== referenceId) return state;
       return {
         ...state,
         detail: {
@@ -1999,10 +1760,7 @@ export function LibraryTitleDrawer({
                   ...season,
                   playedEpisodeCount: Math.max(
                     0,
-                    Math.min(
-                      season.episodeCount,
-                      season.playedEpisodeCount + playedDelta,
-                    ),
+                    Math.min(season.episodeCount, season.playedEpisodeCount + playedDelta),
                   ),
                 }
               : season,
@@ -2023,10 +1781,8 @@ export function LibraryTitleDrawer({
       item.media.artwork.backdropPath ??
       item.media.artwork.posterPath,
   );
-  const visibleEpisodeState =
-    episodeState?.requestKey === episodeRequestKey ? episodeState : null;
-  const visibleExtrasState =
-    extrasState?.requestKey === extrasRequestKey ? extrasState : null;
+  const visibleEpisodeState = episodeState?.requestKey === episodeRequestKey ? episodeState : null;
+  const visibleExtrasState = extrasState?.requestKey === extrasRequestKey ? extrasState : null;
 
   return (
     <>
@@ -2051,9 +1807,7 @@ export function LibraryTitleDrawer({
               <div>
                 <span>Library title</span>
                 <small>
-                  {item.media.kind === "series"
-                    ? "Series and seasons"
-                    : "Movie details"}
+                  {item.media.kind === "series" ? "Series and seasons" : "Movie details"}
                 </small>
               </div>
             </div>
@@ -2090,9 +1844,7 @@ export function LibraryTitleDrawer({
                       // eslint-disable-next-line @next/next/no-img-element
                       <img alt="" decoding="async" src={artworkPath} />
                     ) : null}
-                    <span aria-hidden="true">
-                      {detail!.media.title.slice(0, 1)}
-                    </span>
+                    <span aria-hidden="true">{detail!.media.title.slice(0, 1)}</span>
                   </div>
                   <div className="library-title__hero-copy">
                     <p className="eyebrow">
@@ -2101,15 +1853,10 @@ export function LibraryTitleDrawer({
                       ) : (
                         <Film aria-hidden="true" />
                       )}
-                      {detail!.media.kind === "series"
-                        ? "Series"
-                        : "Feature film"}
+                      {detail!.media.kind === "series" ? "Series" : "Feature film"}
                     </p>
                     <h2>{detail!.media.title}</h2>
-                    <div
-                      aria-label="Title facts"
-                      className="library-title__facts"
-                    >
+                    <div aria-label="Title facts" className="library-title__facts">
                       {titleFacts(detail!).map((fact) => (
                         <span key={fact}>{fact}</span>
                       ))}
@@ -2128,8 +1875,7 @@ export function LibraryTitleDrawer({
                             rel="noopener noreferrer"
                             target="_blank"
                           >
-                            {titleProviderLabel(reference)}{" "}
-                            <ExternalLink aria-hidden="true" />
+                            {titleProviderLabel(reference)} <ExternalLink aria-hidden="true" />
                           </a>
                         ))}
                       </nav>
@@ -2139,9 +1885,7 @@ export function LibraryTitleDrawer({
                         {detail!.movie.tagline}
                       </blockquote>
                     ) : null}
-                    {detail!.media.overview ? (
-                      <p>{detail!.media.overview}</p>
-                    ) : null}
+                    {detail!.media.overview ? <p>{detail!.media.overview}</p> : null}
                     {detail!.playback ? (
                       <PlaybackActions
                         client={client}
@@ -2152,25 +1896,18 @@ export function LibraryTitleDrawer({
                           onPlay({
                             media: detail!.media,
                             playback: detail!.playback!,
-                            ...(startPositionSeconds === undefined
-                              ? {}
-                              : { startPositionSeconds }),
+                            ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
                           })
                         }
                         playback={detail!.playback}
                       />
                     ) : null}
                     {detail!.media.kind === "movie" ? (
-                      <OriginalMediaDownloadAction
-                        client={client}
-                        media={detail!.media}
-                      />
+                      <OriginalMediaDownloadAction client={client} media={detail!.media} />
                     ) : null}
                     <ConnectedServiceActions
                       actions={
-                        connectedActions?.requestKey === requestKey
-                          ? connectedActions.actions
-                          : []
+                        connectedActions?.requestKey === requestKey ? connectedActions.actions : []
                       }
                     />
                   </div>
@@ -2216,20 +1953,12 @@ export function LibraryTitleDrawer({
                         <p className="eyebrow">Episode guide</p>
                         <h3>Seasons</h3>
                       </div>
-                      {detail!.seasonsTruncated ? (
-                        <span>Showing the first 100 seasons</span>
-                      ) : null}
+                      {detail!.seasonsTruncated ? <span>Showing the first 100 seasons</span> : null}
                     </div>
                     {detail!.seasons.length === 0 ? (
-                      <div
-                        className="library-title__episodes-empty"
-                        role="status"
-                      >
+                      <div className="library-title__episodes-empty" role="status">
                         <Layers3 aria-hidden="true" />
-                        <p>
-                          No playable seasons are available for this Jellyfin
-                          account.
-                        </p>
+                        <p>No playable seasons are available for this Jellyfin account.</p>
                       </div>
                     ) : (
                       <>
@@ -2242,12 +1971,9 @@ export function LibraryTitleDrawer({
                           {detail!.seasons.map((season, index) => (
                             <button
                               aria-controls={episodePanelId}
-                              aria-selected={
-                                activeSeasonNumber === season.seasonNumber
-                              }
+                              aria-selected={activeSeasonNumber === season.seasonNumber}
                               data-selected={
-                                activeSeasonNumber === season.seasonNumber ||
-                                undefined
+                                activeSeasonNumber === season.seasonNumber || undefined
                               }
                               id={`library-title-${item.media.id}-season-${season.seasonNumber}`}
                               key={season.seasonNumber}
@@ -2269,32 +1995,23 @@ export function LibraryTitleDrawer({
                                       ? detail!.seasons.length - 1
                                       : direction === 0
                                         ? null
-                                        : (index +
-                                            direction +
-                                            detail!.seasons.length) %
+                                        : (index + direction + detail!.seasons.length) %
                                           detail!.seasons.length;
                                 if (targetIndex === null) return;
                                 event.preventDefault();
-                                const target =
-                                  event.currentTarget.parentElement?.querySelectorAll(
-                                    "button[role='tab']",
-                                  )[targetIndex] as
-                                    HTMLButtonElement | undefined;
+                                const target = event.currentTarget.parentElement?.querySelectorAll(
+                                  "button[role='tab']",
+                                )[targetIndex] as HTMLButtonElement | undefined;
                                 target?.focus();
                                 target?.click();
                               }}
                               role="tab"
-                              tabIndex={
-                                activeSeasonNumber === season.seasonNumber
-                                  ? 0
-                                  : -1
-                              }
+                              tabIndex={activeSeasonNumber === season.seasonNumber ? 0 : -1}
                               type="button"
                             >
                               <strong>{season.title}</strong>
                               <span>
-                                {season.playedEpisodeCount}/
-                                {season.episodeCount} watched
+                                {season.playedEpisodeCount}/{season.episodeCount} watched
                               </span>
                             </button>
                           ))}
@@ -2310,17 +2027,13 @@ export function LibraryTitleDrawer({
                           ) : visibleEpisodeState.kind === "error" ? (
                             <ErrorState
                               message={visibleEpisodeState.message}
-                              onRetry={() =>
-                                setEpisodeAttempt((value) => value + 1)
-                              }
+                              onRetry={() => setEpisodeAttempt((value) => value + 1)}
                             />
                           ) : (
                             <EpisodeList
                               client={client}
                               onLoadMore={() => void loadMoreEpisodes()}
-                              onInspectPerson={(credit) =>
-                                void inspectPerson(credit)
-                              }
+                              onInspectPerson={(credit) => void inspectPerson(credit)}
                               onPlaybackChange={updateEpisodePlayback}
                               onPlay={(episode) => onPlay(episode)}
                               resolvingReferenceId={resolvingPersonReferenceId}
@@ -2336,10 +2049,7 @@ export function LibraryTitleDrawer({
                     <Clock3 aria-hidden="true" />
                     <div>
                       <strong>Playback starts only when you ask.</strong>
-                      <p>
-                        Review the title first, then use the explicit play
-                        action above.
-                      </p>
+                      <p>Review the title first, then use the explicit play action above.</p>
                     </div>
                   </section>
                 )}

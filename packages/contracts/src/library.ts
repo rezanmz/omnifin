@@ -2,10 +2,7 @@ import { z } from "zod";
 
 import { partialFailureSchema } from "./connectors.js";
 import { mediaReferenceIdSchema, mediaSummarySchema } from "./dashboard.js";
-import {
-  discoveryTrailerSchema,
-  titleProviderReferenceSchema,
-} from "./discovery.js";
+import { discoveryTrailerSchema, titleProviderReferenceSchema } from "./discovery.js";
 import { idempotencyKeySchema } from "./requests.js";
 
 export const LIBRARY_ATTENTION_MAX_ITEMS = 100;
@@ -52,12 +49,7 @@ export type LibraryBrowseSort = z.infer<typeof libraryBrowseSortSchema>;
 export const libraryBrowseQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
   kind: libraryBrowseKindSchema.default("all"),
-  limit: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(LIBRARY_BROWSE_MAX_ITEMS)
-    .default(30),
+  limit: z.coerce.number().int().positive().max(LIBRARY_BROWSE_MAX_ITEMS).default(30),
   query: safeTextSchema.max(100).optional(),
   sort: libraryBrowseSortSchema.default("recent"),
 });
@@ -80,9 +72,7 @@ export const libraryPlaybackStateActionSchema = z.enum([
   "mark_unwatched",
   "reset_progress",
 ]);
-export type LibraryPlaybackStateAction = z.infer<
-  typeof libraryPlaybackStateActionSchema
->;
+export type LibraryPlaybackStateAction = z.infer<typeof libraryPlaybackStateActionSchema>;
 
 export const libraryPlaybackStateMutationRequestSchema = z.strictObject({
   action: libraryPlaybackStateActionSchema,
@@ -120,20 +110,10 @@ export type LibraryPlaybackStateMutationResponse = z.infer<
 export const viewingHistoryKindSchema = z.enum(["all", "movies", "episodes"]);
 export type ViewingHistoryKind = z.infer<typeof viewingHistoryKindSchema>;
 
-export const viewingHistoryStateSchema = z.enum([
-  "all",
-  "completed",
-  "in_progress",
-]);
+export const viewingHistoryStateSchema = z.enum(["all", "completed", "in_progress"]);
 export type ViewingHistoryState = z.infer<typeof viewingHistoryStateSchema>;
 
-export const viewingHistoryRangeSchema = z.enum([
-  "all",
-  "7_days",
-  "30_days",
-  "90_days",
-  "1_year",
-]);
+export const viewingHistoryRangeSchema = z.enum(["all", "7_days", "30_days", "90_days", "1_year"]);
 export type ViewingHistoryRange = z.infer<typeof viewingHistoryRangeSchema>;
 
 export const viewingHistoryCursorSchema = z
@@ -145,12 +125,7 @@ export const viewingHistoryCursorSchema = z
 export const viewingHistoryQuerySchema = z.strictObject({
   cursor: viewingHistoryCursorSchema.optional(),
   kind: viewingHistoryKindSchema.default("all"),
-  limit: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(VIEWING_HISTORY_MAX_ITEMS)
-    .default(24),
+  limit: z.coerce.number().int().positive().max(VIEWING_HISTORY_MAX_ITEMS).default(24),
   range: viewingHistoryRangeSchema.default("30_days"),
   state: viewingHistoryStateSchema.default("all"),
 });
@@ -177,8 +152,7 @@ export const viewingHistoryEntrySchema = z
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Viewing history entries must be available movies or episodes.",
+        message: "Viewing history entries must be available movies or episodes.",
         path: ["media", "kind"],
       });
     }
@@ -190,8 +164,7 @@ export const viewingHistoryEntrySchema = z
     if (!completed && !inProgress) {
       context.addIssue({
         code: "custom",
-        message:
-          "Viewing activity must match the current Jellyfin playback state.",
+        message: "Viewing activity must match the current Jellyfin playback state.",
         path: ["activity"],
       });
     }
@@ -209,8 +182,7 @@ export const viewingHistorySourceSchema = z
     if ((source.status === "healthy") !== (source.failure === null)) {
       context.addIssue({
         code: "custom",
-        message:
-          "An unavailable viewing-history source must include one safe failure.",
+        message: "An unavailable viewing-history source must include one safe failure.",
         path: ["failure"],
       });
     }
@@ -222,8 +194,7 @@ export const viewingHistorySourceSchema = z
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Viewing-history failures must identify Jellyfin history or media references.",
+        message: "Viewing-history failures must identify Jellyfin history or media references.",
         path: ["failure"],
       });
     }
@@ -267,15 +238,12 @@ export const viewingHistoryResponseSchema = z
     if (!complete && !empty && !unavailable) {
       context.addIssue({
         code: "custom",
-        message:
-          "Viewing-history state must match its items and Jellyfin source.",
+        message: "Viewing-history state must match its items and Jellyfin source.",
         path: ["state"],
       });
     }
   });
-export type ViewingHistoryResponse = z.infer<
-  typeof viewingHistoryResponseSchema
->;
+export type ViewingHistoryResponse = z.infer<typeof viewingHistoryResponseSchema>;
 
 function validateLibraryMediaArtwork(
   media: z.infer<typeof mediaSummarySchema>,
@@ -288,8 +256,7 @@ function validateLibraryMediaArtwork(
     if (path !== null && !path.startsWith(`/v1/media/${media.id}/images/`)) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library artwork must belong to the same opaque media reference.",
+        message: "Library artwork must belong to the same opaque media reference.",
         path: ["media", "artwork", artworkType],
       });
     }
@@ -319,16 +286,14 @@ export const libraryBrowseItemSchema = z
     if (item.media.availability !== "available") {
       context.addIssue({
         code: "custom",
-        message:
-          "Library catalogue items must be available to the paired Jellyfin user.",
+        message: "Library catalogue items must be available to the paired Jellyfin user.",
         path: ["media", "availability"],
       });
     }
     if ((item.media.kind === "movie") !== (item.playback !== null)) {
       context.addIssue({
         code: "custom",
-        message:
-          "Only movie catalogue titles can include direct playback state.",
+        message: "Only movie catalogue titles can include direct playback state.",
         path: ["playback"],
       });
     }
@@ -353,9 +318,7 @@ export const libraryMovieCreditSchema = z.strictObject({
   imagePath: z
     .string()
     .max(840)
-    .regex(
-      /^\/v1\/media\/media_[A-Za-z0-9_-]{22}\/images\/people\/[A-Za-z0-9_.-]{64,768}$/u,
-    )
+    .regex(/^\/v1\/media\/media_[A-Za-z0-9_-]{22}\/images\/people\/[A-Za-z0-9_.-]{64,768}$/u)
     .nullable(),
   name: safeTextSchema.max(160),
   personReferenceId: mediaReferenceIdSchema.nullable(),
@@ -382,9 +345,7 @@ const libraryMovieTrackSchema = z.strictObject({
 export const libraryMovieAudioTrackSchema = libraryMovieTrackSchema.extend({
   channels: z.int().positive().max(64).nullable(),
 });
-export type LibraryMovieAudioTrack = z.infer<
-  typeof libraryMovieAudioTrackSchema
->;
+export type LibraryMovieAudioTrack = z.infer<typeof libraryMovieAudioTrackSchema>;
 
 export const libraryMovieSubtitleTrackSchema = libraryMovieTrackSchema
   .omit({
@@ -394,9 +355,7 @@ export const libraryMovieSubtitleTrackSchema = libraryMovieTrackSchema
     default: z.boolean(),
     forced: z.boolean(),
   });
-export type LibraryMovieSubtitleTrack = z.infer<
-  typeof libraryMovieSubtitleTrackSchema
->;
+export type LibraryMovieSubtitleTrack = z.infer<typeof libraryMovieSubtitleTrackSchema>;
 
 export const libraryMovieVideoSchema = z.strictObject({
   bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
@@ -410,23 +369,17 @@ export const libraryMovieVideoSchema = z.strictObject({
 export type LibraryMovieVideo = z.infer<typeof libraryMovieVideoSchema>;
 
 export const libraryMovieMediaSourceSchema = z.strictObject({
-  audio: z
-    .array(libraryMovieAudioTrackSchema)
-    .max(LIBRARY_MOVIE_MAX_AUDIO_TRACKS),
+  audio: z.array(libraryMovieAudioTrackSchema).max(LIBRARY_MOVIE_MAX_AUDIO_TRACKS),
   audioTruncated: z.boolean(),
   bitrateKbps: z.int().nonnegative().max(10_000_000).nullable(),
   container: safeTextSchema.max(64).nullable(),
   label: safeTextSchema.max(160),
   sizeBytes: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
-  subtitles: z
-    .array(libraryMovieSubtitleTrackSchema)
-    .max(LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
+  subtitles: z.array(libraryMovieSubtitleTrackSchema).max(LIBRARY_MOVIE_MAX_SUBTITLE_TRACKS),
   subtitlesTruncated: z.boolean(),
   video: libraryMovieVideoSchema.nullable(),
 });
-export type LibraryMovieMediaSource = z.infer<
-  typeof libraryMovieMediaSourceSchema
->;
+export type LibraryMovieMediaSource = z.infer<typeof libraryMovieMediaSourceSchema>;
 
 export const libraryMovieDetailSchema = z.strictObject({
   cast: z.array(libraryMovieCreditSchema).max(LIBRARY_MOVIE_MAX_CAST),
@@ -436,9 +389,7 @@ export const libraryMovieDetailSchema = z.strictObject({
   crewTruncated: z.boolean(),
   criticRating: z.number().finite().min(0).max(100).nullable(),
   genres: z.array(safeTextSchema.max(100)).max(LIBRARY_MOVIE_MAX_GENRES),
-  mediaSources: z
-    .array(libraryMovieMediaSourceSchema)
-    .max(LIBRARY_MOVIE_MAX_MEDIA_SOURCES),
+  mediaSources: z.array(libraryMovieMediaSourceSchema).max(LIBRARY_MOVIE_MAX_MEDIA_SOURCES),
   mediaSourcesTruncated: z.boolean(),
   premiereDate: z.iso.date().nullable(),
   studios: z.array(safeTextSchema.max(160)).max(LIBRARY_MOVIE_MAX_STUDIOS),
@@ -447,30 +398,22 @@ export const libraryMovieDetailSchema = z.strictObject({
 export type LibraryMovieDetail = z.infer<typeof libraryMovieDetailSchema>;
 
 export const libraryConnectedActionServiceSchema = z.enum(["radarr", "sonarr"]);
-export type LibraryConnectedActionService = z.infer<
-  typeof libraryConnectedActionServiceSchema
->;
+export type LibraryConnectedActionService = z.infer<typeof libraryConnectedActionServiceSchema>;
 
 export const libraryConnectedActionSchema = z.strictObject({
   href: z
     .string()
     .max(256)
-    .regex(
-      /^\/v1\/media\/library\/media_[A-Za-z0-9_-]{22}\/actions\/(?:radarr|sonarr)$/u,
-    ),
+    .regex(/^\/v1\/media\/library\/media_[A-Za-z0-9_-]{22}\/actions\/(?:radarr|sonarr)$/u),
   kind: z.literal("service_navigation"),
   label: safeTextSchema.max(80),
   service: libraryConnectedActionServiceSchema,
 });
-export type LibraryConnectedAction = z.infer<
-  typeof libraryConnectedActionSchema
->;
+export type LibraryConnectedAction = z.infer<typeof libraryConnectedActionSchema>;
 
 export const libraryConnectedActionsResponseSchema = z
   .strictObject({
-    actions: z
-      .array(libraryConnectedActionSchema)
-      .max(LIBRARY_TITLE_MAX_CONNECTED_ACTIONS),
+    actions: z.array(libraryConnectedActionSchema).max(LIBRARY_TITLE_MAX_CONNECTED_ACTIONS),
     generatedAt: timestampSchema,
     mediaKind: z.enum(["movie", "series"]),
     referenceId: mediaReferenceIdSchema,
@@ -482,8 +425,7 @@ export const libraryConnectedActionsResponseSchema = z
       if (action.href !== expectedHref) {
         context.addIssue({
           code: "custom",
-          message:
-            "Connected actions must belong to the requested opaque media reference.",
+          message: "Connected actions must belong to the requested opaque media reference.",
           path: ["actions", index, "href"],
         });
       }
@@ -507,9 +449,7 @@ export const libraryConnectedActionsResponseSchema = z
       }
     }
   });
-export type LibraryConnectedActionsResponse = z.infer<
-  typeof libraryConnectedActionsResponseSchema
->;
+export type LibraryConnectedActionsResponse = z.infer<typeof libraryConnectedActionsResponseSchema>;
 
 export const libraryTitleDetailResponseSchema = z
   .strictObject({
@@ -517,10 +457,7 @@ export const libraryTitleDetailResponseSchema = z
     media: mediaSummarySchema,
     movie: libraryMovieDetailSchema.nullable(),
     playback: libraryPlaybackStateSchema.nullable(),
-    providerReferences: z
-      .array(titleProviderReferenceSchema)
-      .max(3)
-      .default([]),
+    providerReferences: z.array(titleProviderReferenceSchema).max(3).default([]),
     seasons: z.array(librarySeasonSummarySchema).max(LIBRARY_TITLE_MAX_SEASONS),
     seasonsTruncated: z.boolean(),
     seriesCredits: libraryTitleCreditsSchema.nullable(),
@@ -561,8 +498,7 @@ export const libraryTitleDetailResponseSchema = z
     if (detail.media.availability !== "available") {
       context.addIssue({
         code: "custom",
-        message:
-          "Library title details must remain available to the paired Jellyfin user.",
+        message: "Library title details must remain available to the paired Jellyfin user.",
         path: ["media", "availability"],
       });
     }
@@ -586,8 +522,7 @@ export const libraryTitleDetailResponseSchema = z
       });
     }
     if (
-      new Set(detail.seasons.map(({ seasonNumber }) => seasonNumber)).size !==
-      detail.seasons.length
+      new Set(detail.seasons.map(({ seasonNumber }) => seasonNumber)).size !== detail.seasons.length
     ) {
       context.addIssue({
         code: "custom",
@@ -602,14 +537,10 @@ export const libraryTitleDetailResponseSchema = z
       for (const collection of ["cast", "crew"] as const) {
         for (const [index, credit] of (credits?.[collection] ?? []).entries()) {
           const expectedPrefix = `/v1/media/${detail.media.id}/images/people/`;
-          if (
-            credit.imagePath !== null &&
-            !credit.imagePath.startsWith(expectedPrefix)
-          ) {
+          if (credit.imagePath !== null && !credit.imagePath.startsWith(expectedPrefix)) {
             context.addIssue({
               code: "custom",
-              message:
-                "Library person artwork must belong to the same opaque media reference.",
+              message: "Library person artwork must belong to the same opaque media reference.",
               path: [container, collection, index, "imagePath"],
             });
           }
@@ -618,9 +549,7 @@ export const libraryTitleDetailResponseSchema = z
     }
     validateLibraryMediaArtwork(detail.media, context);
   });
-export type LibraryTitleDetailResponse = z.infer<
-  typeof libraryTitleDetailResponseSchema
->;
+export type LibraryTitleDetailResponse = z.infer<typeof libraryTitleDetailResponseSchema>;
 
 export const libraryExtraTypeSchema = z.enum([
   "trailer",
@@ -638,12 +567,7 @@ export type LibraryExtraType = z.infer<typeof libraryExtraTypeSchema>;
 
 export const libraryExtrasQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
-  limit: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(LIBRARY_EXTRAS_MAX_ITEMS)
-    .default(12),
+  limit: z.coerce.number().int().positive().max(LIBRARY_EXTRAS_MAX_ITEMS).default(12),
 });
 export type LibraryExtrasQuery = z.infer<typeof libraryExtrasQuerySchema>;
 
@@ -662,10 +586,7 @@ export const libraryExtraSchema = z
         path: ["media", "id"],
       });
     }
-    if (
-      extra.media.kind !== "other" ||
-      extra.media.availability !== "available"
-    ) {
+    if (extra.media.kind !== "other" || extra.media.availability !== "available") {
       context.addIssue({
         code: "custom",
         message: "Library extras must be available local bonus videos.",
@@ -698,8 +619,7 @@ export const libraryExtrasSourceSchema = z
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library-extra failures must identify Jellyfin library access or references.",
+        message: "Library-extra failures must identify Jellyfin library access or references.",
         path: ["failure"],
       });
     }
@@ -714,8 +634,7 @@ export const libraryOnlineExtrasSourceSchema = z
   })
   .superRefine((source, context) => {
     const healthy = source.status === "healthy" && source.failure === null;
-    const unconfigured =
-      source.status === "unconfigured" && source.failure === null;
+    const unconfigured = source.status === "unconfigured" && source.failure === null;
     const unavailable =
       source.status === "unavailable" &&
       source.failure?.service === "seerr" &&
@@ -728,9 +647,7 @@ export const libraryOnlineExtrasSourceSchema = z
       });
     }
   });
-export type LibraryOnlineExtrasSource = z.infer<
-  typeof libraryOnlineExtrasSourceSchema
->;
+export type LibraryOnlineExtrasSource = z.infer<typeof libraryOnlineExtrasSourceSchema>;
 
 export const libraryExtrasResponseSchema = z
   .strictObject({
@@ -747,10 +664,7 @@ export const libraryExtrasResponseSchema = z
   .superRefine((response, context) => {
     const references = new Set<string>();
     for (const [index, item] of response.items.entries()) {
-      if (
-        item.media.id === response.parentReferenceId ||
-        references.has(item.media.id)
-      ) {
+      if (item.media.id === response.parentReferenceId || references.has(item.media.id)) {
         context.addIssue({
           code: "custom",
           message: "Library extras must use unique child references.",
@@ -776,8 +690,7 @@ export const libraryExtrasResponseSchema = z
     if (!complete && !empty && !unavailable) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library-extra state must match its items and Jellyfin source.",
+        message: "Library-extra state must match its items and Jellyfin source.",
         path: ["state"],
       });
     }
@@ -797,16 +710,10 @@ export const libraryExtrasResponseSchema = z
       response.onlineState === "unconfigured" &&
       response.onlineItems.length === 0 &&
       response.onlineSource.status === "unconfigured";
-    if (
-      !onlineReady &&
-      !onlineEmpty &&
-      !onlineUnavailable &&
-      !onlineUnconfigured
-    ) {
+    if (!onlineReady && !onlineEmpty && !onlineUnavailable && !onlineUnconfigured) {
       context.addIssue({
         code: "custom",
-        message:
-          "Online-extra state must match its items and discovery source.",
+        message: "Online-extra state must match its items and discovery source.",
         path: ["onlineState"],
       });
     }
@@ -815,16 +722,9 @@ export type LibraryExtrasResponse = z.infer<typeof libraryExtrasResponseSchema>;
 
 export const librarySeasonEpisodesQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
-  limit: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(LIBRARY_SEASON_EPISODES_MAX_ITEMS)
-    .default(30),
+  limit: z.coerce.number().int().positive().max(LIBRARY_SEASON_EPISODES_MAX_ITEMS).default(30),
 });
-export type LibrarySeasonEpisodesQuery = z.infer<
-  typeof librarySeasonEpisodesQuerySchema
->;
+export type LibrarySeasonEpisodesQuery = z.infer<typeof librarySeasonEpisodesQuerySchema>;
 
 export const libraryEpisodeCreditSchema = z.strictObject({
   name: safeTextSchema.max(160),
@@ -847,9 +747,7 @@ export const librarySeasonEpisodeSchema = z
   .strictObject({
     airDate: z.iso.date().nullable(),
     communityRating: z.number().finite().min(0).max(10).nullable(),
-    credits: z
-      .array(libraryEpisodeCreditSchema)
-      .max(LIBRARY_EPISODE_MAX_CREDITS),
+    credits: z.array(libraryEpisodeCreditSchema).max(LIBRARY_EPISODE_MAX_CREDITS),
     creditsTruncated: z.boolean(),
     criticRating: z.number().finite().min(0).max(100).nullable(),
     genres: z.array(safeTextSchema.max(100)).max(LIBRARY_EPISODE_MAX_GENRES),
@@ -865,10 +763,7 @@ export const librarySeasonEpisodeSchema = z
         path: ["media", "id"],
       });
     }
-    if (
-      episode.media.kind !== "episode" ||
-      episode.media.availability !== "available"
-    ) {
+    if (episode.media.kind !== "episode" || episode.media.availability !== "available") {
       context.addIssue({
         code: "custom",
         message: "Library season entries must be available episodes.",
@@ -882,9 +777,7 @@ export type LibrarySeasonEpisode = z.infer<typeof librarySeasonEpisodeSchema>;
 export const librarySeasonEpisodesResponseSchema = z
   .strictObject({
     generatedAt: timestampSchema,
-    items: z
-      .array(librarySeasonEpisodeSchema)
-      .max(LIBRARY_SEASON_EPISODES_MAX_ITEMS),
+    items: z.array(librarySeasonEpisodeSchema).max(LIBRARY_SEASON_EPISODES_MAX_ITEMS),
     nextCursor: libraryCursorSchema.nullable(),
     seasonNumber: z.int().nonnegative().max(100_000),
     titleReferenceId: mediaReferenceIdSchema,
@@ -909,9 +802,7 @@ export const librarySeasonEpisodesResponseSchema = z
       });
     }
   });
-export type LibrarySeasonEpisodesResponse = z.infer<
-  typeof librarySeasonEpisodesResponseSchema
->;
+export type LibrarySeasonEpisodesResponse = z.infer<typeof librarySeasonEpisodesResponseSchema>;
 
 export const libraryBrowseSourceSchema = z
   .strictObject({
@@ -955,11 +846,7 @@ export const libraryBrowseResponseSchema = z
     nextCursor: libraryCursorSchema.nullable(),
     source: libraryBrowseSourceSchema,
     state: z.enum(["complete", "empty", "unavailable"]),
-    totalResults: z
-      .int()
-      .nonnegative()
-      .max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS)
-      .nullable(),
+    totalResults: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullable(),
   })
   .superRefine((response, context) => {
     const references = new Set<string>();
@@ -982,27 +869,21 @@ export const libraryBrowseResponseSchema = z
     if (response.state !== expectedState) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library catalogue state must match source health and returned items.",
+        message: "Library catalogue state must match source health and returned items.",
         path: ["state"],
       });
     }
-    if (
-      !healthy &&
-      (response.items.length > 0 || response.nextCursor !== null)
-    ) {
+    if (!healthy && (response.items.length > 0 || response.nextCursor !== null)) {
       context.addIssue({
         code: "custom",
-        message:
-          "Unavailable library sources cannot return media or pagination.",
+        message: "Unavailable library sources cannot return media or pagination.",
         path: ["items"],
       });
     }
     if (!healthy && response.totalResults !== null) {
       context.addIssue({
         code: "custom",
-        message:
-          "Unavailable library sources cannot report an exact result total.",
+        message: "Unavailable library sources cannot report an exact result total.",
         path: ["totalResults"],
       });
     }
@@ -1013,8 +894,7 @@ export const libraryBrowseResponseSchema = z
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library result totals must agree with the returned catalogue state.",
+        message: "Library result totals must agree with the returned catalogue state.",
         path: ["totalResults"],
       });
     }
@@ -1030,12 +910,7 @@ export type LibraryBrowseResponse = z.infer<typeof libraryBrowseResponseSchema>;
 
 export const libraryAttentionQuerySchema = z.strictObject({
   cursor: libraryCursorSchema.optional(),
-  limit: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(LIBRARY_ATTENTION_MAX_ITEMS)
-    .default(30),
+  limit: z.coerce.number().int().positive().max(LIBRARY_ATTENTION_MAX_ITEMS).default(30),
 });
 export type LibraryAttentionQuery = z.infer<typeof libraryAttentionQuerySchema>;
 
@@ -1057,10 +932,7 @@ const attentionIssueOrder: readonly LibraryAttentionIssue[] = [
 export const libraryAttentionItemSchema = z
   .strictObject({
     identityState: z.enum(["identified", "unmatched"]),
-    issues: z
-      .array(libraryAttentionIssueSchema)
-      .min(1)
-      .max(attentionIssueOrder.length),
+    issues: z.array(libraryAttentionIssueSchema).min(1).max(attentionIssueOrder.length),
     kind: z.enum(["movie", "series"]),
     overview: safeTextSchema.max(2_000).nullable(),
     posterPath: z.string().max(512).nullable(),
@@ -1077,9 +949,7 @@ export const libraryAttentionItemSchema = z
         path: ["issues"],
       });
     }
-    const canonicalIssues = attentionIssueOrder.filter((issue) =>
-      uniqueIssues.has(issue),
-    );
+    const canonicalIssues = attentionIssueOrder.filter((issue) => uniqueIssues.has(issue));
     if (canonicalIssues.some((issue, index) => issue !== item.issues[index])) {
       context.addIssue({
         code: "custom",
@@ -1087,10 +957,7 @@ export const libraryAttentionItemSchema = z
         path: ["issues"],
       });
     }
-    if (
-      (item.identityState === "unmatched") !==
-      uniqueIssues.has("missing_identity")
-    ) {
+    if ((item.identityState === "unmatched") !== uniqueIssues.has("missing_identity")) {
       context.addIssue({
         code: "custom",
         message: "Unmatched library items must report a missing identity.",
@@ -1118,8 +985,7 @@ export const libraryAttentionItemSchema = z
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library poster state must use its same-origin opaque media reference.",
+        message: "Library poster state must use its same-origin opaque media reference.",
         path: ["posterPath"],
       });
     }
@@ -1149,27 +1015,21 @@ export const libraryAttentionResponseSchema = z
     if (response.items.length > response.scanned) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library attention pages cannot return more items than they scanned.",
+        message: "Library attention pages cannot return more items than they scanned.",
         path: ["scanned"],
       });
     }
     if ((response.nextCursor !== null) !== response.truncated) {
       context.addIssue({
         code: "custom",
-        message:
-          "Truncated library attention pages require a continuation cursor.",
+        message: "Truncated library attention pages require a continuation cursor.",
         path: ["nextCursor"],
       });
     }
   });
-export type LibraryAttentionResponse = z.infer<
-  typeof libraryAttentionResponseSchema
->;
+export type LibraryAttentionResponse = z.infer<typeof libraryAttentionResponseSchema>;
 
-export const libraryOperationIdSchema = z
-  .string()
-  .regex(/^library_operation_[A-Za-z0-9_-]{22}$/u);
+export const libraryOperationIdSchema = z.string().regex(/^library_operation_[A-Za-z0-9_-]{22}$/u);
 export const libraryRemovalPreviewIdSchema = z
   .string()
   .regex(/^library_removal_preview_[A-Za-z0-9_-]{22}$/u);
@@ -1181,31 +1041,20 @@ export const libraryArtworkResultIdSchema = z
   .regex(/^library_artwork_result_[A-Za-z0-9_-]{22}$/u);
 
 export const libraryMutationIdempotencyKeySchema = idempotencyKeySchema;
-export type LibraryMutationIdempotencyKey = z.infer<
-  typeof libraryMutationIdempotencyKeySchema
->;
+export type LibraryMutationIdempotencyKey = z.infer<typeof libraryMutationIdempotencyKeySchema>;
 
-export const libraryDownloadGrantIdSchema = z
-  .string()
-  .regex(/^media_download_[A-Za-z0-9_-]{22}$/u);
-export type LibraryDownloadGrantId = z.infer<
-  typeof libraryDownloadGrantIdSchema
->;
+export const libraryDownloadGrantIdSchema = z.string().regex(/^media_download_[A-Za-z0-9_-]{22}$/u);
+export type LibraryDownloadGrantId = z.infer<typeof libraryDownloadGrantIdSchema>;
 
 export const libraryDownloadPrepareRequestSchema = z.strictObject({});
-export type LibraryDownloadPrepareRequest = z.infer<
-  typeof libraryDownloadPrepareRequestSchema
->;
+export type LibraryDownloadPrepareRequest = z.infer<typeof libraryDownloadPrepareRequestSchema>;
 
 const libraryDownloadFilenameSchema = z
   .string()
   .trim()
   .min(1)
   .max(240)
-  .refine(
-    (value) =>
-      !/[\p{Cc}\p{Cf}/\\"]/u.test(value) && value !== "." && value !== "..",
-  );
+  .refine((value) => !/[\p{Cc}\p{Cf}/\\"]/u.test(value) && value !== "." && value !== "..");
 
 const libraryDownloadContentTypeSchema = z
   .string()
@@ -1236,15 +1085,12 @@ export const libraryDownloadPrepareResponseSchema = z
     if (Date.parse(response.expiresAt) <= Date.parse(response.generatedAt)) {
       context.addIssue({
         code: "custom",
-        message:
-          "Original-download grants must expire after they are generated.",
+        message: "Original-download grants must expire after they are generated.",
         path: ["expiresAt"],
       });
     }
   });
-export type LibraryDownloadPrepareResponse = z.infer<
-  typeof libraryDownloadPrepareResponseSchema
->;
+export type LibraryDownloadPrepareResponse = z.infer<typeof libraryDownloadPrepareResponseSchema>;
 
 export const libraryRemovalModeSchema = z.enum([
   "delete_files_keep_monitored",
@@ -1316,10 +1162,7 @@ const expectedRemovalEffects = {
     monitoring: "not_applicable",
     reacquisitionRisk: "not_managed",
   },
-} as const satisfies Record<
-  LibraryRemovalMode,
-  z.infer<typeof libraryRemovalEffectsSchema>
->;
+} as const satisfies Record<LibraryRemovalMode, z.infer<typeof libraryRemovalEffectsSchema>>;
 
 const managedRemovalModes = [
   "delete_files_keep_monitored",
@@ -1336,10 +1179,7 @@ export const libraryRemovalPreviewSchema = z
     }),
     expiresAt: timestampSchema,
     generatedAt: timestampSchema,
-    options: z
-      .array(libraryRemovalOptionSchema)
-      .min(1)
-      .max(managedRemovalModes.length),
+    options: z.array(libraryRemovalOptionSchema).min(1).max(managedRemovalModes.length),
     previewId: libraryRemovalPreviewIdSchema,
     referenceId: mediaReferenceIdSchema,
     sizeBytes: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
@@ -1358,26 +1198,20 @@ export const libraryRemovalPreviewSchema = z
     if (preview.confirmation.expectedTitle !== preview.title) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library removal confirmation must use the exact displayed title.",
+        message: "Library removal confirmation must use the exact displayed title.",
         path: ["confirmation", "expectedTitle"],
       });
     }
 
     const expectedModes: readonly LibraryRemovalMode[] =
-      preview.source.kind === "managed"
-        ? managedRemovalModes
-        : ["delete_unmanaged_files"];
+      preview.source.kind === "managed" ? managedRemovalModes : ["delete_unmanaged_files"];
     if (
       preview.options.length !== expectedModes.length ||
-      preview.options.some(
-        (option, index) => option.mode !== expectedModes[index],
-      )
+      preview.options.some((option, index) => option.mode !== expectedModes[index])
     ) {
       context.addIssue({
         code: "custom",
-        message:
-          "Library removal modes must match the resolved source of truth.",
+        message: "Library removal modes must match the resolved source of truth.",
         path: ["options"],
       });
     }
@@ -1404,9 +1238,7 @@ export const libraryItemRefreshRequestSchema = z.strictObject({
   imageMode: z.enum(["missing", "replace"]).default("missing"),
   metadataMode: z.enum(["missing", "replace"]).default("missing"),
 });
-export type LibraryItemRefreshRequest = z.infer<
-  typeof libraryItemRefreshRequestSchema
->;
+export type LibraryItemRefreshRequest = z.infer<typeof libraryItemRefreshRequestSchema>;
 
 export const libraryMetadataUpdateRequestSchema = z
   .strictObject({
@@ -1416,14 +1248,10 @@ export const libraryMetadataUpdateRequestSchema = z
   })
   .refine(
     (request) =>
-      request.overview !== undefined ||
-      request.title !== undefined ||
-      request.year !== undefined,
+      request.overview !== undefined || request.title !== undefined || request.year !== undefined,
     { message: "At least one editable metadata field is required." },
   );
-export type LibraryMetadataUpdateRequest = z.infer<
-  typeof libraryMetadataUpdateRequestSchema
->;
+export type LibraryMetadataUpdateRequest = z.infer<typeof libraryMetadataUpdateRequestSchema>;
 
 export const libraryMutationResponseSchema = z.strictObject({
   acceptedAt: timestampSchema,
@@ -1431,9 +1259,7 @@ export const libraryMutationResponseSchema = z.strictObject({
   referenceId: mediaReferenceIdSchema.nullable(),
   state: z.literal("accepted"),
 });
-export type LibraryMutationResponse = z.infer<
-  typeof libraryMutationResponseSchema
->;
+export type LibraryMutationResponse = z.infer<typeof libraryMutationResponseSchema>;
 
 export const libraryArtworkKindSchema = z.enum(["backdrop", "poster"]);
 export type LibraryArtworkKind = z.infer<typeof libraryArtworkKindSchema>;
@@ -1442,9 +1268,7 @@ export const libraryArtworkSearchRequestSchema = z.strictObject({
   includeAllLanguages: z.boolean().default(false),
   kind: libraryArtworkKindSchema,
 });
-export type LibraryArtworkSearchRequest = z.infer<
-  typeof libraryArtworkSearchRequestSchema
->;
+export type LibraryArtworkSearchRequest = z.infer<typeof libraryArtworkSearchRequestSchema>;
 
 export const libraryArtworkCandidateSchema = z
   .strictObject({
@@ -1466,9 +1290,7 @@ export const libraryArtworkCandidateSchema = z
       });
     }
   });
-export type LibraryArtworkCandidate = z.infer<
-  typeof libraryArtworkCandidateSchema
->;
+export type LibraryArtworkCandidate = z.infer<typeof libraryArtworkCandidateSchema>;
 
 export const libraryArtworkSearchResponseSchema = z
   .strictObject({
@@ -1476,9 +1298,7 @@ export const libraryArtworkSearchResponseSchema = z
     generatedAt: timestampSchema,
     kind: libraryArtworkKindSchema,
     referenceId: mediaReferenceIdSchema,
-    results: z
-      .array(libraryArtworkCandidateSchema)
-      .max(LIBRARY_ARTWORK_MAX_RESULTS),
+    results: z.array(libraryArtworkCandidateSchema).max(LIBRARY_ARTWORK_MAX_RESULTS),
     searchId: libraryArtworkSearchIdSchema,
   })
   .superRefine((response, context) => {
@@ -1509,14 +1329,10 @@ export const libraryArtworkSearchResponseSchema = z
       resultIds.add(result.id);
     }
   });
-export type LibraryArtworkSearchResponse = z.infer<
-  typeof libraryArtworkSearchResponseSchema
->;
+export type LibraryArtworkSearchResponse = z.infer<typeof libraryArtworkSearchResponseSchema>;
 
 export const libraryArtworkApplyRequestSchema = z.strictObject({});
-export type LibraryArtworkApplyRequest = z.infer<
-  typeof libraryArtworkApplyRequestSchema
->;
+export type LibraryArtworkApplyRequest = z.infer<typeof libraryArtworkApplyRequestSchema>;
 
 function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
   const jsonSchema = z.toJSONSchema(schema);
@@ -1527,34 +1343,24 @@ function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
 export const libraryAttentionResponseJsonSchema = withoutSchemaDialect(
   libraryAttentionResponseSchema,
 );
-export const libraryBrowseQueryJsonSchema = withoutSchemaDialect(
-  libraryBrowseQuerySchema,
+export const libraryBrowseQueryJsonSchema = withoutSchemaDialect(libraryBrowseQuerySchema);
+export const libraryBrowseResponseJsonSchema = withoutSchemaDialect(libraryBrowseResponseSchema);
+export const libraryPlaybackStateMutationRequestJsonSchema = withoutSchemaDialect(
+  libraryPlaybackStateMutationRequestSchema,
 );
-export const libraryBrowseResponseJsonSchema = withoutSchemaDialect(
-  libraryBrowseResponseSchema,
+export const libraryPlaybackStateMutationResponseJsonSchema = withoutSchemaDialect(
+  libraryPlaybackStateMutationResponseSchema,
 );
-export const libraryPlaybackStateMutationRequestJsonSchema =
-  withoutSchemaDialect(libraryPlaybackStateMutationRequestSchema);
-export const libraryPlaybackStateMutationResponseJsonSchema =
-  withoutSchemaDialect(libraryPlaybackStateMutationResponseSchema);
-export const viewingHistoryQueryJsonSchema = withoutSchemaDialect(
-  viewingHistoryQuerySchema,
-);
-export const viewingHistoryResponseJsonSchema = withoutSchemaDialect(
-  viewingHistoryResponseSchema,
-);
+export const viewingHistoryQueryJsonSchema = withoutSchemaDialect(viewingHistoryQuerySchema);
+export const viewingHistoryResponseJsonSchema = withoutSchemaDialect(viewingHistoryResponseSchema);
 export const libraryTitleDetailResponseJsonSchema = withoutSchemaDialect(
   libraryTitleDetailResponseSchema,
 );
 export const libraryConnectedActionsResponseJsonSchema = withoutSchemaDialect(
   libraryConnectedActionsResponseSchema,
 );
-export const libraryExtrasQueryJsonSchema = withoutSchemaDialect(
-  libraryExtrasQuerySchema,
-);
-export const libraryExtrasResponseJsonSchema = withoutSchemaDialect(
-  libraryExtrasResponseSchema,
-);
+export const libraryExtrasQueryJsonSchema = withoutSchemaDialect(libraryExtrasQuerySchema);
+export const libraryExtrasResponseJsonSchema = withoutSchemaDialect(libraryExtrasResponseSchema);
 export const librarySeasonEpisodesQueryJsonSchema = withoutSchemaDialect(
   librarySeasonEpisodesQuerySchema,
 );
@@ -1570,9 +1376,7 @@ export const libraryDownloadPrepareRequestJsonSchema = withoutSchemaDialect(
 export const libraryDownloadPrepareResponseJsonSchema = withoutSchemaDialect(
   libraryDownloadPrepareResponseSchema,
 );
-export const libraryScanRequestJsonSchema = withoutSchemaDialect(
-  libraryScanRequestSchema,
-);
+export const libraryScanRequestJsonSchema = withoutSchemaDialect(libraryScanRequestSchema);
 export const libraryItemRefreshRequestJsonSchema = withoutSchemaDialect(
   libraryItemRefreshRequestSchema,
 );
@@ -1582,9 +1386,7 @@ export const libraryMetadataUpdateRequestJsonSchema = withoutSchemaDialect(
 export const libraryMutationResponseJsonSchema = withoutSchemaDialect(
   libraryMutationResponseSchema,
 );
-export const libraryRemovalPreviewJsonSchema = withoutSchemaDialect(
-  libraryRemovalPreviewSchema,
-);
+export const libraryRemovalPreviewJsonSchema = withoutSchemaDialect(libraryRemovalPreviewSchema);
 export const libraryArtworkSearchRequestJsonSchema = withoutSchemaDialect(
   libraryArtworkSearchRequestSchema,
 );

@@ -52,11 +52,7 @@ const attention = {
   items: [
     {
       identityState: "unmatched" as const,
-      issues: [
-        "missing_identity",
-        "missing_overview",
-        "missing_poster",
-      ] as const,
+      issues: ["missing_identity", "missing_overview", "missing_poster"] as const,
       kind: "movie" as const,
       overview: null,
       posterPath: null,
@@ -124,12 +120,8 @@ describe("library operation contracts", () => {
       referenceId,
       sizeBytes: 6_979_321_856,
     };
-    expect(libraryDownloadPrepareResponseSchema.parse(prepared)).toEqual(
-      prepared,
-    );
-    expect(JSON.stringify(prepared)).not.toMatch(
-      /jellyfin|upstream|\/private\//iu,
-    );
+    expect(libraryDownloadPrepareResponseSchema.parse(prepared)).toEqual(prepared);
+    expect(JSON.stringify(prepared)).not.toMatch(/jellyfin|upstream|\/private\//iu);
     expect(
       libraryDownloadPrepareResponseSchema.safeParse({
         ...prepared,
@@ -158,9 +150,7 @@ describe("library operation contracts", () => {
 
   it("normalizes attention items without paths or upstream identifiers", () => {
     expect(libraryAttentionResponseSchema.parse(attention)).toEqual(attention);
-    expect(JSON.stringify(attention)).not.toMatch(
-      /\/media\/|upstream|providerId/iu,
-    );
+    expect(JSON.stringify(attention)).not.toMatch(/\/media\/|upstream|providerId/iu);
   });
 
   it("requires attention state, issue order, and poster references to agree", () => {
@@ -188,8 +178,7 @@ describe("library operation contracts", () => {
           {
             ...attention.items[0],
             issues: ["missing_identity", "missing_overview"],
-            posterPath:
-              "https://jellyfin.example/Items/upstream/Images/Primary",
+            posterPath: "https://jellyfin.example/Items/upstream/Images/Primary",
           },
         ],
       }).success,
@@ -200,9 +189,7 @@ describe("library operation contracts", () => {
     expect(libraryAttentionQuerySchema.parse({ limit: "25" })).toEqual({
       limit: 25,
     });
-    expect(libraryAttentionQuerySchema.safeParse({ limit: 101 }).success).toBe(
-      false,
-    );
+    expect(libraryAttentionQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
     expect(libraryItemRefreshRequestSchema.parse({})).toEqual({
       imageMode: "missing",
       metadataMode: "missing",
@@ -211,9 +198,7 @@ describe("library operation contracts", () => {
 
   it("normalizes a title-level paired-user catalogue with opaque references", () => {
     expect(libraryBrowseResponseSchema.parse(catalogue)).toEqual(catalogue);
-    expect(JSON.stringify(catalogue)).not.toMatch(
-      /external|jellyfin\.example|upstream/iu,
-    );
+    expect(JSON.stringify(catalogue)).not.toMatch(/external|jellyfin\.example|upstream/iu);
     expect(libraryBrowseQuerySchema.parse({ limit: "25" })).toEqual({
       kind: "all",
       limit: 25,
@@ -226,13 +211,10 @@ describe("library operation contracts", () => {
         sort: "title",
       }),
     ).toEqual({ kind: "series", limit: 30, query: "Meridian", sort: "title" });
-    expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(
+    expect(libraryBrowseQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 0 }).success).toBe(
       false,
     );
-    expect(
-      libraryBrowseResponseSchema.safeParse({ ...catalogue, totalResults: 0 })
-        .success,
-    ).toBe(false);
     expect(
       libraryBrowseResponseSchema.safeParse({
         ...catalogue,
@@ -288,9 +270,7 @@ describe("library operation contracts", () => {
       referenceId,
       updatedAt: catalogue.generatedAt,
     };
-    expect(libraryPlaybackStateMutationResponseSchema.parse(response)).toEqual(
-      response,
-    );
+    expect(libraryPlaybackStateMutationResponseSchema.parse(response)).toEqual(response);
     for (const invalid of [
       {
         action: "mark_watched",
@@ -312,9 +292,7 @@ describe("library operation contracts", () => {
         }).success,
       ).toBe(false);
     }
-    expect(JSON.stringify(response)).not.toMatch(
-      /external|jellyfin\.example|upstream/iu,
-    );
+    expect(JSON.stringify(response)).not.toMatch(/external|jellyfin\.example|upstream/iu);
   });
 
   it("models private, bounded, filterable viewing history with opaque references", () => {
@@ -344,15 +322,9 @@ describe("library operation contracts", () => {
         range: "90_days",
       }),
     ).toEqual({ kind: "episodes", limit: 20, range: "90_days", state: "all" });
-    expect(viewingHistoryQuerySchema.safeParse({ limit: 51 }).success).toBe(
-      false,
-    );
-    expect(
-      viewingHistoryCursorSchema.safeParse("c".repeat(1_024)).success,
-    ).toBe(true);
-    expect(
-      viewingHistoryCursorSchema.safeParse("c".repeat(1_025)).success,
-    ).toBe(false);
+    expect(viewingHistoryQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(viewingHistoryCursorSchema.safeParse("c".repeat(1_024)).success).toBe(true);
+    expect(viewingHistoryCursorSchema.safeParse("c".repeat(1_025)).success).toBe(false);
     expect(
       viewingHistoryResponseSchema.safeParse({
         generatedAt: catalogue.generatedAt,
@@ -373,9 +345,7 @@ describe("library operation contracts", () => {
         state: "unavailable",
       }).success,
     ).toBe(true);
-    expect(JSON.stringify(history)).not.toMatch(
-      /external|jellyfin\.example|upstream/iu,
-    );
+    expect(JSON.stringify(history)).not.toMatch(/external|jellyfin\.example|upstream/iu);
   });
 
   it("rejects viewing activity that disagrees with current Jellyfin state", () => {
@@ -548,9 +518,7 @@ describe("library operation contracts", () => {
       mediaKind: "series" as const,
       referenceId: seriesReferenceId,
     };
-    expect(
-      libraryConnectedActionsResponseSchema.parse(connectedActions),
-    ).toEqual(connectedActions);
+    expect(libraryConnectedActionsResponseSchema.parse(connectedActions)).toEqual(connectedActions);
     expect(
       libraryConnectedActionsResponseSchema.safeParse({
         ...connectedActions,
@@ -638,9 +606,7 @@ describe("library operation contracts", () => {
       seasonNumber: 2,
       titleReferenceId: seriesReferenceId,
     };
-    expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(
-      episodes,
-    );
+    expect(librarySeasonEpisodesResponseSchema.parse(episodes)).toEqual(episodes);
     expect(librarySeasonEpisodesQuerySchema.parse({ limit: "20" })).toEqual({
       limit: 20,
     });
@@ -705,12 +671,8 @@ describe("library operation contracts", () => {
     expect(libraryExtrasQuerySchema.parse({ limit: "12" })).toEqual({
       limit: 12,
     });
-    expect(libraryExtrasQuerySchema.safeParse({ limit: 25 }).success).toBe(
-      false,
-    );
-    expect(JSON.stringify(response)).not.toMatch(
-      /external|jellyfin\.example|upstream|itemId/iu,
-    );
+    expect(libraryExtrasQuerySchema.safeParse({ limit: 25 }).success).toBe(false);
+    expect(JSON.stringify(response)).not.toMatch(/external|jellyfin\.example|upstream|itemId/iu);
     expect(
       libraryExtrasResponseSchema.safeParse({
         ...response,
@@ -819,9 +781,7 @@ describe("library operation contracts", () => {
       seriesCredits: null,
     };
     expect(libraryTitleDetailResponseSchema.parse(detail)).toEqual(detail);
-    expect(JSON.stringify(detail)).not.toMatch(
-      /jellyfin|upstream|\/private\//iu,
-    );
+    expect(JSON.stringify(detail)).not.toMatch(/jellyfin|upstream|\/private\//iu);
     expect(
       libraryTitleDetailResponseSchema.safeParse({
         ...detail,
@@ -839,19 +799,16 @@ describe("library operation contracts", () => {
   });
 
   it("requires a bounded editable metadata field", () => {
-    expect(libraryMetadataUpdateRequestSchema.safeParse({}).success).toBe(
-      false,
-    );
+    expect(libraryMetadataUpdateRequestSchema.safeParse({}).success).toBe(false);
     expect(
       libraryMetadataUpdateRequestSchema.parse({
         overview: null,
         title: "The Far Meridian",
       }),
     ).toEqual({ overview: null, title: "The Far Meridian" });
-    expect(
-      libraryMetadataUpdateRequestSchema.safeParse({ path: "/private/media" })
-        .success,
-    ).toBe(false);
+    expect(libraryMetadataUpdateRequestSchema.safeParse({ path: "/private/media" }).success).toBe(
+      false,
+    );
   });
 
   it("accepts an asynchronous mutation receipt", () => {
@@ -922,9 +879,7 @@ describe("library operation contracts", () => {
     };
 
     expect(libraryRemovalPreviewSchema.parse(preview)).toEqual(preview);
-    expect(JSON.stringify(preview)).not.toMatch(
-      /\/private\/|externalId|upstream|connectorUrl/iu,
-    );
+    expect(JSON.stringify(preview)).not.toMatch(/\/private\/|externalId|upstream|connectorUrl/iu);
     expect(
       libraryRemovalPreviewSchema.safeParse({
         ...preview,
@@ -1011,9 +966,7 @@ describe("library operation contracts", () => {
       ],
       searchId,
     };
-    expect(libraryArtworkSearchResponseSchema.parse(response)).toEqual(
-      response,
-    );
+    expect(libraryArtworkSearchResponseSchema.parse(response)).toEqual(response);
     expect(
       libraryArtworkSearchResponseSchema.safeParse({
         ...response,
@@ -1036,19 +989,13 @@ describe("library operation contracts", () => {
     expect(libraryBrowseQueryJsonSchema).toMatchObject({ type: "object" });
     expect(libraryBrowseResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryBrowseResponseJsonSchema).toMatchObject({ type: "object" });
-    expect(libraryPlaybackStateMutationRequestJsonSchema).not.toHaveProperty(
-      "$schema",
-    );
-    expect(libraryPlaybackStateMutationResponseJsonSchema).not.toHaveProperty(
-      "$schema",
-    );
+    expect(libraryPlaybackStateMutationRequestJsonSchema).not.toHaveProperty("$schema");
+    expect(libraryPlaybackStateMutationResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryRemovalPreviewJsonSchema).not.toHaveProperty("$schema");
     expect(libraryRemovalPreviewJsonSchema).toMatchObject({ type: "object" });
     expect(viewingHistoryQueryJsonSchema).not.toHaveProperty("$schema");
     expect(viewingHistoryResponseJsonSchema).not.toHaveProperty("$schema");
-    expect(libraryConnectedActionsResponseJsonSchema).not.toHaveProperty(
-      "$schema",
-    );
+    expect(libraryConnectedActionsResponseJsonSchema).not.toHaveProperty("$schema");
     expect(libraryConnectedActionsResponseJsonSchema).toMatchObject({
       type: "object",
     });
@@ -1059,8 +1006,6 @@ describe("library operation contracts", () => {
     expect(libraryExtrasQueryJsonSchema).not.toHaveProperty("$schema");
     expect(libraryExtrasResponseJsonSchema).not.toHaveProperty("$schema");
     expect(librarySeasonEpisodesQueryJsonSchema).not.toHaveProperty("$schema");
-    expect(librarySeasonEpisodesResponseJsonSchema).not.toHaveProperty(
-      "$schema",
-    );
+    expect(librarySeasonEpisodesResponseJsonSchema).not.toHaveProperty("$schema");
   });
 });

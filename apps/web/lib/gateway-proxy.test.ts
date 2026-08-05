@@ -44,9 +44,7 @@ describe("gateway proxy target resolution", () => {
         pathname: "/api/auth/oidc/provider/callback",
         search: "?code=opaque&state=bound",
       }).href,
-    ).toBe(
-      "https://gateway.example.test/v1/auth/oidc/provider/callback?code=opaque&state=bound",
-    );
+    ).toBe("https://gateway.example.test/v1/auth/oidc/provider/callback?code=opaque&state=bound");
   });
 
   it("rejects encoded dot segments that normalize outside the v1 gateway prefix", () => {
@@ -67,9 +65,7 @@ describe("gateway proxy target resolution", () => {
     ["http://127.0.0.1:4000/#private", "/api/auth/providers"],
     ["http://127.0.0.1:4000", "/healthz"],
   ])("rejects an invalid gateway target %#", (gatewayUrl, pathname) => {
-    expect(() =>
-      resolveGatewayEndpoint({ gatewayUrl, pathname, search: "" }),
-    ).toThrow();
+    expect(() => resolveGatewayEndpoint({ gatewayUrl, pathname, search: "" })).toThrow();
   });
 });
 
@@ -94,10 +90,7 @@ describe("trusted edge address selection", () => {
   it("fails closed for missing, malformed, or oversized forwarding chains", () => {
     expect(selectTrustedClientAddress(new Headers(), 1)).toBeUndefined();
     expect(
-      selectTrustedClientAddress(
-        new Headers({ "x-forwarded-for": "unknown, 192.0.2.10" }),
-        2,
-      ),
+      selectTrustedClientAddress(new Headers({ "x-forwarded-for": "unknown, 192.0.2.10" }), 2),
     ).toBeUndefined();
     expect(
       selectTrustedClientAddress(
@@ -127,12 +120,9 @@ describe("gateway proxy transport", () => {
           );
         }
         if (pathname === `/v1/playback/${sessionId}/master.m3u8`) {
-          return new Response(
-            `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls/${levelHandle}\n`,
-            {
-              headers: { "content-type": "application/vnd.apple.mpegurl" },
-            },
-          );
+          return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nhls/${levelHandle}\n`, {
+            headers: { "content-type": "application/vnd.apple.mpegurl" },
+          });
         }
         if (pathname === `/v1/playback/${sessionId}/hls/${levelHandle}`) {
           return new Response(`#EXTM3U\n#EXTINF:4.000,\n./${segmentHandle}\n`, {
@@ -140,12 +130,9 @@ describe("gateway proxy transport", () => {
           });
         }
         if (pathname === `/v1/playback/${sessionId}/hls/${segmentHandle}`) {
-          return new Response(
-            new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]),
-            {
-              headers: { "content-type": "video/mp4" },
-            },
-          );
+          return new Response(new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]), {
+            headers: { "content-type": "video/mp4" },
+          });
         }
         return new Response("unexpected", { status: 404 });
       }),
@@ -160,35 +147,21 @@ describe("gateway proxy transport", () => {
     );
     const negotiated = (await negotiation.json()) as { streamPath: string };
     const masterPath = browserPlaybackPath(negotiated.streamPath);
-    const master = await proxyGatewayRequest(
-      requestFixture({ path: masterPath }),
-    );
+    const master = await proxyGatewayRequest(requestFixture({ path: masterPath }));
     const levelReference = (await master.text())
       .split("\n")
       .find((line) => line.startsWith("hls/"));
     expect(levelReference).toBeDefined();
-    const levelPath = new URL(
-      levelReference!,
-      `https://omnifin.example${masterPath}`,
-    ).pathname;
+    const levelPath = new URL(levelReference!, `https://omnifin.example${masterPath}`).pathname;
     expect(levelPath).toMatch(/^\/api\/playback\//u);
 
-    const level = await proxyGatewayRequest(
-      requestFixture({ path: levelPath }),
-    );
-    const segmentReference = (await level.text())
-      .split("\n")
-      .find((line) => line.startsWith("./"));
+    const level = await proxyGatewayRequest(requestFixture({ path: levelPath }));
+    const segmentReference = (await level.text()).split("\n").find((line) => line.startsWith("./"));
     expect(segmentReference).toBeDefined();
-    const segmentPath = new URL(
-      segmentReference!,
-      `https://omnifin.example${levelPath}`,
-    ).pathname;
+    const segmentPath = new URL(segmentReference!, `https://omnifin.example${levelPath}`).pathname;
     expect(segmentPath).toMatch(/^\/api\/playback\//u);
 
-    const segment = await proxyGatewayRequest(
-      requestFixture({ path: segmentPath }),
-    );
+    const segment = await proxyGatewayRequest(requestFixture({ path: segmentPath }));
     expect(segment.status).toBe(200);
     expect(segment.headers.get("content-type")).toBe("video/mp4");
     expect(new Uint8Array(await segment.arrayBuffer())).toEqual(
@@ -224,9 +197,7 @@ describe("gateway proxy transport", () => {
 
   it("does not bypass the gateway for an unknown test artwork reference", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
-    const upstream = vi.fn(
-      async () => new Response("upstream", { status: 202 }),
-    );
+    const upstream = vi.fn(async () => new Response("upstream", { status: 202 }));
     vi.stubGlobal("fetch", upstream);
 
     const response = await proxyGatewayRequest(
@@ -242,9 +213,7 @@ describe("gateway proxy transport", () => {
 
   it("keeps generated artwork behind explicit test mode", async () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "false");
-    const upstream = vi.fn(
-      async () => new Response("protected-upstream", { status: 206 }),
-    );
+    const upstream = vi.fn(async () => new Response("protected-upstream", { status: 206 }));
     vi.stubGlobal("fetch", upstream);
 
     const response = await proxyGatewayRequest(
@@ -307,9 +276,7 @@ describe("gateway proxy transport", () => {
     expect(sentHeaders.get("x-request-id")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
     );
-    expect(sentHeaders.get("x-request-id")).not.toBe(
-      "attacker-selected-correlation",
-    );
+    expect(sentHeaders.get("x-request-id")).not.toBe("attacker-selected-correlation");
     expect(sentInit).toMatchObject({
       cache: "no-store",
       method: "GET",
@@ -326,19 +293,16 @@ describe("gateway proxy transport", () => {
   });
 
   it("passes an external service redirect to the browser without fetching its destination", async () => {
-    const upstream = vi.fn(
-      async (_endpoint: URL | string | Request, init?: RequestInit) => {
-        expect(init?.redirect).toBe("manual");
-        return new Response(null, {
-          headers: {
-            location:
-              "https://movies.example.test/radarr/movie/the-far-meridian",
-            "referrer-policy": "no-referrer",
-          },
-          status: 303,
-        });
-      },
-    );
+    const upstream = vi.fn(async (_endpoint: URL | string | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, {
+        headers: {
+          location: "https://movies.example.test/radarr/movie/the-far-meridian",
+          "referrer-policy": "no-referrer",
+        },
+        status: 303,
+      });
+    });
     vi.stubGlobal("fetch", upstream);
 
     const response = await proxyGatewayRequest(
@@ -413,9 +377,7 @@ describe("gateway proxy transport", () => {
     expect(sentBody).toBe('{"confirm":true}');
     expect(sentInit?.duplex).toBe("half");
     expect((sentInit?.headers as Headers).get("content-length")).toBeNull();
-    expect((sentInit?.headers as Headers).get("content-type")).toBe(
-      "application/json",
-    );
+    expect((sentInit?.headers as Headers).get("content-type")).toBe("application/json");
     await expect(response.json()).resolves.toEqual({ accepted: true });
   });
 
@@ -428,22 +390,15 @@ describe("gateway proxy transport", () => {
       "fetch",
       vi.fn(async (_endpoint: URL | string | Request, init?: RequestInit) => {
         const signal = init?.signal;
-        if (!signal)
-          throw new Error(
-            "Expected the gateway request to have an abort signal.",
-          );
+        if (!signal) throw new Error("Expected the gateway request to have an abort signal.");
         const encoder = new TextEncoder();
         return new Response(
           new ReadableStream({
             start(controller) {
               controller.enqueue(encoder.encode("stream-open-"));
-              signal.addEventListener(
-                "abort",
-                () => controller.error(signal.reason),
-                {
-                  once: true,
-                },
-              );
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
               releaseBody = () => {
                 if (signal.aborted) return;
                 controller.enqueue(encoder.encode("stream-close"));
@@ -456,9 +411,7 @@ describe("gateway proxy transport", () => {
     );
 
     const response = await proxyWithShortHeaderDeadline(requestFixture());
-    const bodyAssertion = expect(response.text()).resolves.toBe(
-      "stream-open-stream-close",
-    );
+    const bodyAssertion = expect(response.text()).resolves.toBe("stream-open-stream-close");
     await new Promise((resolve) => setTimeout(resolve, 20));
     releaseBody?.();
 
@@ -497,24 +450,14 @@ describe("gateway proxy transport", () => {
       }),
     );
 
-    expect(String(sentEndpoint)).toBe(
-      "http://127.0.0.1:4000/v1/downloads/queue/events",
-    );
+    expect(String(sentEndpoint)).toBe("http://127.0.0.1:4000/v1/downloads/queue/events");
     expect(sentHeaders?.get("cookie")).toBe("omnifin_session=opaque");
-    expect(sentHeaders?.get("last-event-id")).toBe(
-      "download_event_ABCDEFGHIJKLMNOPQRSTUV",
-    );
-    expect(response.headers.get("content-type")).toBe(
-      "text/event-stream; charset=utf-8",
-    );
-    expect(response.headers.get("cache-control")).toBe(
-      "no-store, no-transform",
-    );
+    expect(sentHeaders?.get("last-event-id")).toBe("download_event_ABCDEFGHIJKLMNOPQRSTUV");
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
     expect(response.headers.get("x-accel-buffering")).toBe("no");
     expect(response.headers.get("connection")).toBeNull();
-    await expect(response.text()).resolves.toContain(
-      "id: download_event_ABCDEFGHIJKLMNOPQRSTUV",
-    );
+    await expect(response.text()).resolves.toContain("id: download_event_ABCDEFGHIJKLMNOPQRSTUV");
   });
 
   it("still aborts a streamed response when the downstream request closes", async () => {
@@ -523,21 +466,14 @@ describe("gateway proxy transport", () => {
       "fetch",
       vi.fn(async (_endpoint: URL | string | Request, init?: RequestInit) => {
         const signal = init?.signal;
-        if (!signal)
-          throw new Error(
-            "Expected the gateway request to have an abort signal.",
-          );
+        if (!signal) throw new Error("Expected the gateway request to have an abort signal.");
         return new Response(
           new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode("stream-open"));
-              signal.addEventListener(
-                "abort",
-                () => controller.error(signal.reason),
-                {
-                  once: true,
-                },
-              );
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
             },
           }),
         );
@@ -548,9 +484,7 @@ describe("gateway proxy transport", () => {
       requestFixture({ signal: downstreamRequest.signal }),
     );
     const body = response.text();
-    downstreamRequest.abort(
-      new DOMException("The downstream request closed.", "AbortError"),
-    );
+    downstreamRequest.abort(new DOMException("The downstream request closed.", "AbortError"));
 
     await expect(body).rejects.toMatchObject({ name: "AbortError" });
   });
@@ -567,11 +501,7 @@ describe("gateway proxy transport", () => {
           await new Promise<Response>((_resolve, reject) => {
             const signal = init?.signal;
             if (!signal) {
-              reject(
-                new Error(
-                  "Expected the gateway request to have an abort signal.",
-                ),
-              );
+              reject(new Error("Expected the gateway request to have an abort signal."));
               return;
             }
             signal.addEventListener("abort", () => reject(signal.reason), {
@@ -608,9 +538,7 @@ describe("gateway proxy transport", () => {
   });
 
   it("returns and logs only a bounded correlation envelope when the gateway fails", async () => {
-    const errorLog = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let sentRequestId: string | null = null;
     vi.stubGlobal(
       "fetch",
