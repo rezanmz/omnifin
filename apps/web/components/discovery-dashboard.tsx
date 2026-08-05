@@ -111,7 +111,9 @@ function cardFor(
     eyebrow: locallyRequested ? "Requested" : metadata || availabilityLabel(item),
     id: item.id,
     requestable: requestable(item) && !locallyRequested,
-    savedDiscoveryTarget: { kind: item.kind, language, tmdbId: item.tmdbId },
+    ...(item.availability === "available" || item.availability === "unknown"
+      ? {}
+      : { savedDiscoveryTarget: { kind: item.kind, language, tmdbId: item.tmdbId } }),
     title: item.title,
   };
 }

@@ -6,9 +6,10 @@ import { openDatabase } from "../src/db/client.js";
 import * as authenticationSchema from "../src/db/schema.js";
 
 const migrationDirectory = path.resolve(import.meta.dirname, "../drizzle");
-const expectedMigrationCount = readdirSync(migrationDirectory).filter((filename) =>
-  /^\d{4}_.+\.sql$/u.test(filename),
-).length;
+const migrationFilenames = readdirSync(migrationDirectory)
+  .filter((filename) => /^\d{4}_.+\.sql$/u.test(filename))
+  .sort();
+const expectedMigrationCount = migrationFilenames.length;
 
 function applyMigration(database: Database.Database, filename: string) {
   const migration = readFileSync(path.join(migrationDirectory, filename), "utf8");
@@ -299,7 +300,9 @@ describe("authentication schema upgrades", () => {
                and name = 'jellyfin_quick_connect_transactions_pairing_session_idx'`,
           )
           .get(),
-      ).toEqual({ name: "jellyfin_quick_connect_transactions_pairing_session_idx" });
+      ).toEqual({
+        name: "jellyfin_quick_connect_transactions_pairing_session_idx",
+      });
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();
@@ -406,7 +409,10 @@ describe("authentication schema upgrades", () => {
             "select purpose, pairing_session_id as pairingSessionId from jellyfin_quick_connect_transactions where id = ?",
           )
           .get("quick-connect-bootstrap"),
-      ).toEqual({ pairingSessionId: "recovery-bootstrap-session", purpose: "bootstrap" });
+      ).toEqual({
+        pairingSessionId: "recovery-bootstrap-session",
+        purpose: "bootstrap",
+      });
       expect(database.pragma("foreign_key_check")).toEqual([]);
     } finally {
       database.close();
@@ -1099,6 +1105,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
+      expect(migrationFilenames.at(-1)).toBe("0029_saved_lists.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
@@ -1133,6 +1140,13 @@ describe("authentication schema invariants", () => {
       expect(
         database.sqlite.prepare("select count(*) as count from __drizzle_migrations").get(),
       ).toEqual({ count: expectedMigrationCount });
+      expect(
+        (
+          database.sqlite.pragma("table_info(connector_configs)") as {
+            name: string;
+          }[]
+        ).map(({ name }) => name),
+      ).toContain("public_ui_url");
       expect(
         database.sqlite
           .prepare(
@@ -1237,7 +1251,11 @@ describe("authentication schema invariants", () => {
         database.sqlite
           .prepare("select role, role_source as roleSource, status from users where id = ?")
           .get("jit-default-user"),
-      ).toEqual({ role: "viewer", roleSource: "default", status: "pending_link" });
+      ).toEqual({
+        role: "viewer",
+        roleSource: "default",
+        status: "pending_link",
+      });
 
       const serviceLinkForeignKeys = database.sqlite.pragma(
         "foreign_key_list(service_identity_links)",
@@ -1261,9 +1279,11 @@ describe("authentication schema invariants", () => {
         { from: "service", table: "connector_configs", to: "type" },
       ]);
       expect(
-        (database.sqlite.pragma("index_list(connector_configs)") as { name: string }[]).map(
-          ({ name }) => name,
-        ),
+        (
+          database.sqlite.pragma("index_list(connector_configs)") as {
+            name: string;
+          }[]
+        ).map(({ name }) => name),
       ).toContain("connector_configs_id_type_unique");
 
       const auditIndexes = database.sqlite.pragma("index_list(audit_events)") as {
@@ -1662,7 +1682,10 @@ describe("authentication schema invariants", () => {
       insertLinkedIdentity(database);
 
       expect(() =>
-        insertSession(database, { id: "session-short-hash", tokenHash: "short" }),
+        insertSession(database, {
+          id: "session-short-hash",
+          tokenHash: "short",
+        }),
       ).toThrow(/sessions_token_hash_check/);
       expect(() =>
         insertSession(database, {
@@ -1811,7 +1834,9 @@ describe("authentication schema invariants", () => {
         }),
       ).toThrow(/auth_transactions_redirect_uri_check/);
       expect(() =>
-        insertTransaction("transaction-4", { returnPath: "//attacker.example.test" }),
+        insertTransaction("transaction-4", {
+          returnPath: "//attacker.example.test",
+        }),
       ).toThrow(/auth_transactions_return_path_check/);
       expect(() => insertTransaction("transaction-5", { consumedAt: 2001 })).toThrow(
         /auth_transactions_timestamp_order_check/,

@@ -151,7 +151,7 @@ export interface SavedListsClient {
   updateFavorite(
     targetReferenceId: string,
     input: SavedFavoriteMutationRequest,
-    options: Pick<SavedMutationOptions, "csrfToken" | "signal">,
+    options: Pick<SavedMutationOptions, "csrfToken" | "idempotencyKey" | "signal">,
   ): Promise<SavedFavoriteMutationResponse>;
   updateList(
     listId: string,
@@ -198,7 +198,11 @@ function mappedError(status: number, code: string, message: string, response: Re
   }
   if (status === 409) {
     return new SavedListsClientError("conflict", code, message, {
-      retryMode: code === "saved_list_operation_in_progress" ? "same_key" : "refresh",
+      retryMode:
+        code === "saved_list_operation_in_progress" ||
+        code === "saved_favorite_operation_in_progress"
+          ? "same_key"
+          : "refresh",
     });
   }
   return new SavedListsClientError(
@@ -586,7 +590,7 @@ export const savedListsClient: SavedListsClient = {
     const body = saved.savedFavoriteMutationRequestSchema.parse(input);
     const response = await fetchSameOrigin(`/api/saved/favorites/${safeTarget}`, {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, false),
+      headers: mutationHeaders(options, true),
       method: "PUT",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });

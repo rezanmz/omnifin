@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SavedListsClientError,
   savedListsClient,
   type SavedListsClient,
   type SavedWorkspaceLoadOutcome,
@@ -131,17 +132,43 @@ describe("SavedLibrary", () => {
     expect(screen.getByText("Only you")).toBeVisible();
   });
 
-  it("removes only private membership with the current CSRF and ETag proofs", async () => {
+  it("removes membership and refetches the first page with a fresh cursor", async () => {
     const user = userEvent.setup();
+    const secondItem = {
+      ...page.items[0]!,
+      catalog: {
+        ...page.items[0]!.catalog,
+        id: `catalog_${"d".repeat(22)}`,
+        title: "Second Signal",
+      },
+      id: `saved_item_${"d".repeat(22)}`,
+      position: 0,
+    };
     const removeItem = vi.fn(async () => ({
       data: { catalogReferenceId: catalogId, listId: watchLaterId, removed: true, revision: 2 },
       etag: `"saved_${"n".repeat(22)}"`,
     }));
+    const listItems = vi.fn<SavedListsClient["listItems"]>(async () => ({
+      data: {
+        ...page,
+        items: [secondItem],
+        list: { ...watchLater, itemCount: 2, revision: 2 },
+        nextCursor: "saved-cursor-fresh-after-remove-001",
+      },
+      etag: `"saved_${"f".repeat(22)}"`,
+    }));
     render(
       <SavedLibrary
-        client={{ ...savedListsClient, removeItem }}
+        client={{ ...savedListsClient, listItems, removeItem }}
         initialOutcome={ready}
-        initialPage={{ data: page, etag }}
+        initialPage={{
+          data: {
+            ...page,
+            list: { ...watchLater, itemCount: 3 },
+            nextCursor: "saved-cursor-after-remove-001",
+          },
+          etag,
+        }}
         live={false}
       />,
     );
@@ -156,11 +183,192 @@ describe("SavedLibrary", () => {
         etag,
       }),
     );
+    expect(await screen.findByRole("heading", { name: "Second Signal" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "The Far Meridian" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
       "Removed The Far Meridian from Watch Later.",
     );
-    expect(screen.getByRole("heading", { name: "Watch Later is empty." })).toBeVisible();
+    expect(
+      within(screen.getByRole("navigation")).getByRole("button", { name: /Watch Later/i }),
+    ).toHaveTextContent("2 titles");
+    expect(screen.getByRole("button", { name: "Load more saved titles" })).toBeVisible();
+    expect(listItems).toHaveBeenCalledWith(watchLaterId, {
+      availability: "all",
+      limit: 30,
+      sort: "manual",
+    });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Watch Later" })),
+    );
+  });
+
+  it("loads a non-null continuation cursor without replacing visible titles", async () => {
+    const user = userEvent.setup();
+    const secondItem = {
+      ...page.items[0]!,
+      catalog: {
+        ...page.items[0]!.catalog,
+        id: `catalog_${"d".repeat(22)}`,
+        title: "Second Signal",
+      },
+      id: `saved_item_${"d".repeat(22)}`,
+      position: 1,
+    };
+    const cursor = "saved-cursor-next-001";
+    const listItems = vi.fn<SavedListsClient["listItems"]>(async (_listId, query) => ({
+      data: {
+        ...page,
+        items: query.cursor ? [secondItem] : page.items,
+        nextCursor: null,
+      },
+      etag,
+    }));
+    render(
+      <SavedLibrary
+        client={{ ...savedListsClient, listItems }}
+        initialOutcome={ready}
+        initialPage={{ data: { ...page, nextCursor: cursor }, etag }}
+        live={false}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Load more saved titles" }));
+
+    await waitFor(() => expect(screen.getByText("Second Signal")).toBeVisible());
+    expect(screen.getByText("The Far Meridian")).toBeVisible();
+    expect(listItems).toHaveBeenCalledWith(
+      watchLaterId,
+      expect.objectContaining({ cursor }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("discards delayed pagination after switching lists", async () => {
+    const user = userEvent.setup();
+    const secondItem = {
+      ...page.items[0]!,
+      catalog: {
+        ...page.items[0]!.catalog,
+        id: `catalog_${"d".repeat(22)}`,
+        title: "Second Signal",
+      },
+      id: `saved_item_${"d".repeat(22)}`,
+      position: 1,
+    };
+    let releasePage!: (value: Awaited<ReturnType<SavedListsClient["listItems"]>>) => void;
+    const delayedPage = new Promise<Awaited<ReturnType<SavedListsClient["listItems"]>>>(
+      (resolve) => {
+        releasePage = resolve;
+      },
+    );
+    const listItems = vi.fn<SavedListsClient["listItems"]>((listId, query) => {
+      if (query.cursor) return delayedPage;
+      return Promise.resolve({
+        data: {
+          ...page,
+          items: [],
+          list: { ...customList, id: listId },
+          nextCursor: null,
+        },
+        etag,
+      });
+    });
+    render(
+      <SavedLibrary
+        client={{ ...savedListsClient, listItems }}
+        initialOutcome={ready}
+        initialPage={{ data: { ...page, nextCursor: "saved-cursor-delayed-001" }, etag }}
+        live={false}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Load more saved titles" }));
+    await waitFor(() => expect(listItems).toHaveBeenCalledOnce());
+    const paginationSignal = listItems.mock.calls[0]?.[2];
+    await user.click(
+      within(screen.getByRole("navigation")).getByRole("button", { name: /Weekend/i }),
+    );
+    await screen.findByRole("heading", { name: "Weekend is empty." });
+
+    releasePage({
+      data: { ...page, items: [secondItem], nextCursor: null },
+      etag,
+    });
+
+    await waitFor(() => expect(paginationSignal?.aborted).toBe(true));
+    expect(screen.queryByRole("heading", { name: "Second Signal" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Weekend" })).toBeVisible();
+  });
+
+  it("moves adjacent titles and refetches the first page with a fresh cursor", async () => {
+    const user = userEvent.setup();
+    const secondItem = {
+      ...page.items[0]!,
+      catalog: {
+        ...page.items[0]!.catalog,
+        id: `catalog_${"d".repeat(22)}`,
+        title: "Second Signal",
+      },
+      id: `saved_item_${"d".repeat(22)}`,
+      position: 1,
+    };
+    const reorderItems = vi.fn<SavedListsClient["reorderItems"]>(async (_listId, input) => ({
+      data: { ...input, revision: 2 },
+      etag: `"saved_${"r".repeat(22)}"`,
+      replayed: false,
+    }));
+    const listItems = vi.fn<SavedListsClient["listItems"]>(async () => ({
+      data: {
+        ...page,
+        items: [
+          { ...secondItem, position: 0 },
+          { ...page.items[0]!, position: 1 },
+        ],
+        list: { ...watchLater, itemCount: 3, revision: 2 },
+        nextCursor: "saved-cursor-fresh-after-reorder-001",
+      },
+      etag: `"saved_${"f".repeat(22)}"`,
+    }));
+    render(
+      <SavedLibrary
+        client={{ ...savedListsClient, listItems, reorderItems }}
+        initialOutcome={ready}
+        initialPage={{
+          data: {
+            ...page,
+            items: [page.items[0]!, secondItem],
+            list: { ...watchLater, itemCount: 3 },
+            nextCursor: "saved-cursor-after-reorder-001",
+          },
+          etag,
+        }}
+        live={false}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Move The Far Meridian later" }));
+
+    await waitFor(() => expect(reorderItems).toHaveBeenCalledOnce());
+    expect(reorderItems).toHaveBeenCalledWith(
+      watchLaterId,
+      { orderedItemIds: [secondItem.id, itemId], startPosition: 0 },
+      expect.objectContaining({
+        csrfToken,
+        etag,
+        idempotencyKey: expect.stringMatching(/^saved-/u),
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent),
+      ).toEqual(["Second Signal", "The Far Meridian"]),
+    );
+    expect(await screen.findByRole("button", { name: "Load more saved titles" })).toBeVisible();
+    expect(listItems).toHaveBeenCalledWith(watchLaterId, {
+      availability: "all",
+      limit: 30,
+      sort: "manual",
+    });
   });
 
   it("creates a bounded personal list without exposing private input in the URL", async () => {
@@ -207,6 +415,52 @@ describe("SavedLibrary", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Created Family night.");
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Family night is empty." })).toBeVisible(),
+    );
+  });
+
+  it("retains one create key while the same pending name has an ambiguous failure", async () => {
+    const user = userEvent.setup();
+    const ambiguous = new SavedListsClientError(
+      "unavailable",
+      "service_unavailable",
+      "Try again.",
+      { retryMode: "same_key" },
+    );
+    const createList = vi
+      .fn<SavedListsClient["createList"]>()
+      .mockRejectedValueOnce(ambiguous)
+      .mockRejectedValueOnce(ambiguous)
+      .mockResolvedValueOnce({
+        data: { list: { ...customList, id: `saved_list_${"n".repeat(22)}`, name: "Changed" } },
+        etag,
+        replayed: true,
+      });
+    render(
+      <SavedLibrary
+        client={{ ...savedListsClient, createList }}
+        initialOutcome={ready}
+        initialPage={{ data: page, etag }}
+        live={false}
+      />,
+    );
+    await user.type(screen.getByLabelText("New personal list"), "Retry me");
+    const create = screen.getByRole("button", { name: "Create private list" });
+
+    await user.click(create);
+    await screen.findByRole("alert");
+    const name = screen.getByLabelText("New personal list");
+    await user.clear(name);
+    await user.type(name, "Changed");
+    await user.click(create);
+    await waitFor(() => expect(createList).toHaveBeenCalledTimes(2));
+    await user.click(create);
+
+    await waitFor(() => expect(createList).toHaveBeenCalledTimes(3));
+    expect(createList.mock.calls[0]?.[1].idempotencyKey).not.toBe(
+      createList.mock.calls[1]?.[1].idempotencyKey,
+    );
+    expect(createList.mock.calls[1]?.[1].idempotencyKey).toBe(
+      createList.mock.calls[2]?.[1].idempotencyKey,
     );
   });
 

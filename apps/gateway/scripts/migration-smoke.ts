@@ -33,6 +33,7 @@ const requiredTables = [
   "media_issue_operations",
   "media_references",
   "media_download_grants",
+  "media_request_profile_preferences",
   "media_request_operations",
   "oidc_logout_receipts",
   "oidc_providers",
@@ -98,6 +99,7 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  connector_configs: ["public_ui_url"],
   download_queue_bulk_operations: [
     "completed_at",
     "fingerprint_hash",
@@ -181,6 +183,7 @@ const requiredColumns = {
     "session_id",
     "started_at",
     "state",
+    "target_digest",
     "user_id",
   ],
   library_removal_previews: [
@@ -252,6 +255,16 @@ const requiredColumns = {
     "response_json",
     "state",
     "user_id",
+  ],
+  media_request_profile_preferences: [
+    "connector_id",
+    "created_at",
+    "destination_id",
+    "is_4k",
+    "kind",
+    "profile_id",
+    "updated_at",
+    "updated_by_user_id",
   ],
   playback_asset_handles: [
     "encrypted_target",
@@ -431,6 +444,7 @@ const requiredIndexes = {
   library_removal_operations: [
     "library_removal_operations_preview_unique",
     "library_removal_operations_reference_idx",
+    "library_removal_operations_running_target_unique",
     "library_removal_operations_state_created_idx",
     "library_removal_operations_user_key_unique",
   ],
@@ -533,6 +547,7 @@ const requiredTriggers = [
   "audit_budget_entries_update_immutable",
   "audit_budget_scopes_delete_protected",
   "audit_budget_scopes_update_guarded",
+  "saved_catalog_media_reference_before_delete",
   "session_rotation_aliases_update_immutable",
   "session_secret_reservations_delete_immutable",
   "session_secret_reservations_update_immutable",
@@ -556,6 +571,12 @@ interface MigrationJournal {
   version: string;
 }
 
+interface MigrationSnapshot {
+  id: string;
+  prevId: string;
+  tables: Record<string, unknown>;
+}
+
 interface LegacySessionFixture {
   createdAt: number;
   csrfTokenHash: string;
@@ -572,6 +593,45 @@ function writeHistoricalMigrationFixture() {
   const journal = JSON.parse(
     readFileSync(path.join(currentMigrationDirectory, "meta/_journal.json"), "utf8"),
   ) as MigrationJournal;
+  const expectedTail = [
+    [26, "0026_media_request_profile_preferences"],
+    [27, "0027_connector_public_ui_urls"],
+    [28, "0028_library_removal_operations"],
+    [29, "0029_saved_lists"],
+  ];
+  assertCondition(
+    JSON.stringify(journal.entries.slice(-4).map(({ idx, tag }) => [idx, tag])) ===
+      JSON.stringify(expectedTail),
+    "Current migration journal must preserve the linear parent and saved-list ancestry.",
+  );
+  const snapshots = [26, 27, 28, 29].map(
+    (index) =>
+      JSON.parse(
+        readFileSync(path.join(currentMigrationDirectory, `meta/00${index}_snapshot.json`), "utf8"),
+      ) as MigrationSnapshot,
+  );
+  assertCondition(
+    snapshots[0]?.id === "016e5741-dd87-416d-8b7d-c5a304008173" &&
+      snapshots[1]?.id === "d72bbdc7-4633-464e-b248-cbaf1640ebbe" &&
+      snapshots[2]?.id === "b0bd4167-ae32-4da2-b8b7-ca27eae76fde" &&
+      snapshots[3]?.id === "b95d5b25-0fe6-4b68-8ab4-febf21513aac" &&
+      snapshots.every(
+        (snapshot, index) => index === 0 || snapshot.prevId === snapshots[index - 1]?.id,
+      ),
+    "Migration snapshots 0026 through 0029 must retain one linear ancestry.",
+  );
+  assertCondition(
+    [
+      "library_removal_operations",
+      "media_request_profile_preferences",
+      "saved_catalog_items",
+      "saved_list_items",
+      "saved_list_operations",
+      "saved_lists",
+      "saved_targets",
+    ].every((table) => Object.hasOwn(snapshots[3]!.tables, table)),
+    "Snapshot 0029 must include all parent and saved-list tables.",
+  );
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
     historicalEntries.length === 3 &&
@@ -603,7 +663,9 @@ function writeHistoricalMigrationFixture() {
 }
 
 function applyHistoricalMigrations(database: DatabaseHandle) {
-  migrateWithDrizzle(database.db, { migrationsFolder: historicalMigrationDirectory });
+  migrateWithDrizzle(database.db, {
+    migrationsFolder: historicalMigrationDirectory,
+  });
 }
 
 function insertLegacySession(database: DatabaseHandle, fixture: LegacySessionFixture) {
@@ -660,8 +722,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0027_saved_lists",
-  "Current migration journal must end at migration 0027_saved_lists.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0029_saved_lists",
+  "Current migration journal must end at migration 0029_saved_lists.",
 );
 
 try {
@@ -756,6 +818,23 @@ try {
       throw new Error(
         "Migration is missing the connector type-bound service identity foreign key.",
       );
+    }
+
+    const requestPreferenceForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(media_request_profile_preferences)",
+    ) as { from: string; on_delete: string; table: string; to: string }[];
+    for (const [column, table, onDelete] of [
+      ["connector_id", "connector_configs", "CASCADE"],
+      ["updated_by_user_id", "users", "SET NULL"],
+    ] as const) {
+      if (
+        !requestPreferenceForeignKeys.some(
+          ({ from, on_delete: foreignDelete, table: foreignTable, to }) =>
+            from === column && foreignTable === table && to === "id" && foreignDelete === onDelete,
+        )
+      ) {
+        throw new Error(`Migration is missing the request-preference ${column} foreign key.`);
+      }
     }
 
     const mediaReferenceForeignKeys = database.sqlite.pragma(
@@ -863,35 +942,15 @@ try {
 
     const removalOperationForeignKeys = database.sqlite.pragma(
       "foreign_key_list(library_removal_operations)",
-    ) as { from: string; id: number; seq: number; table: string; to: string }[];
-    for (const [column, table] of [
-      ["user_id", "users"],
-      ["media_reference_id", "media_references"],
-    ] as const) {
-      if (
-        !removalOperationForeignKeys.some(
-          ({ from, table: foreignTable, to }) =>
-            from === column && foreignTable === table && to === "id",
-        )
-      ) {
-        throw new Error(`Migration is missing the removal-operation ${column} foreign key.`);
-      }
-    }
-    const removalOperationLinkForeignKeyId = removalOperationForeignKeys.find(
-      ({ from, table }) =>
-        from === "service_identity_link_id" && table === "service_identity_links",
-    )?.id;
-    const removalOperationLinkForeignKeyColumns = removalOperationForeignKeys
-      .filter(({ id }) => id === removalOperationLinkForeignKeyId)
-      .sort((left, right) => left.seq - right.seq)
-      .map(({ from, to }) => `${from}:${to}`);
+    ) as { from: string; table: string; to: string }[];
     if (
-      removalOperationLinkForeignKeyColumns.join(",") !==
-      "service_identity_link_id:id,user_id:user_id"
+      removalOperationForeignKeys.length !== 1 ||
+      !removalOperationForeignKeys.some(
+        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+      )
     ) {
-      throw new Error("Migration is missing the user-bound removal-operation link foreign key.");
+      throw new Error("Removal operations must only reference their durable owning user.");
     }
-
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
       "foreign_key_list(discovery_artwork_references)",
     ) as { from: string; table: string; to: string }[];
@@ -1153,7 +1212,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0027.",
+      "Production migration did not advance the historical fixture exactly through migration 0029.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1318,7 +1377,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0027, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0029, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

@@ -48,7 +48,25 @@ export const EpisodeDetailsOpen: Story = {
     });
     episodeDetail.scrollIntoView({ block: "center" });
     await waitFor(() => expect(episodeDetail).toBeVisible());
-    await waitFor(() => expect(within(dialog).getByText("Mara Voss")).toBeVisible());
+    expect(
+      await within(episodeDetail).findByRole("button", { name: "View Mara Voss profile" }),
+    ).toBeVisible();
+  },
+};
+
+export const OwnedMoviePersonProfile: Story = {
+  args: { item: movie },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    const libraryDialog = await canvas.findByRole("dialog", { name: "Ember Coast details" });
+    await userEvent.click(
+      await within(libraryDialog).findByRole("button", { name: "View Mara Voss profile" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("dialog", { name: /(?:Mara Voss person context|Person context)/u }),
+      ).toBeVisible(),
+    );
   },
 };
 

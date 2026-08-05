@@ -72,6 +72,9 @@ function boundaryError(status: "forbidden" | "signed_out" | "unavailable") {
 
 function actionError(error: unknown) {
   if (error instanceof SavedListsClientError) {
+    if (error.code === "saved_favorite_outcome_unknown") {
+      return "Jellyfin may have changed this favorite. Try again to reconcile its current state.";
+    }
     if (error.kind === "signed_out") return "Your session ended. Sign in again to save this title.";
     if (error.kind === "forbidden") return "This account cannot manage private saved titles.";
     if (error.kind === "precondition" || error.kind === "conflict") {
@@ -124,6 +127,7 @@ export function SavedTitleActions(properties: SavedTitleActionsProperties) {
   const [resolved, setResolved] = useState<ResolvedTitle | null>(null);
   const [state, setState] = useState<ActionState>({ kind: eager ? "loading" : "idle" });
   const mounted = useRef(true);
+  const favoriteIntent = useRef<{ favorite: boolean; idempotencyKey: string } | null>(null);
   const pending = state.kind === "loading" || state.kind === "pending";
 
   const refresh = useCallback(
@@ -158,50 +162,68 @@ export function SavedTitleActions(properties: SavedTitleActionsProperties) {
     };
   }, [eager, refresh]);
 
+  async function withFreshTitleRetry<T>(operation: (current: ResolvedTitle) => Promise<T>) {
+    const current = resolved ?? (await resolveTitle(client, target));
+    try {
+      return await operation(current);
+    } catch (error) {
+      if (!(error instanceof SavedListsClientError) || error.retryMode !== "refresh") throw error;
+      return operation(await resolveTitle(client, target));
+    }
+  }
+
   async function toggleWatchLater() {
     if (pending) return;
     setState({ action: "watch_later", kind: "pending" });
     try {
-      const current = resolved ?? (await resolveTitle(client, target));
-      const listId = current.snapshot.lists.watchLater.id;
-      let etag: string;
-      let summary: SavedMembershipSummary;
-      if (current.summary.watchLater) {
-        if (!current.summary.catalogReferenceId) {
-          throw new SavedListsClientError(
-            "invalid_response",
-            "saved_catalog_reference_missing",
-            "The saved title is missing its private catalog reference.",
-          );
+      let addKey: string | undefined;
+      const result = await withFreshTitleRetry(async (current) => {
+        const listId = current.snapshot.lists.watchLater.id;
+        if (current.summary.watchLater) {
+          if (!current.summary.catalogReferenceId) {
+            throw new SavedListsClientError(
+              "invalid_response",
+              "saved_catalog_reference_missing",
+              "The saved title is missing its private catalog reference.",
+            );
+          }
+          const removed = await client.removeItem(listId, current.summary.catalogReferenceId, {
+            csrfToken: current.snapshot.csrfToken,
+            etag: current.etag,
+          });
+          return {
+            current,
+            etag: removed.etag,
+            summary: { ...current.summary, watchLater: false },
+          };
         }
-        const result = await client.removeItem(listId, current.summary.catalogReferenceId, {
-          csrfToken: current.snapshot.csrfToken,
-          etag: current.etag,
-        });
-        etag = result.etag;
-        summary = { ...current.summary, watchLater: false };
-      } else {
-        const result = await client.addItem(
+        addKey ??= createSavedListIdempotencyKey();
+        const added = await client.addItem(
           listId,
           { targetReferenceId: current.summary.targetReferenceId },
           {
             csrfToken: current.snapshot.csrfToken,
             etag: current.etag,
-            idempotencyKey: createSavedListIdempotencyKey(),
+            idempotencyKey: addKey,
           },
         );
-        etag = result.etag;
-        summary = {
-          ...current.summary,
-          catalogReferenceId: result.data.item.catalog.id,
-          watchLater: true,
+        return {
+          current,
+          etag: added.etag,
+          summary: {
+            ...current.summary,
+            catalogReferenceId: added.data.item.catalog.id,
+            watchLater: true,
+          },
         };
-      }
+      });
       if (mounted.current) {
-        setResolved({ ...current, etag, summary });
+        setResolved({ ...result.current, etag: result.etag, summary: result.summary });
         setState({
           kind: "ready",
-          message: summary.watchLater ? "Added to Watch Later." : "Removed from Watch Later.",
+          message: result.summary.watchLater
+            ? "Added to Watch Later."
+            : "Removed from Watch Later.",
         });
       }
     } catch (error) {
@@ -213,50 +235,54 @@ export function SavedTitleActions(properties: SavedTitleActionsProperties) {
     if (pending) return;
     setState({ action: "custom_list", kind: "pending", listId });
     try {
-      const current = resolved ?? (await resolveTitle(client, target));
-      const list = await client.readList(listId);
-      const included = current.summary.customListIds.includes(listId);
-      let catalogId = current.summary.catalogReferenceId;
-      if (included) {
-        if (!catalogId) {
-          throw new SavedListsClientError(
-            "invalid_response",
-            "saved_catalog_reference_missing",
-            "The saved title is missing its private catalog reference.",
-          );
-        }
-        await client.removeItem(listId, catalogId, {
-          csrfToken: current.snapshot.csrfToken,
-          etag: list.etag,
-        });
-      } else {
-        const result = await client.addItem(
-          listId,
-          { targetReferenceId: current.summary.targetReferenceId },
-          {
+      let addKey: string | undefined;
+      const result = await withFreshTitleRetry(async (current) => {
+        const list = await client.readList(listId);
+        const included = current.summary.customListIds.includes(listId);
+        let catalogId = current.summary.catalogReferenceId;
+        if (included) {
+          if (!catalogId) {
+            throw new SavedListsClientError(
+              "invalid_response",
+              "saved_catalog_reference_missing",
+              "The saved title is missing its private catalog reference.",
+            );
+          }
+          await client.removeItem(listId, catalogId, {
             csrfToken: current.snapshot.csrfToken,
             etag: list.etag,
-            idempotencyKey: createSavedListIdempotencyKey(),
-          },
-        );
-        catalogId = result.data.item.catalog.id;
-      }
-      const customListIds = included
-        ? current.summary.customListIds.filter((id) => id !== listId)
-        : [...current.summary.customListIds, listId];
+          });
+        } else {
+          addKey ??= createSavedListIdempotencyKey();
+          const added = await client.addItem(
+            listId,
+            { targetReferenceId: current.summary.targetReferenceId },
+            {
+              csrfToken: current.snapshot.csrfToken,
+              etag: list.etag,
+              idempotencyKey: addKey,
+            },
+          );
+          catalogId = added.data.item.catalog.id;
+        }
+        const customListIds = included
+          ? current.summary.customListIds.filter((id) => id !== listId)
+          : [...current.summary.customListIds, listId];
+        return { catalogId, current, customListIds, included };
+      });
       if (mounted.current) {
         setResolved({
-          ...current,
+          ...result.current,
           summary: {
-            ...current.summary,
-            catalogReferenceId: catalogId,
-            customListCount: customListIds.length,
-            customListIds,
+            ...result.current.summary,
+            catalogReferenceId: result.catalogId,
+            customListCount: result.customListIds.length,
+            customListIds: result.customListIds,
           },
         });
         setState({
           kind: "ready",
-          message: `${included ? "Removed from" : "Added to"} ${listName}.`,
+          message: `${result.included ? "Removed from" : "Added to"} ${listName}.`,
         });
       }
     } catch (error) {
@@ -267,24 +293,48 @@ export function SavedTitleActions(properties: SavedTitleActionsProperties) {
   async function toggleFavorite() {
     if (pending || resolved?.summary.favorite.state !== "synced") return;
     setState({ action: "favorite", kind: "pending" });
+    const desiredFavorite = !resolved.summary.favorite.value;
+    favoriteIntent.current =
+      favoriteIntent.current?.favorite === desiredFavorite
+        ? favoriteIntent.current
+        : {
+            favorite: desiredFavorite,
+            idempotencyKey: createSavedListIdempotencyKey(),
+          };
+    const intent = favoriteIntent.current;
+    if (!intent) return;
     try {
-      const favorite = !resolved.summary.favorite.value;
-      await client.updateFavorite(
-        resolved.summary.targetReferenceId,
-        { favorite },
-        { csrfToken: resolved.snapshot.csrfToken },
-      );
+      const current = await withFreshTitleRetry(async (candidate) => {
+        await client.updateFavorite(
+          candidate.summary.targetReferenceId,
+          { favorite: intent.favorite },
+          {
+            csrfToken: candidate.snapshot.csrfToken,
+            idempotencyKey: intent.idempotencyKey,
+          },
+        );
+        return candidate;
+      });
+      favoriteIntent.current = null;
       if (mounted.current) {
         setResolved({
-          ...resolved,
-          summary: { ...resolved.summary, favorite: { state: "synced", value: favorite } },
+          ...current,
+          summary: {
+            ...current.summary,
+            favorite: { state: "synced", value: intent.favorite },
+          },
         });
         setState({
           kind: "ready",
-          message: favorite ? "Added to Jellyfin Favorites." : "Removed from Jellyfin Favorites.",
+          message: intent.favorite
+            ? "Added to Jellyfin Favorites."
+            : "Removed from Jellyfin Favorites.",
         });
       }
     } catch (error) {
+      if (!(error instanceof SavedListsClientError) || error.retryMode !== "same_key") {
+        favoriteIntent.current = null;
+      }
       if (mounted.current) setState({ kind: "error", message: actionError(error) });
     }
   }

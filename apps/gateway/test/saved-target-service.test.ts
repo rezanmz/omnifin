@@ -160,6 +160,7 @@ function harness(favoriteResult: boolean | Error = true) {
   seed(database, appConfig);
   let now = startedAt.getTime();
   let auditId = 0;
+  let operationId = 0;
   const references = new MediaReferenceService(database, appConfig, {
     clock: () => new Date(now),
     createToken: () => "m".repeat(22),
@@ -199,6 +200,7 @@ function harness(favoriteResult: boolean | Error = true) {
     clock: () => new Date(now),
     createAuditId: () => `saved-favorite-audit-${++auditId}`,
     createClient,
+    createOperationToken: () => (++operationId).toString(36).padStart(22, "o"),
     createTargetToken: () => "t".repeat(22),
     mediaReferences: { clock: () => startedAt },
     resolveDiscovery,
@@ -335,6 +337,40 @@ describe("SavedTargetService", () => {
     ).toMatch(/^[A-Za-z0-9_-]{22}$/u);
   });
 
+  it.each([
+    ["unavailable", "requestable"],
+    ["partial", "requestable"],
+    ["requested", "requested"],
+    ["processing", "requested"],
+  ] as const)("maps verified %s discovery availability to %s", async (availability, expected) => {
+    const { resolveDiscovery, service } = harness();
+    resolveDiscovery.mockResolvedValueOnce(discoveryDetail({ availability }));
+
+    const issued = await service.issueDiscovery(
+      { kind: "movie", language: "en", tmdbId: 603 },
+      { principal: principal() },
+    );
+
+    expect(
+      service.resolve(issued.targetReferenceId, { principal: principal() }).payload,
+    ).toMatchObject({ availability: expected, source: "seerr" });
+  });
+
+  it.each([
+    ["available", "not_found"],
+    ["unknown", "connector_unavailable"],
+  ] as const)("fails closed for %s discovery availability", async (availability, reason) => {
+    const { resolveDiscovery, service } = harness();
+    resolveDiscovery.mockResolvedValueOnce(discoveryDetail({ availability }));
+
+    await expect(
+      service.issueDiscovery(
+        { kind: "movie", language: "en", tmdbId: 603 },
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason });
+  });
+
   it("rejects mismatched or unavailable catalog resolution", async () => {
     const first = harness();
     first.resolveDiscovery.mockResolvedValueOnce(discoveryDetail({ tmdbId: 604 }));
@@ -421,6 +457,7 @@ describe("SavedTargetService", () => {
     const changed = await service.updateFavorite(
       issued.targetReferenceId,
       { favorite: false },
+      "favorite-change-0001",
       {
         ipAddress: "203.0.113.91",
         principal: principal(),
@@ -467,6 +504,7 @@ describe("SavedTargetService", () => {
     await service.updateFavorite(
       issued.targetReferenceId,
       { favorite: false },
+      "favorite-change-0002",
       { principal: principal() },
     );
     expect(
@@ -482,18 +520,76 @@ describe("SavedTargetService", () => {
       service.updateFavorite(
         issued.targetReferenceId,
         { favorite: false },
+        "favorite-failure-0001",
         { principal: principal() },
       ),
-    ).rejects.toMatchObject({ reason: "connector_unavailable" });
+    ).rejects.toMatchObject({ reason: "outcome_unknown" });
 
     readFavoriteState.mockResolvedValueOnce(true);
     await expect(
       service.updateFavorite(
         issued.targetReferenceId,
         { favorite: false },
+        "favorite-failure-0002",
         { principal: principal() },
       ),
     ).rejects.toMatchObject({ reason: "synchronization_failed" });
+  });
+
+  it("reconciles a possibly applied favorite write with the same desired-state key", async () => {
+    const { database, readFavoriteState, referenceId, service, updateFavoriteState } =
+      harness(true);
+    const issued = await service.issueOwned(referenceId, { principal: principal() });
+    database.sqlite.exec(`
+      create trigger fail_saved_target_payload_update
+      before update of encrypted_payload on saved_targets
+      begin
+        select raise(abort, 'simulated local persistence failure');
+      end;
+    `);
+
+    await expect(
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        "favorite-reconcile-0001",
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "outcome_unknown" });
+    expect(
+      database.sqlite
+        .prepare("select state, failure_code as failureCode from saved_list_operations")
+        .get(),
+    ).toEqual({ failureCode: "outcome_unknown", state: "reconcile_required" });
+
+    database.sqlite.exec("drop trigger fail_saved_target_payload_update");
+    let releaseRead: ((favorite: boolean) => void) | undefined;
+    readFavoriteState.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    const reconciliation = service.updateFavorite(
+      issued.targetReferenceId,
+      { favorite: false },
+      "favorite-reconcile-0001",
+      { principal: principal() },
+    );
+    await expect(
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        "favorite-reconcile-0001",
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+    releaseRead?.(false);
+    await expect(reconciliation).resolves.toMatchObject({ favorite: false });
+    expect(updateFavoriteState).toHaveBeenCalledOnce();
+    expect(database.sqlite.prepare("select state from saved_list_operations").get()).toEqual({
+      state: "succeeded",
+    });
   });
 
   it("accepts legacy no-credential storage and normalizes an empty connector label", async () => {
@@ -619,7 +715,7 @@ describe("SavedTargetService", () => {
     first.advance(15 * 60 * 1_000);
     expect(() =>
       first.service.resolveOwned(issued.targetReferenceId, { principal: principal() }),
-    ).toThrow(expect.objectContaining({ reason: "not_found" }));
+    ).toThrow(expect.objectContaining({ reason: "expired" }));
 
     const second = harness();
     const stale = await second.service.issueOwned(second.referenceId, { principal: principal() });

@@ -11,7 +11,9 @@ import {
   discoveryMediaDetailResponseSchema,
   type DiscoveryMediaDetailResponse,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsResponseSchema,
   type DiscoveryPersonDetailResponse,
+  type DiscoveryPersonCreditsResponse,
   discoverySearchResponseSchema,
   type DiscoverySearchResponse,
 } from "@omnifin/contracts/discovery";
@@ -122,6 +124,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     birthplace: "Beirut, Lebanon",
     credits: [],
     creditsState: "empty",
+    creditsTotal: 0,
     deathday: null,
     department: "Acting",
     id: "person:6384",
@@ -130,6 +133,23 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
     source: "seerr",
     tmdbId: 6384,
   },
+};
+
+const normalizedPersonCreditsResponse: DiscoveryPersonCreditsResponse = {
+  generatedAt: now.toISOString(),
+  items: Array.from({ length: 6 }, (_, index) => ({
+    availability: "available",
+    kind: "movie",
+    role: `Role ${index + 25}`,
+    title: `Movie ${index + 25}`,
+    tmdbId: 1_000 + index,
+    voteAverage: 7,
+    year: 2024,
+  })),
+  page: 2,
+  pageSize: 24,
+  totalPages: 2,
+  totalResults: 30,
 };
 
 async function normalizedFeedPage(kind: DiscoveryFeedRailKind): Promise<SeerrDiscoveryFeedPage> {
@@ -196,6 +216,7 @@ async function harness(
       totalResults: 84,
     }),
   ),
+  personCreditsImplementation = vi.fn(async () => normalizedPersonCreditsResponse),
 ) {
   const config = testConfig();
   const detailImplementation = vi.fn(async () => ({
@@ -211,6 +232,7 @@ async function harness(
         detail: detailImplementation,
         discover: discoverImplementation,
         personDetail: personDetailImplementation,
+        personCredits: personCreditsImplementation,
         readDiscoveryArtwork: artworkImplementation,
         search: searchImplementation,
       }),
@@ -339,6 +361,7 @@ async function harness(
     discoverImplementation,
     otherSession,
     personDetailImplementation,
+    personCreditsImplementation,
     recovery,
     searchImplementation,
     session,
@@ -555,6 +578,37 @@ describe("discovery search routes", () => {
       expect(personDetailImplementation).toHaveBeenCalledWith(
         { tmdbId: 6384 },
         { language: "en-CA" },
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves a bounded person-credit page and rejects invalid pagination", async () => {
+    const { app, personCreditsImplementation, session } = await harness();
+    try {
+      const invalid = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/people/6384/credits?page=101",
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(personCreditsImplementation).not.toHaveBeenCalled();
+
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/people/6384/credits?language=en-CA&page=2",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(discoveryPersonCreditsResponseSchema.parse(response.json())).toEqual(
+        normalizedPersonCreditsResponse,
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(personCreditsImplementation).toHaveBeenCalledWith(
+        { tmdbId: 6384 },
+        { language: "en-CA", page: 2 },
         expect.any(AbortSignal),
       );
     } finally {

@@ -7,6 +7,8 @@ import type {
   SavedListSummary,
 } from "@omnifin/contracts/saved";
 import {
+  ArrowDown,
+  ArrowUp,
   Bookmark,
   BookmarkX,
   ChevronDown,
@@ -191,10 +193,14 @@ function itemFacts(item: SavedListItemsResponse["items"][number]) {
 function SavedCard({
   busy,
   item,
+  moveDown,
+  moveUp,
   remove,
 }: {
   busy: boolean;
   item: SavedListItemsResponse["items"][number];
+  moveDown: (() => void) | null;
+  moveUp: (() => void) | null;
   remove: () => void;
 }) {
   const Icon = item.catalog.kind === "movie" ? Film : Tv;
@@ -218,20 +224,47 @@ function SavedCard({
           <p className="eyebrow">{item.catalog.kind}</p>
           <h3>{item.catalog.title}</h3>
         </div>
-        <button
-          aria-label={`Remove ${item.catalog.title} from this private list`}
-          className={styles.remove}
-          disabled={busy}
-          onClick={remove}
-          type="button"
-        >
-          {busy ? (
-            <LoaderCircle aria-hidden="true" className={styles.spinner} size={17} />
-          ) : (
-            <Trash2 aria-hidden="true" size={17} />
-          )}
-          <span>Remove</span>
-        </button>
+        <div className={styles.cardActions}>
+          {moveUp || moveDown ? (
+            <div
+              aria-label={`Reorder ${item.catalog.title}`}
+              className={styles.reorder}
+              role="group"
+            >
+              <button
+                aria-label={`Move ${item.catalog.title} earlier`}
+                disabled={busy || moveUp === null}
+                onClick={moveUp ?? undefined}
+                type="button"
+              >
+                <ArrowUp aria-hidden="true" size={16} />
+              </button>
+              <button
+                aria-label={`Move ${item.catalog.title} later`}
+                disabled={busy || moveDown === null}
+                onClick={moveDown ?? undefined}
+                type="button"
+              >
+                <ArrowDown aria-hidden="true" size={16} />
+              </button>
+            </div>
+          ) : null}
+          <button
+            aria-label={`Remove ${item.catalog.title} from this private list`}
+            className={styles.remove}
+            data-saved-card-action="remove"
+            disabled={busy}
+            onClick={remove}
+            type="button"
+          >
+            {busy ? (
+              <LoaderCircle aria-hidden="true" className={styles.spinner} size={17} />
+            ) : (
+              <Trash2 aria-hidden="true" size={17} />
+            )}
+            <span>Remove</span>
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -285,13 +318,21 @@ export function SavedLibrary({
   const [query, setQuery] = useState("");
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [busyCatalogId, setBusyCatalogId] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [newListName, setNewListName] = useState("");
   const [creatingList, setCreatingList] = useState(false);
   const searchReference = useRef<HTMLInputElement>(null);
   const initialPageConsumed = useRef(false);
+  const createIntent = useRef<{ idempotencyKey: string; name: string } | null>(null);
+  const cardReferences = useRef(new Map<string, HTMLDivElement>());
+  const collectionHeadingReference = useRef<HTMLHeadingElement>(null);
+  const paginationController = useRef<AbortController | null>(null);
+  const pageContextRevision = useRef(0);
+  const [focusAfterRemoval, setFocusAfterRemoval] = useState<string | "heading" | null>(null);
   const refreshAvailable = live ?? initialOutcome === undefined;
+  const outcomeReady = outcome.status === "ready";
 
   useEffect(() => {
     if (!refreshAvailable || initialOutcome !== undefined) return;
@@ -309,7 +350,7 @@ export function SavedLibrary({
   }, [client, initialOutcome, refreshAvailable, refreshRevision]);
 
   useEffect(() => {
-    if (outcome.status !== "ready" || !selectedListId) return;
+    if (!outcomeReady || !selectedListId) return;
     if (!refreshAvailable && initialPage && !initialPageConsumed.current) {
       initialPageConsumed.current = true;
       return;
@@ -342,13 +383,33 @@ export function SavedLibrary({
     client,
     filter,
     initialPage,
-    outcome,
+    outcomeReady,
     query,
     refreshAvailable,
     refreshRevision,
     selectedListId,
     sort,
   ]);
+
+  useEffect(() => {
+    if (focusAfterRemoval === null) return;
+    if (focusAfterRemoval === "heading") {
+      collectionHeadingReference.current?.focus();
+    } else {
+      cardReferences.current
+        .get(focusAfterRemoval)
+        ?.querySelector<HTMLButtonElement>('button[data-saved-card-action="remove"]')
+        ?.focus();
+    }
+    setFocusAfterRemoval(null);
+  }, [focusAfterRemoval, page]);
+
+  useEffect(
+    () => () => {
+      paginationController.current?.abort();
+    },
+    [],
+  );
 
   const lists = useMemo(
     () => (outcome.status === "ready" ? listCollection(outcome) : []),
@@ -366,7 +427,48 @@ export function SavedLibrary({
   }
   const readyOutcome = outcome as Extract<SavedWorkspaceLoadOutcome, { status: "ready" }>;
 
+  function cancelPagination() {
+    paginationController.current?.abort();
+    paginationController.current = null;
+    pageContextRevision.current += 1;
+    setLoadingMore(false);
+  }
+
+  function synchronizeListSummary(summary: SavedListSummary) {
+    setOutcome((current) => {
+      if (current.status !== "ready") return current;
+      const updateList = (list: SavedListSummary) => (list.id === summary.id ? summary : list);
+      return {
+        snapshot: {
+          ...current.snapshot,
+          lists: {
+            ...current.snapshot.lists,
+            lists: current.snapshot.lists.lists.map(updateList),
+            watchLater: updateList(current.snapshot.lists.watchLater),
+          },
+        },
+        status: "ready",
+      };
+    });
+  }
+
+  async function refreshFirstPage(listId: string, expectedContextRevision: number) {
+    const refreshed = await client.listItems(listId, {
+      availability: filter,
+      limit: 30,
+      ...(query ? { query } : {}),
+      sort,
+    });
+    synchronizeListSummary(refreshed.data.list);
+    if (pageContextRevision.current === expectedContextRevision) {
+      setPage(refreshed);
+      setPageLoading(false);
+    }
+    return refreshed;
+  }
+
   function chooseList(listId: string) {
+    cancelPagination();
     setSelectedListId(listId);
     setPage(null);
     setPageLoading(true);
@@ -382,6 +484,7 @@ export function SavedLibrary({
     event.preventDefault();
     const nextQuery = draftQuery.trim();
     if (nextQuery === query) return;
+    cancelPagination();
     setPageLoading(true);
     setError("");
     setQuery(nextQuery);
@@ -389,27 +492,43 @@ export function SavedLibrary({
 
   async function removeItem(item: SavedListItemsResponse["items"][number]) {
     if (!page || !selectedList) return;
+    cancelPagination();
+    const expectedContextRevision = pageContextRevision.current;
+    const index = page.data.items.findIndex(({ id }) => id === item.id);
+    const focused = cardReferences.current.get(item.id)?.contains(document.activeElement) === true;
+    const remaining = page.data.items.filter((candidate) => candidate.id !== item.id);
+    const nextFocus = remaining[index]?.id ?? remaining[index - 1]?.id ?? "heading";
     setBusyCatalogId(item.catalog.id);
     setError("");
+    let mutationCompleted = false;
     try {
       const result = await client.removeItem(selectedList.id, item.catalog.id, {
         csrfToken: readyOutcome.snapshot.csrfToken,
         etag: page.etag,
       });
-      setPage({
-        data: {
-          ...page.data,
-          items: page.data.items.filter((candidate) => candidate.catalog.id !== item.catalog.id),
-          list: {
-            ...page.data.list,
-            itemCount: Math.max(0, page.data.list.itemCount - (result.data.removed ? 1 : 0)),
-            revision: result.data.revision,
-          },
-        },
-        etag: result.etag,
+      mutationCompleted = true;
+      const itemCount = Math.max(0, page.data.list.itemCount - 1);
+      synchronizeListSummary({
+        ...page.data.list,
+        itemCount,
+        revision: result.data.revision,
       });
-      setNotice(`Removed ${item.catalog.title} from ${selectedList.name}.`);
+      await refreshFirstPage(selectedList.id, expectedContextRevision);
+      if (pageContextRevision.current === expectedContextRevision) {
+        setNotice(`Removed ${item.catalog.title} from ${selectedList.name}.`);
+        if (focused) setFocusAfterRemoval(nextFocus);
+      }
     } catch (reason) {
+      if (mutationCompleted) {
+        if (pageContextRevision.current === expectedContextRevision) {
+          setNotice(`Removed ${item.catalog.title} from ${selectedList.name}.`);
+          setPageLoading(true);
+          setError("The title was removed, but this private list could not be refreshed.");
+          setRefreshRevision((value) => value + 1);
+          if (focused) setFocusAfterRemoval(nextFocus);
+        }
+        return;
+      }
       setError(
         reason instanceof SavedListsClientError
           ? reason.message
@@ -423,10 +542,137 @@ export function SavedLibrary({
     }
   }
 
+  async function loadMoreItems() {
+    if (!page?.data.nextCursor || loadingMore || !selectedList) return;
+    paginationController.current?.abort();
+    const controller = new AbortController();
+    paginationController.current = controller;
+    const expectedContextRevision = pageContextRevision.current;
+    const cursor = page.data.nextCursor;
+    const listId = selectedList.id;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const next = await client.listItems(
+        listId,
+        {
+          availability: filter,
+          cursor,
+          limit: 30,
+          ...(query ? { query } : {}),
+          sort,
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted || pageContextRevision.current !== expectedContextRevision)
+        return;
+      setPage((current) => {
+        if (
+          !current ||
+          current.data.list.id !== listId ||
+          current.data.nextCursor !== cursor ||
+          pageContextRevision.current !== expectedContextRevision
+        ) {
+          return current;
+        }
+        const known = new Set(current.data.items.map(({ id }) => id));
+        return {
+          data: {
+            ...next.data,
+            items: [...current.data.items, ...next.data.items.filter(({ id }) => !known.has(id))],
+          },
+          etag: next.etag,
+        };
+      });
+    } catch (reason) {
+      if (controller.signal.aborted || pageContextRevision.current !== expectedContextRevision)
+        return;
+      setError(
+        reason instanceof SavedListsClientError
+          ? reason.message
+          : "More saved titles could not be loaded.",
+      );
+      if (reason instanceof SavedListsClientError && reason.retryMode === "refresh") {
+        setPageLoading(true);
+        setRefreshRevision((value) => value + 1);
+      }
+    } finally {
+      if (paginationController.current === controller) {
+        paginationController.current = null;
+        setLoadingMore(false);
+      }
+    }
+  }
+
+  async function moveItem(index: number, direction: -1 | 1) {
+    if (!page || !selectedList || busyCatalogId) return;
+    cancelPagination();
+    const expectedContextRevision = pageContextRevision.current;
+    const targetIndex = index + direction;
+    const item = page.data.items[index];
+    const targetItem = page.data.items[targetIndex];
+    if (!item || !targetItem) return;
+    const firstIndex = Math.min(index, targetIndex);
+    const positions = [item.position, targetItem.position].sort((left, right) => left - right);
+    const reordered = [...page.data.items];
+    [reordered[index], reordered[targetIndex]] = [targetItem, item];
+    reordered[firstIndex] = { ...reordered[firstIndex]!, position: positions[0]! };
+    reordered[firstIndex + 1] = { ...reordered[firstIndex + 1]!, position: positions[1]! };
+    setBusyCatalogId(item.catalog.id);
+    setError("");
+    let mutationCompleted = false;
+    try {
+      const result = await client.reorderItems(
+        selectedList.id,
+        {
+          orderedItemIds: reordered.slice(firstIndex, firstIndex + 2).map(({ id }) => id),
+          startPosition: positions[0]!,
+        },
+        {
+          csrfToken: readyOutcome.snapshot.csrfToken,
+          etag: page.etag,
+          idempotencyKey: createSavedListIdempotencyKey(),
+        },
+      );
+      mutationCompleted = true;
+      synchronizeListSummary({ ...page.data.list, revision: result.data.revision });
+      await refreshFirstPage(selectedList.id, expectedContextRevision);
+      if (pageContextRevision.current === expectedContextRevision) {
+        setNotice(`Moved ${item.catalog.title} ${direction < 0 ? "earlier" : "later"}.`);
+      }
+    } catch (reason) {
+      if (mutationCompleted) {
+        if (pageContextRevision.current === expectedContextRevision) {
+          setNotice(`Moved ${item.catalog.title} ${direction < 0 ? "earlier" : "later"}.`);
+          setPageLoading(true);
+          setError("The order changed, but this private list could not be refreshed.");
+          setRefreshRevision((value) => value + 1);
+        }
+        return;
+      }
+      setError(
+        reason instanceof SavedListsClientError
+          ? reason.message
+          : "The saved-title order could not be changed.",
+      );
+      if (reason instanceof SavedListsClientError && reason.retryMode === "refresh") {
+        setPageLoading(true);
+        setRefreshRevision((value) => value + 1);
+      }
+    } finally {
+      setBusyCatalogId(null);
+    }
+  }
+
   async function createList(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newListName.trim();
     if (!name || creatingList) return;
+    const intent =
+      createIntent.current?.name === name
+        ? createIntent.current
+        : { idempotencyKey: createSavedListIdempotencyKey(), name };
+    createIntent.current = intent;
     setCreatingList(true);
     setError("");
     try {
@@ -434,7 +680,7 @@ export function SavedLibrary({
         { description: null, name },
         {
           csrfToken: readyOutcome.snapshot.csrfToken,
-          idempotencyKey: createSavedListIdempotencyKey(),
+          idempotencyKey: intent.idempotencyKey,
         },
       );
       setOutcome({
@@ -447,10 +693,14 @@ export function SavedLibrary({
         },
         status: "ready",
       });
+      createIntent.current = null;
       setNewListName("");
       chooseList(result.data.list.id);
       setNotice(`Created ${result.data.list.name}.`);
     } catch (reason) {
+      if (!(reason instanceof SavedListsClientError) || reason.retryMode !== "same_key") {
+        createIntent.current = null;
+      }
       setError(
         reason instanceof SavedListsClientError
           ? reason.message
@@ -527,7 +777,11 @@ export function SavedLibrary({
                 autoComplete="off"
                 id="saved-new-list"
                 maxLength={80}
-                onChange={(event) => setNewListName(event.target.value)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (createIntent.current?.name !== value.trim()) createIntent.current = null;
+                  setNewListName(value);
+                }}
                 placeholder="Weekend picks"
                 value={newListName}
               />
@@ -552,7 +806,9 @@ export function SavedLibrary({
               <p className="eyebrow">
                 {selectedList?.kind === "watch_later" ? "Up next, on your terms" : "Personal list"}
               </p>
-              <h2 id="saved-list-title">{selectedList?.name ?? "Saved titles"}</h2>
+              <h2 id="saved-list-title" ref={collectionHeadingReference} tabIndex={-1}>
+                {selectedList?.name ?? "Saved titles"}
+              </h2>
               <p>{selectedList?.description ?? "A private shelf that changes only when you do."}</p>
             </div>
             <span className={styles.privateBadge}>
@@ -581,6 +837,7 @@ export function SavedLibrary({
                   aria-label="Clear private-list search"
                   className={styles.clearSearch}
                   onClick={() => {
+                    cancelPagination();
                     setDraftQuery("");
                     if (query) {
                       setPageLoading(true);
@@ -602,6 +859,7 @@ export function SavedLibrary({
               <span className="sr-only">Filter saved titles</span>
               <select
                 onChange={(event) => {
+                  cancelPagination();
                   setPageLoading(true);
                   setError("");
                   setFilter(event.target.value as SavedListAvailabilityFilter);
@@ -620,6 +878,7 @@ export function SavedLibrary({
               <span className="sr-only">Sort saved titles</span>
               <select
                 onChange={(event) => {
+                  cancelPagination();
                   setPageLoading(true);
                   setError("");
                   setSort(event.target.value as SavedListItemSort);
@@ -662,17 +921,51 @@ export function SavedLibrary({
               ))}
             </div>
           ) : page && page.data.items.length > 0 ? (
-            <div className={styles.cardGrid} role="list">
-              {page.data.items.map((item) => (
-                <div key={item.id} role="listitem">
-                  <SavedCard
-                    busy={busyCatalogId === item.catalog.id}
-                    item={item}
-                    remove={() => void removeItem(item)}
-                  />
+            <>
+              <div className={styles.cardGrid} id="saved-card-grid" role="list">
+                {page.data.items.map((item, index) => {
+                  const reorderEnabled = sort === "manual" && filter === "all" && !query;
+                  return (
+                    <div
+                      key={item.id}
+                      ref={(node) => {
+                        if (node) cardReferences.current.set(item.id, node);
+                        else cardReferences.current.delete(item.id);
+                      }}
+                      role="listitem"
+                    >
+                      <SavedCard
+                        busy={busyCatalogId === item.catalog.id}
+                        item={item}
+                        moveDown={
+                          reorderEnabled && index < page.data.items.length - 1
+                            ? () => void moveItem(index, 1)
+                            : null
+                        }
+                        moveUp={reorderEnabled && index > 0 ? () => void moveItem(index, -1) : null}
+                        remove={() => void removeItem(item)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {page.data.nextCursor ? (
+                <div className={styles.pagination}>
+                  <button
+                    aria-controls="saved-card-grid"
+                    className="button button--glass"
+                    disabled={loadingMore}
+                    onClick={() => void loadMoreItems()}
+                    type="button"
+                  >
+                    {loadingMore ? (
+                      <LoaderCircle aria-hidden="true" className={styles.spinner} size={17} />
+                    ) : null}
+                    {loadingMore ? "Loading more" : "Load more saved titles"}
+                  </button>
                 </div>
-              ))}
-            </div>
+              ) : null}
+            </>
           ) : (
             <EmptySaved
               filtered={Boolean(query) || filter !== "all"}

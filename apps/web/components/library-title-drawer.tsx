@@ -9,12 +9,14 @@ import type {
   LibraryExtra,
   LibraryExtrasResponse,
   LibraryMovieDetail,
+  LibraryMovieCredit,
   LibraryMovieMediaSource,
   LibraryPlaybackState,
   LibraryPlaybackStateAction,
   LibrarySeasonEpisode,
   LibrarySeasonEpisodesResponse,
   LibraryTitleDetailResponse,
+  LibraryTitleCredits,
 } from "@omnifin/contracts/library";
 import {
   AudioLines,
@@ -26,6 +28,7 @@ import {
   Clapperboard,
   Clock3,
   Download,
+  ExternalLink,
   Film,
   Gauge,
   HardDrive,
@@ -40,6 +43,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 
 import {
   MediaLibraryClientError,
@@ -48,7 +52,14 @@ import {
   type MediaDownloadEligibility,
   type MediaLibraryClient,
 } from "../lib/media-library";
+import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
 import { SavedTitleActions } from "./saved-title-actions";
+
+const MediaDetailDrawer = dynamic(() =>
+  import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
+);
+
+type InspectableCredit = Pick<LibraryMovieCredit, "name" | "personReferenceId">;
 
 export interface PlayableLibrarySelection {
   media: LibrarySeasonEpisode["media"] | LibraryBrowseItem["media"];
@@ -609,7 +620,108 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
   );
 }
 
-function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
+function TitleCredits({
+  credits,
+  onInspectPerson,
+  resolvingReferenceId,
+}: {
+  credits: LibraryTitleCredits;
+  onInspectPerson: (credit: InspectableCredit) => void;
+  resolvingReferenceId: string | null;
+}) {
+  return (
+    <>
+      {credits.cast.length > 0 ? (
+        <section className="library-title__people" aria-labelledby="library-title-cast-heading">
+          <div className="library-title__section-heading library-title__section-heading--compact">
+            <div>
+              <p className="eyebrow">Principal cast</p>
+              <h3 id="library-title-cast-heading">On screen</h3>
+            </div>
+            {credits.castTruncated ? <span>Showing the first 24 credits</span> : null}
+          </div>
+          <ul aria-label="Cast">
+            {credits.cast.map((credit, index) => {
+              const resolving = resolvingReferenceId === credit.personReferenceId;
+              const content = (
+                <>
+                  <PersonPortrait credit={credit} />
+                  <strong>{credit.name}</strong>
+                  <span>{resolving ? "Opening profile…" : (credit.role ?? "Cast")}</span>
+                </>
+              );
+              return (
+                <li key={`${credit.name}:${credit.role ?? "cast"}:${index}`}>
+                  {credit.personReferenceId === null ? (
+                    content
+                  ) : (
+                    <button
+                      aria-busy={resolving || undefined}
+                      aria-label={`View ${credit.name} profile`}
+                      className="library-title__person-action"
+                      data-directional-item
+                      disabled={resolving}
+                      onClick={() => onInspectPerson(credit)}
+                      type="button"
+                    >
+                      {content}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {credits.crew.length > 0 ? (
+        <section className="library-title__crew" aria-label="Key crew">
+          <p className="eyebrow">Behind the title</p>
+          <dl>
+            {credits.crew.map((credit, index) => {
+              const label = credit.type[0]!.toLocaleUpperCase("en-US") + credit.type.slice(1);
+              const resolving = resolvingReferenceId === credit.personReferenceId;
+              return (
+                <div key={`${credit.name}:${credit.type}:${index}`}>
+                  <dt>{label}</dt>
+                  <dd>
+                    {credit.personReferenceId === null ? (
+                      credit.name
+                    ) : (
+                      <button
+                        aria-busy={resolving || undefined}
+                        aria-label={`View ${credit.name} profile`}
+                        className="library-title__crew-action"
+                        data-directional-item
+                        disabled={resolving}
+                        onClick={() => onInspectPerson(credit)}
+                        type="button"
+                      >
+                        {resolving ? "Opening profile…" : credit.name}
+                        <ChevronRight aria-hidden="true" />
+                      </button>
+                    )}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+          {credits.crewTruncated ? <small>Showing the first 16 key crew credits.</small> : null}
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function MovieInformation({
+  movie,
+  onInspectPerson,
+  resolvingReferenceId,
+}: {
+  movie: LibraryMovieDetail;
+  onInspectPerson: (credit: InspectableCredit) => void;
+  resolvingReferenceId: string | null;
+}) {
   const premiereDate = formatAirDate(movie.premiereDate);
   const hasEditorialFacts =
     movie.communityRating !== null ||
@@ -653,41 +765,11 @@ function MovieInformation({ movie }: { movie: LibraryMovieDetail }) {
         </section>
       ) : null}
 
-      {movie.cast.length > 0 ? (
-        <section className="library-title__people" aria-labelledby="library-title-cast-heading">
-          <div className="library-title__section-heading library-title__section-heading--compact">
-            <div>
-              <p className="eyebrow">Principal cast</p>
-              <h3 id="library-title-cast-heading">On screen</h3>
-            </div>
-            {movie.castTruncated ? <span>Showing the first 24 credits</span> : null}
-          </div>
-          <ul aria-label="Cast">
-            {movie.cast.map((credit, index) => (
-              <li key={`${credit.name}:${credit.role ?? "cast"}:${index}`}>
-                <PersonPortrait credit={credit} />
-                <strong>{credit.name}</strong>
-                <span>{credit.role ?? "Cast"}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {movie.crew.length > 0 ? (
-        <section className="library-title__crew" aria-label="Key crew">
-          <p className="eyebrow">Behind the film</p>
-          <dl>
-            {movie.crew.map((credit, index) => (
-              <div key={`${credit.name}:${credit.type}:${index}`}>
-                <dt>{credit.type[0]!.toLocaleUpperCase("en-US") + credit.type.slice(1)}</dt>
-                <dd>{credit.name}</dd>
-              </div>
-            ))}
-          </dl>
-          {movie.crewTruncated ? <small>Showing the first 16 key crew credits.</small> : null}
-        </section>
-      ) : null}
+      <TitleCredits
+        credits={movie}
+        onInspectPerson={onInspectPerson}
+        resolvingReferenceId={resolvingReferenceId}
+      />
 
       <details className="library-title__media-information">
         <summary data-directional-item>
@@ -971,13 +1053,17 @@ function EpisodeArtwork({ episode }: { episode: LibrarySeasonEpisode }) {
 function EpisodeDetail({
   client,
   episode,
+  onInspectPerson,
   onPlaybackChange,
   onPlay,
+  resolvingReferenceId,
 }: {
   client: MediaLibraryClient;
   episode: LibrarySeasonEpisode;
+  onInspectPerson: (credit: InspectableCredit) => void;
   onPlaybackChange: (playback: LibraryPlaybackState) => void;
   onPlay: (startPositionSeconds?: number) => void;
+  resolvingReferenceId: string | null;
 }) {
   const airDate = formatAirDate(episode.airDate);
   const cast = episode.credits.filter(({ type }) => type === "cast");
@@ -1032,10 +1118,33 @@ function EpisodeDetail({
                 <UsersRound aria-hidden="true" /> On screen
               </p>
               <ul>
-                {cast.map((credit) => (
-                  <li key={`${credit.name}:${credit.role ?? "cast"}`}>
-                    <strong>{credit.name}</strong>
-                    <span>{credit.role ?? "Cast"}</span>
+                {cast.map((credit, index) => (
+                  <li
+                    key={`${credit.personReferenceId ?? "unlinked"}:${credit.name}:${credit.role ?? "cast"}:${index}`}
+                  >
+                    {credit.personReferenceId === null ? (
+                      <>
+                        <strong>{credit.name}</strong>
+                        <span>{credit.role ?? "Cast"}</span>
+                      </>
+                    ) : (
+                      <button
+                        aria-busy={resolvingReferenceId === credit.personReferenceId || undefined}
+                        aria-label={`View ${credit.name} profile`}
+                        className="library-title__episode-person-action"
+                        data-directional-item
+                        disabled={resolvingReferenceId === credit.personReferenceId}
+                        onClick={() => onInspectPerson(credit)}
+                        type="button"
+                      >
+                        <strong>{credit.name}</strong>
+                        <span>
+                          {resolvingReferenceId === credit.personReferenceId
+                            ? "Opening profile…"
+                            : (credit.role ?? "Cast")}
+                        </span>
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -1047,10 +1156,31 @@ function EpisodeDetail({
                 <Clapperboard aria-hidden="true" /> Behind the episode
               </p>
               <dl>
-                {crew.map((credit) => (
-                  <div key={`${credit.name}:${credit.type}:${credit.role ?? ""}`}>
+                {crew.map((credit, index) => (
+                  <div
+                    key={`${credit.personReferenceId ?? "unlinked"}:${credit.name}:${credit.type}:${credit.role ?? ""}:${index}`}
+                  >
                     <dt>{credit.type === "director" ? "Director" : "Writer"}</dt>
-                    <dd>{credit.name}</dd>
+                    <dd>
+                      {credit.personReferenceId === null ? (
+                        credit.name
+                      ) : (
+                        <button
+                          aria-busy={resolvingReferenceId === credit.personReferenceId || undefined}
+                          aria-label={`View ${credit.name} profile`}
+                          className="library-title__crew-action"
+                          data-directional-item
+                          disabled={resolvingReferenceId === credit.personReferenceId}
+                          onClick={() => onInspectPerson(credit)}
+                          type="button"
+                        >
+                          {resolvingReferenceId === credit.personReferenceId
+                            ? "Opening profile…"
+                            : credit.name}
+                          <ChevronRight aria-hidden="true" />
+                        </button>
+                      )}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -1101,14 +1231,18 @@ function EpisodeDetail({
 function EpisodeList({
   client,
   onLoadMore,
+  onInspectPerson,
   onPlaybackChange,
   onPlay,
+  resolvingReferenceId,
   state,
 }: {
   client: MediaLibraryClient;
   onLoadMore: () => void;
+  onInspectPerson: (credit: InspectableCredit) => void;
   onPlaybackChange: (episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) => void;
   onPlay: (selection: PlayableLibrarySelection) => void;
+  resolvingReferenceId: string | null;
   state: Extract<EpisodeState, { kind: "ready" }>;
 }) {
   const [expandedEpisodeId, setExpandedEpisodeId] = useState<string | null>(null);
@@ -1180,6 +1314,7 @@ function EpisodeList({
                 <EpisodeDetail
                   client={client}
                   episode={episode}
+                  onInspectPerson={onInspectPerson}
                   onPlaybackChange={(playback) => onPlaybackChange(episode, playback)}
                   onPlay={(startPositionSeconds) =>
                     onPlay({
@@ -1188,6 +1323,7 @@ function EpisodeList({
                       ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
                     })
                   }
+                  resolvingReferenceId={resolvingReferenceId}
                 />
               ) : null}
             </li>
@@ -1226,11 +1362,66 @@ export function LibraryTitleDrawer({
   const [episodeState, setEpisodeState] = useState<EpisodeState | null>(null);
   const [extrasAttempt, setExtrasAttempt] = useState(0);
   const [extrasState, setExtrasState] = useState<ExtrasState | null>(null);
+  const personRequestReference = useRef<AbortController | null>(null);
+  const [personAnnouncement, setPersonAnnouncement] = useState("");
+  const [personMessage, setPersonMessage] = useState<string | null>(null);
+  const [personProfile, setPersonProfile] = useState<{ name: string; tmdbId: number } | null>(null);
+  const [resolvingPersonReferenceId, setResolvingPersonReferenceId] = useState<string | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
   const referenceId = item?.media.id ?? "none";
   const requestKey = `${referenceId}:${attempt}`;
   const extrasRequestKey = `${referenceId}:${extrasAttempt}`;
+
+  useEffect(() => {
+    if (!open) personRequestReference.current?.abort();
+    return () => personRequestReference.current?.abort();
+  }, [open, referenceId]);
+
+  function closeTitleDrawer() {
+    personRequestReference.current?.abort();
+    personRequestReference.current = null;
+    setPersonMessage(null);
+    setPersonProfile(null);
+    setPersonAnnouncement("");
+    setResolvingPersonReferenceId(null);
+    onClose();
+  }
+
+  async function inspectPerson(credit: InspectableCredit) {
+    const personReferenceId = credit.personReferenceId;
+    if (personReferenceId === null) return;
+    if (!client.resolvePerson) {
+      setPersonMessage("Person profiles are unavailable in this library view.");
+      setPersonAnnouncement(`Could not open ${credit.name} profile.`);
+      return;
+    }
+    personRequestReference.current?.abort();
+    const controller = new AbortController();
+    personRequestReference.current = controller;
+    setPersonMessage(null);
+    setPersonAnnouncement(`Opening ${credit.name} profile.`);
+    setResolvingPersonReferenceId(personReferenceId);
+    try {
+      const person = await client.resolvePerson(personReferenceId, controller.signal);
+      if (controller.signal.aborted) return;
+      setPersonProfile({ name: person.name, tmdbId: person.tmdbId });
+      setPersonAnnouncement(`Opened ${person.name} profile.`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setPersonMessage(
+        error instanceof MediaLibraryClientError && error.kind === "signed_out"
+          ? "Your session ended. Sign in again to open this profile."
+          : "This person profile is temporarily unavailable. The library credit is unchanged.",
+      );
+      setPersonAnnouncement(`Could not open ${credit.name} profile.`);
+    } finally {
+      if (personRequestReference.current === controller) {
+        personRequestReference.current = null;
+        setResolvingPersonReferenceId(null);
+      }
+    }
+  }
 
   useEffect(() => {
     const dialog = dialogReference.current;
@@ -1515,226 +1706,291 @@ export function LibraryTitleDrawer({
   const visibleExtrasState = extrasState?.requestKey === extrasRequestKey ? extrasState : null;
 
   return (
-    <dialog
-      aria-label={`${item.media.title} details`}
-      className="media-detail library-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      onClose={() => {
-        if (open) onClose();
-      }}
-      onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose();
-      }}
-      ref={dialogReference}
-    >
-      <div className="media-detail__glass" data-liquid-glass>
-        <div className="media-detail__header">
-          <div className="media-detail__header-context">
-            <div>
-              <span>Library title</span>
-              <small>{item.media.kind === "series" ? "Series and seasons" : "Movie details"}</small>
+    <>
+      <dialog
+        aria-label={`${item.media.title} details`}
+        className="media-detail library-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeTitleDrawer();
+        }}
+        onClose={() => {
+          if (open) closeTitleDrawer();
+        }}
+        onMouseDown={(event) => {
+          if (event.currentTarget === event.target) closeTitleDrawer();
+        }}
+        ref={dialogReference}
+      >
+        <div className="media-detail__glass" data-liquid-glass>
+          <div className="media-detail__header">
+            <div className="media-detail__header-context">
+              <div>
+                <span>Library title</span>
+                <small>
+                  {item.media.kind === "series" ? "Series and seasons" : "Movie details"}
+                </small>
+              </div>
             </div>
+            <button
+              aria-label="Close title details"
+              className="media-detail__close"
+              data-directional-item
+              onClick={closeTitleDrawer}
+              type="button"
+            >
+              <X aria-hidden="true" />
+            </button>
           </div>
-          <button
-            aria-label="Close title details"
-            className="media-detail__close"
-            data-directional-item
-            onClick={onClose}
-            type="button"
-          >
-            <X aria-hidden="true" />
-          </button>
-        </div>
-        <div className="media-detail__scroll">
-          {!visibleTitleState ? (
-            <TitleSkeleton title={item.media.title} />
-          ) : visibleTitleState.kind === "error" ? (
-            <ErrorState
-              message={visibleTitleState.message}
-              onRetry={() => setAttempt((value) => value + 1)}
-            />
-          ) : (
-            <div className="library-title__content">
-              <section className="library-title__hero">
-                <div
-                  className="library-title__artwork"
-                  data-artwork-source={artworkPath ? "remote" : "generated"}
-                >
-                  {artworkPath ? (
-                    // Artwork remains on Omnifin's authenticated origin.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img alt="" decoding="async" src={artworkPath} />
-                  ) : null}
-                  <span aria-hidden="true">{detail!.media.title.slice(0, 1)}</span>
-                </div>
-                <div className="library-title__hero-copy">
-                  <p className="eyebrow">
-                    {detail!.media.kind === "series" ? (
-                      <Tv aria-hidden="true" />
-                    ) : (
-                      <Film aria-hidden="true" />
-                    )}
-                    {detail!.media.kind === "series" ? "Series" : "Feature film"}
-                  </p>
-                  <h2>{detail!.media.title}</h2>
-                  <div aria-label="Title facts" className="library-title__facts">
-                    {titleFacts(detail!).map((fact) => (
-                      <span key={fact}>{fact}</span>
-                    ))}
+          <p aria-atomic="true" className="sr-only" role="status">
+            {personAnnouncement}
+          </p>
+          <div className="media-detail__scroll">
+            {!visibleTitleState ? (
+              <TitleSkeleton title={item.media.title} />
+            ) : visibleTitleState.kind === "error" ? (
+              <ErrorState
+                message={visibleTitleState.message}
+                onRetry={() => setAttempt((value) => value + 1)}
+              />
+            ) : (
+              <div className="library-title__content">
+                <section className="library-title__hero">
+                  <div
+                    className="library-title__artwork"
+                    data-artwork-source={artworkPath ? "remote" : "generated"}
+                  >
+                    {artworkPath ? (
+                      // Artwork remains on Omnifin's authenticated origin.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img alt="" decoding="async" src={artworkPath} />
+                    ) : null}
+                    <span aria-hidden="true">{detail!.media.title.slice(0, 1)}</span>
                   </div>
-                  <SavedTitleActions
-                    eager
-                    key={detail!.media.id}
-                    referenceId={detail!.media.id}
-                    title={detail!.media.title}
-                  />
-                  {detail!.movie?.tagline ? (
-                    <blockquote className="library-title__tagline">
-                      {detail!.movie.tagline}
-                    </blockquote>
-                  ) : null}
-                  {detail!.media.overview ? <p>{detail!.media.overview}</p> : null}
-                  {detail!.playback ? (
-                    <PlaybackActions
-                      client={client}
-                      label="movie"
-                      media={detail!.media}
-                      onChange={updateMoviePlayback}
-                      onPlay={(startPositionSeconds) =>
-                        onPlay({
-                          media: detail!.media,
-                          playback: detail!.playback!,
-                          ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
-                        })
-                      }
-                      playback={detail!.playback}
-                    />
-                  ) : null}
-                  {detail!.media.kind === "movie" ? (
-                    <OriginalMediaDownloadAction client={client} media={detail!.media} />
-                  ) : null}
-                </div>
-              </section>
-
-              {detail!.movie ? <MovieInformation movie={detail!.movie} /> : null}
-
-              {visibleExtrasState ? (
-                <ExtrasSection
-                  onLoadMore={() => void loadMoreExtras()}
-                  onPlay={onPlay}
-                  onRetry={() => setExtrasAttempt((value) => value + 1)}
-                  state={visibleExtrasState}
-                />
-              ) : (
-                <ExtrasSkeleton />
-              )}
-
-              {detail!.media.kind === "series" ? (
-                <section className="library-title__hierarchy">
-                  <div className="library-title__section-heading">
-                    <div>
-                      <p className="eyebrow">Episode guide</p>
-                      <h3>Seasons</h3>
+                  <div className="library-title__hero-copy">
+                    <p className="eyebrow">
+                      {detail!.media.kind === "series" ? (
+                        <Tv aria-hidden="true" />
+                      ) : (
+                        <Film aria-hidden="true" />
+                      )}
+                      {detail!.media.kind === "series" ? "Series" : "Feature film"}
+                    </p>
+                    <h2>{detail!.media.title}</h2>
+                    <div aria-label="Title facts" className="library-title__facts">
+                      {titleFacts(detail!).map((fact) => (
+                        <span key={fact}>{fact}</span>
+                      ))}
                     </div>
-                    {detail!.seasonsTruncated ? <span>Showing the first 100 seasons</span> : null}
-                  </div>
-                  {detail!.seasons.length === 0 ? (
-                    <div className="library-title__episodes-empty" role="status">
-                      <Layers3 aria-hidden="true" />
-                      <p>No playable seasons are available for this Jellyfin account.</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        aria-label="Seasons"
-                        aria-orientation="horizontal"
-                        className="library-title__seasons"
-                        role="tablist"
+                    {detail!.providerReferences.length > 0 ? (
+                      <nav
+                        aria-label="External title pages"
+                        className="library-title__provider-links"
                       >
-                        {detail!.seasons.map((season, index) => (
-                          <button
-                            aria-controls={episodePanelId}
-                            aria-selected={activeSeasonNumber === season.seasonNumber}
-                            data-selected={activeSeasonNumber === season.seasonNumber || undefined}
-                            id={`library-title-${item.media.id}-season-${season.seasonNumber}`}
-                            key={season.seasonNumber}
-                            onClick={() => {
-                              setSeasonNumber(season.seasonNumber);
-                              setEpisodeAttempt(0);
-                            }}
-                            onKeyDown={(event) => {
-                              const direction =
-                                event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-                              const targetIndex =
-                                event.key === "Home"
-                                  ? 0
-                                  : event.key === "End"
-                                    ? detail!.seasons.length - 1
-                                    : direction === 0
-                                      ? null
-                                      : (index + direction + detail!.seasons.length) %
-                                        detail!.seasons.length;
-                              if (targetIndex === null) return;
-                              event.preventDefault();
-                              const target = event.currentTarget.parentElement?.querySelectorAll(
-                                "button[role='tab']",
-                              )[targetIndex] as HTMLButtonElement | undefined;
-                              target?.focus();
-                              target?.click();
-                            }}
-                            role="tab"
-                            tabIndex={activeSeasonNumber === season.seasonNumber ? 0 : -1}
-                            type="button"
+                        {detail!.providerReferences.map((reference) => (
+                          <a
+                            aria-label={`${titleProviderLabel(reference)} — open canonical title page in a new tab`}
+                            data-directional-item
+                            href={titleProviderHref(reference)}
+                            key={reference.provider}
+                            rel="noopener noreferrer"
+                            target="_blank"
                           >
-                            <strong>{season.title}</strong>
-                            <span>
-                              {season.playedEpisodeCount}/{season.episodeCount} watched
-                            </span>
-                          </button>
+                            {titleProviderLabel(reference)} <ExternalLink aria-hidden="true" />
+                          </a>
                         ))}
-                      </div>
-                      <div
-                        aria-labelledby={activeSeasonTabId}
-                        className="library-title__episode-panel"
-                        id={episodePanelId}
-                        role="tabpanel"
-                      >
-                        {!visibleEpisodeState ? (
-                          <EpisodeSkeleton />
-                        ) : visibleEpisodeState.kind === "error" ? (
-                          <ErrorState
-                            message={visibleEpisodeState.message}
-                            onRetry={() => setEpisodeAttempt((value) => value + 1)}
-                          />
-                        ) : (
-                          <EpisodeList
-                            client={client}
-                            onLoadMore={() => void loadMoreEpisodes()}
-                            onPlaybackChange={updateEpisodePlayback}
-                            onPlay={(episode) => onPlay(episode)}
-                            state={visibleEpisodeState}
-                          />
-                        )}
-                      </div>
-                    </>
-                  )}
-                </section>
-              ) : (
-                <section className="library-title__movie-note">
-                  <Clock3 aria-hidden="true" />
-                  <div>
-                    <strong>Playback starts only when you ask.</strong>
-                    <p>Review the title first, then use the explicit play action above.</p>
+                      </nav>
+                    ) : null}
+                    <SavedTitleActions
+                      eager
+                      key={detail!.media.id}
+                      referenceId={detail!.media.id}
+                      title={detail!.media.title}
+                    />
+                    {detail!.movie?.tagline ? (
+                      <blockquote className="library-title__tagline">
+                        {detail!.movie.tagline}
+                      </blockquote>
+                    ) : null}
+                    {detail!.media.overview ? <p>{detail!.media.overview}</p> : null}
+                    {detail!.playback ? (
+                      <PlaybackActions
+                        client={client}
+                        label="movie"
+                        media={detail!.media}
+                        onChange={updateMoviePlayback}
+                        onPlay={(startPositionSeconds) =>
+                          onPlay({
+                            media: detail!.media,
+                            playback: detail!.playback!,
+                            ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
+                          })
+                        }
+                        playback={detail!.playback}
+                      />
+                    ) : null}
+                    {detail!.media.kind === "movie" ? (
+                      <OriginalMediaDownloadAction client={client} media={detail!.media} />
+                    ) : null}
                   </div>
                 </section>
-              )}
-            </div>
-          )}
+
+                {personMessage ? (
+                  <p className="library-title__person-message" role="status">
+                    {personMessage}
+                  </p>
+                ) : null}
+
+                {detail!.movie ? (
+                  <MovieInformation
+                    movie={detail!.movie}
+                    onInspectPerson={(credit) => void inspectPerson(credit)}
+                    resolvingReferenceId={resolvingPersonReferenceId}
+                  />
+                ) : null}
+
+                {detail!.seriesCredits ? (
+                  <TitleCredits
+                    credits={detail!.seriesCredits}
+                    onInspectPerson={(credit) => void inspectPerson(credit)}
+                    resolvingReferenceId={resolvingPersonReferenceId}
+                  />
+                ) : null}
+
+                {visibleExtrasState ? (
+                  <ExtrasSection
+                    onLoadMore={() => void loadMoreExtras()}
+                    onPlay={onPlay}
+                    onRetry={() => setExtrasAttempt((value) => value + 1)}
+                    state={visibleExtrasState}
+                  />
+                ) : (
+                  <ExtrasSkeleton />
+                )}
+
+                {detail!.media.kind === "series" ? (
+                  <section className="library-title__hierarchy">
+                    <div className="library-title__section-heading">
+                      <div>
+                        <p className="eyebrow">Episode guide</p>
+                        <h3>Seasons</h3>
+                      </div>
+                      {detail!.seasonsTruncated ? <span>Showing the first 100 seasons</span> : null}
+                    </div>
+                    {detail!.seasons.length === 0 ? (
+                      <div className="library-title__episodes-empty" role="status">
+                        <Layers3 aria-hidden="true" />
+                        <p>No playable seasons are available for this Jellyfin account.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div
+                          aria-label="Seasons"
+                          aria-orientation="horizontal"
+                          className="library-title__seasons"
+                          role="tablist"
+                        >
+                          {detail!.seasons.map((season, index) => (
+                            <button
+                              aria-controls={episodePanelId}
+                              aria-selected={activeSeasonNumber === season.seasonNumber}
+                              data-selected={
+                                activeSeasonNumber === season.seasonNumber || undefined
+                              }
+                              id={`library-title-${item.media.id}-season-${season.seasonNumber}`}
+                              key={season.seasonNumber}
+                              onClick={() => {
+                                setSeasonNumber(season.seasonNumber);
+                                setEpisodeAttempt(0);
+                              }}
+                              onKeyDown={(event) => {
+                                const direction =
+                                  event.key === "ArrowRight"
+                                    ? 1
+                                    : event.key === "ArrowLeft"
+                                      ? -1
+                                      : 0;
+                                const targetIndex =
+                                  event.key === "Home"
+                                    ? 0
+                                    : event.key === "End"
+                                      ? detail!.seasons.length - 1
+                                      : direction === 0
+                                        ? null
+                                        : (index + direction + detail!.seasons.length) %
+                                          detail!.seasons.length;
+                                if (targetIndex === null) return;
+                                event.preventDefault();
+                                const target = event.currentTarget.parentElement?.querySelectorAll(
+                                  "button[role='tab']",
+                                )[targetIndex] as HTMLButtonElement | undefined;
+                                target?.focus();
+                                target?.click();
+                              }}
+                              role="tab"
+                              tabIndex={activeSeasonNumber === season.seasonNumber ? 0 : -1}
+                              type="button"
+                            >
+                              <strong>{season.title}</strong>
+                              <span>
+                                {season.playedEpisodeCount}/{season.episodeCount} watched
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                        <div
+                          aria-labelledby={activeSeasonTabId}
+                          className="library-title__episode-panel"
+                          id={episodePanelId}
+                          role="tabpanel"
+                        >
+                          {!visibleEpisodeState ? (
+                            <EpisodeSkeleton />
+                          ) : visibleEpisodeState.kind === "error" ? (
+                            <ErrorState
+                              message={visibleEpisodeState.message}
+                              onRetry={() => setEpisodeAttempt((value) => value + 1)}
+                            />
+                          ) : (
+                            <EpisodeList
+                              client={client}
+                              onLoadMore={() => void loadMoreEpisodes()}
+                              onInspectPerson={(credit) => void inspectPerson(credit)}
+                              onPlaybackChange={updateEpisodePlayback}
+                              onPlay={(episode) => onPlay(episode)}
+                              resolvingReferenceId={resolvingPersonReferenceId}
+                              state={visibleEpisodeState}
+                            />
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </section>
+                ) : (
+                  <section className="library-title__movie-note">
+                    <Clock3 aria-hidden="true" />
+                    <div>
+                      <strong>Playback starts only when you ask.</strong>
+                      <p>Review the title first, then use the explicit play action above.</p>
+                    </div>
+                  </section>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </dialog>
+      </dialog>
+      <MediaDetailDrawer
+        media={null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setPersonProfile(null);
+            setPersonAnnouncement(`Returned to ${item.media.title} details.`);
+          }
+        }}
+        open={personProfile !== null}
+        person={personProfile}
+      />
+    </>
   );
 }

@@ -27,6 +27,7 @@ export type PrivacyHashDomain =
   | "external_issue_reference"
   | "ip_address"
   | "library_attention_cursor"
+  | "library_removal_target"
   | "media_item"
   | "oidc_failure_audit_bucket"
   | "oidc_failure_audit_ip_address"

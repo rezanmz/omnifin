@@ -7,6 +7,7 @@ import {
   savedFavoriteMutationRequestSchema,
   savedFavoriteMutationResponseJsonSchema,
   savedFavoriteMutationResponseSchema,
+  savedListIdempotencyKeySchema,
   savedMembershipSummaryJsonSchema,
   savedMembershipSummarySchema,
   savedOwnedTargetIssueRequestJsonSchema,
@@ -101,12 +102,42 @@ function serviceError(
             : "The connected catalog could not confirm this title. Try again shortly.",
         statusCode: 503,
       });
+    case "expired":
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_target_expired",
+        message: "This private save target expired. Refresh the title and try again.",
+        statusCode: 410,
+      });
+    case "idempotency_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "idempotency_key_conflict",
+        message: "The retry key was already used for a different favorite state.",
+        statusCode: 409,
+      });
+    case "idempotency_in_progress":
+      reply.header("retry-after", "2");
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_favorite_operation_in_progress",
+        message: "This favorite change is still being reconciled.",
+        statusCode: 409,
+      });
     case "not_found":
       return new SafeHttpError({
         cause: error,
         code: "saved_target_not_found",
         message: "The selected library title is no longer available for saving.",
         statusCode: 404,
+      });
+    case "outcome_unknown":
+      reply.header("retry-after", "2");
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_favorite_outcome_unknown",
+        message: "Jellyfin may have applied this favorite change. Retry to reconcile its state.",
+        statusCode: 503,
       });
     case "principal_unavailable":
       return new SafeHttpError({
@@ -241,6 +272,7 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
         const result = await targets.updateFavorite(
           targetReferenceId,
           input,
+          savedListIdempotencyKeySchema.parse(request.headers["idempotency-key"]),
           operationContext(request, reply, "favorites.self.manage"),
           controller.signal,
         );

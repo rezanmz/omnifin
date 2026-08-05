@@ -170,6 +170,22 @@ describe("Radarr library ownership", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("rejects queued destructive writes without claiming synchronous completion", async () => {
+    const { adapter } = radarrWithResponses([
+      new Response("queued", { status: 202 }),
+      new Response("queued", { status: 202 }),
+    ]);
+
+    await expect(adapter.deleteLibraryMovieFile(314)).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "library.removal.file_delete",
+    });
+    await expect(adapter.deleteLibraryMovie(42)).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "library.removal.manager_delete",
+    });
+  });
+
   it("does not claim ownership when an IMDb-only lookup lacks an exact response identity", async () => {
     const { adapter, requests } = radarrWithResponses([
       jsonResponse([

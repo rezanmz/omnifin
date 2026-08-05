@@ -20,6 +20,10 @@ import {
   discoveryPersonDetailQueryJsonSchema,
   discoveryPersonDetailResponseJsonSchema,
   discoveryPersonDetailResponseSchema,
+  discoveryPersonCreditsQueryJsonSchema,
+  discoveryPersonCreditsQuerySchema,
+  discoveryPersonCreditsResponseJsonSchema,
+  discoveryPersonCreditsResponseSchema,
   discoverySearchQueryJsonSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseJsonSchema,
@@ -117,6 +121,10 @@ describe("discovery contracts", () => {
         items: [{ ...response.items[0], kind: "series" }],
       }).success,
     ).toBe(false);
+    expect(discoveryBrowseQuerySchema.safeParse({ kind: "movie", page: 501 }).success).toBe(false);
+    expect(discoveryBrowseResponseSchema.safeParse({ ...response, totalPages: 501 }).success).toBe(
+      false,
+    );
   });
 
   it("exports closed browse schemas for the HTTP boundary", () => {
@@ -267,6 +275,7 @@ describe("discovery contracts", () => {
           {
             audience: "community",
             label: "TMDB",
+            providerReference: { identifier: 603, mediaKind: "movie", provider: "tmdb" },
             scale: 10,
             sentiment: null,
             source: "tmdb",
@@ -276,6 +285,11 @@ describe("discovery contracts", () => {
           {
             audience: "critics",
             label: "Tomatometer",
+            providerReference: {
+              identifier: "the_matrix",
+              mediaKind: "movie",
+              provider: "rotten_tomatoes",
+            },
             scale: 100,
             sentiment: "Certified Fresh",
             source: "rotten_tomatoes",
@@ -313,6 +327,11 @@ describe("discovery contracts", () => {
       item: common,
     });
     expect(response.item.kind).toBe("movie");
+    expect(response.item.intelligence.ratings[0]?.providerReference).toEqual({
+      identifier: 603,
+      mediaKind: "movie",
+      provider: "tmdb",
+    });
 
     const series = discoveryMediaDetailResponseSchema.parse({
       generatedAt: "2026-07-28T20:00:00.000Z",
@@ -320,6 +339,20 @@ describe("discovery contracts", () => {
         ...common,
         episodeCount: 73,
         id: "series:1396",
+        intelligence: {
+          ...common.intelligence,
+          ratings: common.intelligence.ratings.map((rating) => ({
+            ...rating,
+            providerReference:
+              rating.source === "tmdb"
+                ? { identifier: 1396, mediaKind: "series" as const, provider: "tmdb" as const }
+                : {
+                    identifier: "the_matrix",
+                    mediaKind: "series" as const,
+                    provider: "rotten_tomatoes" as const,
+                  },
+          })),
+        },
         kind: "series",
         runtimeMinutes: 48,
         seasonCount: 5,
@@ -334,6 +367,45 @@ describe("discovery contracts", () => {
     });
     expect(series.item.kind).toBe("series");
     if (series.item.kind === "series") expect(series.item.seasons).toHaveLength(2);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          ...common,
+          intelligence: {
+            ...common.intelligence,
+            ratings: [
+              {
+                ...common.intelligence.ratings[0],
+                providerReference: { identifier: 1396, mediaKind: "series", provider: "tmdb" },
+              },
+            ],
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: {
+          ...common,
+          intelligence: {
+            ...common.intelligence,
+            ratings: [
+              {
+                ...common.intelligence.ratings[0],
+                providerReference: {
+                  href: "https://private.invalid/title/603",
+                  identifier: 603,
+                  mediaKind: "movie",
+                  provider: "tmdb",
+                },
+              },
+            ],
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects raw upstream fields and unbounded detail collections", () => {
@@ -441,6 +513,7 @@ describe("discovery contracts", () => {
             },
           ],
           creditsState: "ready",
+          creditsTotal: 1,
           deathday: null,
           department: "Acting",
           id: "person:6384",
@@ -460,6 +533,7 @@ describe("discovery contracts", () => {
           birthplace: null,
           credits: [],
           creditsState: "empty",
+          creditsTotal: 0,
           deathday: null,
           department: null,
           id: "person:6384",
@@ -468,6 +542,52 @@ describe("discovery contracts", () => {
           source: "seerr",
           tmdbId: 6384,
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("normalizes bounded person-credit pages", () => {
+    expect(discoveryPersonCreditsQuerySchema.parse({ page: "2" })).toEqual({
+      language: "en",
+      page: 2,
+    });
+    expect(
+      discoveryPersonCreditsResponseSchema.parse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        items: [
+          {
+            availability: "available",
+            kind: "movie",
+            role: "Neo",
+            title: "The Matrix",
+            tmdbId: 603,
+            voteAverage: 8.2,
+            year: 1999,
+          },
+        ],
+        page: 3,
+        pageSize: 24,
+        totalPages: 3,
+        totalResults: 49,
+      }).totalPages,
+    ).toBe(3);
+    expect(discoveryPersonCreditsQuerySchema.safeParse({ page: 101 }).success).toBe(false);
+    expect(
+      discoveryPersonCreditsResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        items: Array.from({ length: 25 }, () => ({
+          availability: "unknown",
+          kind: "movie",
+          role: "Cast",
+          title: "Bounded work",
+          tmdbId: 1,
+          voteAverage: null,
+          year: null,
+        })),
+        page: 1,
+        pageSize: 24,
+        totalPages: 2,
+        totalResults: 25,
       }).success,
     ).toBe(false);
   });
@@ -550,6 +670,8 @@ describe("discovery contracts", () => {
     expect(discoveryPersonDetailParamsJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryPersonDetailQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoveryPersonDetailResponseJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonCreditsQueryJsonSchema).not.toHaveProperty("$schema");
+    expect(discoveryPersonCreditsResponseJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchQueryJsonSchema).not.toHaveProperty("$schema");
     expect(discoverySearchResponseJsonSchema).not.toHaveProperty("$schema");
   });

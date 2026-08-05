@@ -252,6 +252,13 @@ function handleServiceError(error: SavedListServiceError, reply: FastifyReply) {
         message: "Refresh this title before saving it.",
         statusCode: 404,
       });
+    case "target_expired":
+      return new SafeHttpError({
+        cause: error,
+        code: "saved_target_expired",
+        message: "This private save target expired. Refresh the title and try again.",
+        statusCode: 410,
+      });
   }
 }
 

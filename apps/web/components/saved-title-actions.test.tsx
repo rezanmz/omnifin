@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { readySavedOutcome, savedListsDemoClient } from "../lib/saved-lists-demo";
-import type { SavedListsClient } from "../lib/saved-lists";
+import { SavedListsClientError, type SavedListsClient } from "../lib/saved-lists";
 import { SavedTitleActions } from "./saved-title-actions";
 
 const referenceId = `media_${"m".repeat(22)}`;
@@ -168,7 +168,84 @@ describe("SavedTitleActions", () => {
     expect(actions.updateFavorite).toHaveBeenCalledWith(
       targetReferenceId,
       { favorite: true },
-      { csrfToken: readySavedOutcome.snapshot.csrfToken },
+      {
+        csrfToken: readySavedOutcome.snapshot.csrfToken,
+        idempotencyKey: expect.stringMatching(/^saved-/u),
+      },
+    );
+  });
+
+  it("reissues an expired target and rereads the list before retrying", async () => {
+    const user = userEvent.setup();
+    const actions = client();
+    const successfulAdd = await client().addItem(
+      readySavedOutcome.snapshot.lists.watchLater.id,
+      { targetReferenceId },
+      {
+        csrfToken: readySavedOutcome.snapshot.csrfToken,
+        etag,
+        idempotencyKey: "saved-test-success",
+      },
+    );
+    const refreshedTarget = `save_target_${"r".repeat(22)}`;
+    actions.issueLibraryTarget
+      .mockResolvedValueOnce(summary())
+      .mockResolvedValueOnce({ ...summary(), targetReferenceId: refreshedTarget });
+    actions.readList
+      .mockResolvedValueOnce({ data: readySavedOutcome.snapshot.lists.watchLater, etag })
+      .mockResolvedValueOnce({
+        data: readySavedOutcome.snapshot.lists.watchLater,
+        etag: nextEtag,
+      });
+    actions.addItem
+      .mockRejectedValueOnce(
+        new SavedListsClientError("expired", "saved_target_expired", "Refresh the title.", {
+          retryMode: "refresh",
+        }),
+      )
+      .mockResolvedValueOnce({ ...successfulAdd, etag: nextEtag });
+    render(
+      <SavedTitleActions client={actions} compact referenceId={referenceId} title="Ember Coast" />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Toggle Ember Coast in Watch Later" }));
+
+    await waitFor(() => expect(actions.addItem).toHaveBeenCalledTimes(2));
+    expect(actions.issueLibraryTarget).toHaveBeenCalledTimes(2);
+    expect(actions.readList).toHaveBeenCalledTimes(2);
+    expect(actions.addItem.mock.calls[1]?.[1]).toEqual({ targetReferenceId: refreshedTarget });
+    expect(actions.addItem.mock.calls[1]?.[2]).toMatchObject({ etag: nextEtag });
+  });
+
+  it("retains the favorite key while an unknown outcome is reconciled", async () => {
+    const user = userEvent.setup();
+    const actions = client();
+    actions.updateFavorite
+      .mockRejectedValueOnce(
+        new SavedListsClientError(
+          "unavailable",
+          "saved_favorite_outcome_unknown",
+          "The outcome is unknown.",
+          { retryMode: "same_key" },
+        ),
+      )
+      .mockResolvedValueOnce({
+        favorite: true,
+        synchronizedAt: now,
+        targetReferenceId,
+      });
+    render(
+      <SavedTitleActions client={actions} eager referenceId={referenceId} title="Ember Coast" />,
+    );
+    const favorite = await screen.findByRole("button", { name: "Favorite" });
+
+    await user.click(favorite);
+    expect(await screen.findByRole("status")).toHaveTextContent("may have changed");
+    await user.click(favorite);
+
+    await waitFor(() => expect(actions.updateFavorite).toHaveBeenCalledTimes(2));
+    expect(actions.updateFavorite.mock.calls[0]?.[2].idempotencyKey).toBe(
+      actions.updateFavorite.mock.calls[1]?.[2].idempotencyKey,
     );
   });
 

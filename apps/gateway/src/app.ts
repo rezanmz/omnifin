@@ -77,6 +77,7 @@ import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import { runtimeIdentityRoutes } from "./runtime/identity-routes.js";
 import { loadRuntimeIdentity } from "./runtime/identity.js";
 import { savedListRoutes, type SavedListRoutesOptions } from "./saved/list-routes.js";
+import { purgeExpiredSavedState, SAVED_MAINTENANCE_INTERVAL_MS } from "./saved/maintenance.js";
 import { savedTargetRoutes, type SavedTargetRoutesOptions } from "./saved/target-routes.js";
 import {
   continueWatchingRoutes,
@@ -455,7 +456,19 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       );
     });
 
+    const savedMaintenance = setInterval(() => {
+      try {
+        purgeExpiredSavedState(database, Date.now());
+      } catch (error) {
+        app?.log.error(
+          { err: error, operation: "saved.maintenance" },
+          "Saved-state maintenance failed",
+        );
+      }
+    }, SAVED_MAINTENANCE_INTERVAL_MS);
+    savedMaintenance.unref();
     app.addHook("onClose", async () => {
+      clearInterval(savedMaintenance);
       closeDatabase();
     });
 

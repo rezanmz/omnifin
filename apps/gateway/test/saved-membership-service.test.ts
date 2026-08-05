@@ -297,7 +297,7 @@ describe("SavedListService membership", () => {
       watchLater.id,
       { targetReferenceId },
       "add-owned-title-0002",
-      added.etag,
+      initialEtag,
       context(),
     );
     expect(duplicate).toMatchObject({
@@ -405,7 +405,7 @@ describe("SavedListService membership", () => {
     advance(15 * 60 * 1_000);
     expect(() =>
       lists.addItem(own.id, { targetReferenceId }, "expired-membership-0001", ownEtag, context()),
-    ).toThrow(expect.objectContaining({ reason: "target_not_found" }));
+    ).toThrow(expect.objectContaining({ reason: "target_expired" }));
 
     const other = lists.list({}, context("other-user")).watchLater;
     const otherEtag = lists.read(other.id, context("other-user")).etag;
@@ -437,6 +437,37 @@ describe("SavedListService membership", () => {
       backdropPath: null,
       posterPath: null,
     });
+  });
+
+  it("expires stale owned references in one read and advances the list version", async () => {
+    const { advance, context, lists, targetReferenceId } = await harness();
+    const watchLater = lists.list({}, context()).watchLater;
+    const added = lists.addItem(
+      watchLater.id,
+      { targetReferenceId },
+      "add-before-reference-expiry",
+      lists.read(watchLater.id, context()).etag,
+      context(),
+    );
+
+    advance(7 * 24 * 60 * 60 * 1_000);
+    const stale = lists.readItems(watchLater.id, {}, context());
+
+    expect(stale.body).toMatchObject({
+      items: [
+        {
+          catalog: {
+            availability: "unavailable",
+            favorite: { state: "not_applicable", value: null },
+            libraryReferenceId: null,
+            resolutionState: "missing",
+          },
+        },
+      ],
+      list: { revision: added.body.revision + 1 },
+      reconciliation: { state: "degraded" },
+    });
+    expect(stale.etag).not.toBe(added.etag);
   });
 
   it("paginates, filters, sorts, and reports degraded saved-title snapshots", async () => {
@@ -514,14 +545,15 @@ describe("SavedListService membership", () => {
     });
   });
 
-  it("invalidates list versions when an existing catalog snapshot changes", async () => {
+  it("refreshes a duplicate catalog snapshot while ignoring its stale list ETag", async () => {
     const { context, issueTarget, lists, setFavorite, targetReferenceId } = await harness();
     const watchLater = lists.list({}, context()).watchLater;
+    const initialEtag = lists.read(watchLater.id, context()).etag;
     const added = lists.addItem(
       watchLater.id,
       { targetReferenceId },
       "add-refresh-title-0001",
-      lists.read(watchLater.id, context()).etag,
+      initialEtag,
       context(),
     );
 
@@ -531,7 +563,7 @@ describe("SavedListService membership", () => {
       watchLater.id,
       { targetReferenceId },
       "add-refresh-title-0002",
-      added.etag,
+      initialEtag,
       context(),
     );
 

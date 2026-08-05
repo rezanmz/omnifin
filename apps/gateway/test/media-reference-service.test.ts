@@ -71,6 +71,53 @@ const media = {
   year: 2026,
 };
 
+function seedSavedMembership(database: DatabaseHandle, referenceId: string) {
+  const catalogId = `catalog_${"s".repeat(22)}`;
+  const listId = `saved_list_${"s".repeat(22)}`;
+  database.sqlite
+    .prepare(
+      `insert into saved_catalog_items (
+         id, user_id, identity_digest, encrypted_identity, encrypted_snapshot,
+         library_reference_id, library_reference_user_id, last_resolved_at,
+         created_at, updated_at
+       ) values (?, 'user-1', ?, 'sealed', 'sealed', ?, 'user-1', 2000, 2000, 2000)`,
+    )
+    .run(catalogId, "s".repeat(22), referenceId);
+  database.sqlite
+    .prepare(
+      `insert into saved_lists (
+         id, user_id, kind, encrypted_name, revision, created_at, updated_at
+       ) values (?, 'user-1', 'watch_later', 'sealed', 0, 2000, 2000)`,
+    )
+    .run(listId);
+  database.sqlite
+    .prepare(
+      `insert into saved_list_items (
+         id, user_id, list_id, catalog_item_id, position, created_at, updated_at
+       ) values (?, 'user-1', ?, ?, 0, 2000, 2000)`,
+    )
+    .run(`saved_item_${"s".repeat(22)}`, listId, catalogId);
+  return { catalogId, listId };
+}
+
+function expectSavedReferenceInvalidated(
+  database: DatabaseHandle,
+  input: { catalogId: string; listId: string },
+) {
+  expect(
+    database.sqlite
+      .prepare(
+        `select saved_lists.revision as revision,
+                saved_catalog_items.library_reference_id as libraryReferenceId
+         from saved_lists
+         join saved_list_items on saved_list_items.list_id = saved_lists.id
+         join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+         where saved_lists.id = ? and saved_catalog_items.id = ?`,
+      )
+      .get(input.listId, input.catalogId),
+  ).toEqual({ libraryReferenceId: null, revision: 1 });
+}
+
 describe("MediaReferenceService", () => {
   it("creates a stable opaque reference while encrypting every upstream identifier", () => {
     const database = seededDatabase();
@@ -204,6 +251,7 @@ describe("MediaReferenceService", () => {
     const references = service(database, { clock: () => new Date(now) }).createOrRefresh(context, [
       media,
     ]);
+    const saved = seedSavedMembership(database, references[0]!);
     try {
       now += 7 * 24 * 60 * 60 * 1_000;
       expect(() =>
@@ -221,6 +269,31 @@ describe("MediaReferenceService", () => {
       expect(
         database.sqlite.prepare("select count(*) as count from media_references").get(),
       ).toEqual({ count: 1 });
+      expectSavedReferenceInvalidated(database, saved);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("invalidates saved ownership before capacity-style reference eviction", () => {
+    const database = seededDatabase();
+    try {
+      const reference = service(database).createOrRefresh(context, [media])[0]!;
+      const saved = seedSavedMembership(database, reference);
+
+      const removed = database.sqlite
+        .prepare(
+          `delete from media_references where id in (
+             select id from media_references
+             where user_id = ? and last_used_at <= ? and id not in ('')
+             order by last_used_at asc, id asc
+             limit 1
+           )`,
+        )
+        .run(context.userId, 2_000);
+
+      expect(removed.changes).toBe(1);
+      expectSavedReferenceInvalidated(database, saved);
     } finally {
       database.close();
     }

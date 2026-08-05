@@ -291,6 +291,7 @@ export const connectorConfigs = sqliteTable(
     }).notNull(),
     displayName: text("display_name").notNull(),
     baseUrl: text("base_url").notNull(),
+    publicUiUrl: text("public_ui_url"),
     encryptedCredentials: text("encrypted_credentials").notNull(),
     tlsPolicy: text("tls_policy", { enum: ["strict", "allow_self_signed"] })
       .notNull()
@@ -329,6 +330,39 @@ export const connectorConfigs = sqliteTable(
       sql`${table.insecureHttpApproved} in (0, 1)`,
     ),
     check("connector_configs_enabled_check", sql`${table.enabled} in (0, 1)`),
+  ],
+);
+
+export const mediaRequestProfilePreferences = sqliteTable(
+  "media_request_profile_preferences",
+  {
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["movie", "series"] }).notNull(),
+    is4k: integer("is_4k", { mode: "boolean" }).notNull(),
+    destinationId: integer("destination_id").notNull(),
+    profileId: integer("profile_id").notNull(),
+    updatedByUserId: text("updated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectorId, table.kind, table.is4k] }),
+    check(
+      "media_request_profile_preferences_kind_check",
+      sql`${table.kind} in ('movie', 'series')`,
+    ),
+    check("media_request_profile_preferences_is_4k_check", sql`${table.is4k} in (0, 1)`),
+    check(
+      "media_request_profile_preferences_destination_check",
+      sql`${table.destinationId} between 0 and 2147483647`,
+    ),
+    check(
+      "media_request_profile_preferences_profile_check",
+      sql`${table.profileId} between 1 and 2147483647`,
+    ),
   ],
 );
 
@@ -1086,9 +1120,7 @@ export const libraryRemovalOperations = sqliteTable(
     sessionId: text("session_id").notNull(),
     serviceIdentityLinkId: text("service_identity_link_id").notNull(),
     linkRevision: integer("link_revision").notNull(),
-    mediaReferenceId: text("media_reference_id")
-      .notNull()
-      .references(() => mediaReferences.id, { onDelete: "cascade" }),
+    mediaReferenceId: text("media_reference_id").notNull(),
     previewId: text("preview_id").notNull(),
     mode: text("mode", {
       enum: [
@@ -1100,6 +1132,7 @@ export const libraryRemovalOperations = sqliteTable(
     }).notNull(),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
+    targetDigest: text("target_digest").notNull(),
     state: text("state", {
       enum: ["running", "succeeded", "reconcile_required", "failed"],
     })
@@ -1118,13 +1151,11 @@ export const libraryRemovalOperations = sqliteTable(
       table.idempotencyKeyHash,
     ),
     uniqueIndex("library_removal_operations_preview_unique").on(table.previewId),
+    uniqueIndex("library_removal_operations_running_target_unique")
+      .on(table.targetDigest)
+      .where(sql`${table.state} = 'running'`),
     index("library_removal_operations_state_created_idx").on(table.state, table.createdAt),
     index("library_removal_operations_reference_idx").on(table.mediaReferenceId, table.createdAt),
-    foreignKey({
-      columns: [table.serviceIdentityLinkId, table.userId],
-      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
-      name: "library_removal_operations_service_identity_link_fk",
-    }).onDelete("cascade"),
     check(
       "library_removal_operations_id_check",
       sql`length(${table.id}) = 48
@@ -1138,9 +1169,20 @@ export const libraryRemovalOperations = sqliteTable(
         and substr(${table.previewId}, 25) not glob '*[^A-Za-z0-9_-]*'`,
     ),
     check(
+      "library_removal_operations_reference_id_check",
+      sql`length(${table.mediaReferenceId}) = 28
+        and substr(${table.mediaReferenceId}, 1, 6) = 'media_'
+        and substr(${table.mediaReferenceId}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
       "library_removal_operations_session_id_check",
       sql`length(${table.sessionId}) between 1 and 128
         and ${table.sessionId} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "library_removal_operations_link_id_check",
+      sql`length(${table.serviceIdentityLinkId}) between 1 and 128
+        and ${table.serviceIdentityLinkId} not glob '*[^A-Za-z0-9._:-]*'`,
     ),
     check(
       "library_removal_operations_link_revision_check",
@@ -1164,6 +1206,11 @@ export const libraryRemovalOperations = sqliteTable(
       "library_removal_operations_fingerprint_hash_check",
       sql`length(${table.fingerprintHash}) = 43
         and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_target_digest_check",
+      sql`length(${table.targetDigest}) = 22
+        and ${table.targetDigest} not glob '*[^A-Za-z0-9_-]*'`,
     ),
     check(
       "library_removal_operations_state_check",
@@ -1518,12 +1565,14 @@ export const savedListOperations = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     kind: text("kind", {
-      enum: ["create_list", "restore_list", "add_item", "reorder_items"],
+      enum: ["create_list", "restore_list", "add_item", "reorder_items", "favorite"],
     }).notNull(),
     resourceId: text("resource_id"),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "succeeded", "reconcile_required", "failed"],
+    })
       .notNull()
       .default("pending"),
     encryptedResponse: text("encrypted_response"),
@@ -1543,7 +1592,7 @@ export const savedListOperations = sqliteTable(
     ),
     check(
       "saved_list_operations_kind_check",
-      sql`${table.kind} in ('create_list', 'restore_list', 'add_item', 'reorder_items')`,
+      sql`${table.kind} in ('create_list', 'restore_list', 'add_item', 'reorder_items', 'favorite')`,
     ),
     check(
       "saved_list_operations_key_hash_check",
@@ -1557,7 +1606,7 @@ export const savedListOperations = sqliteTable(
     ),
     check(
       "saved_list_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'succeeded', 'reconcile_required', 'failed')`,
     ),
     check(
       "saved_list_operations_response_check",
@@ -1577,7 +1626,7 @@ export const savedListOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'failed')
           and ${table.encryptedResponse} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null

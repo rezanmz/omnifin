@@ -59,7 +59,7 @@ function assertDatabaseReady(database: DatabaseHandle) {
       .all();
     database.sqlite
       .prepare(
-        "select id, user_id, session_id, service_identity_link_id, link_revision, media_reference_id, preview_id, mode, idempotency_key_hash, fingerprint_hash, state, response_json, encrypted_payload, failure_code, started_at, completed_at from library_removal_operations limit 0",
+        "select id, user_id, session_id, service_identity_link_id, link_revision, media_reference_id, preview_id, mode, idempotency_key_hash, fingerprint_hash, target_digest, state, response_json, encrypted_payload, failure_code, started_at, completed_at from library_removal_operations limit 0",
       )
       .all();
     database.sqlite

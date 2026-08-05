@@ -8,6 +8,7 @@ import {
   savedFavoriteMutationRequestSchema,
   savedFavoriteMutationResponseSchema,
   savedFavoriteStateSchema,
+  savedListIdempotencyKeySchema,
   savedMembershipSummarySchema,
   type SavedFavoriteMutationResponse,
   type SavedFavoriteState,
@@ -20,7 +21,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher, privacyHash, randomToken } from "../security/crypto.js";
+import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import { DiscoverySearchService } from "../discovery/search-service.js";
 import {
   MediaReferenceError,
@@ -31,8 +32,10 @@ import {
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const TARGET_ID_PATTERN = /^save_target_[A-Za-z0-9_-]{22}$/u;
 const CATALOG_ID_PATTERN = /^catalog_[A-Za-z0-9_-]{22}$/u;
+const OPERATION_ID_PATTERN = /^saved_operation_[A-Za-z0-9_-]{22}$/u;
 const DIGEST_PATTERN = /^[A-Za-z0-9_-]{22}$/u;
 const TARGET_TTL_MS = 15 * 60 * 1_000;
+const FAVORITE_PENDING_RECONCILE_MS = 30_000;
 const MAX_TARGETS_PER_USER = 1_024;
 const MAX_TARGET_CREATION_ATTEMPTS = 8;
 
@@ -174,6 +177,23 @@ interface FavoriteCatalogRow {
   id: string;
 }
 
+interface FavoriteOperation {
+  fingerprintHash: string;
+  id: string;
+  idempotencyKeyHash: string;
+  resourceId: string;
+  userId: string;
+}
+
+interface FavoriteOperationRow {
+  encryptedResponse: string | null;
+  fingerprintHash: string;
+  id: string;
+  kind: string;
+  state: string;
+  updatedAt: number;
+}
+
 export interface SavedTargetContext {
   ipAddress?: string;
   principal: SessionPrincipal;
@@ -206,6 +226,7 @@ export interface SavedTargetServiceDependencies {
   clock?: () => Date;
   createAuditId?: () => string;
   createClient?: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
+  createOperationToken?: () => string;
   createTargetToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
   resolveDiscovery?: (
@@ -217,7 +238,11 @@ export interface SavedTargetServiceDependencies {
 
 export type SavedTargetErrorReason =
   | "connector_unavailable"
+  | "expired"
+  | "idempotency_conflict"
+  | "idempotency_in_progress"
   | "not_found"
+  | "outcome_unknown"
   | "principal_unavailable"
   | "storage_failure"
   | "synchronization_failed";
@@ -301,12 +326,30 @@ function defaultClient(input: SavedTargetClientFactoryInput): SavedTargetClient 
   return new JellyfinUserMediaClient({ accessToken: privateAccessToken, deviceId, target });
 }
 
+function savedDiscoveryAvailability(
+  availability: DiscoveryMediaDetail["availability"],
+): "requestable" | "requested" {
+  switch (availability) {
+    case "partial":
+    case "unavailable":
+      return "requestable";
+    case "processing":
+    case "requested":
+      return "requested";
+    case "available":
+      throw new SavedTargetServiceError("not_found");
+    case "unknown":
+      throw new SavedTargetServiceError("connector_unavailable");
+  }
+}
+
 export class SavedTargetService {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
   readonly #createAuditId: () => string;
   readonly #createClient: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
+  readonly #createOperationToken: () => string;
   readonly #createTargetToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #references: MediaReferenceService;
@@ -322,6 +365,7 @@ export class SavedTargetService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAuditId = dependencies.createAuditId ?? (() => `saved-audit-${randomToken(16)}`);
+    this.#createOperationToken = dependencies.createOperationToken ?? (() => randomToken(16));
     this.#createTargetToken = dependencies.createTargetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#references = new MediaReferenceService(database, config, {
@@ -479,10 +523,7 @@ export class SavedTargetService {
       throw new SavedTargetServiceError("connector_unavailable");
     }
 
-    const availability =
-      detail.availability === "unavailable" || detail.availability === "unknown"
-        ? "requestable"
-        : "requested";
+    const availability = savedDiscoveryAvailability(detail.availability);
     const now = this.#now();
     const expiresAt = now + TARGET_TTL_MS;
     const catalogIdentityDigest = privacyHash(
@@ -573,6 +614,7 @@ export class SavedTargetService {
   public async updateFavorite(
     targetReferenceId: string,
     rawInput: unknown,
+    rawIdempotencyKey: string,
     context: SavedTargetContext,
     signal?: AbortSignal,
   ): Promise<SavedFavoriteMutationResponse> {
@@ -582,6 +624,7 @@ export class SavedTargetService {
     }
     const activePrincipal = principal as SessionPrincipal & { userId: string };
     const input = savedFavoriteMutationRequestSchema.parse(rawInput);
+    const idempotencyKey = savedListIdempotencyKeySchema.parse(rawIdempotencyKey);
     const source = this.#source(activePrincipal);
     if (source.linkHealthState !== "linked") {
       throw new SavedTargetServiceError("connector_unavailable");
@@ -590,28 +633,54 @@ export class SavedTargetService {
     if (resolved.payload.source !== "jellyfin") {
       throw new SavedTargetServiceError("not_found");
     }
+    const operation = this.#favoriteOperation(
+      activePrincipal.userId,
+      targetReferenceId,
+      resolved,
+      input.favorite,
+      idempotencyKey,
+    );
+    const reservation = this.#reserveFavoriteOperation(operation, this.#now());
+    if (reservation.kind === "replay") return reservation.response;
+
     let observed: boolean;
     try {
       const client = this.#client(source);
-      await client.updateFavoriteState(
-        {
-          favorite: input.favorite,
-          itemId: resolved.payload.itemId,
-          userId: source.externalUserId,
-        },
-        signal,
-      );
-      observed = await client.readFavoriteState(
-        { itemId: resolved.payload.itemId, userId: source.externalUserId },
-        signal,
-      );
+      observed =
+        reservation.kind === "reconcile"
+          ? await client.readFavoriteState(
+              { itemId: resolved.payload.itemId, userId: source.externalUserId },
+              signal,
+            )
+          : !input.favorite;
+      if (observed !== input.favorite) {
+        await client.updateFavoriteState(
+          {
+            favorite: input.favorite,
+            itemId: resolved.payload.itemId,
+            userId: source.externalUserId,
+          },
+          signal,
+        );
+        observed = await client.readFavoriteState(
+          { itemId: resolved.payload.itemId, userId: source.externalUserId },
+          signal,
+        );
+      }
     } catch (error) {
-      throw new SavedTargetServiceError("connector_unavailable", { cause: error });
+      this.#markFavoriteReconcileRequired(operation, "outcome_unknown");
+      throw new SavedTargetServiceError("outcome_unknown", { cause: error });
     }
     if (observed !== input.favorite) {
+      this.#markFavoriteReconcileRequired(operation, "not_confirmed");
       throw new SavedTargetServiceError("synchronization_failed");
     }
     const now = this.#now();
+    const response = savedFavoriteMutationResponseSchema.parse({
+      favorite: observed,
+      synchronizedAt: new Date(now).toISOString(),
+      targetReferenceId,
+    });
     try {
       this.#database.sqlite
         .transaction(() => {
@@ -635,7 +704,7 @@ export class SavedTargetService {
               activePrincipal.userId,
               now,
             );
-          if (updatedTarget.changes !== 1) throw new SavedTargetServiceError("not_found");
+          if (updatedTarget.changes !== 1) throw new SavedTargetServiceError("expired");
           const catalog = this.#refreshCatalogFavorite(
             activePrincipal.userId,
             payload.catalogIdentityDigest,
@@ -650,16 +719,166 @@ export class SavedTargetService {
             context,
             now,
           );
+          this.#completeFavoriteOperation(operation, response, now);
         })
         .immediate();
-      return savedFavoriteMutationResponseSchema.parse({
-        favorite: observed,
-        synchronizedAt: new Date(now).toISOString(),
-        targetReferenceId,
-      });
+      return response;
+    } catch (error) {
+      this.#markFavoriteReconcileRequired(operation, "outcome_unknown");
+      throw new SavedTargetServiceError("outcome_unknown", { cause: error });
+    }
+  }
+
+  #favoriteOperation(
+    userId: string,
+    targetReferenceId: string,
+    resolved: ResolvedSavedTarget,
+    favorite: boolean,
+    idempotencyKey: string,
+  ): FavoriteOperation {
+    const id = `saved_operation_${this.#createOperationToken()}`;
+    if (!OPERATION_ID_PATTERN.test(id)) throw new SavedTargetServiceError("storage_failure");
+    return {
+      fingerprintHash: privacyHash(
+        "saved_operation",
+        JSON.stringify({
+          catalogIdentityDigest: resolved.payload.catalogIdentityDigest,
+          favorite,
+          kind: "favorite",
+          linkId: resolved.linkId,
+          linkRevision: resolved.linkRevision,
+        }),
+        this.#config.encryptionKey,
+      ),
+      id,
+      idempotencyKeyHash: hashToken(`${userId}\0saved_favorite\0${idempotencyKey}`),
+      resourceId: targetReferenceId,
+      userId,
+    };
+  }
+
+  #reserveFavoriteOperation(
+    operation: FavoriteOperation,
+    now: number,
+  ): { kind: "new" | "reconcile" } | { kind: "replay"; response: SavedFavoriteMutationResponse } {
+    try {
+      return this.#database.sqlite
+        .transaction(() => {
+          const existing = this.#database.sqlite
+            .prepare(
+              `select id, kind, fingerprint_hash as fingerprintHash, state,
+                      encrypted_response as encryptedResponse, updated_at as updatedAt
+               from saved_list_operations
+               where user_id = ? and idempotency_key_hash = ?`,
+            )
+            .get(operation.userId, operation.idempotencyKeyHash) as
+            FavoriteOperationRow | undefined;
+          if (existing) {
+            if (
+              existing.kind !== "favorite" ||
+              existing.fingerprintHash !== operation.fingerprintHash
+            ) {
+              throw new SavedTargetServiceError("idempotency_conflict");
+            }
+            operation.id = existing.id;
+            if (existing.state === "succeeded" && existing.encryptedResponse !== null) {
+              return {
+                kind: "replay" as const,
+                response: savedFavoriteMutationResponseSchema.parse(
+                  JSON.parse(
+                    this.#cipher.decrypt(
+                      existing.encryptedResponse,
+                      `saved_list_operation:${operation.userId}:${existing.id}`,
+                    ),
+                  ),
+                ),
+              };
+            }
+            if (
+              existing.state === "pending" &&
+              existing.updatedAt > now - FAVORITE_PENDING_RECONCILE_MS
+            ) {
+              throw new SavedTargetServiceError("idempotency_in_progress");
+            }
+            const claimed = this.#database.sqlite
+              .prepare(
+                `update saved_list_operations
+                 set state = 'pending', encrypted_response = null, failure_code = null,
+                     completed_at = null, updated_at = ?
+                 where id = ? and user_id = ? and kind = 'favorite'
+                   and state = ? and updated_at = ?`,
+              )
+              .run(now, existing.id, operation.userId, existing.state, existing.updatedAt);
+            if (claimed.changes !== 1) {
+              throw new SavedTargetServiceError("idempotency_in_progress");
+            }
+            return { kind: "reconcile" as const };
+          }
+          this.#database.sqlite
+            .prepare(
+              `insert into saved_list_operations (
+                 id, user_id, kind, resource_id, idempotency_key_hash, fingerprint_hash,
+                 state, encrypted_response, failure_code, completed_at, created_at, updated_at
+               ) values (?, ?, 'favorite', ?, ?, ?, 'pending', null, null, null, ?, ?)`,
+            )
+            .run(
+              operation.id,
+              operation.userId,
+              operation.resourceId,
+              operation.idempotencyKeyHash,
+              operation.fingerprintHash,
+              now,
+              now,
+            );
+          return { kind: "new" as const };
+        })
+        .immediate();
     } catch (error) {
       if (error instanceof SavedTargetServiceError) throw error;
       throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #completeFavoriteOperation(
+    operation: FavoriteOperation,
+    response: SavedFavoriteMutationResponse,
+    now: number,
+  ) {
+    const updated = this.#database.sqlite
+      .prepare(
+        `update saved_list_operations
+         set state = 'succeeded', encrypted_response = ?, failure_code = null,
+             completed_at = ?, updated_at = ?
+         where id = ? and user_id = ? and kind = 'favorite'
+           and state in ('pending', 'reconcile_required')`,
+      )
+      .run(
+        this.#cipher.encrypt(
+          JSON.stringify(response),
+          `saved_list_operation:${operation.userId}:${operation.id}`,
+        ),
+        now,
+        now,
+        operation.id,
+        operation.userId,
+      );
+    if (updated.changes !== 1) throw new SavedTargetServiceError("storage_failure");
+  }
+
+  #markFavoriteReconcileRequired(operation: FavoriteOperation, failureCode: string) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite
+        .prepare(
+          `update saved_list_operations
+           set state = 'reconcile_required', encrypted_response = null,
+               failure_code = ?, completed_at = ?, updated_at = ?
+           where id = ? and user_id = ? and kind = 'favorite'
+             and state in ('pending', 'reconcile_required')`,
+        )
+        .run(failureCode, now, now, operation.id, operation.userId);
+    } catch {
+      // The durable pending intent still prevents a false success response.
     }
   }
 
@@ -682,12 +901,11 @@ export class SavedTargetService {
            where id = ? and user_id = ?`,
         )
         .get(targetReferenceId, userId) as ResolvedTargetRow | undefined;
-      if (
-        !row ||
-        row.expiresAt <= now ||
-        row.serviceIdentityLinkId !== source.linkId ||
-        row.linkRevision !== source.linkRevision
-      ) {
+      if (!row) {
+        throw new SavedTargetServiceError("not_found");
+      }
+      if (row.expiresAt <= now) throw new SavedTargetServiceError("expired");
+      if (row.serviceIdentityLinkId !== source.linkId || row.linkRevision !== source.linkRevision) {
         throw new SavedTargetServiceError("not_found");
       }
       const payload = storedTargetPayloadSchema.parse(

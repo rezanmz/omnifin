@@ -78,6 +78,7 @@ const pendingRequest: RequestReviewItem = {
   id: "request:101",
   is4k: false,
   kind: "movie",
+  qualityProfile: "1080p",
   requestedBy: "alex",
   seasons: null,
   source: "seerr",
@@ -243,6 +244,51 @@ describe("request review service", () => {
       });
       expect(JSON.parse(audit.metadataJson!)).toEqual({ decision: "approve" });
       expect(JSON.stringify({ audit, operation })).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("replays a review persisted before profile labels were recorded", async () => {
+    const { database, reviewMediaRequest, service } = harness();
+    try {
+      const first = await service.review(
+        "request:101",
+        { decision: "approve" },
+        "review-key-legacy-response",
+        context(),
+      );
+      database.sqlite
+        .prepare("update media_request_operations set response_json = ? where state = 'succeeded'")
+        .run(
+          JSON.stringify({
+            createdAt: first.request.createdAt,
+            id: first.request.id,
+            is4k: first.request.is4k,
+            kind: first.request.kind,
+            requestedBy: first.request.requestedBy,
+            seasons: first.request.seasons,
+            source: first.request.source,
+            status: first.request.status,
+            title: first.request.title,
+            tmdbId: first.request.tmdbId,
+            updatedAt: first.request.updatedAt,
+            year: first.request.year,
+          }),
+        );
+
+      await expect(
+        service.review(
+          "request:101",
+          { decision: "approve" },
+          "review-key-legacy-response",
+          context(),
+        ),
+      ).resolves.toMatchObject({
+        replayed: true,
+        request: { qualityProfile: "Profile unavailable" },
+      });
+      expect(reviewMediaRequest).toHaveBeenCalledOnce();
     } finally {
       database.close();
     }

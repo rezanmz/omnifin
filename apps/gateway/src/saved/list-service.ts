@@ -87,8 +87,8 @@ interface OperationRow {
   encryptedResponse: string | null;
   fingerprintHash: string;
   id: string;
-  kind: "create_list" | "restore_list" | "add_item" | "reorder_items";
-  state: "pending" | "succeeded" | "failed";
+  kind: "create_list" | "restore_list" | "add_item" | "reorder_items" | "favorite";
+  state: "pending" | "succeeded" | "reconcile_required" | "failed";
 }
 
 interface SavedCatalogRow {
@@ -102,6 +102,10 @@ interface SavedMembershipRow {
   createdAt: number;
   id: string;
   position: number;
+}
+
+interface ExistingSavedMembershipRow extends SavedMembershipRow {
+  catalogId: string;
 }
 
 interface MutableSavedMembershipRow extends SavedMembershipRow {
@@ -153,6 +157,7 @@ export type SavedListErrorReason =
   | "reorder_window_changed"
   | "revision_stale"
   | "storage_failure"
+  | "target_expired"
   | "target_not_found"
   | "undo_expired";
 
@@ -212,7 +217,6 @@ export class SavedListService {
     const now = this.#now();
     try {
       return this.#database.sqlite.transaction(() => {
-        this.#pruneExpired(now);
         const watchLater = this.#ensureWatchLater(principal.userId, now);
         const cursor = query.cursor ? this.#decodeCursor(query.cursor, principal.userId) : null;
         const rows = this.#listCustomRows(principal.userId, query, cursor);
@@ -255,13 +259,23 @@ export class SavedListService {
   ): string {
     const principal = this.#activePrincipal(context);
     const catalogReferenceId = savedCatalogReferenceIdSchema.parse(rawCatalogReferenceId);
+    const now = this.#now();
     const row = this.#database.sqlite
       .prepare(
         `select saved_catalog_items.library_reference_id as libraryReferenceId
          from saved_catalog_items
+         join media_references
+           on media_references.id = saved_catalog_items.library_reference_id
+          and media_references.user_id = saved_catalog_items.user_id
+         join service_identity_links
+           on service_identity_links.id = media_references.service_identity_link_id
+          and service_identity_links.user_id = media_references.user_id
          where saved_catalog_items.id = ?
            and saved_catalog_items.user_id = ?
            and saved_catalog_items.library_reference_id is not null
+           and media_references.expires_at > ?
+           and media_references.link_revision = service_identity_links.revision
+           and service_identity_links.revoked_at is null
            and exists (
              select 1
              from saved_list_items
@@ -272,7 +286,7 @@ export class SavedListService {
                and saved_lists.deleted_at is null
            )`,
       )
-      .get(catalogReferenceId, principal.userId) as { libraryReferenceId: string } | undefined;
+      .get(catalogReferenceId, principal.userId, now) as { libraryReferenceId: string } | undefined;
     if (!row || !MEDIA_REFERENCE_ID_PATTERN.test(row.libraryReferenceId)) {
       throw new SavedListServiceError("target_not_found");
     }
@@ -297,80 +311,84 @@ export class SavedListService {
     const query = savedListItemsQuerySchema.parse(rawQuery);
     const now = this.#now();
     try {
-      const list = this.#row(id, principal.userId, false);
-      if (!list) throw new SavedListServiceError("list_not_found");
-      const fingerprint = privacyHash(
-        "saved_list_items_query",
-        JSON.stringify({
-          availability: query.availability,
-          query: query.query ?? null,
-          sort: query.sort,
-        }),
-        this.#config.encryptionKey,
-      );
-      const cursor = query.cursor
-        ? this.#decodeItemCursor(query.cursor, principal.userId, id)
-        : null;
-      if (
-        cursor &&
-        (cursor.listId !== id ||
-          cursor.revision !== list.revision ||
-          cursor.fingerprint !== fingerprint)
-      ) {
-        throw new SavedListServiceError("cursor_invalid");
-      }
-      const normalizedQuery = query.query?.toLowerCase();
-      const allItems = this.#listItemRows(id, principal.userId).map((row) =>
-        this.#listItem(row, principal.userId),
-      );
-      const filtered = allItems.filter(
-        ({ catalog }) =>
-          (query.availability === "all" || catalog.availability === query.availability) &&
-          (normalizedQuery === undefined || catalog.title.toLowerCase().includes(normalizedQuery)),
-      );
-      filtered.sort((left, right) => this.#compareListItems(left, right, query));
-      const offset = cursor?.offset ?? 0;
-      if (offset > filtered.length) throw new SavedListServiceError("cursor_invalid");
-      const page = filtered.slice(offset, offset + query.limit);
-      const nextOffset = offset + page.length;
-      const degraded = filtered.some(
-        ({ catalog }) => catalog.resolutionState === "connector_unavailable",
-      );
-      const body = savedListItemsResponseSchema.parse({
-        generatedAt: new Date(now).toISOString(),
-        items: page,
-        list: this.#summary(list),
-        nextCursor:
-          nextOffset < filtered.length
-            ? this.#encodeItemCursor(
-                {
-                  fingerprint,
-                  listId: id,
-                  offset: nextOffset,
-                  revision: list.revision,
-                  schemaVersion: 1,
-                },
-                principal.userId,
-                id,
-              )
-            : null,
-        reconciliation: degraded
-          ? {
-              failures: [
-                {
-                  code: "unreachable",
-                  message: "Some saved titles could not be refreshed from Jellyfin.",
-                  occurredAt: new Date(now).toISOString(),
-                  operation: "saved.list.items.resolve",
-                  retryable: true,
-                  service: "jellyfin",
-                },
-              ],
-              state: "degraded",
-            }
-          : { failures: [], state: "current" },
-      });
-      return { body, etag: this.#etag(principal.userId, id, list.revision) };
+      return this.#database.sqlite
+        .transaction(() => {
+          this.#invalidateStaleCatalogReferences(principal.userId, now);
+          const list = this.#row(id, principal.userId, false);
+          if (!list) throw new SavedListServiceError("list_not_found");
+          const fingerprint = privacyHash(
+            "saved_list_items_query",
+            JSON.stringify({
+              availability: query.availability,
+              query: query.query ?? null,
+              sort: query.sort,
+            }),
+            this.#config.encryptionKey,
+          );
+          const cursor = query.cursor
+            ? this.#decodeItemCursor(query.cursor, principal.userId, id)
+            : null;
+          if (
+            cursor &&
+            (cursor.listId !== id ||
+              cursor.revision !== list.revision ||
+              cursor.fingerprint !== fingerprint)
+          ) {
+            throw new SavedListServiceError("cursor_invalid");
+          }
+          const normalizedQuery = query.query?.toLowerCase();
+          const allItems = this.#listItemRows(id, principal.userId).map((row) =>
+            this.#listItem(row, principal.userId),
+          );
+          const filtered = allItems.filter(
+            ({ catalog }) =>
+              (query.availability === "all" || catalog.availability === query.availability) &&
+              (normalizedQuery === undefined ||
+                catalog.title.toLowerCase().includes(normalizedQuery)),
+          );
+          filtered.sort((left, right) => this.#compareListItems(left, right, query));
+          const offset = cursor?.offset ?? 0;
+          if (offset > filtered.length) throw new SavedListServiceError("cursor_invalid");
+          const page = filtered.slice(offset, offset + query.limit);
+          const nextOffset = offset + page.length;
+          const degraded = allItems.some(({ catalog }) => catalog.resolutionState !== "current");
+          const body = savedListItemsResponseSchema.parse({
+            generatedAt: new Date(now).toISOString(),
+            items: page,
+            list: this.#summary(list),
+            nextCursor:
+              nextOffset < filtered.length
+                ? this.#encodeItemCursor(
+                    {
+                      fingerprint,
+                      listId: id,
+                      offset: nextOffset,
+                      revision: list.revision,
+                      schemaVersion: 1,
+                    },
+                    principal.userId,
+                    id,
+                  )
+                : null,
+            reconciliation: degraded
+              ? {
+                  failures: [
+                    {
+                      code: "unreachable",
+                      message: "Some saved titles could not be refreshed from Jellyfin.",
+                      occurredAt: new Date(now).toISOString(),
+                      operation: "saved.list.items.resolve",
+                      retryable: true,
+                      service: "jellyfin",
+                    },
+                  ],
+                  state: "degraded",
+                }
+              : { failures: [], state: "current" },
+          });
+          return { body, etag: this.#etag(principal.userId, id, list.revision) };
+        })
+        .immediate();
     } catch (error) {
       throw this.#normalizeError(error);
     }
@@ -397,7 +415,6 @@ export class SavedListService {
               replayed: true,
             };
           }
-          this.#pruneExpired(now);
           this.#ensureWatchLater(principal.userId, now);
           const count = this.#database.sqlite
             .prepare(
@@ -607,13 +624,20 @@ export class SavedListService {
           }
           const list = this.#row(id, principal.userId, false);
           if (!list) throw new SavedListServiceError("list_not_found");
-          this.#matchRevision(list, ifMatch);
           const target = this.#resolveTarget(input.targetReferenceId, principal);
+          const existing = this.#membershipByIdentity(
+            id,
+            principal.userId,
+            target.payload.catalogIdentityDigest,
+          );
+          if (!existing) this.#matchRevision(list, ifMatch);
           const catalog = this.#upsertCatalog(principal.userId, target, now);
+          if (existing && catalog.id !== existing.catalogId) {
+            throw new SavedListServiceError("storage_failure");
+          }
           if (catalog.changed) {
             this.#refreshCatalogListRevisions(principal.userId, catalog.id, now);
           }
-          const existing = this.#membership(id, principal.userId, catalog.id);
           if (existing) {
             const currentList = this.#row(id, principal.userId, false);
             if (!currentList) throw new SavedListServiceError("storage_failure");
@@ -885,6 +909,9 @@ export class SavedListService {
       return this.#targets.resolve(targetReferenceId, { principal });
     } catch (error) {
       if (error instanceof SavedTargetServiceError) {
+        if (error.reason === "expired") {
+          throw new SavedListServiceError("target_expired", { cause: error });
+        }
         if (error.reason === "not_found") {
           throw new SavedListServiceError("target_not_found", { cause: error });
         }
@@ -1167,6 +1194,22 @@ export class SavedListService {
       .get(listId, userId, catalogId) as SavedMembershipRow | undefined;
   }
 
+  #membershipByIdentity(listId: string, userId: string, identityDigest: string) {
+    return this.#database.sqlite
+      .prepare(
+        `select saved_list_items.id as id, saved_list_items.position as position,
+                saved_list_items.created_at as createdAt,
+                saved_catalog_items.id as catalogId
+         from saved_list_items
+         join saved_catalog_items
+           on saved_catalog_items.id = saved_list_items.catalog_item_id
+          and saved_catalog_items.user_id = saved_list_items.user_id
+         where saved_list_items.list_id = ? and saved_list_items.user_id = ?
+           and saved_catalog_items.identity_digest = ?`,
+      )
+      .get(listId, userId, identityDigest) as ExistingSavedMembershipRow | undefined;
+  }
+
   #insertMembership(
     listId: string,
     userId: string,
@@ -1351,6 +1394,54 @@ export class SavedListService {
       id: row.id,
       position: row.position,
     };
+  }
+
+  #invalidateStaleCatalogReferences(userId: string, now: number) {
+    const staleCatalogClause = `saved_catalog_items.user_id = ?
+      and saved_catalog_items.library_reference_id is not null
+      and not exists (
+        select 1
+        from media_references
+        join service_identity_links
+          on service_identity_links.id = media_references.service_identity_link_id
+         and service_identity_links.user_id = media_references.user_id
+        where media_references.id = saved_catalog_items.library_reference_id
+          and media_references.user_id = saved_catalog_items.user_id
+          and media_references.expires_at > ?
+          and media_references.link_revision = service_identity_links.revision
+          and service_identity_links.revoked_at is null
+      )`;
+    const exhausted = this.#database.sqlite
+      .prepare(
+        `select 1
+         from saved_lists
+         join saved_list_items on saved_list_items.list_id = saved_lists.id
+         join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+         where saved_lists.user_id = ? and saved_lists.deleted_at is null
+           and saved_lists.revision >= 2147483647 and ${staleCatalogClause}
+         limit 1`,
+      )
+      .get(userId, userId, now);
+    if (exhausted) throw new SavedListServiceError("integrity_failure");
+    this.#database.sqlite
+      .prepare(
+        `update saved_lists set revision = revision + 1, updated_at = ?
+         where user_id = ? and deleted_at is null and id in (
+           select saved_list_items.list_id
+           from saved_list_items
+           join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+           where saved_list_items.user_id = ? and ${staleCatalogClause}
+         )`,
+      )
+      .run(now, userId, userId, userId, now);
+    this.#database.sqlite
+      .prepare(
+        `update saved_catalog_items
+         set library_reference_id = null, library_reference_user_id = null,
+             last_resolved_at = null, updated_at = ?
+         where ${staleCatalogClause}`,
+      )
+      .run(now, userId, now);
   }
 
   #compareListItems(
@@ -1584,21 +1675,6 @@ export class SavedListService {
         userId,
       );
     if (updated.changes !== 1) throw new SavedListServiceError("storage_failure");
-  }
-
-  #pruneExpired(now: number) {
-    this.#database.sqlite
-      .prepare(
-        `delete from saved_lists
-         where kind = 'custom' and deleted_at is not null and undo_expires_at <= ?`,
-      )
-      .run(now);
-    this.#database.sqlite
-      .prepare(
-        `delete from saved_list_operations
-         where updated_at < ? and state <> 'pending'`,
-      )
-      .run(now - 7 * 24 * 60 * 60 * 1_000);
   }
 
   #audit(

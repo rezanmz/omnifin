@@ -52,7 +52,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: scripts/ci/install-dependencies.sh
       - name: Build web application
         run: pnpm build
       - name: Install browser runtimes

@@ -76,12 +76,12 @@ CREATE TABLE `saved_list_operations` (
 	CONSTRAINT "saved_list_operations_id_check" CHECK(length("saved_list_operations"."id") = 38
         and substr("saved_list_operations"."id", 1, 16) = 'saved_operation_'
         and substr("saved_list_operations"."id", 17) not glob '*[^A-Za-z0-9_-]*'),
-	CONSTRAINT "saved_list_operations_kind_check" CHECK("saved_list_operations"."kind" in ('create_list', 'restore_list', 'add_item', 'reorder_items')),
+	CONSTRAINT "saved_list_operations_kind_check" CHECK("saved_list_operations"."kind" in ('create_list', 'restore_list', 'add_item', 'reorder_items', 'favorite')),
 	CONSTRAINT "saved_list_operations_key_hash_check" CHECK(length("saved_list_operations"."idempotency_key_hash") = 43
         and "saved_list_operations"."idempotency_key_hash" not glob '*[^A-Za-z0-9_-]*'),
 	CONSTRAINT "saved_list_operations_fingerprint_hash_check" CHECK(length("saved_list_operations"."fingerprint_hash") = 22
         and "saved_list_operations"."fingerprint_hash" not glob '*[^A-Za-z0-9_-]*'),
-	CONSTRAINT "saved_list_operations_state_check" CHECK("saved_list_operations"."state" in ('pending', 'succeeded', 'failed')),
+	CONSTRAINT "saved_list_operations_state_check" CHECK("saved_list_operations"."state" in ('pending', 'succeeded', 'reconcile_required', 'failed')),
 	CONSTRAINT "saved_list_operations_response_check" CHECK("saved_list_operations"."encrypted_response" is null
         or length("saved_list_operations"."encrypted_response") between 1 and 131072),
 	CONSTRAINT "saved_list_operations_outcome_check" CHECK((
@@ -95,7 +95,7 @@ CREATE TABLE `saved_list_operations` (
           and "saved_list_operations"."failure_code" is null
           and "saved_list_operations"."completed_at" is not null
         ) or (
-          "saved_list_operations"."state" = 'failed'
+          "saved_list_operations"."state" in ('reconcile_required', 'failed')
           and "saved_list_operations"."encrypted_response" is null
           and length("saved_list_operations"."failure_code") between 1 and 64
           and "saved_list_operations"."completed_at" is not null
@@ -174,4 +174,42 @@ CREATE TABLE `saved_targets` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `saved_targets_user_identity_unique` ON `saved_targets` (`user_id`,`service_identity_link_id`,`link_revision`,`identity_digest`);--> statement-breakpoint
 CREATE INDEX `saved_targets_expiry_idx` ON `saved_targets` (`expires_at`);--> statement-breakpoint
-CREATE UNIQUE INDEX `media_references_id_user_unique` ON `media_references` (`id`,`user_id`);
+CREATE UNIQUE INDEX `media_references_id_user_unique` ON `media_references` (`id`,`user_id`);--> statement-breakpoint
+CREATE TRIGGER `saved_catalog_media_reference_before_delete`
+BEFORE DELETE ON `media_references`
+WHEN EXISTS (
+	SELECT 1 FROM `saved_catalog_items`
+	WHERE `library_reference_id` = OLD.`id`
+		AND `library_reference_user_id` = OLD.`user_id`
+)
+BEGIN
+	SELECT CASE WHEN EXISTS (
+		SELECT 1
+		FROM `saved_lists`
+		JOIN `saved_list_items` ON `saved_list_items`.`list_id` = `saved_lists`.`id`
+		JOIN `saved_catalog_items` ON `saved_catalog_items`.`id` = `saved_list_items`.`catalog_item_id`
+		WHERE `saved_lists`.`user_id` = OLD.`user_id`
+			AND `saved_lists`.`deleted_at` IS NULL
+			AND `saved_catalog_items`.`library_reference_id` = OLD.`id`
+			AND `saved_lists`.`revision` >= 2147483647
+	) THEN RAISE(ABORT, 'saved list revision exhausted') END;
+	UPDATE `saved_lists`
+	SET `revision` = `revision` + 1,
+		`updated_at` = max(`updated_at`, unixepoch('subsec') * 1000)
+	WHERE `user_id` = OLD.`user_id`
+		AND `deleted_at` IS NULL
+		AND `id` IN (
+			SELECT `saved_list_items`.`list_id`
+			FROM `saved_list_items`
+			JOIN `saved_catalog_items` ON `saved_catalog_items`.`id` = `saved_list_items`.`catalog_item_id`
+			WHERE `saved_list_items`.`user_id` = OLD.`user_id`
+				AND `saved_catalog_items`.`library_reference_id` = OLD.`id`
+		);
+	UPDATE `saved_catalog_items`
+	SET `library_reference_id` = NULL,
+		`library_reference_user_id` = NULL,
+		`last_resolved_at` = NULL,
+		`updated_at` = max(`updated_at`, unixepoch('subsec') * 1000)
+	WHERE `user_id` = OLD.`user_id`
+		AND `library_reference_id` = OLD.`id`;
+END;

@@ -124,6 +124,7 @@ async function harness() {
   let sessionId = 0;
   let sessionToken = 0;
   let favorite = true;
+  let currentTime = now;
   const readFavoriteState = vi.fn(async () => favorite);
   const resolveDiscovery = vi.fn(async () => discoveryDetail);
   const updateFavoriteState = vi.fn(async (input: { favorite: boolean }) => {
@@ -134,25 +135,25 @@ async function harness() {
   const app = await createApp({
     config: appConfig,
     savedTargetDependencies: {
-      clock: () => now,
+      clock: () => currentTime,
       createAuditId: () => "saved-route-favorite-audit",
       createClient: () => ({
         readFavoriteState,
         updateFavoriteState,
       }),
       createTargetToken: () => "t".repeat(22),
-      mediaReferences: { clock: () => now },
+      mediaReferences: { clock: () => currentTime },
       resolveDiscovery,
     },
     sessionDependencies: {
-      clock: () => now,
+      clock: () => currentTime,
       createId: () => `target-route-session-${++sessionId}`,
       createToken: () => Buffer.alloc(32, ++sessionToken).toString("base64url"),
     },
   });
   seed(app.database, appConfig);
   const references = new MediaReferenceService(app.database, appConfig, {
-    clock: () => now,
+    clock: () => currentTime,
     createToken: () => "m".repeat(22),
   });
   const [referenceId] = references.createOrRefresh(
@@ -177,6 +178,9 @@ async function harness() {
     },
   });
   return {
+    advance(milliseconds: number) {
+      currentTime = new Date(currentTime.getTime() + milliseconds);
+    },
     app,
     headers: {
       [SESSION_CSRF_HEADER]: session.csrfToken,
@@ -202,7 +206,10 @@ describe("saved target routes", () => {
       expect(anonymous.statusCode).toBe(403);
 
       const missingCsrf = await app.inject({
-        headers: { cookie: headers.cookie, origin: headers.origin },
+        headers: {
+          cookie: headers.cookie,
+          origin: headers.origin,
+        },
         method: "POST",
         payload: {},
         url: `/v1/saved/targets/library/${referenceId}`,
@@ -263,6 +270,39 @@ describe("saved target routes", () => {
     }
   });
 
+  it("returns 410 only for an expired target owned by the active user", async () => {
+    const { advance, app, headers, referenceId } = await harness();
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+      advance(15 * 60 * 1_000);
+
+      const expired = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-expired" },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(expired.statusCode).toBe(410);
+      expect(apiErrorSchema.parse(expired.json()).error.code).toBe("saved_target_expired");
+
+      const unknown = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-unknown" },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/save_target_${"z".repeat(22)}`,
+      });
+      expect(unknown.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("issues a no-store discovery target without creating a media request", async () => {
     const { app, headers, resolveDiscovery } = await harness();
     try {
@@ -314,7 +354,7 @@ describe("saved target routes", () => {
       expect(apiErrorSchema.parse(missingCsrf.json()).error.code).toBe("csrf_denied");
 
       const changed = await app.inject({
-        headers,
+        headers: { ...headers, "idempotency-key": "favorite-route-0001" },
         method: "PUT",
         payload: { favorite: false },
         url: `/v1/saved/favorites/${issued.targetReferenceId}`,
@@ -333,7 +373,7 @@ describe("saved target routes", () => {
       expect(changed.body).not.toMatch(/private-movie|target-user-private|target-private-token/u);
 
       const missing = await app.inject({
-        headers,
+        headers: { ...headers, "idempotency-key": "favorite-route-missing" },
         method: "PUT",
         payload: { favorite: true },
         url: `/v1/saved/favorites/save_target_${"z".repeat(22)}`,

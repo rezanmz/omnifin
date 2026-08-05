@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f34a47c8-b244-4533-b0b5-6b2e939a3db6",
-  "prevId": "bd20e3cc-6409-421d-923b-24ef018ca7c1",
+  "id": "d72bbdc7-4633-464e-b248-cbaf1640ebbe",
+  "prevId": "016e5741-dd87-416d-8b7d-c5a304008173",
   "tables": {
     "acquisition_grab_operations": {
       "name": "acquisition_grab_operations",
@@ -936,6 +936,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "public_ui_url": {
+          "name": "public_ui_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "encrypted_credentials": {
@@ -2175,243 +2182,6 @@
         }
       }
     },
-    "library_removal_operations": {
-      "name": "library_removal_operations",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "service_identity_link_id": {
-          "name": "service_identity_link_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "link_revision": {
-          "name": "link_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "media_reference_id": {
-          "name": "media_reference_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "preview_id": {
-          "name": "preview_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "mode": {
-          "name": "mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "idempotency_key_hash": {
-          "name": "idempotency_key_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "fingerprint_hash": {
-          "name": "fingerprint_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'running'"
-        },
-        "response_json": {
-          "name": "response_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_payload": {
-          "name": "encrypted_payload",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "library_removal_operations_user_key_unique": {
-          "name": "library_removal_operations_user_key_unique",
-          "columns": ["user_id", "idempotency_key_hash"],
-          "isUnique": true
-        },
-        "library_removal_operations_preview_unique": {
-          "name": "library_removal_operations_preview_unique",
-          "columns": ["preview_id"],
-          "isUnique": true
-        },
-        "library_removal_operations_state_created_idx": {
-          "name": "library_removal_operations_state_created_idx",
-          "columns": ["state", "created_at"],
-          "isUnique": false
-        },
-        "library_removal_operations_reference_idx": {
-          "name": "library_removal_operations_reference_idx",
-          "columns": ["media_reference_id", "created_at"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "library_removal_operations_user_id_users_id_fk": {
-          "name": "library_removal_operations_user_id_users_id_fk",
-          "tableFrom": "library_removal_operations",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "library_removal_operations_media_reference_id_media_references_id_fk": {
-          "name": "library_removal_operations_media_reference_id_media_references_id_fk",
-          "tableFrom": "library_removal_operations",
-          "tableTo": "media_references",
-          "columnsFrom": ["media_reference_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "library_removal_operations_service_identity_link_fk": {
-          "name": "library_removal_operations_service_identity_link_fk",
-          "tableFrom": "library_removal_operations",
-          "tableTo": "service_identity_links",
-          "columnsFrom": ["service_identity_link_id", "user_id"],
-          "columnsTo": ["id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "library_removal_operations_id_check": {
-          "name": "library_removal_operations_id_check",
-          "value": "length(\"library_removal_operations\".\"id\") = 48\n        and substr(\"library_removal_operations\".\"id\", 1, 26) = 'library_removal_operation_'\n        and substr(\"library_removal_operations\".\"id\", 27) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "library_removal_operations_preview_id_check": {
-          "name": "library_removal_operations_preview_id_check",
-          "value": "length(\"library_removal_operations\".\"preview_id\") = 46\n        and substr(\"library_removal_operations\".\"preview_id\", 1, 24) = 'library_removal_preview_'\n        and substr(\"library_removal_operations\".\"preview_id\", 25) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "library_removal_operations_session_id_check": {
-          "name": "library_removal_operations_session_id_check",
-          "value": "length(\"library_removal_operations\".\"session_id\") between 1 and 128\n        and \"library_removal_operations\".\"session_id\" not glob '*[^A-Za-z0-9._:-]*'"
-        },
-        "library_removal_operations_link_revision_check": {
-          "name": "library_removal_operations_link_revision_check",
-          "value": "\"library_removal_operations\".\"link_revision\" between 0 and 2147483647"
-        },
-        "library_removal_operations_mode_check": {
-          "name": "library_removal_operations_mode_check",
-          "value": "\"library_removal_operations\".\"mode\" in (\n        'delete_files_keep_monitored',\n        'delete_files_and_unmonitor',\n        'remove_from_radarr_and_delete_files',\n        'delete_unmanaged_files'\n      )"
-        },
-        "library_removal_operations_key_hash_check": {
-          "name": "library_removal_operations_key_hash_check",
-          "value": "length(\"library_removal_operations\".\"idempotency_key_hash\") = 43\n        and \"library_removal_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "library_removal_operations_fingerprint_hash_check": {
-          "name": "library_removal_operations_fingerprint_hash_check",
-          "value": "length(\"library_removal_operations\".\"fingerprint_hash\") = 43\n        and \"library_removal_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "library_removal_operations_state_check": {
-          "name": "library_removal_operations_state_check",
-          "value": "\"library_removal_operations\".\"state\" in ('running', 'succeeded', 'reconcile_required', 'failed')"
-        },
-        "library_removal_operations_response_check": {
-          "name": "library_removal_operations_response_check",
-          "value": "length(\"library_removal_operations\".\"response_json\") between 2 and 16384\n        and json_valid(\"library_removal_operations\".\"response_json\")\n        and json_type(\"library_removal_operations\".\"response_json\") = 'object'"
-        },
-        "library_removal_operations_payload_check": {
-          "name": "library_removal_operations_payload_check",
-          "value": "length(\"library_removal_operations\".\"encrypted_payload\") between 1 and 65536"
-        },
-        "library_removal_operations_outcome_check": {
-          "name": "library_removal_operations_outcome_check",
-          "value": "(\n          \"library_removal_operations\".\"state\" = 'running'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is null\n        ) or (\n          \"library_removal_operations\".\"state\" = 'succeeded'\n          and \"library_removal_operations\".\"failure_code\" is null\n          and \"library_removal_operations\".\"completed_at\" is not null\n        ) or (\n          \"library_removal_operations\".\"state\" in ('reconcile_required', 'failed')\n          and length(\"library_removal_operations\".\"failure_code\") between 1 and 64\n          and \"library_removal_operations\".\"completed_at\" is not null\n        )"
-        },
-        "library_removal_operations_timestamp_order_check": {
-          "name": "library_removal_operations_timestamp_order_check",
-          "value": "\"library_removal_operations\".\"created_at\" >= 0\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"updated_at\"\n        and \"library_removal_operations\".\"created_at\" <= \"library_removal_operations\".\"started_at\"\n        and (\"library_removal_operations\".\"completed_at\" is null\n          or (\"library_removal_operations\".\"completed_at\" >= \"library_removal_operations\".\"started_at\"\n            and \"library_removal_operations\".\"completed_at\" <= \"library_removal_operations\".\"updated_at\"))"
-        }
-      }
-    },
     "library_removal_previews": {
       "name": "library_removal_previews",
       "columns": {
@@ -3241,11 +3011,6 @@
         }
       },
       "indexes": {
-        "media_references_id_user_unique": {
-          "name": "media_references_id_user_unique",
-          "columns": ["id", "user_id"],
-          "isUnique": true
-        },
         "media_references_link_item_unique": {
           "name": "media_references_link_item_unique",
           "columns": ["service_identity_link_id", "link_revision", "item_digest"],
@@ -3433,6 +3198,115 @@
         "media_request_operations_timestamp_order_check": {
           "name": "media_request_operations_timestamp_order_check",
           "value": "\"media_request_operations\".\"completed_at\" is null or \"media_request_operations\".\"completed_at\" >= \"media_request_operations\".\"created_at\""
+        }
+      }
+    },
+    "media_request_profile_preferences": {
+      "name": "media_request_profile_preferences",
+      "columns": {
+        "connector_id": {
+          "name": "connector_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "is_4k": {
+          "name": "is_4k",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "destination_id": {
+          "name": "destination_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "profile_id": {
+          "name": "profile_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_by_user_id": {
+          "name": "updated_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch('subsec') * 1000)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "media_request_profile_preferences_connector_id_connector_configs_id_fk": {
+          "name": "media_request_profile_preferences_connector_id_connector_configs_id_fk",
+          "tableFrom": "media_request_profile_preferences",
+          "tableTo": "connector_configs",
+          "columnsFrom": ["connector_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_request_profile_preferences_updated_by_user_id_users_id_fk": {
+          "name": "media_request_profile_preferences_updated_by_user_id_users_id_fk",
+          "tableFrom": "media_request_profile_preferences",
+          "tableTo": "users",
+          "columnsFrom": ["updated_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "media_request_profile_preferences_connector_id_kind_is_4k_pk": {
+          "columns": ["connector_id", "kind", "is_4k"],
+          "name": "media_request_profile_preferences_connector_id_kind_is_4k_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "media_request_profile_preferences_kind_check": {
+          "name": "media_request_profile_preferences_kind_check",
+          "value": "\"media_request_profile_preferences\".\"kind\" in ('movie', 'series')"
+        },
+        "media_request_profile_preferences_is_4k_check": {
+          "name": "media_request_profile_preferences_is_4k_check",
+          "value": "\"media_request_profile_preferences\".\"is_4k\" in (0, 1)"
+        },
+        "media_request_profile_preferences_destination_check": {
+          "name": "media_request_profile_preferences_destination_check",
+          "value": "\"media_request_profile_preferences\".\"destination_id\" between 0 and 2147483647"
+        },
+        "media_request_profile_preferences_profile_check": {
+          "name": "media_request_profile_preferences_profile_check",
+          "value": "\"media_request_profile_preferences\".\"profile_id\" between 1 and 2147483647"
         }
       }
     },
@@ -4221,709 +4095,6 @@
         "role_mappings_enabled_check": {
           "name": "role_mappings_enabled_check",
           "value": "\"role_mappings\".\"enabled\" in (0, 1)"
-        }
-      }
-    },
-    "saved_catalog_items": {
-      "name": "saved_catalog_items",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "identity_digest": {
-          "name": "identity_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_identity": {
-          "name": "encrypted_identity",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_snapshot": {
-          "name": "encrypted_snapshot",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "library_reference_id": {
-          "name": "library_reference_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "library_reference_user_id": {
-          "name": "library_reference_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "last_resolved_at": {
-          "name": "last_resolved_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "saved_catalog_items_id_user_unique": {
-          "name": "saved_catalog_items_id_user_unique",
-          "columns": ["id", "user_id"],
-          "isUnique": true
-        },
-        "saved_catalog_items_user_identity_unique": {
-          "name": "saved_catalog_items_user_identity_unique",
-          "columns": ["user_id", "identity_digest"],
-          "isUnique": true
-        },
-        "saved_catalog_items_user_updated_idx": {
-          "name": "saved_catalog_items_user_updated_idx",
-          "columns": ["user_id", "updated_at"],
-          "isUnique": false
-        },
-        "saved_catalog_items_library_reference_idx": {
-          "name": "saved_catalog_items_library_reference_idx",
-          "columns": ["library_reference_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "saved_catalog_items_user_id_users_id_fk": {
-          "name": "saved_catalog_items_user_id_users_id_fk",
-          "tableFrom": "saved_catalog_items",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "saved_catalog_items_library_reference_fk": {
-          "name": "saved_catalog_items_library_reference_fk",
-          "tableFrom": "saved_catalog_items",
-          "tableTo": "media_references",
-          "columnsFrom": ["library_reference_id", "library_reference_user_id"],
-          "columnsTo": ["id", "user_id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "saved_catalog_items_id_check": {
-          "name": "saved_catalog_items_id_check",
-          "value": "length(\"saved_catalog_items\".\"id\") = 30\n        and substr(\"saved_catalog_items\".\"id\", 1, 8) = 'catalog_'\n        and substr(\"saved_catalog_items\".\"id\", 9) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_catalog_items_identity_digest_check": {
-          "name": "saved_catalog_items_identity_digest_check",
-          "value": "length(\"saved_catalog_items\".\"identity_digest\") = 22\n        and \"saved_catalog_items\".\"identity_digest\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_catalog_items_identity_check": {
-          "name": "saved_catalog_items_identity_check",
-          "value": "length(\"saved_catalog_items\".\"encrypted_identity\") between 1 and 16384"
-        },
-        "saved_catalog_items_snapshot_check": {
-          "name": "saved_catalog_items_snapshot_check",
-          "value": "length(\"saved_catalog_items\".\"encrypted_snapshot\") between 1 and 65536"
-        },
-        "saved_catalog_items_library_reference_check": {
-          "name": "saved_catalog_items_library_reference_check",
-          "value": "(\n          \"saved_catalog_items\".\"library_reference_id\" is null\n          and \"saved_catalog_items\".\"library_reference_user_id\" is null\n        ) or (\n          length(\"saved_catalog_items\".\"library_reference_id\") = 28\n          and substr(\"saved_catalog_items\".\"library_reference_id\", 1, 6) = 'media_'\n          and substr(\"saved_catalog_items\".\"library_reference_id\", 7) not glob '*[^A-Za-z0-9_-]*'\n          and \"saved_catalog_items\".\"library_reference_user_id\" = \"saved_catalog_items\".\"user_id\"\n        )"
-        },
-        "saved_catalog_items_timestamp_order_check": {
-          "name": "saved_catalog_items_timestamp_order_check",
-          "value": "\"saved_catalog_items\".\"created_at\" >= 0\n        and \"saved_catalog_items\".\"created_at\" <= \"saved_catalog_items\".\"updated_at\"\n        and (\"saved_catalog_items\".\"last_resolved_at\" is null or \"saved_catalog_items\".\"last_resolved_at\" between \"saved_catalog_items\".\"created_at\" and \"saved_catalog_items\".\"updated_at\")"
-        }
-      }
-    },
-    "saved_list_items": {
-      "name": "saved_list_items",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "list_id": {
-          "name": "list_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "catalog_item_id": {
-          "name": "catalog_item_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "saved_list_items_list_catalog_unique": {
-          "name": "saved_list_items_list_catalog_unique",
-          "columns": ["list_id", "catalog_item_id"],
-          "isUnique": true
-        },
-        "saved_list_items_list_position_unique": {
-          "name": "saved_list_items_list_position_unique",
-          "columns": ["list_id", "position"],
-          "isUnique": true
-        },
-        "saved_list_items_user_created_idx": {
-          "name": "saved_list_items_user_created_idx",
-          "columns": ["user_id", "created_at"],
-          "isUnique": false
-        },
-        "saved_list_items_catalog_idx": {
-          "name": "saved_list_items_catalog_idx",
-          "columns": ["catalog_item_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "saved_list_items_user_id_users_id_fk": {
-          "name": "saved_list_items_user_id_users_id_fk",
-          "tableFrom": "saved_list_items",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "saved_list_items_list_owner_fk": {
-          "name": "saved_list_items_list_owner_fk",
-          "tableFrom": "saved_list_items",
-          "tableTo": "saved_lists",
-          "columnsFrom": ["list_id", "user_id"],
-          "columnsTo": ["id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "saved_list_items_catalog_owner_fk": {
-          "name": "saved_list_items_catalog_owner_fk",
-          "tableFrom": "saved_list_items",
-          "tableTo": "saved_catalog_items",
-          "columnsFrom": ["catalog_item_id", "user_id"],
-          "columnsTo": ["id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "saved_list_items_id_check": {
-          "name": "saved_list_items_id_check",
-          "value": "length(\"saved_list_items\".\"id\") = 33\n        and substr(\"saved_list_items\".\"id\", 1, 11) = 'saved_item_'\n        and substr(\"saved_list_items\".\"id\", 12) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_list_items_position_check": {
-          "name": "saved_list_items_position_check",
-          "value": "\"saved_list_items\".\"position\" between 0 and 499"
-        },
-        "saved_list_items_timestamp_order_check": {
-          "name": "saved_list_items_timestamp_order_check",
-          "value": "\"saved_list_items\".\"created_at\" >= 0 and \"saved_list_items\".\"created_at\" <= \"saved_list_items\".\"updated_at\""
-        }
-      }
-    },
-    "saved_list_operations": {
-      "name": "saved_list_operations",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "resource_id": {
-          "name": "resource_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "idempotency_key_hash": {
-          "name": "idempotency_key_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "fingerprint_hash": {
-          "name": "fingerprint_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pending'"
-        },
-        "encrypted_response": {
-          "name": "encrypted_response",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "saved_list_operations_user_key_unique": {
-          "name": "saved_list_operations_user_key_unique",
-          "columns": ["user_id", "idempotency_key_hash"],
-          "isUnique": true
-        },
-        "saved_list_operations_state_created_idx": {
-          "name": "saved_list_operations_state_created_idx",
-          "columns": ["state", "created_at"],
-          "isUnique": false
-        },
-        "saved_list_operations_resource_idx": {
-          "name": "saved_list_operations_resource_idx",
-          "columns": ["user_id", "resource_id", "created_at"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "saved_list_operations_user_id_users_id_fk": {
-          "name": "saved_list_operations_user_id_users_id_fk",
-          "tableFrom": "saved_list_operations",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "saved_list_operations_id_check": {
-          "name": "saved_list_operations_id_check",
-          "value": "length(\"saved_list_operations\".\"id\") = 38\n        and substr(\"saved_list_operations\".\"id\", 1, 16) = 'saved_operation_'\n        and substr(\"saved_list_operations\".\"id\", 17) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_list_operations_kind_check": {
-          "name": "saved_list_operations_kind_check",
-          "value": "\"saved_list_operations\".\"kind\" in ('create_list', 'restore_list', 'add_item', 'reorder_items')"
-        },
-        "saved_list_operations_key_hash_check": {
-          "name": "saved_list_operations_key_hash_check",
-          "value": "length(\"saved_list_operations\".\"idempotency_key_hash\") = 43\n        and \"saved_list_operations\".\"idempotency_key_hash\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_list_operations_fingerprint_hash_check": {
-          "name": "saved_list_operations_fingerprint_hash_check",
-          "value": "length(\"saved_list_operations\".\"fingerprint_hash\") = 22\n        and \"saved_list_operations\".\"fingerprint_hash\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_list_operations_state_check": {
-          "name": "saved_list_operations_state_check",
-          "value": "\"saved_list_operations\".\"state\" in ('pending', 'succeeded', 'failed')"
-        },
-        "saved_list_operations_response_check": {
-          "name": "saved_list_operations_response_check",
-          "value": "\"saved_list_operations\".\"encrypted_response\" is null\n        or length(\"saved_list_operations\".\"encrypted_response\") between 1 and 131072"
-        },
-        "saved_list_operations_outcome_check": {
-          "name": "saved_list_operations_outcome_check",
-          "value": "(\n          \"saved_list_operations\".\"state\" = 'pending'\n          and \"saved_list_operations\".\"encrypted_response\" is null\n          and \"saved_list_operations\".\"failure_code\" is null\n          and \"saved_list_operations\".\"completed_at\" is null\n        ) or (\n          \"saved_list_operations\".\"state\" = 'succeeded'\n          and \"saved_list_operations\".\"encrypted_response\" is not null\n          and \"saved_list_operations\".\"failure_code\" is null\n          and \"saved_list_operations\".\"completed_at\" is not null\n        ) or (\n          \"saved_list_operations\".\"state\" = 'failed'\n          and \"saved_list_operations\".\"encrypted_response\" is null\n          and length(\"saved_list_operations\".\"failure_code\") between 1 and 64\n          and \"saved_list_operations\".\"completed_at\" is not null\n        )"
-        },
-        "saved_list_operations_timestamp_order_check": {
-          "name": "saved_list_operations_timestamp_order_check",
-          "value": "\"saved_list_operations\".\"completed_at\" is null or \"saved_list_operations\".\"completed_at\" >= \"saved_list_operations\".\"created_at\""
-        }
-      }
-    },
-    "saved_lists": {
-      "name": "saved_lists",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_name": {
-          "name": "encrypted_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_description": {
-          "name": "encrypted_description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "undo_expires_at": {
-          "name": "undo_expires_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "saved_lists_id_user_unique": {
-          "name": "saved_lists_id_user_unique",
-          "columns": ["id", "user_id"],
-          "isUnique": true
-        },
-        "saved_lists_user_watch_later_unique": {
-          "name": "saved_lists_user_watch_later_unique",
-          "columns": ["user_id"],
-          "isUnique": true,
-          "where": "\"saved_lists\".\"kind\" = 'watch_later'"
-        },
-        "saved_lists_user_updated_idx": {
-          "name": "saved_lists_user_updated_idx",
-          "columns": ["user_id", "deleted_at", "updated_at"],
-          "isUnique": false
-        },
-        "saved_lists_undo_expiry_idx": {
-          "name": "saved_lists_undo_expiry_idx",
-          "columns": ["undo_expires_at"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "saved_lists_user_id_users_id_fk": {
-          "name": "saved_lists_user_id_users_id_fk",
-          "tableFrom": "saved_lists",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "saved_lists_id_check": {
-          "name": "saved_lists_id_check",
-          "value": "length(\"saved_lists\".\"id\") = 33\n        and substr(\"saved_lists\".\"id\", 1, 11) = 'saved_list_'\n        and substr(\"saved_lists\".\"id\", 12) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_lists_kind_check": {
-          "name": "saved_lists_kind_check",
-          "value": "\"saved_lists\".\"kind\" in ('watch_later', 'custom')"
-        },
-        "saved_lists_name_check": {
-          "name": "saved_lists_name_check",
-          "value": "length(\"saved_lists\".\"encrypted_name\") between 1 and 4096"
-        },
-        "saved_lists_description_check": {
-          "name": "saved_lists_description_check",
-          "value": "\"saved_lists\".\"encrypted_description\" is null\n        or length(\"saved_lists\".\"encrypted_description\") between 1 and 8192"
-        },
-        "saved_lists_revision_check": {
-          "name": "saved_lists_revision_check",
-          "value": "\"saved_lists\".\"revision\" between 0 and 2147483647"
-        },
-        "saved_lists_deletion_check": {
-          "name": "saved_lists_deletion_check",
-          "value": "(\n          \"saved_lists\".\"kind\" = 'watch_later'\n          and \"saved_lists\".\"deleted_at\" is null\n          and \"saved_lists\".\"undo_expires_at\" is null\n        ) or (\n          \"saved_lists\".\"kind\" = 'custom'\n          and (\n            (\"saved_lists\".\"deleted_at\" is null and \"saved_lists\".\"undo_expires_at\" is null)\n            or (\"saved_lists\".\"deleted_at\" is not null and \"saved_lists\".\"undo_expires_at\" > \"saved_lists\".\"deleted_at\")\n          )\n        )"
-        },
-        "saved_lists_timestamp_order_check": {
-          "name": "saved_lists_timestamp_order_check",
-          "value": "\"saved_lists\".\"created_at\" >= 0\n        and \"saved_lists\".\"created_at\" <= \"saved_lists\".\"updated_at\"\n        and (\"saved_lists\".\"deleted_at\" is null or \"saved_lists\".\"deleted_at\" between \"saved_lists\".\"created_at\" and \"saved_lists\".\"updated_at\")"
-        }
-      }
-    },
-    "saved_targets": {
-      "name": "saved_targets",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "service_identity_link_id": {
-          "name": "service_identity_link_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "link_revision": {
-          "name": "link_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "identity_digest": {
-          "name": "identity_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "encrypted_payload": {
-          "name": "encrypted_payload",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "last_used_at": {
-          "name": "last_used_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch('subsec') * 1000)"
-        }
-      },
-      "indexes": {
-        "saved_targets_user_identity_unique": {
-          "name": "saved_targets_user_identity_unique",
-          "columns": ["user_id", "service_identity_link_id", "link_revision", "identity_digest"],
-          "isUnique": true
-        },
-        "saved_targets_expiry_idx": {
-          "name": "saved_targets_expiry_idx",
-          "columns": ["expires_at"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "saved_targets_user_id_users_id_fk": {
-          "name": "saved_targets_user_id_users_id_fk",
-          "tableFrom": "saved_targets",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "saved_targets_service_identity_link_fk": {
-          "name": "saved_targets_service_identity_link_fk",
-          "tableFrom": "saved_targets",
-          "tableTo": "service_identity_links",
-          "columnsFrom": ["service_identity_link_id", "user_id"],
-          "columnsTo": ["id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "saved_targets_id_check": {
-          "name": "saved_targets_id_check",
-          "value": "length(\"saved_targets\".\"id\") = 34\n        and substr(\"saved_targets\".\"id\", 1, 12) = 'save_target_'\n        and substr(\"saved_targets\".\"id\", 13) not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_targets_identity_digest_check": {
-          "name": "saved_targets_identity_digest_check",
-          "value": "length(\"saved_targets\".\"identity_digest\") = 22\n        and \"saved_targets\".\"identity_digest\" not glob '*[^A-Za-z0-9_-]*'"
-        },
-        "saved_targets_payload_check": {
-          "name": "saved_targets_payload_check",
-          "value": "length(\"saved_targets\".\"encrypted_payload\") between 1 and 65536"
-        },
-        "saved_targets_link_revision_check": {
-          "name": "saved_targets_link_revision_check",
-          "value": "\"saved_targets\".\"link_revision\" between 0 and 2147483647"
-        },
-        "saved_targets_timestamp_order_check": {
-          "name": "saved_targets_timestamp_order_check",
-          "value": "\"saved_targets\".\"created_at\" >= 0\n        and \"saved_targets\".\"created_at\" <= \"saved_targets\".\"updated_at\"\n        and \"saved_targets\".\"created_at\" <= \"saved_targets\".\"last_used_at\"\n        and \"saved_targets\".\"last_used_at\" < \"saved_targets\".\"expires_at\""
         }
       }
     },

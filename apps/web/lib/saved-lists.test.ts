@@ -219,7 +219,10 @@ describe("savedListsClient", () => {
       .fn()
       .mockResolvedValueOnce(response(mutation, 201, { etag, "idempotency-replayed": "false" }))
       .mockResolvedValueOnce(response(target, 201))
-      .mockResolvedValueOnce(response(target, 201));
+      .mockResolvedValueOnce(response(target, 201))
+      .mockResolvedValueOnce(
+        response({ favorite: false, synchronizedAt: now, targetReferenceId: targetId }),
+      );
     vi.stubGlobal("fetch", fetch);
 
     await expect(
@@ -237,6 +240,13 @@ describe("savedListsClient", () => {
         { csrfToken },
       ),
     ).resolves.toEqual(target);
+    await expect(
+      savedListsClient.updateFavorite(
+        targetId,
+        { favorite: false },
+        { csrfToken, idempotencyKey: "saved-favorite-0001" },
+      ),
+    ).resolves.toMatchObject({ favorite: false });
 
     const [createUrl, createInit] = fetch.mock.calls[0]!;
     expect(createUrl).toBe("/api/saved/lists");
@@ -253,6 +263,10 @@ describe("savedListsClient", () => {
     expect(discoveryTargetInit).toMatchObject({
       body: JSON.stringify({ kind: "movie", language: "en-CA", tmdbId: 603 }),
       method: "POST",
+    });
+    expect(fetch.mock.calls[3]?.[1].headers).toMatchObject({
+      "idempotency-key": "saved-favorite-0001",
+      "x-omnifin-csrf": csrfToken,
     });
   });
 
@@ -293,6 +307,7 @@ describe("savedListsClient", () => {
     [412, "saved_list_revision_stale", "precondition", "refresh"],
     [428, "saved_list_precondition_required", "precondition", "refresh"],
     [409, "saved_list_operation_in_progress", "conflict", "same_key"],
+    [409, "saved_favorite_operation_in_progress", "conflict", "same_key"],
     [409, "saved_reorder_window_changed", "conflict", "refresh"],
     [503, "saved_list_temporarily_unavailable", "unavailable", "same_key"],
     [400, "invalid_request", "invalid_response", "none"],
