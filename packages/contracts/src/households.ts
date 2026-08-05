@@ -27,7 +27,7 @@ const policyLabelSchema = z
   .min(1)
   .max(80)
   .refine(
-    (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+    (value) => !/[\p{Cc}\p{Cf}]/u.test(value),
     "Policy labels cannot contain control characters.",
   )
   .transform((value) => value.normalize("NFKC").replaceAll(/\s+/gu, " ").toLocaleLowerCase("en-US"))
@@ -36,6 +36,10 @@ const policyLabelSchema = z
       .string()
       .min(1)
       .max(80)
+      .refine(
+        (value) => !/[\p{Cc}\p{Cf}]/u.test(value),
+        "Policy labels cannot contain control characters.",
+      )
       .refine(
         (value) => new TextEncoder().encode(value).length <= 160,
         "Policy labels cannot exceed 160 UTF-8 bytes.",
@@ -90,7 +94,15 @@ export const householdParentalPolicySchema = z
   });
 export type HouseholdParentalPolicy = z.infer<typeof householdParentalPolicySchema>;
 
-export const conservativeChildPolicy = Object.freeze(
+function freezeHouseholdPolicy(policy: HouseholdParentalPolicy): HouseholdParentalPolicy {
+  Object.freeze(policy.allowedLibraries);
+  Object.freeze(policy.blockedGenres);
+  Object.freeze(policy.blockedMedia);
+  Object.freeze(policy.blockedTags);
+  return Object.freeze(policy);
+}
+
+export const conservativeChildPolicy = freezeHouseholdPolicy(
   householdParentalPolicySchema.parse({
     allowedLibraries: [],
     blockedGenres: [],
@@ -124,8 +136,31 @@ export const householdPolicyDecisionReasonSchema = z.enum([
 ]);
 export type HouseholdPolicyDecisionReason = z.infer<typeof householdPolicyDecisionReasonSchema>;
 
-export const householdPolicyDecisionSchema = z.strictObject({
-  allowed: z.boolean(),
-  reason: householdPolicyDecisionReasonSchema,
-});
+const householdPolicyBlockedReasonSchema = householdPolicyDecisionReasonSchema.exclude(["allowed"]);
+
+export const householdPolicyDecisionSchema = z.discriminatedUnion("allowed", [
+  z.strictObject({ allowed: z.literal(true), reason: z.literal("allowed") }),
+  z.strictObject({ allowed: z.literal(false), reason: householdPolicyBlockedReasonSchema }),
+]);
 export type HouseholdPolicyDecision = z.infer<typeof householdPolicyDecisionSchema>;
+
+export const householdRequestPolicyDecisionSchema = z.discriminatedUnion("reason", [
+  z.strictObject({
+    allowed: z.literal(false),
+    reason: z.enum(["disabled", "permission_denied"]),
+    requiresApproval: z.literal(false),
+  }),
+  z.strictObject({
+    allowed: z.literal(true),
+    reason: z.literal("approval_required"),
+    requiresApproval: z.literal(true),
+  }),
+  z.strictObject({
+    allowed: z.literal(true),
+    reason: z.literal("allowed"),
+    requiresApproval: z.literal(false),
+  }),
+]);
+export type HouseholdRequestPolicyDecision = z.infer<
+  typeof householdRequestPolicyDecisionSchema
+>;

@@ -2,9 +2,11 @@ import {
   householdParentalPolicySchema,
   householdPolicyContentFactsSchema,
   householdPolicyDecisionSchema,
+  householdRequestPolicyDecisionSchema,
   type HouseholdParentalPolicy,
   type HouseholdPolicyContentFacts,
   type HouseholdPolicyDecision,
+  type HouseholdRequestPolicyDecision,
 } from "@omnifin/contracts/households";
 
 function blocked(
@@ -53,4 +55,41 @@ export function evaluateHouseholdContentPolicy(
     return blocked("blocked_certification");
   }
   return householdPolicyDecisionSchema.parse({ allowed: true, reason: "allowed" });
+}
+
+/**
+ * Intersects request policy with an already-authorized local principal. An
+ * approval-required result permits request creation only when the mutation
+ * path can force the request into review rather than upstream auto-approval.
+ */
+export function evaluateHouseholdRequestPolicy(
+  policyInput: HouseholdParentalPolicy,
+  hasRequestPermission: boolean,
+): HouseholdRequestPolicyDecision {
+  const policy = householdParentalPolicySchema.parse(policyInput);
+  if (!hasRequestPermission) {
+    return householdRequestPolicyDecisionSchema.parse({
+      allowed: false,
+      reason: "permission_denied",
+      requiresApproval: false,
+    });
+  }
+  if (policy.requestMode === "disabled") {
+    return householdRequestPolicyDecisionSchema.parse({
+      allowed: false,
+      reason: "disabled",
+      requiresApproval: false,
+    });
+  }
+  return policy.requestMode === "approval_required"
+    ? householdRequestPolicyDecisionSchema.parse({
+        allowed: true,
+        reason: "approval_required",
+        requiresApproval: true,
+      })
+    : householdRequestPolicyDecisionSchema.parse({
+        allowed: true,
+        reason: "allowed",
+        requiresApproval: false,
+      });
 }

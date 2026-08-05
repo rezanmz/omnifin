@@ -563,9 +563,12 @@ do not satisfy this boundary.
   and recovery changes.
 
 The conservative child default blocks unknown certifications, limits certification age to twelve,
-and requires approval for requests. Omnifin policy can only further restrict the paired Jellyfin
-identity; it can never broaden upstream access. Every content-producing and content-mutating route
-must use the same evaluator before this feature can advance from foundation to runtime support.
+and requires approval for requests. Request mutations must intersect existing local permission with
+the profile request mode at commit time; an approval-required result is valid only when the request
+is forced into review rather than accepted through upstream auto-approval. Omnifin policy can only
+further restrict the paired Jellyfin identity; it can never broaden upstream access. Every
+content-producing and content-mutating route must use the same evaluator before this feature can
+advance from foundation to runtime support.
 
 ## Operational controls
 

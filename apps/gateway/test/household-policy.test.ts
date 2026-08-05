@@ -5,7 +5,10 @@ import {
 } from "@omnifin/contracts/households";
 import { describe, expect, it } from "vitest";
 
-import { evaluateHouseholdContentPolicy } from "../src/auth/household-policy.js";
+import {
+  evaluateHouseholdContentPolicy,
+  evaluateHouseholdRequestPolicy,
+} from "../src/auth/household-policy.js";
 
 const library = "household_library_0123456789ABCDEFGHIJKL";
 const otherLibrary = "household_library_ABCDEFGHIJKLMNOPQRSTUV";
@@ -80,4 +83,25 @@ describe("household content policy", () => {
       evaluateHouseholdContentPolicy(conservativeChildPolicy, facts({ certificationAge: 120 })),
     ).toThrow();
   });
+
+  it.each([
+    [false, "allowed", { allowed: false, reason: "permission_denied", requiresApproval: false }],
+    [true, "disabled", { allowed: false, reason: "disabled", requiresApproval: false }],
+    [
+      true,
+      "approval_required",
+      { allowed: true, reason: "approval_required", requiresApproval: true },
+    ],
+    [true, "allowed", { allowed: true, reason: "allowed", requiresApproval: false }],
+  ] as const)(
+    "intersects permission %s with request mode %s",
+    (hasRequestPermission, requestMode, expected) => {
+      expect(
+        evaluateHouseholdRequestPolicy(
+          { ...conservativeChildPolicy, requestMode },
+          hasRequestPermission,
+        ),
+      ).toEqual(expected);
+    },
+  );
 });
