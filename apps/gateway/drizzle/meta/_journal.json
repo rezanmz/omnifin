@@ -190,6 +190,13 @@
       "when": 1785890702827,
       "tag": "0026_media_request_profile_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1785890702828,
+      "tag": "0027_connector_public_ui_urls",
+      "breakpoints": true
     }
   ]
 }

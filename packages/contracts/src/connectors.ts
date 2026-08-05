@@ -160,12 +160,41 @@ const connectorBaseUrlSchema = z
       url.username ||
       url.password ||
       url.search ||
-      url.hash
+      url.hash ||
+      value.includes("?") ||
+      value.includes("#")
     ) {
       context.addIssue({
         code: "custom",
         message:
           "Connector URLs must be HTTP(S) origins or base paths without credentials or suffixes.",
+      });
+    }
+  });
+
+export const connectorPublicUiUrlSchema = z
+  .url()
+  .max(2_048)
+  .superRefine((value, context) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return;
+    }
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      value.includes("?") ||
+      value.includes("#")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Browser URLs must be HTTPS origins or base paths without credentials, query strings, or fragments.",
       });
     }
   });
@@ -209,6 +238,7 @@ function validateConnectorPolicy(
     baseUrl: string;
     credentials: ConnectorCredentialInput;
     insecureHttpApproved: boolean;
+    publicUiUrl?: string | null | undefined;
     service: ManagedConnectorService;
     tlsCaCertificatePem?: string | undefined;
     tlsPolicy: ConnectorTlsPolicy;
@@ -263,6 +293,18 @@ function validateConnectorPolicy(
       message: "The credential kind is not valid for this connector service.",
     });
   }
+  if (
+    input.publicUiUrl !== undefined &&
+    input.publicUiUrl !== null &&
+    input.service !== "radarr" &&
+    input.service !== "sonarr"
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["publicUiUrl"],
+      message: "A browser URL is supported only for Radarr and Sonarr.",
+    });
+  }
 }
 
 export const connectorCreateRequestSchema = z
@@ -271,6 +313,7 @@ export const connectorCreateRequestSchema = z
     service: managedConnectorServiceSchema,
     displayName: z.string().trim().min(1).max(160),
     baseUrl: connectorBaseUrlSchema,
+    publicUiUrl: connectorPublicUiUrlSchema.nullable().optional(),
     credentials: connectorCredentialInputSchema,
     tlsPolicy: connectorTlsPolicySchema.default("strict"),
     tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
@@ -288,6 +331,7 @@ export const connectorUpdateRequestSchema = z
       .regex(/^[A-Za-z0-9_-]+$/u),
     displayName: z.string().trim().min(1).max(160).optional(),
     baseUrl: connectorBaseUrlSchema.optional(),
+    publicUiUrl: connectorPublicUiUrlSchema.nullable().optional(),
     credentials: connectorCredentialInputSchema.optional(),
     tlsPolicy: connectorTlsPolicySchema.optional(),
     tlsCaCertificatePem: connectorTlsCaCertificatePemSchema.optional(),
@@ -298,6 +342,7 @@ export const connectorUpdateRequestSchema = z
     (value) =>
       value.displayName !== undefined ||
       value.baseUrl !== undefined ||
+      value.publicUiUrl !== undefined ||
       value.credentials !== undefined ||
       value.tlsPolicy !== undefined ||
       value.tlsCaCertificatePem !== undefined ||
@@ -312,6 +357,7 @@ export const connectorAdminSchema = z.strictObject({
   service: managedConnectorServiceSchema,
   displayName: z.string().trim().min(1).max(160),
   baseUrl: connectorBaseUrlSchema,
+  publicUiUrl: connectorPublicUiUrlSchema.nullable(),
   credentialKind: connectorCredentialKindSchema,
   credentialsConfigured: z.boolean(),
   tlsPolicy: connectorTlsPolicySchema,

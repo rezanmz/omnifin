@@ -93,6 +93,7 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
+  connector_configs: ["public_ui_url"],
   download_queue_bulk_operations: [
     "completed_at",
     "fingerprint_hash",
@@ -579,8 +580,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0026_media_request_profile_preferences",
-  "Current migration journal must end at migration 0026_media_request_profile_preferences.",
+    currentMigrationTag === "0027_connector_public_ui_urls",
+  "Current migration journal must end at migration 0027_connector_public_ui_urls.",
 );
 
 try {
@@ -1058,7 +1059,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0026.",
+      "Production migration did not advance the historical fixture exactly through migration 0027.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1223,7 +1224,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0026, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0027, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
