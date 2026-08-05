@@ -197,6 +197,13 @@
       "when": 1785890702828,
       "tag": "0027_connector_public_ui_urls",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1785890702829,
+      "tag": "0028_library_removal_operations",
+      "breakpoints": true
     }
   ]
 }

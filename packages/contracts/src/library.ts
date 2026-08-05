@@ -1170,6 +1170,11 @@ const managedRemovalModes = [
   "remove_from_radarr_and_delete_files",
 ] as const satisfies readonly LibraryRemovalMode[];
 
+const unmonitoredManagedRemovalModes = [
+  "delete_files_and_unmonitor",
+  "remove_from_radarr_and_delete_files",
+] as const satisfies readonly LibraryRemovalMode[];
+
 export const libraryRemovalPreviewSchema = z
   .strictObject({
     confirmation: z.strictObject({
@@ -1204,7 +1209,11 @@ export const libraryRemovalPreviewSchema = z
     }
 
     const expectedModes: readonly LibraryRemovalMode[] =
-      preview.source.kind === "managed" ? managedRemovalModes : ["delete_unmanaged_files"];
+      preview.source.kind === "unmanaged"
+        ? ["delete_unmanaged_files"]
+        : preview.source.monitored
+          ? managedRemovalModes
+          : unmonitoredManagedRemovalModes;
     if (
       preview.options.length !== expectedModes.length ||
       preview.options.some((option, index) => option.mode !== expectedModes[index])
@@ -1230,6 +1239,149 @@ export const libraryRemovalPreviewSchema = z
     }
   });
 export type LibraryRemovalPreview = z.infer<typeof libraryRemovalPreviewSchema>;
+
+export const libraryRemovalOperationIdSchema = z
+  .string()
+  .regex(/^library_removal_operation_[A-Za-z0-9_-]{22}$/u);
+
+export const libraryRemovalCommitRequestSchema = z.strictObject({
+  confirmationTitle: safeTextSchema.max(300),
+  mode: libraryRemovalModeSchema,
+  previewId: libraryRemovalPreviewIdSchema,
+});
+export type LibraryRemovalCommitRequest = z.infer<typeof libraryRemovalCommitRequestSchema>;
+
+const libraryRemovalStageKinds = [
+  "authorization_recheck",
+  "source_revalidation",
+  "monitoring_change",
+  "organized_file_deletion",
+  "manager_record_removal",
+  "jellyfin_reconciliation",
+] as const;
+
+export const libraryRemovalStageKindSchema = z.enum(libraryRemovalStageKinds);
+export const libraryRemovalStageStateSchema = z.enum([
+  "pending",
+  "succeeded",
+  "failed",
+  "uncertain",
+  "not_applicable",
+]);
+export const libraryRemovalStageSchema = z.strictObject({
+  kind: libraryRemovalStageKindSchema,
+  state: libraryRemovalStageStateSchema,
+});
+export type LibraryRemovalStage = z.infer<typeof libraryRemovalStageSchema>;
+
+export const libraryRemovalOperationStateSchema = z.enum([
+  "running",
+  "succeeded",
+  "reconcile_required",
+  "failed",
+]);
+export const libraryRemovalFailureCodeSchema = z.enum([
+  "authentication_stale",
+  "permission_revoked",
+  "preview_expired",
+  "identity_changed",
+  "source_changed",
+  "connector_unavailable",
+  "upstream_rejected",
+  "outcome_unknown",
+  "reconciliation_pending",
+  "internal_failure",
+]);
+
+export const libraryRemovalOperationSchema = z
+  .strictObject({
+    completedAt: timestampSchema.nullable(),
+    failureCode: libraryRemovalFailureCodeSchema.optional(),
+    mode: libraryRemovalModeSchema,
+    operationId: libraryRemovalOperationIdSchema,
+    previewId: libraryRemovalPreviewIdSchema,
+    referenceId: mediaReferenceIdSchema,
+    stages: z.array(libraryRemovalStageSchema).length(libraryRemovalStageKinds.length),
+    startedAt: timestampSchema,
+    state: libraryRemovalOperationStateSchema,
+  })
+  .superRefine((operation, context) => {
+    operation.stages.forEach((stage, index) => {
+      if (stage.kind !== libraryRemovalStageKinds[index]) {
+        context.addIssue({
+          code: "custom",
+          message: "Library removal stages must be complete and ordered.",
+          path: ["stages", index, "kind"],
+        });
+      }
+    });
+
+    const completed = operation.completedAt !== null;
+    if (completed && Date.parse(operation.completedAt!) < Date.parse(operation.startedAt)) {
+      context.addIssue({
+        code: "custom",
+        message: "Library removal completion cannot precede its start.",
+        path: ["completedAt"],
+      });
+    }
+    if ((operation.state === "running") === completed) {
+      context.addIssue({
+        code: "custom",
+        message: "Only running library removals may omit a completion timestamp.",
+        path: ["completedAt"],
+      });
+    }
+
+    const states = operation.stages.map((stage) => stage.state);
+    if (operation.state === "running") {
+      if (operation.failureCode !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Running library removals cannot have a terminal failure.",
+          path: ["failureCode"],
+        });
+      }
+      return;
+    }
+    if (operation.state === "succeeded") {
+      if (
+        operation.failureCode !== undefined ||
+        states.some((state) => !["succeeded", "not_applicable"].includes(state))
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Successful library removals require terminal successful stages.",
+          path: ["state"],
+        });
+      }
+      return;
+    }
+    if (operation.failureCode === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Unsuccessful library removals require a normalized failure code.",
+        path: ["failureCode"],
+      });
+    }
+    if (
+      operation.state === "reconcile_required" &&
+      !states.some((state) => state === "uncertain" || state === "failed" || state === "pending")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Reconciliation requires a non-terminal or uncertain stage.",
+        path: ["stages"],
+      });
+    }
+    if (operation.state === "failed" && !states.includes("failed")) {
+      context.addIssue({
+        code: "custom",
+        message: "Failed library removals require a failed stage.",
+        path: ["stages"],
+      });
+    }
+  });
+export type LibraryRemovalOperation = z.infer<typeof libraryRemovalOperationSchema>;
 
 export const libraryScanRequestSchema = z.strictObject({});
 export type LibraryScanRequest = z.infer<typeof libraryScanRequestSchema>;
@@ -1387,6 +1539,12 @@ export const libraryMutationResponseJsonSchema = withoutSchemaDialect(
   libraryMutationResponseSchema,
 );
 export const libraryRemovalPreviewJsonSchema = withoutSchemaDialect(libraryRemovalPreviewSchema);
+export const libraryRemovalCommitRequestJsonSchema = withoutSchemaDialect(
+  libraryRemovalCommitRequestSchema,
+);
+export const libraryRemovalOperationJsonSchema = withoutSchemaDialect(
+  libraryRemovalOperationSchema,
+);
 export const libraryArtworkSearchRequestJsonSchema = withoutSchemaDialect(
   libraryArtworkSearchRequestSchema,
 );

@@ -6,7 +6,9 @@ import type {
   JellyfinLibraryTitleResult,
   JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
+import type { RadarrAdapter } from "@omnifin/connectors/adapters/radarr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import type { ApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import {
   ROLE_PERMISSIONS,
   sessionPrincipalSchema,
@@ -17,6 +19,7 @@ import {
   libraryBrowseResponseSchema,
   libraryConnectedActionsResponseSchema,
   libraryExtrasResponseSchema,
+  libraryRemovalOperationSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesResponseSchema,
   libraryTitleDetailResponseSchema,
@@ -170,6 +173,32 @@ function insertIdentity(database: DatabaseHandle, config: AppConfig) {
     .run();
 }
 
+function insertRadarr(database: DatabaseHandle, config: AppConfig) {
+  database.db
+    .insert(connectorConfigs)
+    .values({
+      baseUrl: "https://radarr.example.test/",
+      capabilitySnapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      createdAt: now,
+      displayName: "Home Radarr",
+      enabled: true,
+      encryptedCredentials: new EnvelopeCipher(config.encryptionKey).encrypt(
+        JSON.stringify({
+          credentials: { apiKey: "private-radarr-api-key", kind: "api_key" },
+          schemaVersion: 1,
+        }),
+        "connector_credentials:radarr:radarr-main",
+      ),
+      healthState: "healthy",
+      id: "radarr-main",
+      insecureHttpApproved: false,
+      tlsPolicy: "strict",
+      type: "radarr",
+      updatedAt: now,
+    })
+    .run();
+}
+
 function insertSonarrNavigationConnector(
   database: DatabaseHandle,
   config: AppConfig,
@@ -256,6 +285,17 @@ function libraryResult(): JellyfinLibraryResult {
 
 function harness(
   options: {
+    createRadarrAdapter?: (
+      input: ApiKeyConnectorConfig,
+    ) => Pick<
+      RadarrAdapter,
+      | "deleteLibraryMovie"
+      | "deleteLibraryMovieFile"
+      | "resolveLibraryMovie"
+      | "updateAcquisitionMonitoring"
+    >;
+    createRemovalOperationToken?: () => string;
+    createRemovalPreviewToken?: () => string;
     resolveLibrarySeriesNavigation?: (
       input: { tmdb: number | null; tvdb: number | null },
       signal?: AbortSignal,
@@ -283,6 +323,7 @@ function harness(
   const database = openDatabase(":memory:");
   database.migrate();
   if (options.withIdentity !== false) insertIdentity(database, config);
+  if (options.createRadarrAdapter !== undefined) insertRadarr(database, config);
   const readContinueWatching = vi.fn(async () => resumeResult());
   const readLibrary = vi.fn(async () => libraryResult());
   const readLibraryTitle = vi.fn(async (): Promise<JellyfinLibraryTitleResult> => ({
@@ -391,6 +432,7 @@ function harness(
     played: false,
     positionSeconds: 0,
   }));
+  const deleteLibraryItem = vi.fn(async () => undefined);
   const readViewingHistory = vi.fn(
     async (input: { afterItemId?: string }): Promise<JellyfinViewingHistoryResult> => ({
       boundaryFound: true,
@@ -415,13 +457,18 @@ function harness(
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readViewingHistory,
+    deleteLibraryItem,
     updatePlaybackState,
   }));
   let mediaReferenceIndex = 0;
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
-    createRemovalPreviewToken: () => "d".repeat(22),
+    createRemovalOperationToken: options.createRemovalOperationToken ?? (() => "r".repeat(22)),
+    createRemovalPreviewToken: options.createRemovalPreviewToken ?? (() => "d".repeat(22)),
+    ...(options.createRadarrAdapter === undefined
+      ? {}
+      : { createRadarrAdapter: options.createRadarrAdapter }),
     createUserMediaStateOperationToken: () => "o".repeat(22),
     readOnlineExtras,
     mediaReferences: {
@@ -447,6 +494,7 @@ function harness(
     config,
     createClient,
     database,
+    deleteLibraryItem,
     readContinueWatching,
     readImage,
     readLibrary,
@@ -629,7 +677,7 @@ describe("ContinueWatchingService", () => {
         itemId: "private-upstream-movie",
         linkRevision: 3,
         referenceId,
-        schemaVersion: 1,
+        schemaVersion: 2,
         source: {
           connectorId: "radarr-main",
           fileId: 314,
@@ -670,6 +718,1033 @@ describe("ContinueWatchingService", () => {
     }
   });
 
+  it("commits one exact managed-file removal once and replays the persisted result", async () => {
+    const ownership = {
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    };
+    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const deleteLibraryMovieFile = vi.fn(async () => undefined);
+    const deleteLibraryMovie = vi.fn(async () => undefined);
+    const updateAcquisitionMonitoring = vi.fn(async () => ({
+      monitored: false,
+      target: {
+        kind: "movie" as const,
+        mediaId: 42,
+        service: "radarr" as const,
+      },
+      verifiedAt: now.toISOString(),
+    }));
+    const createRadarrAdapter = vi.fn(() => ({
+      deleteLibraryMovie,
+      deleteLibraryMovieFile,
+      resolveLibraryMovie,
+      updateAcquisitionMonitoring,
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      createRadarrAdapter,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: ownership.sizeBytes,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      const encryptedV2 = database.sqlite
+        .prepare("select encrypted_payload as encryptedPayload from library_removal_previews")
+        .get() as { encryptedPayload: string };
+      const legacyManagedPayload = {
+        itemId: "private-upstream-movie",
+        linkId: "viewer-link",
+        linkRevision: 3,
+        referenceId,
+        schemaVersion: 1,
+        source: {
+          connectorId: "radarr-main",
+          fileId: 314,
+          kind: "managed",
+          mediaId: 42,
+          monitored: true,
+        },
+        title: "The Long Meridian",
+        userId: "viewer-user",
+        year: 2026,
+      };
+      database.sqlite
+        .prepare("update library_removal_previews set encrypted_payload = ?")
+        .run(
+          new EnvelopeCipher(testConfig().encryptionKey).encrypt(
+            JSON.stringify(legacyManagedPayload),
+            `library_removal_preview:${preview.previewId}`,
+          ),
+        );
+      const request = {
+        confirmationTitle: "The Long Meridian",
+        mode: "delete_files_keep_monitored" as const,
+        previewId: preview.previewId,
+      };
+      await expect(
+        service.commitLibraryRemoval(referenceId, request, "legacy-managed-preview", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "source_changed" });
+      const legacyManagedSourceWithoutFileId = {
+        connectorId: legacyManagedPayload.source.connectorId,
+        kind: legacyManagedPayload.source.kind,
+        mediaId: legacyManagedPayload.source.mediaId,
+        monitored: legacyManagedPayload.source.monitored,
+      };
+      database.sqlite.prepare("update library_removal_previews set encrypted_payload = ?").run(
+        new EnvelopeCipher(testConfig().encryptionKey).encrypt(
+          JSON.stringify({
+            ...legacyManagedPayload,
+            source: legacyManagedSourceWithoutFileId,
+          }),
+          `library_removal_preview:${preview.previewId}`,
+        ),
+      );
+      await expect(
+        service.commitLibraryRemoval(referenceId, request, "legacy-managed-preview-pre-file-id", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "source_changed" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+      ).toEqual({ count: 0 });
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .get(),
+      ).toEqual({ consumedAt: null });
+      database.sqlite
+        .prepare("update library_removal_previews set encrypted_payload = ?")
+        .run(encryptedV2.encryptedPayload);
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          { ...request, confirmationTitle: "The Long Meridian!" },
+          "remove-long-meridian-confirmation",
+          { principal: adminPrincipal() },
+        ),
+      ).rejects.toMatchObject({ reason: "confirmation_mismatch" });
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          { ...request, mode: "delete_unmanaged_files" },
+          "remove-long-meridian-mode",
+          { principal: adminPrincipal() },
+        ),
+      ).rejects.toMatchObject({ reason: "invalid_mode" });
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .get(),
+      ).toEqual({ consumedAt: null });
+      const first = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-long-meridian-0001",
+        { principal: adminPrincipal() },
+      );
+      const replay = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-long-meridian-0001",
+        { principal: adminPrincipal() },
+      );
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          { ...request, mode: "delete_files_and_unmonitor" },
+          "remove-long-meridian-0001",
+          { principal: adminPrincipal() },
+        ),
+      ).rejects.toMatchObject({ reason: "idempotency_conflict" });
+
+      expect(libraryRemovalOperationSchema.parse(first.operation)).toEqual(first.operation);
+      expect(first).toMatchObject({
+        operation: {
+          mode: "delete_files_keep_monitored",
+          operationId: `library_removal_operation_${"r".repeat(22)}`,
+          previewId: preview.previewId,
+          referenceId,
+          stages: [
+            { kind: "authorization_recheck", state: "succeeded" },
+            { kind: "source_revalidation", state: "succeeded" },
+            { kind: "monitoring_change", state: "not_applicable" },
+            { kind: "organized_file_deletion", state: "succeeded" },
+            { kind: "manager_record_removal", state: "not_applicable" },
+            { kind: "jellyfin_reconciliation", state: "not_applicable" },
+          ],
+          state: "succeeded",
+        },
+        replayed: false,
+      });
+      expect(replay).toEqual({ operation: first.operation, replayed: true });
+      expect(resolveLibraryMovie).toHaveBeenCalledTimes(2);
+      expect(deleteLibraryMovieFile).toHaveBeenCalledOnce();
+      expect(deleteLibraryMovieFile).toHaveBeenCalledWith(314, undefined);
+      expect(deleteLibraryMovie).not.toHaveBeenCalled();
+      expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+      const storedOperation = database.sqlite
+        .prepare(
+          `select state, response_json as responseJson, encrypted_payload as encryptedPayload
+             from library_removal_operations`,
+        )
+        .get() as {
+        encryptedPayload: string;
+        responseJson: string;
+        state: string;
+      };
+      expect(
+        new EnvelopeCipher(testConfig().encryptionKey).decrypt(
+          storedOperation.encryptedPayload,
+          `library_removal_operation:${first.operation.operationId}`,
+        ),
+      ).toBe(JSON.stringify({ schemaVersion: 1, state: "cleared" }));
+      expect(storedOperation).toMatchObject({ state: "succeeded" });
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .get(),
+      ).toEqual({ consumedAt: now.getTime() });
+      database.sqlite.prepare("delete from media_references where id = ?").run(referenceId);
+      expect(
+        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+      ).toEqual({ count: 1 });
+      expect(
+        service.readLibraryRemovalOperation(first.operation.operationId, {
+          principal: adminPrincipal(),
+        }),
+      ).toEqual(first.operation);
+      await expect(
+        service.commitLibraryRemoval(referenceId, request, "remove-long-meridian-0001", {
+          principal: adminPrincipal(),
+        }),
+      ).resolves.toEqual({ operation: first.operation, replayed: true });
+      expect(JSON.stringify(first)).not.toMatch(
+        /private-upstream|private-radarr|viewer-external|tt1234567|98765/iu,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("serializes distinct previews for the same exact removal target", async () => {
+    let operationIndex = 0;
+    let previewIndex = 0;
+    const { database, deleteLibraryItem, readLibrary, readLibraryTitle, service } = harness({
+      createRemovalOperationToken: () => ["r", "s"][operationIndex++]!.repeat(22),
+      createRemovalPreviewToken: () => ["d", "e"][previewIndex++]!.repeat(22),
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "shared-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: null, tmdb: null },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: null, tmdb: null },
+        sizeBytes: 6_979_321_856,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    deleteLibraryItem.mockImplementation(async () => {
+      await writeGate;
+    });
+    let firstCommit: ReturnType<typeof service.commitLibraryRemoval> | null = null;
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const firstPreview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      const secondPreview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      firstCommit = service.commitLibraryRemoval(
+        referenceId,
+        {
+          confirmationTitle: movie.title,
+          mode: "delete_unmanaged_files",
+          previewId: firstPreview.previewId,
+        },
+        "first-exact-target-removal",
+        { principal: adminPrincipal() },
+      );
+      await vi.waitFor(() => expect(deleteLibraryItem).toHaveBeenCalledOnce());
+
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          {
+            confirmationTitle: movie.title,
+            mode: "delete_unmanaged_files",
+            previewId: secondPreview.previewId,
+          },
+          "second-exact-target-removal",
+          { principal: adminPrincipal() },
+        ),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from library_removal_operations where state = 'running'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+
+      releaseWrite();
+      await expect(firstCommit).resolves.toMatchObject({
+        operation: { state: "succeeded" },
+      });
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          {
+            confirmationTitle: movie.title,
+            mode: "delete_unmanaged_files",
+            previewId: secondPreview.previewId,
+          },
+          "second-exact-target-removal",
+          { principal: adminPrincipal() },
+        ),
+      ).resolves.toMatchObject({ operation: { state: "succeeded" } });
+      expect(deleteLibraryItem).toHaveBeenCalledTimes(2);
+      const targetDigests = database.sqlite
+        .prepare("select target_digest as targetDigest from library_removal_operations order by id")
+        .all() as { targetDigest: string }[];
+      expect(targetDigests).toHaveLength(2);
+      expect(targetDigests[0]?.targetDigest).toMatch(/^[A-Za-z0-9_-]{22}$/u);
+      expect(targetDigests[1]?.targetDigest).toBe(targetDigests[0]?.targetDigest);
+      expect(JSON.stringify(targetDigests)).not.toContain("shared-upstream-movie");
+    } finally {
+      releaseWrite();
+      if (firstCommit !== null) await Promise.allSettled([firstCommit]);
+      database.close();
+    }
+  });
+
+  it.each([
+    {
+      expectedManagerStage: "not_applicable" as const,
+      expectedMonitoringStage: "succeeded" as const,
+      expectedMonitoringWrite: true,
+      mode: "delete_files_and_unmonitor" as const,
+      monitored: true,
+    },
+    {
+      expectedManagerStage: "not_applicable" as const,
+      expectedMonitoringStage: "succeeded" as const,
+      expectedMonitoringWrite: false,
+      mode: "delete_files_and_unmonitor" as const,
+      monitored: false,
+    },
+    {
+      expectedManagerStage: "succeeded" as const,
+      expectedMonitoringStage: "not_applicable" as const,
+      expectedMonitoringWrite: false,
+      mode: "remove_from_radarr_and_delete_files" as const,
+      monitored: true,
+    },
+  ])("executes only the reviewed $mode Radarr writes (monitored=$monitored)", async (testCase) => {
+    const ownership = {
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: testCase.monitored,
+      sizeBytes: 6_979_321_856,
+    };
+    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const deleteLibraryMovieFile = vi.fn(async () => undefined);
+    const deleteLibraryMovie = vi.fn(async () => undefined);
+    const updateAcquisitionMonitoring = vi.fn(async () => ({
+      monitored: false,
+      target: {
+        kind: "movie" as const,
+        mediaId: 42,
+        service: "radarr" as const,
+      },
+      verifiedAt: now.toISOString(),
+    }));
+    const createRadarrAdapter = vi.fn(() => ({
+      deleteLibraryMovie,
+      deleteLibraryMovieFile,
+      resolveLibraryMovie,
+      updateAcquisitionMonitoring,
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      createRadarrAdapter,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: ownership.sizeBytes,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      if (!testCase.monitored) {
+        expect(preview.options.map(({ mode }) => mode)).not.toContain(
+          "delete_files_keep_monitored",
+        );
+        await expect(
+          service.commitLibraryRemoval(
+            referenceId,
+            {
+              confirmationTitle: "The Long Meridian",
+              mode: "delete_files_keep_monitored",
+              previewId: preview.previewId,
+            },
+            "remove-unmonitored-as-monitored",
+            { principal: adminPrincipal() },
+          ),
+        ).rejects.toMatchObject({ reason: "invalid_mode" });
+      }
+      const result = await service.commitLibraryRemoval(
+        referenceId,
+        {
+          confirmationTitle: "The Long Meridian",
+          mode: testCase.mode,
+          previewId: preview.previewId,
+        },
+        `remove-managed-${testCase.mode}`,
+        { principal: adminPrincipal() },
+      );
+
+      expect(result.operation).toMatchObject({
+        stages: expect.arrayContaining([
+          {
+            kind: "monitoring_change",
+            state: testCase.expectedMonitoringStage,
+          },
+          { kind: "organized_file_deletion", state: "succeeded" },
+          {
+            kind: "manager_record_removal",
+            state: testCase.expectedManagerStage,
+          },
+        ]),
+        state: "succeeded",
+      });
+      if (testCase.mode === "delete_files_and_unmonitor") {
+        if (testCase.expectedMonitoringWrite) {
+          expect(updateAcquisitionMonitoring).toHaveBeenCalledWith(
+            {
+              expectedMonitored: true,
+              mediaId: 42,
+              monitored: false,
+              service: "radarr",
+            },
+            undefined,
+          );
+        } else {
+          expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+        }
+        expect(deleteLibraryMovieFile).toHaveBeenCalledWith(314, undefined);
+        expect(deleteLibraryMovie).not.toHaveBeenCalled();
+      } else {
+        expect(deleteLibraryMovie).toHaveBeenCalledWith(42, undefined);
+        expect(deleteLibraryMovieFile).not.toHaveBeenCalled();
+        expect(updateAcquisitionMonitoring).not.toHaveBeenCalled();
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it("requires a recent authenticated session before consuming a destructive preview", async () => {
+    const resolveLibraryMovie = vi.fn(async () => ({
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    }));
+    const createRadarrAdapter = vi.fn(() => ({
+      deleteLibraryMovie: vi.fn(async () => undefined),
+      deleteLibraryMovieFile: vi.fn(async () => undefined),
+      resolveLibraryMovie,
+      updateAcquisitionMonitoring: vi.fn(async () => ({
+        monitored: false,
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
+        verifiedAt: now.toISOString(),
+      })),
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      createRadarrAdapter,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: 6_979_321_856,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const freshPrincipal = adminPrincipal();
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: freshPrincipal },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: freshPrincipal,
+      });
+      const stalePrincipal = sessionPrincipalSchema.parse({
+        ...freshPrincipal,
+        issuedAt: new Date(now.getTime() - 10 * 60 * 1_000 - 1).toISOString(),
+      });
+
+      await expect(
+        service.commitLibraryRemoval(
+          referenceId,
+          {
+            confirmationTitle: "The Long Meridian",
+            mode: "delete_files_keep_monitored",
+            previewId: preview.previewId,
+          },
+          "remove-long-meridian-stale",
+          { principal: stalePrincipal },
+        ),
+      ).rejects.toMatchObject({ reason: "authentication_stale" });
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from library_removal_previews")
+          .get(),
+      ).toEqual({ consumedAt: null });
+      expect(
+        database.sqlite.prepare("select count(*) as count from library_removal_operations").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed when the exact Radarr file changes after preview without issuing a write", async () => {
+    const firstOwnership = {
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    };
+    const resolveLibraryMovie = vi
+      .fn()
+      .mockResolvedValueOnce(firstOwnership)
+      .mockResolvedValueOnce({ ...firstOwnership, fileId: 315 });
+    const deleteLibraryMovieFile = vi.fn(async () => undefined);
+    const createRadarrAdapter = vi.fn(() => ({
+      deleteLibraryMovie: vi.fn(async () => undefined),
+      deleteLibraryMovieFile,
+      resolveLibraryMovie,
+      updateAcquisitionMonitoring: vi.fn(async () => ({
+        monitored: false,
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
+        verifiedAt: now.toISOString(),
+      })),
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      createRadarrAdapter,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: firstOwnership.sizeBytes,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      const result = await service.commitLibraryRemoval(
+        referenceId,
+        {
+          confirmationTitle: "The Long Meridian",
+          mode: "delete_files_keep_monitored",
+          previewId: preview.previewId,
+        },
+        "remove-source-changed-0001",
+        { principal: adminPrincipal() },
+      );
+
+      expect(result).toMatchObject({
+        operation: {
+          failureCode: "source_changed",
+          stages: expect.arrayContaining([
+            { kind: "authorization_recheck", state: "succeeded" },
+            { kind: "source_revalidation", state: "failed" },
+          ]),
+          state: "failed",
+        },
+        replayed: false,
+      });
+      expect(deleteLibraryMovieFile).not.toHaveBeenCalled();
+      expect(
+        database.sqlite
+          .prepare("select state, failure_code as failureCode from library_removal_operations")
+          .get(),
+      ).toEqual({ failureCode: "source_changed", state: "failed" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("uses one Radarr adapter snapshot across revalidation and the destructive write", async () => {
+    const ownership = {
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    };
+    const writeKeys: string[] = [];
+    const createRadarrAdapter = vi.fn((input: ApiKeyConnectorConfig) => ({
+      deleteLibraryMovie: vi.fn(async () => undefined),
+      deleteLibraryMovieFile: vi.fn(async () => {
+        writeKeys.push(input.apiKey);
+      }),
+      resolveLibraryMovie: vi.fn(async () => {
+        if (createRadarrAdapter.mock.calls.length === 2) {
+          const rotatedCredentials = new EnvelopeCipher(testConfig().encryptionKey).encrypt(
+            JSON.stringify({
+              credentials: { apiKey: "rotated-private-key", kind: "api_key" },
+              schemaVersion: 1,
+            }),
+            "connector_credentials:radarr:radarr-main",
+          );
+          database.sqlite
+            .prepare(
+              "update connector_configs set base_url = ?, encrypted_credentials = ? where id = ?",
+            )
+            .run("https://rotated-radarr.example.test/", rotatedCredentials, "radarr-main");
+        }
+        return ownership;
+      }),
+      updateAcquisitionMonitoring: vi.fn(async () => ({
+        monitored: false,
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
+        verifiedAt: now.toISOString(),
+      })),
+    }));
+    const fixture = harness({ createRadarrAdapter });
+    const database = fixture.database;
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    fixture.readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    fixture.readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: ownership.sizeBytes,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const catalogue = await fixture.service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await fixture.service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      const result = await fixture.service.commitLibraryRemoval(
+        referenceId,
+        {
+          confirmationTitle: movie.title,
+          mode: "delete_files_keep_monitored",
+          previewId: preview.previewId,
+        },
+        "configuration-snapshot-removal",
+        { principal: adminPrincipal() },
+      );
+
+      expect(result.operation.state).toBe("succeeded");
+      expect(createRadarrAdapter).toHaveBeenCalledTimes(2);
+      expect(createRadarrAdapter.mock.calls[1]?.[0]).toMatchObject({
+        apiKey: "private-radarr-api-key",
+        baseUrl: "https://radarr.example.test/",
+      });
+      expect(writeKeys).toEqual(["private-radarr-api-key"]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("persists an uncertain outcome and never retries a possibly applied destructive write", async () => {
+    const ownership = {
+      fileId: 314,
+      hasFile: true as const,
+      mediaId: 42,
+      monitored: true,
+      sizeBytes: 6_979_321_856,
+    };
+    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const deleteLibraryMovieFile = vi.fn(async () => {
+      throw new SafeConnectorError({
+        code: "timeout",
+        message: "private timeout detail",
+        operation: "library.removal.file_delete",
+        retryable: true,
+        service: "radarr",
+      });
+    });
+    const createRadarrAdapter = vi.fn(() => ({
+      deleteLibraryMovie: vi.fn(async () => undefined),
+      deleteLibraryMovieFile,
+      resolveLibraryMovie,
+      updateAcquisitionMonitoring: vi.fn(async () => ({
+        monitored: false,
+        target: {
+          kind: "movie" as const,
+          mediaId: 42,
+          service: "radarr" as const,
+        },
+        verifiedAt: now.toISOString(),
+      })),
+    }));
+    const { database, readLibrary, readLibraryTitle, service } = harness({
+      createRadarrAdapter,
+    });
+    const movie = {
+      ...libraryResult().items[0]!,
+      externalId: "private-upstream-movie",
+      kind: "movie" as const,
+      runtimeSeconds: 7_080,
+      title: "The Long Meridian",
+      year: 2026,
+    };
+    readLibrary.mockResolvedValue({
+      items: [movie],
+      nextStartIndex: null,
+      totalResults: 1,
+      truncated: false,
+    });
+    readLibraryTitle.mockResolvedValue({
+      item: movie,
+      managementIdentity: {
+        kind: "movie",
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+      },
+      movie: null,
+      providerReferences: [],
+      removal: {
+        canDelete: true,
+        providerIds: { imdb: "tt1234567", tmdb: 98_765 },
+        sizeBytes: ownership.sizeBytes,
+      },
+      seasons: [],
+      seasonsTruncated: false,
+      seriesCredits: null,
+    });
+
+    try {
+      const catalogue = await service.browse(
+        { kind: "movies", limit: 30, sort: "title" },
+        { principal: adminPrincipal() },
+      );
+      const referenceId = catalogue.items[0]!.media.id;
+      const preview = await service.previewLibraryRemoval(referenceId, {
+        principal: adminPrincipal(),
+      });
+      const request = {
+        confirmationTitle: "The Long Meridian",
+        mode: "delete_files_keep_monitored" as const,
+        previewId: preview.previewId,
+      };
+      const first = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-uncertain-0001",
+        { principal: adminPrincipal() },
+      );
+      const replay = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-uncertain-0001",
+        { principal: adminPrincipal() },
+      );
+
+      expect(first).toMatchObject({
+        operation: {
+          failureCode: "outcome_unknown",
+          stages: expect.arrayContaining([{ kind: "organized_file_deletion", state: "uncertain" }]),
+          state: "reconcile_required",
+        },
+        replayed: false,
+      });
+      expect(replay).toEqual({ operation: first.operation, replayed: true });
+      expect(deleteLibraryMovieFile).toHaveBeenCalledOnce();
+      expect(JSON.stringify(first)).not.toMatch(
+        /private timeout|private-upstream|private-radarr/iu,
+      );
+
+      const recentRunning = libraryRemovalOperationSchema.parse({
+        completedAt: null,
+        mode: first.operation.mode,
+        operationId: first.operation.operationId,
+        previewId: first.operation.previewId,
+        referenceId: first.operation.referenceId,
+        stages: first.operation.stages,
+        startedAt: now.toISOString(),
+        state: "running",
+      });
+      database.sqlite
+        .prepare(
+          `update library_removal_operations
+              set state = 'running', response_json = ?, failure_code = null,
+                  completed_at = null, started_at = ?, created_at = ?, updated_at = ?
+            where id = ?`,
+        )
+        .run(
+          JSON.stringify(recentRunning),
+          now.getTime(),
+          now.getTime(),
+          now.getTime(),
+          first.operation.operationId,
+        );
+      expect(
+        service.readLibraryRemovalOperation(first.operation.operationId, {
+          principal: adminPrincipal(),
+        }),
+      ).toEqual(recentRunning);
+      await expect(
+        service.commitLibraryRemoval(referenceId, request, "remove-uncertain-0001", {
+          principal: adminPrincipal(),
+        }),
+      ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
+
+      const staleStartedAt = new Date(now.getTime() - 5 * 60 * 1_000 - 1);
+      const staleRunning = libraryRemovalOperationSchema.parse({
+        ...recentRunning,
+        startedAt: staleStartedAt.toISOString(),
+      });
+      database.sqlite
+        .prepare(
+          `update library_removal_operations
+              set response_json = ?, started_at = ?, created_at = ?, updated_at = ?
+            where id = ?`,
+        )
+        .run(
+          JSON.stringify(staleRunning),
+          staleStartedAt.getTime(),
+          staleStartedAt.getTime(),
+          staleStartedAt.getTime(),
+          first.operation.operationId,
+        );
+      const recovered = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-uncertain-0001",
+        { principal: adminPrincipal() },
+      );
+      expect(recovered).toMatchObject({
+        operation: {
+          completedAt: now.toISOString(),
+          failureCode: "outcome_unknown",
+          state: "reconcile_required",
+        },
+        replayed: true,
+      });
+      expect(
+        database.sqlite
+          .prepare("select state, failure_code as failureCode from library_removal_operations")
+          .get(),
+      ).toEqual({
+        failureCode: "outcome_unknown",
+        state: "reconcile_required",
+      });
+    } finally {
+      database.close();
+    }
+  });
   it("fails closed without evicting another active destructive preview at the per-user bound", async () => {
     const resolveManagedMovie = vi.fn(async () => ({
       connectorId: "radarr-main",

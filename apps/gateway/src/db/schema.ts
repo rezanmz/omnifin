@@ -1109,6 +1109,150 @@ export const libraryRemovalPreviews = sqliteTable(
   ],
 );
 
+export const libraryRemovalOperations = sqliteTable(
+  "library_removal_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull(),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    mediaReferenceId: text("media_reference_id").notNull(),
+    previewId: text("preview_id").notNull(),
+    mode: text("mode", {
+      enum: [
+        "delete_files_keep_monitored",
+        "delete_files_and_unmonitor",
+        "remove_from_radarr_and_delete_files",
+        "delete_unmanaged_files",
+      ],
+    }).notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    targetDigest: text("target_digest").notNull(),
+    state: text("state", {
+      enum: ["running", "succeeded", "reconcile_required", "failed"],
+    })
+      .notNull()
+      .default("running"),
+    responseJson: text("response_json").notNull(),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    failureCode: text("failure_code"),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("library_removal_operations_user_key_unique").on(
+      table.userId,
+      table.idempotencyKeyHash,
+    ),
+    uniqueIndex("library_removal_operations_preview_unique").on(table.previewId),
+    uniqueIndex("library_removal_operations_running_target_unique")
+      .on(table.targetDigest)
+      .where(sql`${table.state} = 'running'`),
+    index("library_removal_operations_state_created_idx").on(table.state, table.createdAt),
+    index("library_removal_operations_reference_idx").on(table.mediaReferenceId, table.createdAt),
+    check(
+      "library_removal_operations_id_check",
+      sql`length(${table.id}) = 48
+        and substr(${table.id}, 1, 26) = 'library_removal_operation_'
+        and substr(${table.id}, 27) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_preview_id_check",
+      sql`length(${table.previewId}) = 46
+        and substr(${table.previewId}, 1, 24) = 'library_removal_preview_'
+        and substr(${table.previewId}, 25) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_reference_id_check",
+      sql`length(${table.mediaReferenceId}) = 28
+        and substr(${table.mediaReferenceId}, 1, 6) = 'media_'
+        and substr(${table.mediaReferenceId}, 7) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_session_id_check",
+      sql`length(${table.sessionId}) between 1 and 128
+        and ${table.sessionId} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "library_removal_operations_link_id_check",
+      sql`length(${table.serviceIdentityLinkId}) between 1 and 128
+        and ${table.serviceIdentityLinkId} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "library_removal_operations_link_revision_check",
+      sql`${table.linkRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "library_removal_operations_mode_check",
+      sql`${table.mode} in (
+        'delete_files_keep_monitored',
+        'delete_files_and_unmonitor',
+        'remove_from_radarr_and_delete_files',
+        'delete_unmanaged_files'
+      )`,
+    ),
+    check(
+      "library_removal_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_target_digest_check",
+      sql`length(${table.targetDigest}) = 22
+        and ${table.targetDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "library_removal_operations_state_check",
+      sql`${table.state} in ('running', 'succeeded', 'reconcile_required', 'failed')`,
+    ),
+    check(
+      "library_removal_operations_response_check",
+      sql`length(${table.responseJson}) between 2 and 16384
+        and json_valid(${table.responseJson})
+        and json_type(${table.responseJson}) = 'object'`,
+    ),
+    check(
+      "library_removal_operations_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 65536`,
+    ),
+    check(
+      "library_removal_operations_outcome_check",
+      sql`(
+          ${table.state} = 'running'
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} in ('reconcile_required', 'failed')
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "library_removal_operations_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.startedAt}
+        and (${table.completedAt} is null
+          or (${table.completedAt} >= ${table.startedAt}
+            and ${table.completedAt} <= ${table.updatedAt}))`,
+    ),
+  ],
+);
+
 export const userMediaStateOperations = sqliteTable(
   "user_media_state_operations",
   {

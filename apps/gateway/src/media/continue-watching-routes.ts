@@ -21,6 +21,11 @@ import {
   libraryPlaybackStateMutationResponseSchema,
   libraryPersonProfileLinkResponseJsonSchema,
   libraryPersonProfileLinkResponseSchema,
+  libraryRemovalCommitRequestJsonSchema,
+  libraryRemovalCommitRequestSchema,
+  libraryRemovalOperationIdSchema,
+  libraryRemovalOperationJsonSchema,
+  libraryRemovalOperationSchema,
   libraryRemovalPreviewJsonSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesQueryJsonSchema,
@@ -46,10 +51,11 @@ import {
   ContinueWatchingService,
   type ContinueWatchingDependencies,
   LibraryConnectedActionError,
+  LibraryRemovalError,
+  LibraryRemovalPreviewError,
   MediaArtworkError,
   MediaLibraryError,
   MediaPlaybackStateError,
-  LibraryRemovalPreviewError,
   ViewingHistoryError,
 } from "./continue-watching-service.js";
 
@@ -106,6 +112,22 @@ const librarySeasonParamsJsonSchema = {
   properties: {
     referenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
     seasonNumber: { type: "integer", minimum: 0, maximum: 100_000 },
+  },
+} as const;
+
+const libraryRemovalOperationParamsSchema = z.strictObject({
+  operationId: libraryRemovalOperationIdSchema,
+});
+
+const libraryRemovalOperationParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["operationId"],
+  properties: {
+    operationId: {
+      type: "string",
+      pattern: "^library_removal_operation_[A-Za-z0-9_-]{22}$",
+    },
   },
 } as const;
 
@@ -193,6 +215,85 @@ function playbackStateError(error: MediaPlaybackStateError, reply: FastifyReply)
         cause: error,
         code: "media_playback_state_unavailable",
         message: "The Jellyfin playback state is temporarily unavailable.",
+        statusCode: 503,
+      });
+  }
+}
+
+function libraryRemovalError(error: LibraryRemovalError, reply: FastifyReply) {
+  switch (error.reason) {
+    case "authentication_stale":
+      return new SafeHttpError({
+        cause: error,
+        code: "recent_authentication_required",
+        message: "Sign in again before removing a library title.",
+        statusCode: 403,
+      });
+    case "confirmation_mismatch":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_confirmation_mismatch",
+        message: "The confirmation title must exactly match the current library title.",
+        statusCode: 400,
+      });
+    case "idempotency_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "idempotency_key_conflict",
+        message: "The idempotency key was already used for another library removal.",
+        statusCode: 409,
+      });
+    case "idempotency_in_progress":
+      reply.header("retry-after", "2");
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_outcome_pending",
+        message: "The outcome of this library removal is still being determined.",
+        statusCode: 409,
+      });
+    case "identity_changed":
+    case "source_changed":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_context_changed",
+        message: "The linked identity or library source changed. Create a new removal preview.",
+        statusCode: 409,
+      });
+    case "invalid_mode":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_mode_invalid",
+        message: "The selected removal mode no longer matches the title source.",
+        statusCode: 409,
+      });
+    case "not_found":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_not_found",
+        message: "The library title or removal preview is no longer available.",
+        statusCode: 404,
+      });
+    case "operation_limit_reached":
+      reply.header("retry-after", "60");
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_limit_reached",
+        message: "Too many library-removal operations are retained for this account.",
+        statusCode: 429,
+      });
+    case "preview_expired":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_preview_expired",
+        message: "The library removal preview expired. Review the current effects again.",
+        statusCode: 410,
+      });
+    case "storage_failure":
+    case "unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_removal_unavailable",
+        message: "The library removal service is temporarily unavailable.",
         statusCode: 503,
       });
   }
@@ -418,6 +519,92 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
         throw error;
       } finally {
         request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/media/library/:referenceId/removals",
+    {
+      bodyLimit: 2_048,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        body: libraryRemovalCommitRequestJsonSchema,
+        params: libraryTitleParamsJsonSchema,
+        response: {
+          200: libraryRemovalOperationJsonSchema,
+          201: libraryRemovalOperationJsonSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "library.delete",
+      );
+      const { referenceId } = libraryTitleParamsSchema.parse(request.params);
+      const body = libraryRemovalCommitRequestSchema.parse(request.body);
+      const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
+        request.headers["idempotency-key"],
+      );
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const result = await service.commitLibraryRemoval(
+          referenceId,
+          body,
+          idempotencyKey,
+          { ipAddress: request.ip, principal, requestId: request.id },
+          controller.signal,
+        );
+        reply.header("idempotency-replayed", String(result.replayed));
+        reply.code(result.replayed ? 200 : 201);
+        return libraryRemovalOperationSchema.parse(result.operation);
+      } catch (error) {
+        if (error instanceof LibraryRemovalError) throw libraryRemovalError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/media/library/removals/:operationId",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      onSend: noStore,
+      schema: {
+        params: libraryRemovalOperationParamsJsonSchema,
+        response: { 200: libraryRemovalOperationJsonSchema },
+      },
+    },
+    (request, reply) => {
+      const session = app.sessionService.resolveAndRefresh(
+        request.cookies[sessionCookieName(app.appConfig)],
+      );
+      if (session?.rotatedSessionToken) {
+        writeSessionCookie(
+          reply,
+          app.appConfig,
+          session.rotatedSessionToken,
+          session.absoluteExpiresAt,
+        );
+      }
+      const principal = requirePermission(session?.principal, "library.delete");
+      const { operationId } = libraryRemovalOperationParamsSchema.parse(request.params);
+      try {
+        return libraryRemovalOperationSchema.parse(
+          service.readLibraryRemovalOperation(operationId, { principal }),
+        );
+      } catch (error) {
+        if (error instanceof LibraryRemovalError) throw libraryRemovalError(error, reply);
+        throw error;
       }
     },
   );

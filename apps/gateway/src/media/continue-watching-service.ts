@@ -27,6 +27,10 @@ import {
   libraryPlaybackStateMutationRequestSchema,
   libraryPlaybackStateMutationResponseSchema,
   libraryPersonProfileLinkResponseSchema,
+  libraryRemovalCommitRequestSchema,
+  libraryRemovalFailureCodeSchema,
+  libraryRemovalOperationIdSchema,
+  libraryRemovalOperationSchema,
   libraryRemovalPreviewSchema,
   librarySeasonEpisodesQuerySchema,
   librarySeasonEpisodesResponseSchema,
@@ -44,6 +48,8 @@ import {
   type LibraryPlaybackStateMutationRequest,
   type LibraryPlaybackStateMutationResponse,
   type LibraryPersonProfileLinkResponse,
+  type LibraryRemovalCommitRequest,
+  type LibraryRemovalOperation,
   type LibraryRemovalPreview,
   type LibrarySeasonEpisodesQuery,
   type LibrarySeasonEpisodesResponse,
@@ -65,8 +71,14 @@ import { z, ZodError } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
-import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import { DiscoverySearchError, DiscoverySearchService } from "../discovery/search-service.js";
+import {
+  constantTimeTextEqual,
+  EnvelopeCipher,
+  hashToken,
+  privacyHash,
+  randomToken,
+} from "../security/crypto.js";
 import {
   MediaReferenceError,
   MediaReferenceService,
@@ -83,6 +95,10 @@ const USER_MEDIA_STATE_OPERATION_ID_PATTERN = /^user_media_state_[A-Za-z0-9_-]{2
 const LIBRARY_REMOVAL_PREVIEW_TTL_MS = 5 * 60 * 1_000;
 const MAX_LIBRARY_REMOVAL_PREVIEWS_PER_USER = 20;
 const MAX_LIBRARY_REMOVAL_PREVIEW_BYTES = 65_536;
+const LIBRARY_REMOVAL_RECENT_AUTH_MS = 10 * 60 * 1_000;
+const MAX_LIBRARY_REMOVAL_OPERATIONS_PER_USER = 4_096;
+const LIBRARY_REMOVAL_OPERATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+const LIBRARY_REMOVAL_STALE_OPERATION_MS = 5 * 60 * 1_000;
 const libraryPersonImagePayloadSchema = z.strictObject({
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
   version: z.literal(1),
@@ -120,12 +136,39 @@ const librarySeasonCursorPayloadSchema = z.strictObject({
 });
 type LibrarySeasonCursorPayload = z.infer<typeof librarySeasonCursorPayloadSchema>;
 
-const storedLibraryRemovalPreviewSchema = z.strictObject({
+const storedLibraryRemovalPreviewShape = {
   itemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
   linkId: z.string().regex(IDENTIFIER_PATTERN),
   linkRevision: z.int().nonnegative().max(2_147_483_647),
   referenceId: z.string().regex(/^media_[A-Za-z0-9_-]{22}$/u),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
+  userId: z.string().regex(IDENTIFIER_PATTERN),
+  year: z.int().min(1870).max(2200).nullable(),
+};
+
+const storedLibraryRemovalPreviewV1Schema = z.strictObject({
+  ...storedLibraryRemovalPreviewShape,
   schemaVersion: z.literal(1),
+  source: z.discriminatedUnion("kind", [
+    z.strictObject({
+      connectorId: z.string().regex(IDENTIFIER_PATTERN),
+      fileId: z.int().positive().max(2_147_483_647).optional(),
+      kind: z.literal("managed"),
+      mediaId: z.int().positive().max(2_147_483_647),
+      monitored: z.boolean(),
+    }),
+    z.strictObject({ kind: z.literal("unmanaged") }),
+  ]),
+});
+
+const storedLibraryRemovalPreviewV2Schema = z.strictObject({
+  ...storedLibraryRemovalPreviewShape,
+  schemaVersion: z.literal(2),
   source: z.discriminatedUnion("kind", [
     z.strictObject({
       connectorId: z.string().regex(IDENTIFIER_PATTERN),
@@ -136,15 +179,12 @@ const storedLibraryRemovalPreviewSchema = z.strictObject({
     }),
     z.strictObject({ kind: z.literal("unmanaged") }),
   ]),
-  title: z
-    .string()
-    .trim()
-    .min(1)
-    .max(300)
-    .refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value)),
-  userId: z.string().regex(IDENTIFIER_PATTERN),
-  year: z.int().min(1870).max(2200).nullable(),
 });
+
+const storedLibraryRemovalPreviewSchema = z.discriminatedUnion("schemaVersion", [
+  storedLibraryRemovalPreviewV1Schema,
+  storedLibraryRemovalPreviewV2Schema,
+]);
 
 const viewingHistoryCursorPayloadSchema = z.strictObject({
   afterItemId: z.string().regex(UPSTREAM_MEDIA_IDENTIFIER_PATTERN),
@@ -188,6 +228,22 @@ interface LibraryRemovalRadarrRow {
   tlsPolicy: string;
 }
 
+type LibraryRemovalManagedMovie = RadarrLibraryMovieOwnership & {
+  connectorId: string;
+};
+type LibraryRemovalRadarrAdapter = Pick<
+  RadarrAdapter,
+  | "deleteLibraryMovie"
+  | "deleteLibraryMovieFile"
+  | "resolveLibraryMovie"
+  | "updateAcquisitionMonitoring"
+>;
+
+interface LibraryRemovalManagedResolution {
+  adapter: LibraryRemovalRadarrAdapter;
+  ownership: LibraryRemovalManagedMovie;
+}
+
 interface LibraryConnectedActionTarget {
   publicUiUrl: string;
   titleSlug: string;
@@ -211,9 +267,6 @@ const libraryConnectedServiceRowSchema = z.strictObject({
   updatedAt: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 
-type LibraryRemovalManagedMovie = RadarrLibraryMovieOwnership & {
-  connectorId: string;
-};
 type LibraryConnectedServiceRow = z.infer<typeof libraryConnectedServiceRowSchema>;
 
 interface StoredConnectorSecrets {
@@ -231,6 +284,34 @@ interface UserMediaStateOperationRow {
   state: string;
 }
 
+interface LibraryRemovalPreviewRow {
+  consumedAt: number | null;
+  encryptedPayload: string;
+  expiresAt: number;
+  linkRevision: number;
+  mediaReferenceId: string;
+  serviceIdentityLinkId: string;
+  sessionId: string;
+  userId: string;
+}
+
+interface LibraryRemovalOperationRow {
+  fingerprintHash: string;
+  responseJson: string;
+  state: string;
+  updatedAt: number;
+}
+
+type StoredLibraryRemovalPreview = z.infer<typeof storedLibraryRemovalPreviewSchema>;
+
+type LibraryRemovalReservation =
+  | {
+      kind: "new";
+      operation: LibraryRemovalOperation;
+      payload: StoredLibraryRemovalPreview;
+    }
+  | { kind: "replay"; operation: LibraryRemovalOperation };
+
 export interface ContinueWatchingContext {
   ipAddress?: string;
   principal: SessionPrincipal;
@@ -245,6 +326,7 @@ export interface ContinueWatchingClientFactoryInput extends ConnectorTargetConfi
 export interface ContinueWatchingDependencies {
   clock?: () => Date;
   createAuditToken?: () => string;
+  createRemovalOperationToken?: () => string;
   createRemovalPreviewToken?: () => string;
   createUserMediaStateOperationToken?: () => string;
   createClient?: (
@@ -259,12 +341,11 @@ export interface ContinueWatchingDependencies {
         | "readLibrarySeasonEpisodes"
         | "readLibraryTitle"
         | "readViewingHistory"
+        | "deleteLibraryItem"
         | "updatePlaybackState"
       >
     >;
-  createRadarrAdapter?: (
-    input: ApiKeyConnectorConfig,
-  ) => Pick<RadarrAdapter, "resolveLibraryMovie">;
+  createRadarrAdapter?: (input: ApiKeyConnectorConfig) => LibraryRemovalRadarrAdapter;
   createRadarrNavigationAdapter?: (
     input: ApiKeyConnectorConfig,
   ) => Pick<RadarrAdapter, "resolveLibraryMovieNavigation">;
@@ -351,6 +432,35 @@ export class LibraryRemovalPreviewError extends Error {
   }
 }
 
+export type LibraryRemovalErrorReason =
+  | "authentication_stale"
+  | "confirmation_mismatch"
+  | "idempotency_conflict"
+  | "idempotency_in_progress"
+  | "identity_changed"
+  | "invalid_mode"
+  | "not_found"
+  | "operation_limit_reached"
+  | "preview_expired"
+  | "source_changed"
+  | "storage_failure"
+  | "unavailable";
+
+export class LibraryRemovalError extends Error {
+  public readonly code = "library_removal_failed";
+  public readonly reason: LibraryRemovalErrorReason;
+
+  public constructor(reason: LibraryRemovalErrorReason, options?: ErrorOptions) {
+    super("The library title could not be removed safely.", options);
+    this.name = "LibraryRemovalError";
+    this.reason = reason;
+  }
+}
+
+export interface LibraryRemovalResult {
+  operation: LibraryRemovalOperation;
+  replayed: boolean;
+}
 export type MediaPlaybackStateErrorReason =
   | "idempotency_conflict"
   | "idempotency_in_progress"
@@ -624,6 +734,7 @@ export class ContinueWatchingService {
   readonly #config: AppConfig;
   readonly #createAuditToken: () => string;
   readonly #createClient: NonNullable<ContinueWatchingDependencies["createClient"]>;
+  readonly #createRemovalOperationToken: () => string;
   readonly #createRemovalPreviewToken: () => string;
   readonly #createRadarrAdapter: NonNullable<ContinueWatchingDependencies["createRadarrAdapter"]>;
   readonly #createRadarrNavigationAdapter: NonNullable<
@@ -650,6 +761,8 @@ export class ContinueWatchingService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAuditToken = dependencies.createAuditToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
+    this.#createRemovalOperationToken =
+      dependencies.createRemovalOperationToken ?? (() => randomToken(16));
     this.#createRemovalPreviewToken =
       dependencies.createRemovalPreviewToken ?? (() => randomToken(16));
     this.#createRadarrAdapter =
@@ -1318,15 +1431,19 @@ export class ContinueWatchingService {
         generatedAt: generatedAt.toISOString(),
         options: managed
           ? [
-              {
-                effects: {
-                  ...commonEffects,
-                  managerRecord: "retained",
-                  monitoring: "monitored",
-                  reacquisitionRisk: "possible",
-                },
-                mode: "delete_files_keep_monitored",
-              },
+              ...(ownership?.monitored === true
+                ? [
+                    {
+                      effects: {
+                        ...commonEffects,
+                        managerRecord: "retained" as const,
+                        monitoring: "monitored" as const,
+                        reacquisitionRisk: "possible" as const,
+                      },
+                      mode: "delete_files_keep_monitored" as const,
+                    },
+                  ]
+                : []),
               {
                 effects: {
                   ...commonEffects,
@@ -1377,7 +1494,7 @@ export class ContinueWatchingService {
           linkId: row.linkId,
           linkRevision: row.linkRevision,
           referenceId,
-          schemaVersion: 1,
+          schemaVersion: 2,
           source:
             ownership === null
               ? { kind: "unmanaged" }
@@ -1403,6 +1520,245 @@ export class ContinueWatchingService {
     }
   }
 
+  public async commitLibraryRemoval(
+    referenceId: string,
+    rawRequest: LibraryRemovalCommitRequest,
+    rawIdempotencyKey: string,
+    context: ContinueWatchingContext,
+    signal?: AbortSignal,
+  ): Promise<LibraryRemovalResult> {
+    const principal = requirePermission(context.principal, "library.delete");
+    if (principal.userId === null) throw new LibraryRemovalError("identity_changed");
+    const request = libraryRemovalCommitRequestSchema.parse(rawRequest);
+    const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(rawIdempotencyKey);
+    const startedAt = this.#clock();
+    const issuedAt = Date.parse(principal.issuedAt);
+    if (
+      !Number.isFinite(issuedAt) ||
+      issuedAt > startedAt.getTime() ||
+      issuedAt < startedAt.getTime() - LIBRARY_REMOVAL_RECENT_AUTH_MS
+    ) {
+      throw new LibraryRemovalError("authentication_stale");
+    }
+
+    let row: ContinueWatchingSourceRow;
+    try {
+      row = this.#source(principal);
+    } catch (error) {
+      throw new LibraryRemovalError("identity_changed", { cause: error });
+    }
+    const replay = this.#readLibraryRemovalIdempotency(
+      principal.userId,
+      row,
+      referenceId,
+      request,
+      idempotencyKey,
+      context,
+    );
+    if (replay !== null) return { operation: replay, replayed: true };
+    let reference;
+    try {
+      reference = this.#references.resolve(this.#referenceContext(row), referenceId);
+    } catch (error) {
+      throw new LibraryRemovalError("not_found", { cause: error });
+    }
+    if (reference.kind !== "movie") throw new LibraryRemovalError("not_found");
+
+    const reservation = this.#reserveLibraryRemovalOperation(
+      principal.userId,
+      row,
+      referenceId,
+      request,
+      idempotencyKey,
+      context,
+      startedAt,
+    );
+    if (reservation.kind === "replay") {
+      return { operation: reservation.operation, replayed: true };
+    }
+
+    let operation = reservation.operation;
+    const payload = reservation.payload;
+    let titleResult: Awaited<ReturnType<JellyfinUserMediaClient["readLibraryTitle"]>>;
+    let ownership: LibraryRemovalManagedMovie | null;
+    let radarrAdapter: LibraryRemovalRadarrAdapter | null = null;
+    try {
+      const client = this.#client(row);
+      if (!client.readLibraryTitle) throw new ContinueWatchingConfigurationError();
+      titleResult = await client.readLibraryTitle(
+        { itemId: payload.itemId, userId: row.externalUserId },
+        signal,
+      );
+      if (
+        titleResult.item.externalId !== payload.itemId ||
+        titleResult.item.kind !== "movie" ||
+        !constantTimeTextEqual(titleResult.item.title, payload.title) ||
+        titleResult.item.year !== payload.year ||
+        titleResult.removal === undefined ||
+        titleResult.removal === null ||
+        !titleResult.removal.canDelete
+      ) {
+        return {
+          operation: this.#finishLibraryRemovalOperation(
+            this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
+            "failed",
+            "source_changed",
+            context,
+          ),
+          replayed: false,
+        };
+      }
+      if (payload.source.kind === "managed") {
+        const resolution = await this.#resolveManagedMovieSnapshotFromConnectors(
+          titleResult.removal.providerIds,
+          signal,
+        );
+        ownership = resolution?.ownership ?? null;
+        radarrAdapter = resolution?.adapter ?? null;
+      } else {
+        ownership = await this.#resolveManagedMovie(
+          { providerIds: titleResult.removal.providerIds },
+          signal,
+        );
+      }
+    } catch (_error) {
+      return {
+        operation: this.#finishLibraryRemovalOperation(
+          this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
+          "failed",
+          "connector_unavailable",
+          context,
+        ),
+        replayed: false,
+      };
+    }
+
+    if (!this.#libraryRemovalSourceMatches(payload, ownership)) {
+      return {
+        operation: this.#finishLibraryRemovalOperation(
+          this.#setLibraryRemovalStage(operation, "source_revalidation", "failed"),
+          "failed",
+          "source_changed",
+          context,
+        ),
+        replayed: false,
+      };
+    }
+    operation = this.#setLibraryRemovalStage(operation, "source_revalidation", "succeeded");
+    this.#persistLibraryRemovalOperation(operation);
+
+    let attemptedStage: "manager_record_removal" | "monitoring_change" | "organized_file_deletion" =
+      "organized_file_deletion";
+    try {
+      if (payload.source.kind === "unmanaged") {
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "uncertain");
+        this.#persistLibraryRemovalOperation(operation);
+        attemptedStage = "organized_file_deletion";
+        const client = this.#client(row);
+        if (!client.deleteLibraryItem) throw new ContinueWatchingConfigurationError();
+        await client.deleteLibraryItem(payload.itemId, signal);
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "succeeded");
+      } else {
+        if (payload.schemaVersion !== 2 || radarrAdapter === null) {
+          throw new ContinueWatchingConfigurationError();
+        }
+        const adapter = radarrAdapter;
+        if (request.mode === "delete_files_and_unmonitor" && payload.source.monitored) {
+          attemptedStage = "monitoring_change";
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "uncertain");
+          this.#persistLibraryRemovalOperation(operation);
+          const updated = await adapter.updateAcquisitionMonitoring(
+            {
+              expectedMonitored: payload.source.monitored,
+              mediaId: payload.source.mediaId,
+              monitored: false,
+              service: "radarr",
+            },
+            signal,
+          );
+          if (
+            updated.monitored ||
+            updated.target.kind !== "movie" ||
+            updated.target.mediaId !== payload.source.mediaId ||
+            updated.target.service !== "radarr"
+          ) {
+            throw new ContinueWatchingConfigurationError();
+          }
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "succeeded");
+          this.#persistLibraryRemovalOperation(operation);
+        } else if (request.mode === "delete_files_and_unmonitor") {
+          operation = this.#setLibraryRemovalStage(operation, "monitoring_change", "succeeded");
+          this.#persistLibraryRemovalOperation(operation);
+        }
+
+        attemptedStage = "organized_file_deletion";
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "uncertain");
+        if (request.mode === "remove_from_radarr_and_delete_files") {
+          operation = this.#setLibraryRemovalStage(
+            operation,
+            "manager_record_removal",
+            "uncertain",
+          );
+        }
+        this.#persistLibraryRemovalOperation(operation);
+        if (request.mode === "remove_from_radarr_and_delete_files") {
+          attemptedStage = "manager_record_removal";
+          await adapter.deleteLibraryMovie(payload.source.mediaId, signal);
+          operation = this.#setLibraryRemovalStage(
+            operation,
+            "manager_record_removal",
+            "succeeded",
+          );
+        } else {
+          await adapter.deleteLibraryMovieFile(payload.source.fileId, signal);
+        }
+        operation = this.#setLibraryRemovalStage(operation, "organized_file_deletion", "succeeded");
+      }
+
+      return {
+        operation: this.#finishLibraryRemovalOperation(operation, "succeeded", undefined, context),
+        replayed: false,
+      };
+    } catch (_error) {
+      operation = this.#setLibraryRemovalStage(operation, attemptedStage, "uncertain");
+      return {
+        operation: this.#finishLibraryRemovalOperation(
+          operation,
+          "reconcile_required",
+          "outcome_unknown",
+          context,
+        ),
+        replayed: false,
+      };
+    }
+  }
+
+  public readLibraryRemovalOperation(
+    rawOperationId: string,
+    context: ContinueWatchingContext,
+  ): LibraryRemovalOperation {
+    const principal = requirePermission(context.principal, "library.delete");
+    if (principal.userId === null) throw new LibraryRemovalError("identity_changed");
+    const operationId = libraryRemovalOperationIdSchema.parse(rawOperationId);
+    const row = this.#database.sqlite
+      .prepare(
+        `select response_json as responseJson, state, updated_at as updatedAt
+           from library_removal_operations
+          where id = ? and user_id = ?
+          limit 1`,
+      )
+      .get(operationId, principal.userId) as
+      Pick<LibraryRemovalOperationRow, "responseJson" | "state" | "updatedAt"> | undefined;
+    if (!row) throw new LibraryRemovalError("not_found");
+    try {
+      const operation = libraryRemovalOperationSchema.parse(JSON.parse(row.responseJson));
+      return row.state === "running"
+        ? this.#recoverStaleLibraryRemovalOperation(operation, row.updatedAt, context)
+        : operation;
+    } catch (error) {
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
   public async updatePlaybackState(
     referenceId: string,
     rawRequest: LibraryPlaybackStateMutationRequest,
@@ -1953,6 +2309,16 @@ export class ContinueWatchingService {
     providerIds: { imdb: string | null; tmdb: number | null },
     signal?: AbortSignal,
   ): Promise<LibraryRemovalManagedMovie | null> {
+    return (
+      (await this.#resolveManagedMovieSnapshotFromConnectors(providerIds, signal))?.ownership ??
+      null
+    );
+  }
+
+  async #resolveManagedMovieSnapshotFromConnectors(
+    providerIds: { imdb: string | null; tmdb: number | null },
+    signal?: AbortSignal,
+  ): Promise<LibraryRemovalManagedResolution | null> {
     const rows = this.#database.sqlite
       .prepare(
         `select id, display_name as displayName, base_url as baseUrl, enabled,
@@ -1996,10 +2362,14 @@ export class ContinueWatchingService {
           ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
         });
         const ownership = await adapter.resolveLibraryMovie(providerIds, signal);
-        return ownership === null ? null : { ...ownership, connectorId: row.id };
+        return ownership === null
+          ? null
+          : { adapter, ownership: { ...ownership, connectorId: row.id } };
       }),
     );
-    const owned = matches.filter((match): match is LibraryRemovalManagedMovie => match !== null);
+    const owned = matches.filter(
+      (match): match is LibraryRemovalManagedResolution => match !== null,
+    );
     if (owned.length > 1) throw new ContinueWatchingConfigurationError("invalid");
     return owned[0] ?? null;
   }
@@ -2180,7 +2550,7 @@ export class ContinueWatchingService {
 
   #storeLibraryRemovalPreview(
     preview: LibraryRemovalPreview,
-    rawPayload: z.input<typeof storedLibraryRemovalPreviewSchema>,
+    rawPayload: z.input<typeof storedLibraryRemovalPreviewV2Schema>,
     row: ContinueWatchingSourceRow,
     context: ContinueWatchingContext,
     now: number,
@@ -2262,6 +2632,542 @@ export class ContinueWatchingService {
       if (error instanceof LibraryRemovalPreviewError) throw error;
       throw new LibraryRemovalPreviewError("unavailable", { cause: error });
     }
+  }
+
+  #libraryRemovalFingerprint(
+    row: ContinueWatchingSourceRow,
+    referenceId: string,
+    request: LibraryRemovalCommitRequest,
+  ) {
+    return hashToken(
+      JSON.stringify({
+        linkId: row.linkId,
+        linkRevision: row.linkRevision,
+        referenceId,
+        request,
+        version: 1,
+      }),
+    );
+  }
+
+  #readLibraryRemovalIdempotency(
+    userId: string,
+    row: ContinueWatchingSourceRow,
+    referenceId: string,
+    request: LibraryRemovalCommitRequest,
+    idempotencyKey: string,
+    context: ContinueWatchingContext,
+  ) {
+    const keyHash = hashToken(`${userId}\0library_removal\0${idempotencyKey}`);
+    const fingerprintHash = this.#libraryRemovalFingerprint(row, referenceId, request);
+    const existing = this.#database.sqlite
+      .prepare(
+        `select fingerprint_hash as fingerprintHash, response_json as responseJson, state,
+                updated_at as updatedAt
+           from library_removal_operations
+          where user_id = ? and idempotency_key_hash = ?
+          limit 1`,
+      )
+      .get(userId, keyHash) as LibraryRemovalOperationRow | undefined;
+    if (!existing) return null;
+    if (!constantTimeTextEqual(existing.fingerprintHash, fingerprintHash)) {
+      throw new LibraryRemovalError("idempotency_conflict");
+    }
+    try {
+      const operation = libraryRemovalOperationSchema.parse(JSON.parse(existing.responseJson));
+      if (existing.state !== "running") return operation;
+      const recovered = this.#recoverStaleLibraryRemovalOperation(
+        operation,
+        existing.updatedAt,
+        context,
+      );
+      if (recovered.state === "running") {
+        throw new LibraryRemovalError("idempotency_in_progress");
+      }
+      return recovered;
+    } catch (error) {
+      if (error instanceof LibraryRemovalError) throw error;
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  #reserveLibraryRemovalOperation(
+    userId: string,
+    row: ContinueWatchingSourceRow,
+    referenceId: string,
+    request: LibraryRemovalCommitRequest,
+    idempotencyKey: string,
+    context: ContinueWatchingContext,
+    startedAt: Date,
+  ): LibraryRemovalReservation {
+    const now = startedAt.getTime();
+    const keyHash = hashToken(`${userId}\0library_removal\0${idempotencyKey}`);
+    const fingerprintHash = this.#libraryRemovalFingerprint(row, referenceId, request);
+    try {
+      return this.#database.sqlite
+        .transaction((): LibraryRemovalReservation => {
+          const existing = this.#database.sqlite
+            .prepare(
+              `select fingerprint_hash as fingerprintHash, response_json as responseJson, state
+                 from library_removal_operations
+                where user_id = ? and idempotency_key_hash = ?
+                limit 1`,
+            )
+            .get(userId, keyHash) as
+            | Pick<LibraryRemovalOperationRow, "fingerprintHash" | "responseJson" | "state">
+            | undefined;
+          if (existing) {
+            if (!constantTimeTextEqual(existing.fingerprintHash, fingerprintHash)) {
+              throw new LibraryRemovalError("idempotency_conflict");
+            }
+            if (existing.state === "running") {
+              throw new LibraryRemovalError("idempotency_in_progress");
+            }
+            return {
+              kind: "replay",
+              operation: libraryRemovalOperationSchema.parse(JSON.parse(existing.responseJson)),
+            };
+          }
+
+          this.#database.sqlite
+            .prepare(
+              `delete from library_removal_operations
+                where completed_at is not null and completed_at < ?`,
+            )
+            .run(now - LIBRARY_REMOVAL_OPERATION_RETENTION_MS);
+          const { count } = this.#database.sqlite
+            .prepare("select count(*) as count from library_removal_operations where user_id = ?")
+            .get(userId) as { count: number };
+          if (count >= MAX_LIBRARY_REMOVAL_OPERATIONS_PER_USER) {
+            throw new LibraryRemovalError("operation_limit_reached");
+          }
+
+          const previewRow = this.#database.sqlite
+            .prepare(
+              `select user_id as userId, session_id as sessionId,
+                      service_identity_link_id as serviceIdentityLinkId,
+                      link_revision as linkRevision, media_reference_id as mediaReferenceId,
+                      encrypted_payload as encryptedPayload, expires_at as expiresAt,
+                      consumed_at as consumedAt
+                 from library_removal_previews
+                where id = ?
+                limit 1`,
+            )
+            .get(request.previewId) as LibraryRemovalPreviewRow | undefined;
+          if (!previewRow || previewRow.userId !== userId) {
+            throw new LibraryRemovalError("not_found");
+          }
+          if (previewRow.expiresAt <= now) throw new LibraryRemovalError("preview_expired");
+          if (previewRow.consumedAt !== null) throw new LibraryRemovalError("not_found");
+          if (
+            previewRow.sessionId !== context.principal.sessionId ||
+            previewRow.serviceIdentityLinkId !== row.linkId ||
+            previewRow.linkRevision !== row.linkRevision ||
+            previewRow.mediaReferenceId !== referenceId
+          ) {
+            throw new LibraryRemovalError("identity_changed");
+          }
+
+          let payload: StoredLibraryRemovalPreview;
+          try {
+            payload = storedLibraryRemovalPreviewSchema.parse(
+              JSON.parse(
+                this.#cipher.decrypt(
+                  previewRow.encryptedPayload,
+                  `library_removal_preview:${request.previewId}`,
+                ),
+              ),
+            );
+          } catch (error) {
+            throw new LibraryRemovalError("storage_failure", { cause: error });
+          }
+          if (
+            payload.userId !== userId ||
+            payload.linkId !== row.linkId ||
+            payload.linkRevision !== row.linkRevision ||
+            payload.referenceId !== referenceId
+          ) {
+            throw new LibraryRemovalError("identity_changed");
+          }
+          if (payload.schemaVersion === 1 && payload.source.kind === "managed") {
+            throw new LibraryRemovalError("source_changed");
+          }
+          if (!constantTimeTextEqual(request.confirmationTitle, payload.title)) {
+            throw new LibraryRemovalError("confirmation_mismatch");
+          }
+          if (
+            (payload.source.kind === "managed" && request.mode === "delete_unmanaged_files") ||
+            (payload.source.kind === "unmanaged" && request.mode !== "delete_unmanaged_files") ||
+            (payload.source.kind === "managed" &&
+              !payload.source.monitored &&
+              request.mode === "delete_files_keep_monitored")
+          ) {
+            throw new LibraryRemovalError("invalid_mode");
+          }
+
+          const targetDigest = this.#libraryRemovalTargetDigest(payload, row.connectorId);
+          const runningTarget = this.#database.sqlite
+            .prepare(
+              `select response_json as responseJson, updated_at as updatedAt, user_id as userId
+                 from library_removal_operations
+                where target_digest = ? and state = 'running'
+                limit 1`,
+            )
+            .get(targetDigest) as
+            { responseJson: string; updatedAt: number; userId: string } | undefined;
+          if (runningTarget) {
+            const runningOperation = libraryRemovalOperationSchema.parse(
+              JSON.parse(runningTarget.responseJson),
+            );
+            const recovered = this.#recoverStaleLibraryRemovalOperationInTransaction(
+              runningOperation,
+              runningTarget.updatedAt,
+              runningTarget.userId === userId ? context : undefined,
+            );
+            if (recovered.state === "running") {
+              throw new LibraryRemovalError("idempotency_in_progress");
+            }
+          }
+
+          const operationId = this.#libraryRemovalOperationId();
+          const operation = this.#initialLibraryRemovalOperation(
+            operationId,
+            referenceId,
+            request,
+            startedAt,
+          );
+          const encryptedPayload = this.#cipher.encrypt(
+            JSON.stringify(payload),
+            `library_removal_operation:${operationId}`,
+          );
+          if (Buffer.byteLength(encryptedPayload, "utf8") > MAX_LIBRARY_REMOVAL_PREVIEW_BYTES) {
+            throw new LibraryRemovalError("storage_failure");
+          }
+          this.#database.sqlite
+            .prepare(
+              `insert into library_removal_operations (
+                 id, user_id, session_id, service_identity_link_id, link_revision,
+                 media_reference_id, preview_id, mode, idempotency_key_hash,
+                 fingerprint_hash, target_digest, state, response_json, encrypted_payload,
+                 started_at, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              operationId,
+              userId,
+              context.principal.sessionId,
+              row.linkId,
+              row.linkRevision,
+              referenceId,
+              request.previewId,
+              request.mode,
+              keyHash,
+              fingerprintHash,
+              targetDigest,
+              JSON.stringify(operation),
+              encryptedPayload,
+              now,
+              now,
+              now,
+            );
+          const consumed = this.#database.sqlite
+            .prepare(
+              `update library_removal_previews
+                  set consumed_at = ?, updated_at = ?
+                where id = ? and consumed_at is null and expires_at > ?`,
+            )
+            .run(now, now, request.previewId, now);
+          if (consumed.changes !== 1) throw new LibraryRemovalError("preview_expired");
+          this.#insertLibraryRemovalAudit(
+            "library.removal.requested",
+            "success",
+            operation,
+            context,
+            now,
+          );
+          return { kind: "new", operation, payload };
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof LibraryRemovalError) throw error;
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  #initialLibraryRemovalOperation(
+    operationId: string,
+    referenceId: string,
+    request: LibraryRemovalCommitRequest,
+    startedAt: Date,
+  ) {
+    return libraryRemovalOperationSchema.parse({
+      completedAt: null,
+      mode: request.mode,
+      operationId,
+      previewId: request.previewId,
+      referenceId,
+      stages: [
+        { kind: "authorization_recheck", state: "succeeded" },
+        { kind: "source_revalidation", state: "pending" },
+        {
+          kind: "monitoring_change",
+          state: request.mode === "delete_files_and_unmonitor" ? "pending" : "not_applicable",
+        },
+        { kind: "organized_file_deletion", state: "pending" },
+        {
+          kind: "manager_record_removal",
+          state:
+            request.mode === "remove_from_radarr_and_delete_files" ? "pending" : "not_applicable",
+        },
+        { kind: "jellyfin_reconciliation", state: "not_applicable" },
+      ],
+      startedAt: startedAt.toISOString(),
+      state: "running",
+    });
+  }
+
+  #setLibraryRemovalStage(
+    operation: LibraryRemovalOperation,
+    kind: LibraryRemovalOperation["stages"][number]["kind"],
+    state: LibraryRemovalOperation["stages"][number]["state"],
+  ) {
+    return libraryRemovalOperationSchema.parse({
+      ...operation,
+      stages: operation.stages.map((stage) => (stage.kind === kind ? { ...stage, state } : stage)),
+    });
+  }
+
+  #persistLibraryRemovalOperation(operation: LibraryRemovalOperation) {
+    const now = this.#clock().getTime();
+    try {
+      const updated = this.#database.sqlite
+        .prepare(
+          `update library_removal_operations
+              set response_json = ?, updated_at = ?
+            where id = ? and state = 'running'`,
+        )
+        .run(
+          JSON.stringify(libraryRemovalOperationSchema.parse(operation)),
+          now,
+          operation.operationId,
+        );
+      if (updated.changes !== 1) throw new Error("operation_not_running");
+    } catch (error) {
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  #finishLibraryRemovalOperation(
+    operation: LibraryRemovalOperation,
+    state: "failed" | "reconcile_required" | "succeeded",
+    rawFailureCode: z.input<typeof libraryRemovalFailureCodeSchema> | undefined,
+    context: ContinueWatchingContext,
+  ) {
+    const completedAt = this.#clock();
+    const failureCode =
+      rawFailureCode === undefined
+        ? undefined
+        : libraryRemovalFailureCodeSchema.parse(rawFailureCode);
+    const terminal = libraryRemovalOperationSchema.parse({
+      ...operation,
+      completedAt: completedAt.toISOString(),
+      ...(failureCode === undefined ? {} : { failureCode }),
+      state,
+    });
+    const clearedEncryptedPayload =
+      state === "reconcile_required"
+        ? null
+        : this.#cipher.encrypt(
+            JSON.stringify({ schemaVersion: 1, state: "cleared" }),
+            `library_removal_operation:${terminal.operationId}`,
+          );
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update library_removal_operations
+                  set state = ?, response_json = ?, failure_code = ?, completed_at = ?, updated_at = ?,
+                      encrypted_payload = coalesce(?, encrypted_payload)
+                where id = ? and state = 'running'`,
+            )
+            .run(
+              state,
+              JSON.stringify(terminal),
+              failureCode ?? null,
+              completedAt.getTime(),
+              completedAt.getTime(),
+              clearedEncryptedPayload,
+              terminal.operationId,
+            );
+          if (updated.changes !== 1) throw new Error("operation_not_running");
+          this.#insertLibraryRemovalAudit(
+            state === "succeeded"
+              ? "library.removal.completed"
+              : state === "reconcile_required"
+                ? "library.removal.reconciliation_required"
+                : "library.removal.failed",
+            state === "succeeded" ? "success" : "failure",
+            terminal,
+            context,
+            completedAt.getTime(),
+          );
+        })
+        .immediate();
+      return terminal;
+    } catch (error) {
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  #recoverStaleLibraryRemovalOperation(
+    operation: LibraryRemovalOperation,
+    updatedAt: number,
+    context: ContinueWatchingContext,
+  ) {
+    try {
+      return this.#database.sqlite
+        .transaction(() =>
+          this.#recoverStaleLibraryRemovalOperationInTransaction(operation, updatedAt, context),
+        )
+        .immediate();
+    } catch (error) {
+      if (error instanceof LibraryRemovalError) throw error;
+      throw new LibraryRemovalError("storage_failure", { cause: error });
+    }
+  }
+
+  #recoverStaleLibraryRemovalOperationInTransaction(
+    operation: LibraryRemovalOperation,
+    updatedAt: number,
+    context?: ContinueWatchingContext,
+  ) {
+    const completedAt = this.#clock();
+    const cutoff = completedAt.getTime() - LIBRARY_REMOVAL_STALE_OPERATION_MS;
+    if (operation.state !== "running" || updatedAt > cutoff) return operation;
+    const terminal = libraryRemovalOperationSchema.parse({
+      ...operation,
+      completedAt: completedAt.toISOString(),
+      failureCode: "outcome_unknown",
+      state: "reconcile_required",
+    });
+    const updated = this.#database.sqlite
+      .prepare(
+        `update library_removal_operations
+            set state = 'reconcile_required', response_json = ?,
+                failure_code = 'outcome_unknown', completed_at = ?, updated_at = ?
+          where id = ? and state = 'running' and updated_at <= ?`,
+      )
+      .run(
+        JSON.stringify(terminal),
+        completedAt.getTime(),
+        completedAt.getTime(),
+        operation.operationId,
+        cutoff,
+      );
+    if (updated.changes === 1) {
+      this.#insertLibraryRemovalAudit(
+        "library.removal.reconciliation_required",
+        "failure",
+        terminal,
+        context,
+        completedAt.getTime(),
+      );
+      return terminal;
+    }
+    const current = this.#database.sqlite
+      .prepare(
+        "select response_json as responseJson from library_removal_operations where id = ? limit 1",
+      )
+      .get(operation.operationId) as Pick<LibraryRemovalOperationRow, "responseJson"> | undefined;
+    if (!current) throw new LibraryRemovalError("not_found");
+    return libraryRemovalOperationSchema.parse(JSON.parse(current.responseJson));
+  }
+
+  #insertLibraryRemovalAudit(
+    eventType: string,
+    outcome: "failure" | "success",
+    operation: LibraryRemovalOperation,
+    context: ContinueWatchingContext | undefined,
+    now: number,
+  ) {
+    this.#database.sqlite
+      .prepare(
+        `insert into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method,
+           event_type, outcome, target_type, target_id, request_id,
+           metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, ?, ?, 'library_removal_operation', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        this.#userMediaStateAuditId(),
+        context?.principal.userId ?? null,
+        context?.principal.sessionId ?? null,
+        context?.principal.authenticationMethod.kind ?? null,
+        eventType,
+        outcome,
+        operation.operationId,
+        context?.requestId ?? null,
+        JSON.stringify({
+          failureCode: operation.failureCode ?? null,
+          mode: operation.mode,
+          state: operation.state,
+        }),
+        context?.ipAddress
+          ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+          : null,
+        now,
+      );
+  }
+
+  #libraryRemovalSourceMatches(
+    payload: StoredLibraryRemovalPreview,
+    ownership: LibraryRemovalManagedMovie | null,
+  ) {
+    if (payload.source.kind === "unmanaged") return ownership === null;
+    if (payload.schemaVersion !== 2) return false;
+    return (
+      ownership !== null &&
+      ownership.hasFile &&
+      ownership.connectorId === payload.source.connectorId &&
+      ownership.fileId === payload.source.fileId &&
+      ownership.mediaId === payload.source.mediaId &&
+      ownership.monitored === payload.source.monitored
+    );
+  }
+
+  #libraryRemovalTargetDigest(payload: StoredLibraryRemovalPreview, connectorId: string) {
+    const target =
+      payload.source.kind === "unmanaged"
+        ? { connectorId, itemId: payload.itemId, kind: "unmanaged", version: 1 }
+        : payload.schemaVersion === 2
+          ? {
+              connectorId: payload.source.connectorId,
+              kind: "managed",
+              mediaId: payload.source.mediaId,
+              version: 1,
+            }
+          : null;
+    if (target === null) throw new LibraryRemovalError("source_changed");
+    return privacyHash(
+      "library_removal_target",
+      JSON.stringify(target),
+      this.#config.encryptionKey,
+    );
+  }
+
+  #libraryRemovalOperationId() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `library_removal_operation_${this.#createRemovalOperationToken()}`;
+      if (!/^library_removal_operation_[A-Za-z0-9_-]{22}$/u.test(candidate)) {
+        throw new LibraryRemovalError("storage_failure");
+      }
+      const exists = this.#database.sqlite
+        .prepare("select 1 from library_removal_operations where id = ? limit 1")
+        .get(candidate);
+      if (!exists) return candidate;
+    }
+    throw new LibraryRemovalError("storage_failure");
   }
 
   #apiKeySecrets(row: LibraryRemovalRadarrRow, service: LibraryConnectedActionService) {

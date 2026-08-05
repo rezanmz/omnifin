@@ -27,6 +27,7 @@ const requiredTables = [
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
+  "library_removal_operations",
   "library_removal_previews",
   "media_issues",
   "media_issue_operations",
@@ -160,6 +161,24 @@ const requiredColumns = {
     "reference_id",
     "response_json",
     "state",
+    "user_id",
+  ],
+  library_removal_operations: [
+    "completed_at",
+    "encrypted_payload",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "link_revision",
+    "media_reference_id",
+    "mode",
+    "preview_id",
+    "response_json",
+    "service_identity_link_id",
+    "session_id",
+    "started_at",
+    "state",
+    "target_digest",
     "user_id",
   ],
   library_removal_previews: [
@@ -378,6 +397,13 @@ const requiredIndexes = {
     "library_mutation_operations_state_created_idx",
     "library_mutation_operations_user_key_unique",
   ],
+  library_removal_operations: [
+    "library_removal_operations_preview_unique",
+    "library_removal_operations_reference_idx",
+    "library_removal_operations_running_target_unique",
+    "library_removal_operations_state_created_idx",
+    "library_removal_operations_user_key_unique",
+  ],
   library_removal_previews: [
     "library_removal_previews_expiry_idx",
     "library_removal_previews_user_created_idx",
@@ -522,7 +548,9 @@ function writeHistoricalMigrationFixture() {
 }
 
 function applyHistoricalMigrations(database: DatabaseHandle) {
-  migrateWithDrizzle(database.db, { migrationsFolder: historicalMigrationDirectory });
+  migrateWithDrizzle(database.db, {
+    migrationsFolder: historicalMigrationDirectory,
+  });
 }
 
 function insertLegacySession(database: DatabaseHandle, fixture: LegacySessionFixture) {
@@ -580,8 +608,8 @@ const {
 } = writeHistoricalMigrationFixture();
 assertCondition(
   currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0027_connector_public_ui_urls",
-  "Current migration journal must end at migration 0027_connector_public_ui_urls.",
+    currentMigrationTag === "0028_library_removal_operations",
+  "Current migration journal must end at migration 0028_library_removal_operations.",
 );
 
 try {
@@ -798,6 +826,17 @@ try {
       throw new Error("Migration is missing the user-bound removal-preview link foreign key.");
     }
 
+    const removalOperationForeignKeys = database.sqlite.pragma(
+      "foreign_key_list(library_removal_operations)",
+    ) as { from: string; table: string; to: string }[];
+    if (
+      removalOperationForeignKeys.length !== 1 ||
+      !removalOperationForeignKeys.some(
+        ({ from, table, to }) => from === "user_id" && table === "users" && to === "id",
+      )
+    ) {
+      throw new Error("Removal operations must only reference their durable owning user.");
+    }
     const discoveryArtworkForeignKeys = database.sqlite.pragma(
       "foreign_key_list(discovery_artwork_references)",
     ) as { from: string; table: string; to: string }[];
@@ -1059,7 +1098,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0027.",
+      "Production migration did not advance the historical fixture exactly through migration 0028.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1224,7 +1263,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0027, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0028, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
