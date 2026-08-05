@@ -170,12 +170,87 @@ describe("global search", () => {
       await waitFor(() =>
         expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
       );
+      fireEvent.scroll(window);
       await waitFor(() => expect(scrollTop).toBe(1_200));
 
-      // WebKit can apply one more sticky-focus adjustment after the replacement input mounts.
-      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      // WebKit can apply another sticky-focus adjustment after the lazy handoff settles.
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
       scrollTop = 88;
+      fireEvent.scroll(window);
       await waitFor(() => expect(scrollTop).toBe(1_200));
+
+      fireEvent.wheel(window);
+      scrollTop = 72;
+      fireEvent.scroll(window);
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+      expect(scrollTop).toBe(72);
+    } finally {
+      vi.mocked(window.scrollTo).mockReset();
+      if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
+      if (originalScrollY) Object.defineProperty(window, "scrollY", originalScrollY);
+    }
+  });
+
+  it("honors scroll intent while the lazy search implementation loads", async () => {
+    let scrollTop = 1_200;
+    const originalScrollX = Object.getOwnPropertyDescriptor(window, "scrollX");
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, get: () => 0 },
+      scrollY: { configurable: true, get: () => scrollTop },
+    });
+    vi.mocked(window.scrollTo).mockImplementation(((_left: number, top?: number) => {
+      scrollTop = top ?? scrollTop;
+    }) as typeof window.scrollTo);
+
+    try {
+      render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+      fireEvent.wheel(window);
+      scrollTop = 72;
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      scrollTop = 31;
+      fireEvent.scroll(window);
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+      expect(scrollTop).toBe(31);
+    } finally {
+      vi.mocked(window.scrollTo).mockReset();
+      if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
+      if (originalScrollY) Object.defineProperty(window, "scrollY", originalScrollY);
+    }
+  });
+
+  it("rearms scroll stabilization after a new activation during lazy loading", async () => {
+    let scrollTop = 1_200;
+    const originalScrollX = Object.getOwnPropertyDescriptor(window, "scrollX");
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, get: () => 0 },
+      scrollY: { configurable: true, get: () => scrollTop },
+    });
+    vi.mocked(window.scrollTo).mockImplementation(((_left: number, top?: number) => {
+      scrollTop = top ?? scrollTop;
+    }) as typeof window.scrollTo);
+
+    try {
+      render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+      fireEvent.wheel(window);
+      scrollTop = 72;
+      fireEvent.keyDown(document, { ctrlKey: true, key: "k" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      scrollTop = 31;
+      fireEvent.scroll(window);
+      await waitFor(() => expect(scrollTop).toBe(72));
+      fireEvent.wheel(window);
     } finally {
       vi.mocked(window.scrollTo).mockReset();
       if (originalScrollX) Object.defineProperty(window, "scrollX", originalScrollX);
@@ -186,16 +261,45 @@ describe("global search", () => {
   it("retains focus after the complete pointer gesture hands off the lazy search", async () => {
     render(<GlobalSearchLoader client={client()} debounceMs={0} />);
     const placeholder = screen.getByRole("combobox");
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    placeholder.setPointerCapture = setPointerCapture;
+    placeholder.hasPointerCapture = () => true;
+    placeholder.releasePointerCapture = releasePointerCapture;
+    vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ height: 40, width: 100 }),
+    );
 
-    fireEvent.pointerDown(placeholder);
+    fireEvent.pointerDown(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
     expect(placeholder).toHaveFocus();
     expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
-    fireEvent.pointerUp(placeholder);
+    fireEvent.pointerUp(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
 
     await waitFor(() =>
       expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search"),
     );
     expect(screen.getByRole("combobox")).toHaveFocus();
+  });
+
+  it("does not activate when a captured pointer is released outside search", async () => {
+    render(<GlobalSearchLoader client={client()} debounceMs={0} />);
+    const placeholder = screen.getByRole("combobox");
+    placeholder.setPointerCapture = vi.fn();
+    placeholder.hasPointerCapture = () => true;
+    placeholder.releasePointerCapture = vi.fn();
+    vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ height: 40, width: 100 }),
+    );
+
+    fireEvent.pointerDown(placeholder, { clientX: 50, clientY: 20, pointerId: 7 });
+    fireEvent.pointerUp(placeholder, { clientX: 150, clientY: 20, pointerId: 7 });
+    fireEvent.click(placeholder);
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "global-search-placeholder");
+    expect(placeholder.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
   it("falls back to click activation after a canceled pointer gesture", async () => {
