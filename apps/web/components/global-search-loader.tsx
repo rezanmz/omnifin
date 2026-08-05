@@ -2,14 +2,7 @@
 
 import { Command, Search } from "lucide-react";
 import type { ComponentType, RefObject } from "react";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { GlobalSearchProperties } from "./global-search";
 import {
@@ -41,6 +34,7 @@ function GlobalSearchPlaceholder({
   const pointerActivationPositionReference = useRef<DocumentScrollPosition | null>(null);
   const pointerScrollReference = useRef<DocumentScrollPosition | null>(null);
   const pointerActivationReference = useRef(false);
+  const suppressClickActivationReference = useRef(false);
 
   return (
     <div className="global-search" data-liquid-glass>
@@ -61,6 +55,10 @@ function GlobalSearchPlaceholder({
         id="global-search-placeholder"
         onClick={(event) => {
           event.preventDefault();
+          if (suppressClickActivationReference.current) {
+            suppressClickActivationReference.current = false;
+            return;
+          }
           activate?.(true);
         }}
         onBlur={() => {
@@ -93,24 +91,40 @@ function GlobalSearchPlaceholder({
         }}
         onPointerEnter={preload}
         onPointerDown={(event) => {
+          suppressClickActivationReference.current = false;
           const position = captureDocumentScrollPosition();
           pointerActivationPositionReference.current = position;
           pointerScrollReference.current = position;
           pointerActivationReference.current = true;
+          event.currentTarget.setPointerCapture?.(event.pointerId);
           if (document.activeElement !== event.currentTarget) {
             event.preventDefault();
             focusWithoutDocumentScroll(event.currentTarget);
           }
         }}
-        onPointerCancel={() => {
+        onPointerCancel={(event) => {
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
           pointerActivationReference.current = false;
           pointerActivationPositionReference.current = null;
         }}
         placeholder="Search everything…"
-        onPointerUp={() => {
+        onPointerUp={(event) => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const releasedWithinInput =
+            event.clientX >= bounds.left &&
+            event.clientX <= bounds.right &&
+            event.clientY >= bounds.top &&
+            event.clientY <= bounds.bottom;
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
           pointerActivationReference.current = false;
           const position = pointerActivationPositionReference.current;
           pointerActivationPositionReference.current = null;
+          if (!releasedWithinInput) {
+            suppressClickActivationReference.current = true;
+            return;
+          }
           activate?.(true, position);
         }}
         ref={inputReference}
@@ -141,10 +155,20 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
   const [openRequested, setOpenRequested] = useState(false);
   const activationScrollReference = useRef<DocumentScrollPosition | null>(null);
   const placeholderReference = useRef<HTMLInputElement>(null);
+  const stopStabilizingReference = useRef<(() => void) | null>(null);
 
   const activate = useCallback(
     (focusRequested = false, activationPosition?: DocumentScrollPosition | null) => {
       activationScrollReference.current ??= activationPosition ?? captureDocumentScrollPosition();
+      if (!stopStabilizingReference.current) {
+        let stopStabilizing: () => void = () => undefined;
+        stopStabilizing = stabilizeDocumentScrollPosition(activationScrollReference.current, () => {
+          if (stopStabilizingReference.current !== stopStabilizing) return;
+          stopStabilizingReference.current = null;
+          activationScrollReference.current = null;
+        });
+        stopStabilizingReference.current = stopStabilizing;
+      }
       if (focusRequested) setOpenRequested(true);
       setLoading(true);
       void loadGlobalSearch()
@@ -157,17 +181,20 @@ export function GlobalSearchLoader(properties: GlobalSearchProperties) {
           );
           setSearchComponent(() => Component);
         })
-        .catch(() => setLoading(false));
+        .catch(() => {
+          stopStabilizingReference.current?.();
+          setLoading(false);
+        });
     },
     [],
   );
 
-  useLayoutEffect(() => {
-    if (!SearchComponent) return;
-    const stopStabilizing = stabilizeDocumentScrollPosition(activationScrollReference.current);
-    activationScrollReference.current = null;
-    return stopStabilizing;
-  }, [SearchComponent]);
+  useEffect(
+    () => () => {
+      stopStabilizingReference.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
