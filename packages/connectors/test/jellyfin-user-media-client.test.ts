@@ -891,9 +891,16 @@ describe("JellyfinUserMediaClient", () => {
       jsonResponse({
         ...movie,
         CanDownload: true,
-        Container: "mkv",
         Etag: "private-source-version",
-        MediaSources: [{ Container: "mkv", Size: 50_000_000_000 }],
+        MediaSources: [
+          { Container: "mp4", Id: "alternate-source", Size: 1_000 },
+          {
+            Container: "mkv",
+            Id: "movie-upstream-1",
+            MediaStreams: [{ Height: 0, Type: "Subtitle", Width: 0 }],
+            Size: 50_000_000_000,
+          },
+        ],
         Path: "/private/library/The Far Meridian.mkv",
       }),
       new Response(original, {
@@ -953,7 +960,7 @@ describe("JellyfinUserMediaClient", () => {
         CanDownload: false,
         Container: "mp4",
         Etag: "private-denied-version",
-        MediaSources: [{ Container: "mp4", Size: 9_000 }],
+        MediaSources: [{ Container: "mp4", Id: "movie-upstream-1", Size: 9_000 }],
       }),
     ]);
     await expect(
@@ -998,7 +1005,14 @@ describe("JellyfinUserMediaClient", () => {
         Etag: "private-episode-version",
         Id: "episode-upstream-1",
         IndexNumber: 3,
-        MediaSources: [{ Container: "mkv", Size: 1_250_000_000 }],
+        MediaSources: [
+          {
+            Container: "mkv",
+            Id: "episode-upstream-1",
+            MediaStreams: [{ Height: 0, Type: "Subtitle", Width: 0 }],
+            Size: 1_250_000_000,
+          },
+        ],
         Name: "The Long Meridian",
         ParentIndexNumber: 2,
         ProductionYear: 2026,
@@ -1022,6 +1036,26 @@ describe("JellyfinUserMediaClient", () => {
       year: 2026,
     });
     expect(JSON.stringify(episodeDownload.requests)).not.toContain("private-episode-version");
+  });
+
+  it("rejects malformed required original download source metadata", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CanDownload: true,
+        MediaSources: [{ Container: "mkv", Id: "movie-upstream-1", Size: "50000000000" }],
+      }),
+    ]);
+
+    await expect(
+      client.readOriginalDownloadMetadata({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "media.original_download.metadata",
+    });
   });
 
   it("reads parent-scoped local extras and normalizes every reviewed Jellyfin type", async () => {
