@@ -502,7 +502,7 @@ export function TheaterPlayer({
         if (stageReference.current && !video.parentNode) {
           stageReference.current.insertBefore(video, stageReference.current.firstChild);
         }
-        video.className = styles.video;
+        if (typeof styles.video === "string") video.className = styles.video;
         clearTracks();
         attachSubtitles();
         video.src = source;
