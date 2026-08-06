@@ -470,7 +470,9 @@ export function TheaterPlayer({
         const trackElement = document.createElement("track");
         trackElement.kind = kind;
         trackElement.label = track.title ?? `Track ${track.index}`;
-        trackElement.srclang = track.language ?? undefined;
+        if (track.language !== null && track.language !== undefined) {
+          trackElement.srclang = track.language;
+        }
         if (track.selected) trackElement.default = true;
         trackElement.src = browserPlaybackSubtitlePath(track.subtitlePath);
         video.appendChild(trackElement);

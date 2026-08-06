@@ -1,4 +1,7 @@
-import type { JellyfinPlaybackResult } from "@omnifin/connectors/media/jellyfin-playback-client";
+import type {
+  JellyfinPlaybackBytesResult,
+  JellyfinPlaybackResult,
+} from "@omnifin/connectors/media/jellyfin-playback-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { playbackIssueSchema } from "@omnifin/contracts/issues";
 import {
@@ -95,7 +98,9 @@ async function harness(
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
-  const readSubtitleStream = vi.fn();
+  const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
+    throw new Error("Subtitle bytes were not requested by this route test.");
+  });
   const reportPlaybackEvent = vi.fn(async () => undefined);
   const streamPlaybackTarget = vi.fn();
   const resolvePlaybackTarget = vi.fn(
@@ -252,6 +257,7 @@ async function harness(
     headers,
     negotiate,
     readPlaybackTarget,
+    readSubtitleStream,
     referenceId,
     reportPlaybackEvent,
     resolvePlaybackTarget,

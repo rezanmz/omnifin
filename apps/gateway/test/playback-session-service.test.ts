@@ -1,5 +1,6 @@
 import {
   JellyfinPlaybackClient,
+  type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTransport } from "@omnifin/connectors/types";
@@ -210,7 +211,7 @@ function harness(
   const readPlaybackTarget = vi.fn(async () => {
     throw new Error("Playback bytes were not expected in this service test.");
   });
-  const readSubtitleStream = vi.fn(async () => {
+  const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
     throw new Error("Subtitle bytes were not expected in this service test.");
   });
   const streamPlaybackTarget = vi.fn(async () => {
