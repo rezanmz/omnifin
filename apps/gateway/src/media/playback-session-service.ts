@@ -2,6 +2,7 @@ import {
   JellyfinPlaybackClient,
   JellyfinPlaybackUnavailableError,
   isJellyfinPlaybackTargetPath,
+  isTextSubtitleCodec,
   type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
   type JellyfinPlaybackReportingSession,
@@ -51,6 +52,7 @@ const MAX_PLAYBACK_SESSIONS_PER_USER = 32;
 const MAX_CREATION_ATTEMPTS = 8;
 const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
+const SUBTITLE_MAX_BYTES = 8 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
 const MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION = 20_000;
 const MAX_PLAYBACK_ASSET_HANDLES_GLOBAL = 250_000;
@@ -83,8 +85,9 @@ const storedPlaybackSchema = z
     mediaSourceId: identifierSchema,
     playMethod: z.enum(["DirectPlay", "DirectStream", "Transcode"]),
     playSessionId: identifierSchema,
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     subtitleStreamIndex: z.int().nonnegative().max(4_095).nullable(),
+    textSubtitleIndexes: z.array(z.int().nonnegative().max(4_095)).max(128),
     upstreamTarget: playbackTargetSchema,
   })
   .superRefine((payload, context) => {
@@ -180,6 +183,7 @@ export interface PlaybackSessionDependencies {
     JellyfinPlaybackClient,
     | "negotiate"
     | "readPlaybackTarget"
+    | "readSubtitleStream"
     | "reportPlaybackEvent"
     | "resolvePlaybackTarget"
     | "streamPlaybackTarget"
@@ -311,8 +315,11 @@ function storedPlayback(result: JellyfinPlaybackResult): StoredPlayback {
     mediaSourceId: result.mediaSourceId,
     playMethod: result.playMethod,
     playSessionId: result.playSessionId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     subtitleStreamIndex: selectedTrackIndex(result.subtitleTracks),
+    textSubtitleIndexes: result.subtitleTracks
+      .filter((track) => isTextSubtitleCodec(track.codec) && track.delivery !== "hls")
+      .map((track) => track.index),
     upstreamTarget: result.upstreamTarget,
   });
 }
@@ -496,7 +503,12 @@ export class PlaybackSessionService {
         positionSeconds: result.positionSeconds,
         sessionId: session.id,
         streamPath: `/v1/playback/${session.id}/${result.delivery === "hls" ? "master.m3u8" : "stream"}`,
-        subtitleTracks: result.subtitleTracks,
+        subtitleTracks: result.subtitleTracks.map((track) => ({
+          ...track,
+          ...(isTextSubtitleCodec(track.codec) && track.delivery !== "hls"
+            ? { subtitlePath: `/v1/playback/${session.id}/subtitle/${track.index}` }
+            : {}),
+        })),
       });
     } catch (error) {
       if (error instanceof PlaybackSessionError) throw error;
@@ -687,6 +699,39 @@ export class PlaybackSessionService {
       kind: "asset" as const,
       status: response.status === 206 ? 206 : 200,
     };
+  }
+
+  public async readSubtitle(
+    context: PlaybackSessionContext,
+    sessionId: string,
+    subtitleIndex: number,
+    signal?: AbortSignal,
+  ) {
+    const specificIndexSchema = z.int().nonnegative().max(4_095);
+    const index = specificIndexSchema.parse(subtitleIndex);
+    const { client, payload } = this.#stream(context, sessionId, SUBTITLE_MAX_BYTES);
+    if (!payload.textSubtitleIndexes.includes(index)) {
+      throw new PlaybackSessionError("not_found");
+    }
+    let response: JellyfinPlaybackBytesResult;
+    try {
+      response = await client.readSubtitleStream({
+        itemId: payload.itemId,
+        mediaSourceId: payload.mediaSourceId,
+        subtitleIndex: index,
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    if (response.status !== 200 && response.status !== 206) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    return {
+      body: response.body,
+      contentType: contentType(response.headers, "text/vtt"),
+      status: response.status === 206 ? 206 : 200,
+    } as const;
   }
 
   #client(source: PlaybackSourceRow, maxResponseBytes?: number) {

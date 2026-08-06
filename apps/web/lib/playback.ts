@@ -149,6 +149,17 @@ export function browserPlaybackPath(path: string) {
   return path.replace(/^\/v1\//u, "/api/");
 }
 
+export function browserPlaybackSubtitlePath(path: string) {
+  if (!/^\/v1\/playback\/playback_[A-Za-z0-9_-]{22}\/subtitle\/\d{1,4}$/u.test(path)) {
+    throw new PlaybackClientError(
+      "invalid_response",
+      "invalid_subtitle_path",
+      "The gateway returned an unsafe subtitle path.",
+    );
+  }
+  return path.replace(/^\/v1\//u, "/api/");
+}
+
 export const playbackClient: PlaybackClient = {
   async prepare(mediaReferenceId, positionSeconds, signal, options = {}) {
     const schemas = await contractSchemas();
@@ -209,6 +220,9 @@ export const playbackClient: PlaybackClient = {
       );
     }
     browserPlaybackPath(parsed.data.streamPath);
+    for (const track of parsed.data.subtitleTracks) {
+      if (track.subtitlePath !== undefined) browserPlaybackSubtitlePath(track.subtitlePath);
+    }
     return {
       canManageLibrary: session.data.principal.permissions.includes("library.manage"),
       csrfToken: session.data.csrfToken,

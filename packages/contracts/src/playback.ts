@@ -59,6 +59,10 @@ export const playbackAudioTrackSchema = z.strictObject({
 });
 export type PlaybackAudioTrack = z.infer<typeof playbackAudioTrackSchema>;
 
+const playbackSubtitlePathSchema = z
+  .string()
+  .regex(/^\/v1\/playback\/playback_[A-Za-z0-9_-]{22}\/subtitle\/\d{1,4}$/u);
+
 export const playbackSubtitleTrackSchema = z.strictObject({
   codec: codecSchema,
   default: z.boolean(),
@@ -67,6 +71,7 @@ export const playbackSubtitleTrackSchema = z.strictObject({
   index: streamIndexSchema,
   language: languageSchema,
   selected: z.boolean(),
+  subtitlePath: playbackSubtitlePathSchema.optional(),
   title: compactTextSchema,
 });
 export type PlaybackSubtitleTrack = z.infer<typeof playbackSubtitleTrackSchema>;
@@ -136,6 +141,18 @@ export const playbackNegotiationResponseSchema = z
           code: "custom",
           message: "At most one playback track may be selected within its kind.",
           path: [name],
+        });
+      }
+    }
+    for (const [index, track] of response.subtitleTracks.entries()) {
+      if (
+        track.subtitlePath !== undefined &&
+        track.subtitlePath !== `/v1/playback/${response.sessionId}/subtitle/${track.index}`
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Playback subtitle paths must belong to their own session and track.",
+          path: ["subtitleTracks", index, "subtitlePath"],
         });
       }
     }
@@ -289,6 +306,10 @@ export const playbackNegotiationResponseJsonSchema = {
           index: streamIndexJsonSchema,
           language: nullableLanguageJsonSchema,
           selected: { type: "boolean" },
+          subtitlePath: {
+            type: "string",
+            pattern: "^/v1/playback/playback_[A-Za-z0-9_-]{22}/subtitle/[0-9]{1,4}$",
+          },
           title: nullableCompactTextJsonSchema,
         },
       },

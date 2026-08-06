@@ -24,6 +24,22 @@ const sensitiveQueryNames = new Set([
   "x-mediabrowser-token",
 ]);
 
+const textSubtitleCodecs = new Set([
+  "ass",
+  "mov_text",
+  "sami",
+  "smi",
+  "srt",
+  "ssa",
+  "subrip",
+  "vtt",
+  "webvtt",
+]);
+
+export function isTextSubtitleCodec(codec: string | null) {
+  return codec !== null && textSubtitleCodecs.has(codec);
+}
+
 export function isJellyfinPlaybackTargetPath(value: string) {
   if (
     !value ||
@@ -565,6 +581,32 @@ export class JellyfinPlaybackClient {
         ...(input.range === undefined ? {} : { range: input.range }),
       },
       operation: "media.playback.stream",
+      query: new URLSearchParams(target.query),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+
+  public async readSubtitleStream(input: {
+    itemId: string;
+    mediaSourceId: string;
+    signal?: AbortSignal;
+    subtitleIndex: number;
+  }): Promise<JellyfinPlaybackBytesResult> {
+    const itemId = identifierSchema.parse(input.itemId);
+    const mediaSourceId = identifierSchema.parse(input.mediaSourceId);
+    const subtitleIndex = optionalIndexSchema.parse(input.subtitleIndex);
+    if (subtitleIndex === undefined) {
+      throw this.#client.invalidResponse("media.playback.subtitle");
+    }
+    const path = `Videos/${itemId}/${mediaSourceId}/Subtitles/${subtitleIndex}/Stream.vtt`;
+    const target = this.#validatedTarget({ path, query: "" }, "media.playback.subtitle");
+    return this.#client.requestBytes(target.path, {
+      acceptedStatuses: [200, 206],
+      headers: {
+        accept: "text/vtt,text/plain,application/octet-stream",
+        authorization: this.#authorization,
+      },
+      operation: "media.playback.subtitle",
       query: new URLSearchParams(target.query),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });

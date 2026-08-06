@@ -24,6 +24,9 @@ import {
 
 const negotiationParamsSchema = z.strictObject({ referenceId: mediaReferenceIdSchema });
 const progressParamsSchema = z.strictObject({ sessionId: playbackSessionIdSchema });
+const subtitleParamsSchema = progressParamsSchema.extend({
+  subtitleIndex: z.int().nonnegative().max(4_095),
+});
 const assetParamsSchema = progressParamsSchema.extend({
   assetToken: z
     .string()
@@ -46,6 +49,16 @@ const progressParamsJsonSchema = {
   additionalProperties: false,
   required: ["sessionId"],
   properties: { sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" } },
+} as const;
+
+const subtitleParamsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["sessionId", "subtitleIndex"],
+  properties: {
+    sessionId: { type: "string", pattern: "^playback_[A-Za-z0-9_-]{22}$" },
+    subtitleIndex: { type: "integer", minimum: 0, maximum: 4_095 },
+  },
 } as const;
 
 const assetParamsJsonSchema = {
@@ -249,6 +262,41 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
         reply.header("vary", "Cookie, Range");
         if (stream.contentRange) reply.header("content-range", stream.contentRange);
         return reply.status(stream.status).type(stream.contentType).send(Buffer.from(stream.body));
+      } catch (error) {
+        if (error instanceof PlaybackSessionError) throw playbackError(error);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.get(
+    "/v1/playback/:sessionId/subtitle/:subtitleIndex",
+    {
+      config: { rateLimit: { max: 180, timeWindow: "1 minute" } },
+      schema: { params: subtitleParamsJsonSchema },
+    },
+    async (request, reply) => {
+      const principal = readPrincipal(request, reply);
+      const params = subtitleParamsSchema.parse(request.params);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        const subtitle = await playback.readSubtitle(
+          { principal },
+          params.sessionId,
+          params.subtitleIndex,
+          controller.signal,
+        );
+        reply.header("cache-control", "private, no-store");
+        reply.header("content-disposition", "inline");
+        reply.header("vary", "Cookie");
+        return reply
+          .status(subtitle.status)
+          .type(subtitle.contentType)
+          .send(Buffer.from(subtitle.body));
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
