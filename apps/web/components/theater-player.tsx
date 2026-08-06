@@ -1,5 +1,6 @@
 "use client";
 
+import "video.js/dist/video-js.css";
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import {
   Bug,
