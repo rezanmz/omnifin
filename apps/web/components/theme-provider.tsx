@@ -56,7 +56,12 @@ function applyTheme(preference: ThemePreference, resolvedTheme: ResolvedTheme) {
 export function ThemeProvider({
   children,
   initialPreference,
-}: Readonly<{ children: ReactNode; initialPreference: ThemePreference }>) {
+  accountSync = true,
+}: Readonly<{
+  children: ReactNode;
+  initialPreference: ThemePreference;
+  accountSync?: boolean;
+}>) {
   const [preference, setPreferenceState] = useState<ThemePreference>(initialPreference);
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme | null>(() =>
     initialPreference === "system" ? null : initialPreference,
@@ -79,6 +84,7 @@ export function ThemeProvider({
   }, [preference]);
 
   useEffect(() => {
+    if (!accountSync) return;
     const controller = new AbortController();
     void (async () => {
       let csrfToken: string | null = null;
@@ -127,7 +133,7 @@ export function ThemeProvider({
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [accountSync]);
 
   const setPreference = useCallback((nextPreference: ThemePreference) => {
     userChangedReference.current = true;
