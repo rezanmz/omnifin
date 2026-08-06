@@ -365,6 +365,65 @@ export function TheaterPlayer({
     absolutePositionReference.current = absolutePosition;
   }, [absolutePosition]);
 
+  const replacePlayback = useCallback(
+    async (nextPreferences: PlaybackPreferences, nextPosition: number, nextMessage: string) => {
+      const active = preparedReference.current;
+      if (!active) return;
+      const previousPosition = absolutePosition();
+      const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
+      const generation = replacementGenerationReference.current + 1;
+      replacementGenerationReference.current = generation;
+      replacementControllerReference.current?.abort();
+      const controller = new AbortController();
+      replacementControllerReference.current = controller;
+      setSwitching(true);
+      setTransitionMessage(nextMessage);
+      setSettingsOpen(false);
+      try {
+        const result = await client.prepare(
+          media.id,
+          safePosition,
+          controller.signal,
+          preparationOptions(nextPreferences, active.session),
+        );
+        if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
+          stopSession(result, safePosition);
+          return;
+        }
+        replacementReference.current = {
+          generation,
+          previous: active,
+          previousPosition,
+          previousPreferences: preferencesReference.current,
+          resume: playing,
+        };
+        preferencesReference.current = nextPreferences;
+        preparedReference.current = result;
+        reportedStateReference.current = "negotiated";
+        startWhenReadyReference.current = playing;
+        setPreferences(nextPreferences);
+        setPrepared(result);
+        setPlaying(false);
+        setBuffering(false);
+        setCurrentTime(safePosition);
+        setSeekPreview(null);
+        setStatus("preparing");
+        setMessage(nextMessage);
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          generation !== replacementGenerationReference.current ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        setSwitching(false);
+        setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
+      }
+    },
+    [absolutePosition, client, duration, media.id, playing, stopSession],
+  );
+
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -671,66 +730,6 @@ export function TheaterPlayer({
       await video.play().catch(() => undefined);
     } else {
       video.pause();
-    }
-  }
-
-  async function replacePlayback(
-    nextPreferences: PlaybackPreferences,
-    nextPosition: number,
-    nextMessage: string,
-  ) {
-    const active = preparedReference.current;
-    if (!active) return;
-    const previousPosition = absolutePosition();
-    const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
-    const generation = replacementGenerationReference.current + 1;
-    replacementGenerationReference.current = generation;
-    replacementControllerReference.current?.abort();
-    const controller = new AbortController();
-    replacementControllerReference.current = controller;
-    setSwitching(true);
-    setTransitionMessage(nextMessage);
-    setSettingsOpen(false);
-    try {
-      const result = await client.prepare(
-        media.id,
-        safePosition,
-        controller.signal,
-        preparationOptions(nextPreferences, active.session),
-      );
-      if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
-        stopSession(result, safePosition);
-        return;
-      }
-      replacementReference.current = {
-        generation,
-        previous: active,
-        previousPosition,
-        previousPreferences: preferencesReference.current,
-        resume: playing,
-      };
-      preferencesReference.current = nextPreferences;
-      preparedReference.current = result;
-      reportedStateReference.current = "negotiated";
-      startWhenReadyReference.current = playing;
-      setPreferences(nextPreferences);
-      setPrepared(result);
-      setPlaying(false);
-      setBuffering(false);
-      setCurrentTime(safePosition);
-      setSeekPreview(null);
-      setStatus("preparing");
-      setMessage(nextMessage);
-    } catch (error) {
-      if (
-        controller.signal.aborted ||
-        generation !== replacementGenerationReference.current ||
-        (error instanceof DOMException && error.name === "AbortError")
-      ) {
-        return;
-      }
-      setSwitching(false);
-      setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
     }
   }
 

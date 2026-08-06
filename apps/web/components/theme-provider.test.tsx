@@ -115,7 +115,7 @@ describe("ThemeProvider", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        calls.push({ method: init?.method, url });
+        calls.push({ url, ...(init?.method ? { method: init.method } : {}) });
         if (url.endsWith("/api/auth/session")) {
           return new Response(
             JSON.stringify({
