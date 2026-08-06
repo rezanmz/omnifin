@@ -102,7 +102,7 @@ export const appearanceRoutes: FastifyPluginAsync<AppearanceRoutesOptions> = asy
         response: { 200: appearanceUpdateResponseJsonSchema },
       },
     },
-    async (request, reply) => {
+    async (request) => {
       const principal = requirePermission(
         app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
         "identities.self.manage",

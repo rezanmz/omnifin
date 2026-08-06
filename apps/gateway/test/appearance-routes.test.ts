@@ -39,6 +39,8 @@ async function identifiedApp() {
   app.database.db
     .insert(oidcProviders)
     .values({
+      clientId: "omnifin-client",
+      displayName: "Home identity",
       id: "oidc-home",
       issuer: "https://id.example.test/application/o/omnifin/",
       slug: "home",
@@ -117,7 +119,28 @@ describe("appearance routes", () => {
         url: "/v1/auth/session",
         headers: { cookie },
       });
-      expect(sessionResponseSchema.parse(reissued.json()).theme).toBe("dark");
+      expect(sessionResponseSchema.parse(reissued.json())).toEqual({
+        csrfToken: session.csrfToken,
+        principal: expect.any(Object),
+        theme: "dark",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires a session to inspect the appearance preference", async () => {
+    const app = await createApp({
+      config: config(),
+      sessionDependencies: { clock: () => new Date(NOW) },
+    });
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/v1/profile/appearance",
+      });
+      expect(anonymous.statusCode).toBe(401);
+      expect(apiErrorSchema.parse(anonymous.json()).error.code).toBe("authentication_required");
     } finally {
       await app.close();
     }
