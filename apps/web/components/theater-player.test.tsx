@@ -256,6 +256,30 @@ describe("TheaterPlayer", () => {
     expect(requestFullscreen).toHaveBeenCalledOnce();
   });
 
+  it("toggles playback on a single click and full screen on a double click", async () => {
+    const requestFullscreen = vi.fn(async () => undefined);
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+      configurable: true,
+      value: requestFullscreen,
+    });
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+
+    fireEvent.click(video);
+    fireEvent.canPlay(video);
+    await waitFor(() => expect(play).toHaveBeenCalled());
+
+    fireEvent.click(video);
+    fireEvent.click(video);
+    fireEvent.doubleClick(video);
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
+  });
+
   it("supports player shortcuts without hijacking range inputs", async () => {
     const client = readyClient();
     render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);

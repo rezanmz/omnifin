@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ThemePreference } from "../lib/theme";
 import { AppearanceSelector } from "./appearance-selector";
@@ -42,6 +42,10 @@ function ThemeProbe({ onPreference }: { onPreference?: (value: ThemePreference) 
 }
 
 describe("ThemeProvider", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("applies an explicit theme to the document", async () => {
     installColorScheme(false);
     render(
@@ -102,5 +106,51 @@ describe("ThemeProvider", () => {
     await user.keyboard("{ArrowRight}");
 
     expect(screen.getByRole("radio", { name: /light/i })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("adopts the signed-in account theme and persists subsequent changes", async () => {
+    installColorScheme(false);
+    const calls: Array<{ method?: string; url: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ method: init?.method, url });
+        if (url.endsWith("/api/auth/session")) {
+          return new Response(
+            JSON.stringify({
+              csrfToken: "csrf-account-000",
+              principal: { userId: "u1" },
+              theme: "dark",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/api/profile/appearance")) {
+          return new Response(JSON.stringify({ theme: "dark" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider initialPreference="light">
+        <AppearanceSelector />
+      </ThemeProvider>,
+    );
+
+    const dark = await screen.findByRole("radio", { name: /dark/i });
+    expect(dark).toHaveAttribute("aria-checked", "true");
+
+    const light = screen.getByRole("radio", { name: /light/i });
+    await user.click(light);
+    expect(light).toHaveAttribute("aria-checked", "true");
+    expect(
+      calls.some((call) => call.url.endsWith("/api/profile/appearance") && call.method === "PATCH"),
+    ).toBe(true);
+    expect(calls.filter((call) => call.url.endsWith("/api/profile/appearance")).length).toBe(1);
   });
 });

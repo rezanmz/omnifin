@@ -204,6 +204,13 @@
       "when": 1785890702829,
       "tag": "0028_library_removal_operations",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1786025457414,
+      "tag": "0029_theme_preferences",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ import {
   type ManualReleaseRoutesOptions,
 } from "./acquisitions/manual-release-routes.js";
 import { auditTrailRoutes, type AuditTrailRoutesOptions } from "./audit/audit-trail-routes.js";
+import { appearanceRoutes } from "./auth/appearance-routes.js";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
@@ -606,6 +607,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         : { dependencies: options.recoveryAccessDependencies },
     );
     await app.register(sessionRoutes);
+    await app.register(appearanceRoutes);
     await app.register(
       identityLinkRoutes,
       options.identityLinkDependencies === undefined

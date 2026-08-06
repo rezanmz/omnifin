@@ -230,6 +230,7 @@ export function TheaterPlayer({
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimerReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestedPositionReference = useRef(media.positionSeconds);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
@@ -519,6 +520,8 @@ export function TheaterPlayer({
         player = videojs(video, {
           autoplay: false,
           controls: false,
+          fill: true,
+          fluid: false,
           html5: {
             vhs: {
               limitRenditionByPlayerDimensions: true,
@@ -602,6 +605,7 @@ export function TheaterPlayer({
   useEffect(
     () => () => {
       replacementControllerReference.current?.abort();
+      if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
       const player = playerReference.current;
       playerReference.current = null;
       if (player && typeof player.dispose === "function") player.dispose();
@@ -724,10 +728,14 @@ export function TheaterPlayer({
   }
 
   async function toggleFullscreen() {
-    const dialog = dialogReference.current;
-    if (!dialog) return;
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await dialog.requestFullscreen?.();
+    const stage = stageReference.current;
+    if (!stage) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (typeof stage.requestFullscreen === "function") await stage.requestFullscreen();
+    } catch {
+      // Fullscreen can be rejected while a modal dialog is open; keep playback usable.
+    }
   }
 
   async function submitIssue(event: React.FormEvent<HTMLFormElement>) {
@@ -820,6 +828,24 @@ export function TheaterPlayer({
         <video
           aria-label={`${media.title} video`}
           className={styles.video}
+          onClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
+            clickTimerReference.current = setTimeout(() => {
+              clickTimerReference.current = null;
+              void togglePlayback();
+            }, 260);
+            revealControls();
+          }}
+          onDoubleClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) {
+              clearTimeout(clickTimerReference.current);
+              clickTimerReference.current = null;
+            }
+            void toggleFullscreen();
+            revealControls();
+          }}
           onCanPlay={(event) => {
             const restorePosition = restorePositionReference.current;
             if (restorePosition !== null && prepared) {
