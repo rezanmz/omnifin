@@ -403,6 +403,50 @@ export function TheaterPlayer({
     return resolved;
   }, []);
 
+  const setSubtitleTrack = useCallback(
+    (subtitleStreamIndex: number | null) => {
+      const active = prepared;
+      if (!active) return;
+      const track =
+        subtitleStreamIndex === null
+          ? null
+          : (active.session.subtitleTracks.find(
+              (candidate) => candidate.index === subtitleStreamIndex,
+            ) ?? null);
+      const clientToggleableTrack =
+        subtitleStreamIndex !== null
+          ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
+          : active.session.subtitleTracks.some(
+              (candidate) => candidate.subtitlePath !== undefined && subtitleKind(candidate),
+            );
+      const toggleable = clientToggleableTrack && selectSubtitleTrack(subtitleStreamIndex);
+      if (toggleable) {
+        const nextPreferences = { ...preferences, subtitleStreamIndex };
+        preferencesReference.current = nextPreferences;
+        subtitleSuppressedReference.current = subtitleStreamIndex === null;
+        setPreferences(nextPreferences);
+        setTransitionMessage(
+          subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+        );
+        return;
+      }
+      const nextPreferences = {
+        ...preferences,
+        quality:
+          subtitleStreamIndex !== null && preferences.quality === "original"
+            ? "auto"
+            : preferences.quality,
+        subtitleStreamIndex,
+      } satisfies PlaybackPreferences;
+      void replacePlayback(
+        nextPreferences,
+        absolutePosition(),
+        subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+      );
+    },
+    [absolutePosition, preferences, prepared, replacePlayback, selectSubtitleTrack],
+  );
+
   useEffect(() => {
     if (!restoreSubtitleFocusReference.current || subtitleWorkbenchOpen || !settingsOpen) return;
     subtitleTriggerReference.current?.focus();
@@ -773,21 +817,62 @@ export function TheaterPlayer({
       setSubtitleWorkbenchOpen(false);
       return;
     }
-    if (event.key === " " || event.key.toLowerCase() === "k") {
+    const key = event.key.toLowerCase();
+    if (event.key === " " || key === "k") {
       event.preventDefault();
       void togglePlayback();
-    } else if (event.key === "ArrowLeft") {
+    } else if (event.key === "ArrowLeft" || key === "j") {
       event.preventDefault();
       seekWithinSession(currentTime - 10);
-    } else if (event.key === "ArrowRight") {
+    } else if (event.key === "ArrowRight" || key === "l") {
       event.preventDefault();
       seekWithinSession(currentTime + 10);
-    } else if (event.key.toLowerCase() === "m") {
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) + 0.1)));
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) - 0.1)));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      seekWithinSession(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      seekWithinSession(duration);
+    } else if (/^[0-9]$/u.test(event.key)) {
+      event.preventDefault();
+      const fraction = event.key === "0" ? 1 : Number(event.key) / 9;
+      seekWithinSession(Math.round(duration * fraction));
+    } else if (key === "m") {
       event.preventDefault();
       toggleMuted();
-    } else if (event.key.toLowerCase() === "f") {
+    } else if (key === "f") {
       event.preventDefault();
       void toggleFullscreen();
+    } else if (key === "c") {
+      event.preventDefault();
+      const active = prepared;
+      if (active && active.session.subtitleTracks.length > 0) {
+        let subtitlesActive = !subtitleSuppressedReference.current;
+        if (subtitlesActive && preferences.subtitleStreamIndex === null) {
+          subtitlesActive = Array.from(subtitleTracksByIndexReference.current.values()).some(
+            (track) => track !== null && track.mode === "showing",
+          );
+        }
+        if (subtitlesActive) {
+          setSubtitleTrack(null);
+        } else {
+          const preferredIndex =
+            preferences.subtitleStreamIndex ??
+            active.session.subtitleTracks.find((track) => track.selected)?.index ??
+            active.session.subtitleTracks.find(
+              (track) => track.subtitlePath !== undefined && subtitleKind(track),
+            )?.index ??
+            active.session.subtitleTracks[0]?.index ??
+            null;
+          if (preferredIndex !== null) setSubtitleTrack(preferredIndex);
+        }
+      }
     }
     revealControls();
   }
@@ -936,7 +1021,9 @@ export function TheaterPlayer({
         </header>
 
         <p className="sr-only" id={descriptionId}>
-          Use Space or K to play and pause, arrow keys to seek, M to mute, and F for full screen.
+          Use Space or K to play and pause, J and L to jump back and forward, arrow keys to seek or
+          change volume, Home and End to jump to the start and end, number keys to seek by
+          percentage, M to mute, C to show or hide captions, and F for full screen.
         </p>
 
         {status === "preparing" && (
@@ -1156,43 +1243,7 @@ export function TheaterPlayer({
                       event.currentTarget.value === "off"
                         ? null
                         : Number(event.currentTarget.value);
-                    const track =
-                      nextIndex === null
-                        ? null
-                        : (prepared.session.subtitleTracks.find(
-                            (candidate) => candidate.index === nextIndex,
-                          ) ?? null);
-                    const clientToggleableTrack =
-                      nextIndex !== null
-                        ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
-                        : prepared.session.subtitleTracks.some(
-                            (candidate) =>
-                              candidate.subtitlePath !== undefined && subtitleKind(candidate),
-                          );
-                    const toggleable = clientToggleableTrack && selectSubtitleTrack(nextIndex);
-                    if (toggleable) {
-                      const nextPreferences = { ...preferences, subtitleStreamIndex: nextIndex };
-                      preferencesReference.current = nextPreferences;
-                      subtitleSuppressedReference.current = nextIndex === null;
-                      setPreferences(nextPreferences);
-                      setTransitionMessage(
-                        nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
-                      );
-                      return;
-                    }
-                    const nextPreferences = {
-                      ...preferences,
-                      quality:
-                        nextIndex !== null && preferences.quality === "original"
-                          ? "auto"
-                          : preferences.quality,
-                      subtitleStreamIndex: nextIndex,
-                    } satisfies PlaybackPreferences;
-                    void replacePlayback(
-                      nextPreferences,
-                      absolutePosition(),
-                      nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
-                    );
+                    setSubtitleTrack(nextIndex);
                   }}
                   value={preferences.subtitleStreamIndex ?? "off"}
                 >

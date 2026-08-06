@@ -303,6 +303,36 @@ describe("TheaterPlayer", () => {
     expect(video.muted).toBe(true);
   });
 
+  it("supports the standard player keys: volume, jump, edges, and percentage seek", async () => {
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const dialog = screen.getByRole("dialog", { name: media.title });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_200;
+    Object.defineProperty(video, "volume", { configurable: true, value: 0.5, writable: true });
+
+    fireEvent.keyDown(dialog, { key: "ArrowUp" });
+    expect(video.volume).toBeCloseTo(0.6);
+    fireEvent.keyDown(dialog, { key: "ArrowDown" });
+    expect(video.volume).toBeCloseTo(0.5);
+
+    fireEvent.keyDown(dialog, { key: "j" });
+    expect(video.currentTime).toBe(1_190);
+    fireEvent.keyDown(dialog, { key: "l" });
+    expect(video.currentTime).toBe(1_200);
+
+    fireEvent.keyDown(dialog, { key: "Home" });
+    expect(video.currentTime).toBe(0);
+    fireEvent.keyDown(dialog, { key: "End" });
+    expect(video.currentTime).toBe(7_200);
+
+    video.currentTime = 1_200;
+    fireEvent.keyDown(dialog, { key: "5" });
+    expect(video.currentTime).toBe(4_000);
+  });
+
   it("attaches the masked HLS manifest through video.js and surfaces a safe failure", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const hlsSession: PlaybackNegotiationResponse = {
@@ -655,6 +685,47 @@ describe("TheaterPlayer", () => {
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Subtitle track" }), "off");
     expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles captions with C and remembers the chosen track", async () => {
+    const user = userEvent.setup();
+    const captionedSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "direct",
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 5,
+          language: "eng",
+          selected: true,
+          title: "English",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/5`,
+        },
+      ],
+    };
+    const client = readyClient(captionedSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const dialog = screen.getByRole("dialog", { name: media.title });
+    const subtitleSelect = () => screen.getByRole("combobox", { name: "Subtitle track" });
+
+    fireEvent.keyDown(dialog, { key: "c" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(subtitleSelect()).toHaveValue("5");
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    fireEvent.keyDown(dialog, { key: "c" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(subtitleSelect()).toHaveValue("off");
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    fireEvent.keyDown(dialog, { key: "c" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(subtitleSelect()).toHaveValue("5");
   });
 
   it("submits a private playback issue with category, note, and current timestamp", async () => {
