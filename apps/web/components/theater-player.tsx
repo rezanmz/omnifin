@@ -1,6 +1,5 @@
 "use client";
 
-import "video.js/dist/video-js.css";
 import type { LibraryMovieMediaSource } from "@omnifin/contracts/library";
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import {
@@ -25,6 +24,11 @@ import {
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import {
+  createHlsPlayerHandle,
+  createNativeHlsPlayerHandle,
+  type PlayerHandle,
+} from "../lib/player-engine";
 import {
   browserPlaybackPath,
   browserPlaybackSubtitlePath,
@@ -69,15 +73,6 @@ export interface TheaterPlayerProperties {
 }
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
-
-interface PlayerHandle {
-  dispose(): void;
-  error(): { code?: number; message?: string } | null;
-  on(event: string, listener: (...args: unknown[]) => void): void;
-  one(event: string, listener: () => void): void;
-  play(): Promise<void>;
-  src(source: { src: string; type: string }): void;
-}
 
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
@@ -637,23 +632,24 @@ export function TheaterPlayer({
       }
       let player = playerReference.current;
       if (!player) {
-        const videojsModule = await import("video.js");
+        const hlsModule = await import("hls.js");
         if (cancelled) return;
-        const videojs = videojsModule.default;
-        player = videojs(video, {
-          autoplay: false,
-          controls: false,
-          fill: true,
-          fluid: false,
-          html5: {
-            vhs: {
-              limitRenditionByPlayerDimensions: true,
-              overrideNative: false,
-            },
-          },
-          liveui: false,
-          preload: "metadata",
-        }) as unknown as PlayerHandle;
+        const Hls = hlsModule.default;
+        if (Hls.isSupported()) {
+          player = createHlsPlayerHandle(video, Hls);
+        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          player = createNativeHlsPlayerHandle(video);
+        } else {
+          if (
+            !rollbackReplacement(
+              "That playback change is not supported here. The previous stream was restored.",
+            )
+          ) {
+            setStatus("unsupported");
+            setMessage("This browser cannot play the negotiated HLS stream.");
+          }
+          return;
+        }
         playerReference.current = player;
         player.on("error", () => {
           const currentError = player!.error();
@@ -661,7 +657,7 @@ export function TheaterPlayer({
             {
               code: currentError?.code,
               details: currentError?.message,
-              source: "video.js",
+              source: "hls.js",
             },
             "stopped",
           );
