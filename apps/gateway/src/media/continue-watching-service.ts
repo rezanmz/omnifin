@@ -3063,14 +3063,9 @@ export class ContinueWatchingService {
          )`,
       )
       .run(userId, userId, referenceId);
-    this.#database.sqlite
-      .prepare(
-        `update saved_catalog_items
-         set library_reference_id = null, library_reference_user_id = null,
-             last_resolved_at = null, updated_at = ?
-         where user_id = ? and library_reference_id = ?`,
-      )
-      .run(now, userId, referenceId);
+    // Invalidate the reference only while it is still owned by a saved catalog
+    // item (before the ownership link is cleared below), so removal of a title
+    // that is not saved does not break later same-target removal commits.
     this.#database.sqlite
       .prepare(
         `update media_references
@@ -3079,9 +3074,21 @@ export class ContinueWatchingService {
                else link_revision - 1
              end,
              updated_at = ?
-         where id = ? and user_id = ?`,
+         where id = ? and user_id = ?
+           and exists (
+             select 1 from saved_catalog_items
+             where user_id = ? and library_reference_id = media_references.id
+           )`,
       )
-      .run(now, referenceId, userId);
+      .run(now, referenceId, userId, userId);
+    this.#database.sqlite
+      .prepare(
+        `update saved_catalog_items
+         set library_reference_id = null, library_reference_user_id = null,
+             last_resolved_at = null, updated_at = ?
+         where user_id = ? and library_reference_id = ?`,
+      )
+      .run(now, userId, referenceId);
   }
 
   #recoverStaleLibraryRemovalOperation(
