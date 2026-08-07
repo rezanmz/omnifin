@@ -583,6 +583,26 @@ test("global search preserves the document position while focusing and typing", 
 
   const search = page.getByRole("combobox", { name: "Search media and commands" });
   await expect(search).toBeEnabled();
+
+  // WebKit can defer its history scroll restoration until after load; if the
+  // page snaps back to the top before the click, focusing the search box
+  // scrolls it into view at its natural offset (~152) and the assertions below
+  // flake. Re-assert the scroll until the sticky top-command-bar pins the box
+  // at the top of the viewport (sticky y ~20-30; natural y ~152).
+  await expect
+    .poll(
+      async () => {
+        const box = await search.boundingBox();
+        if (box === null) return Number.POSITIVE_INFINITY;
+        if (box.y >= 120) {
+          await page.evaluate((y) => window.scrollTo(0, y), initialScrollPosition);
+        }
+        return (await search.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
+      },
+      { timeout: 5_000 },
+    )
+    .toBeLessThan(120);
+
   const bounds = await search.boundingBox();
   expect(bounds).not.toBeNull();
   await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
