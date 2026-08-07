@@ -97,10 +97,12 @@ export const playbackNegotiationResponseSchema = z
       container: codecSchema,
       durationSeconds: z.int().positive().max(10_000_000),
       height: z.int().positive().max(16_384).nullable(),
+      streamBitrate: z.int().nonnegative().max(PLAYBACK_MAX_BITRATE).nullable(),
       videoCodec: codecSchema,
       width: z.int().positive().max(16_384).nullable(),
     }),
     mediaReferenceId: mediaReferenceIdSchema,
+    playMethod: z.enum(["direct_play", "direct_stream", "transcode"]),
     positionSeconds: z.int().nonnegative().max(10_000_000),
     sessionId: playbackSessionIdSchema,
     sourceReferenceId: playbackSourceReferenceIdSchema.nullable().optional(),
@@ -429,6 +431,7 @@ export const playbackNegotiationResponseJsonSchema = {
     "expiresAt",
     "media",
     "mediaReferenceId",
+    "playMethod",
     "positionSeconds",
     "sessionId",
     "streamPath",
@@ -466,6 +469,7 @@ export const playbackNegotiationResponseJsonSchema = {
         "container",
         "durationSeconds",
         "height",
+        "streamBitrate",
         "videoCodec",
         "width",
       ],
@@ -479,6 +483,9 @@ export const playbackNegotiationResponseJsonSchema = {
         height: {
           anyOf: [{ type: "integer", minimum: 1, maximum: 16_384 }, { type: "null" }],
         },
+        streamBitrate: {
+          anyOf: [{ type: "integer", minimum: 0, maximum: PLAYBACK_MAX_BITRATE }, { type: "null" }],
+        },
         videoCodec: nullableCodecJsonSchema,
         width: {
           anyOf: [{ type: "integer", minimum: 1, maximum: 16_384 }, { type: "null" }],
@@ -486,6 +493,7 @@ export const playbackNegotiationResponseJsonSchema = {
       },
     },
     mediaReferenceId: { type: "string", pattern: "^media_[A-Za-z0-9_-]{22}$" },
+    playMethod: { enum: ["direct_play", "direct_stream", "transcode"] },
     positionSeconds: { type: "integer", minimum: 0, maximum: 10_000_000 },
     sessionId: { type: "string", pattern: playbackSessionJsonPattern },
     sourceReferenceId: {

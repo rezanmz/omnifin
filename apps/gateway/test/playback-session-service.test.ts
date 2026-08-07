@@ -283,7 +283,9 @@ describe("PlaybackSessionService", () => {
       expect(playbackNegotiationResponseSchema.parse(response)).toEqual(response);
       expect(response).toMatchObject({
         delivery: "direct",
+        media: { streamBitrate: 8_640_000 },
         mediaReferenceId: reference,
+        playMethod: "direct_play",
         sessionId: `playback_${"p".repeat(22)}`,
         streamPath: `/v1/playback/playback_${"p".repeat(22)}/stream`,
       });
@@ -405,6 +407,7 @@ describe("PlaybackSessionService", () => {
 
       expect(response).toMatchObject({
         delivery: "hls",
+        playMethod: "transcode",
         streamPath: `/v1/playback/${response.sessionId}/master.m3u8`,
       });
       expect(capturedRequests[0]?.pathname).toBe(`/Items/${privateItemId}/PlaybackInfo`);

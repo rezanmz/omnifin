@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PLAYBACK_PREFERENCES,
+  PLAYBACK_MAX_BITRATE,
   playbackNegotiationRequestSchema,
+  playbackNegotiationResponseJsonSchema,
   playbackNegotiationResponseSchema,
   playbackContextResponseJsonSchema,
   playbackContextResponseSchema,
@@ -41,10 +43,12 @@ function response() {
       container: "m3u8",
       durationSeconds: 7_200,
       height: 1_080,
+      streamBitrate: null,
       videoCodec: "h264",
       width: 1_920,
     },
     mediaReferenceId,
+    playMethod: "transcode",
     positionSeconds: 1_200,
     sessionId,
     sourceReferenceId,
@@ -133,6 +137,52 @@ describe("playback contracts", () => {
         delivery: "direct",
       }).success,
     ).toBe(false);
+  });
+
+  it("carries the negotiated play method and stream bitrate", () => {
+    expect(
+      playbackNegotiationResponseSchema.parse({
+        ...response(),
+        playMethod: "direct_play",
+        media: { ...response().media, streamBitrate: 8_000_000 },
+      }),
+    ).toMatchObject({ playMethod: "direct_play", media: { streamBitrate: 8_000_000 } });
+    expect(
+      playbackNegotiationResponseSchema.safeParse({
+        ...response(),
+        playMethod: "direct",
+      }).success,
+    ).toBe(false);
+    expect(
+      playbackNegotiationResponseSchema.safeParse({
+        ...response(),
+        media: { ...response().media, streamBitrate: -1 },
+      }).success,
+    ).toBe(false);
+    const withoutPlayMethod: Record<string, unknown> = { ...response() };
+    delete withoutPlayMethod.playMethod;
+    expect(playbackNegotiationResponseSchema.safeParse(withoutPlayMethod).success).toBe(false);
+  });
+
+  it("mirrors the negotiation response fields in the strict JSON schema", () => {
+    expect(playbackNegotiationResponseJsonSchema).toMatchObject({
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        playMethod: { enum: ["direct_play", "direct_stream", "transcode"] },
+        media: {
+          required: expect.arrayContaining(["streamBitrate"]),
+          properties: {
+            streamBitrate: {
+              anyOf: [
+                { type: "integer", minimum: 0, maximum: PLAYBACK_MAX_BITRATE },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+      },
+    });
   });
 
   it("accepts masked subtitle paths bound to their own session and track", () => {

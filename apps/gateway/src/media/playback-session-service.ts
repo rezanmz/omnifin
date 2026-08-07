@@ -341,6 +341,16 @@ function publicState(state: string): PlaybackProgressResponse["state"] {
   throw new PlaybackSessionError("unavailable");
 }
 
+function publicPlayMethod(
+  playMethod: JellyfinPlaybackResult["playMethod"],
+): PlaybackNegotiationResponse["playMethod"] {
+  return playMethod === "DirectPlay"
+    ? "direct_play"
+    : playMethod === "DirectStream"
+      ? "direct_stream"
+      : "transcode";
+}
+
 function parseRange(value: string | undefined) {
   if (value === undefined) return `bytes=0-${DIRECT_RANGE_BYTES - 1}`;
   const match = /^bytes=(\d+)-(\d*)$/u.exec(value.trim());
@@ -510,8 +520,12 @@ export class PlaybackSessionService {
         audioTracks: result.audioTracks,
         delivery: result.delivery,
         expiresAt: new Date(session.expiresAt).toISOString(),
-        media: result.media,
+        media: {
+          ...result.media,
+          streamBitrate: result.media.bitrate,
+        },
         mediaReferenceId,
+        playMethod: publicPlayMethod(result.playMethod),
         positionSeconds: result.positionSeconds,
         sessionId: session.id,
         ...(request.sourceReferenceId === undefined
