@@ -7,12 +7,60 @@ export interface HlsLevelSummary {
   index: number;
 }
 
+/** A single manifest audio rendition as surfaced by the engine. */
+export interface HlsAudioTrackSummary {
+  channels?: string;
+  id: number;
+  lang?: string;
+  name: string;
+}
+
+/** The contract-side audio track shape the engine matcher consumes. */
+export interface AudioTrackMatchTarget {
+  language: string | null;
+  title: string | null;
+}
+
+function normalizedAudioMatchValue(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+/**
+ * Matches a negotiated Jellyfin audio track (contract side) against the
+ * hls.js manifest audio renditions. hls.js track ids are not Jellyfin stream
+ * indexes, so matching is by language and name: an exact language + name
+ * match wins, otherwise any rendition with the same language, otherwise a
+ * name-only match when the target has no language. Returns null when nothing
+ * matches (the caller must fall back to renegotiation).
+ */
+export function matchEngineAudioTrack(
+  target: AudioTrackMatchTarget,
+  tracks: HlsAudioTrackSummary[],
+): HlsAudioTrackSummary | null {
+  const language = normalizedAudioMatchValue(target.language);
+  const title = normalizedAudioMatchValue(target.title);
+  if (language !== "") {
+    const byLanguage = tracks.filter((track) => normalizedAudioMatchValue(track.lang) === language);
+    const nameMatch = byLanguage.find((track) => normalizedAudioMatchValue(track.name) === title);
+    if (nameMatch !== undefined) return nameMatch;
+    const languageMatch = byLanguage[0];
+    if (languageMatch !== undefined) return languageMatch;
+  }
+  if (title !== "") {
+    const titleMatch = tracks.find((track) => normalizedAudioMatchValue(track.name) === title);
+    if (titleMatch !== undefined) return titleMatch;
+  }
+  return null;
+}
+
 /**
  * Minimal engine seam the theater player drives. The component only relies on
  * these methods, so the engine behind the seam can be swapped without touching
  * the player's state machine or controls.
  */
 export interface PlayerHandle {
+  audioTrack(): number;
+  audioTracks(): HlsAudioTrackSummary[];
   currentLevel(): number;
   dispose(): void;
   error(): { code?: number; message?: string } | null;
@@ -20,6 +68,7 @@ export interface PlayerHandle {
   on(event: string, listener: (...args: unknown[]) => void): void;
   one(event: string, listener: () => void): void;
   play(): Promise<void>;
+  setAudioTrack(id: number): void;
   setAutoLevel(): void;
   setLevel(index: number): void;
   src(source: { src: string; type: string }): void;
@@ -121,6 +170,7 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
   let networkRecoveries = 0;
   let mediaRecoveries = 0;
   let capturedLevels: HlsLevelSummary[] = [];
+  let capturedAudioTracks: HlsAudioTrackSummary[] = [];
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (!data.fatal) return;
     if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
@@ -152,14 +202,32 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
       height: level.height,
       index,
     }));
+    capturedAudioTracks = (data.audioTracks ?? []).map((track) => ({
+      id: track.id,
+      name: track.name,
+      ...(track.lang === undefined ? {} : { lang: track.lang }),
+      ...(track.channels === undefined ? {} : { channels: track.channels }),
+    }));
     emitter.emit("levelchanged");
+    emitter.emit("audiotrackchanged");
   });
   hls.on(Hls.Events.LEVEL_SWITCHED, () => {
     // The current level is read live from the hls instance; this notification
     // keeps the component's level state in sync with hls.js's own tracking.
     emitter.emit("levelchanged");
   });
+  hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => {
+    // The current audio track is read live from the hls instance; this
+    // notification keeps the component's audio track state in sync.
+    emitter.emit("audiotrackchanged");
+  });
   return {
+    audioTrack() {
+      return hls.audioTrack;
+    },
+    audioTracks() {
+      return capturedAudioTracks;
+    },
     currentLevel() {
       return hls.currentLevel;
     },
@@ -177,6 +245,9 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
     play() {
       return video.play();
     },
+    setAudioTrack(id) {
+      hls.audioTrack = id;
+    },
     setAutoLevel() {
       hls.currentLevel = -1;
     },
@@ -189,7 +260,9 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
       networkRecoveries = 0;
       mediaRecoveries = 0;
       capturedLevels = [];
+      capturedAudioTracks = [];
       emitter.emit("levelchanged");
+      emitter.emit("audiotrackchanged");
       hls.loadSource(source.src);
       if (!hls.media) hls.attachMedia(video);
       emitter.emit("ready");
@@ -213,6 +286,15 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
   };
   video.addEventListener("error", onVideoError);
   return {
+    audioTrack() {
+      // Native HLS exposes no audio track introspection; Safari handles its
+      // own audio switching via the media element, so the fast path never
+      // fires on the native path.
+      return -1;
+    },
+    audioTracks() {
+      return [];
+    },
     currentLevel() {
       // Native HLS exposes no level introspection; the UI must treat the
       // stream as a single auto rendition.
@@ -233,6 +315,9 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
     one: emitter.one,
     play() {
       return video.play();
+    },
+    setAudioTrack(_id: number) {
+      // No-op: native HLS has no client-side audio track selection.
     },
     setAutoLevel() {
       // No-op: native HLS has no client-side rendition selection.

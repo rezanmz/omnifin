@@ -8,8 +8,11 @@ import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
 const hlsHarness = vi.hoisted(() => ({
+  audioSwitchApplies: true,
+  audioTrackSelections: [] as number[],
   instances: [] as Array<{
     attachMedia: ReturnType<typeof vi.fn>;
+    audioTrack: number;
     currentLevel: number;
     destroy: ReturnType<typeof vi.fn>;
     handlers: Map<string, (event: string, data: unknown) => void>;
@@ -28,6 +31,7 @@ vi.mock("hls.js", () => {
       NETWORK_ERROR: "networkError",
     };
     static readonly Events = {
+      AUDIO_TRACK_SWITCHED: "audioTrackSwitched",
       ERROR: "error",
       LEVEL_SWITCHED: "levelSwitched",
       MANIFEST_PARSED: "manifestParsed",
@@ -40,10 +44,20 @@ vi.mock("hls.js", () => {
     readonly loadSource = vi.fn();
     readonly recoverMediaError = vi.fn();
     readonly startLoad = vi.fn();
+    #audioTrack = -1;
     #currentLevel = -1;
 
     constructor() {
       hlsHarness.instances.push(this);
+    }
+
+    get audioTrack() {
+      return this.#audioTrack;
+    }
+
+    set audioTrack(value: number) {
+      hlsHarness.audioTrackSelections.push(value);
+      if (hlsHarness.audioSwitchApplies) this.#audioTrack = value;
     }
 
     get currentLevel() {
@@ -153,6 +167,8 @@ function readyClient(
 
 describe("TheaterPlayer", () => {
   beforeEach(() => {
+    hlsHarness.audioSwitchApplies = true;
+    hlsHarness.audioTrackSelections.length = 0;
     hlsHarness.instances.length = 0;
     hlsHarness.levelSelections.length = 0;
     hlsHarness.supported = true;
@@ -1181,6 +1197,168 @@ describe("TheaterPlayer", () => {
 
     expect(screen.queryByRole("combobox", { name: "Stream quality" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Playback quality" })).toBeVisible();
+  });
+
+  it("switches audio client-side when the manifest exposes a matching rendition", async () => {
+    const user = userEvent.setup();
+    const audioSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ],
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(audioSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    hlsHarness.instances[0]?.handlers.get("manifestParsed")?.("manifestParsed", {
+      audioTracks: [
+        { id: 7, lang: "eng", name: "English 5.1" },
+        { id: 5, lang: "spa", name: "Español" },
+      ],
+    });
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    const audio = screen.getByRole("combobox", { name: "Audio track" });
+    expect(audio).toHaveValue("1");
+    await user.selectOptions(audio, "3");
+    expect(hlsHarness.audioTrackSelections).toEqual([5]);
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+    expect(audio).toHaveValue("3");
+    expect(screen.getByText("Switching audio track…")).toBeVisible();
+  });
+
+  it("falls back to renegotiation when the manifest has no matching audio renditions", async () => {
+    const user = userEvent.setup();
+    const audioSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ],
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(audioSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    hlsHarness.instances[0]?.handlers.get("manifestParsed")?.("manifestParsed", {
+      audioTracks: [],
+    });
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Audio track" }), "3");
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      expect.any(Number),
+      expect.any(AbortSignal),
+      expect.objectContaining({ audioStreamIndex: 3 }),
+    );
+    expect(hlsHarness.audioTrackSelections).toEqual([]);
+  });
+
+  it("re-negotiates when the client-side audio switch stalls", async () => {
+    const user = userEvent.setup();
+    const audioSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ],
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(audioSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    hlsHarness.instances[0]?.handlers.get("manifestParsed")?.("manifestParsed", {
+      audioTracks: [
+        { id: 7, lang: "eng", name: "English 5.1" },
+        { id: 5, lang: "spa", name: "Español" },
+      ],
+    });
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    hlsHarness.audioSwitchApplies = false;
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByRole("combobox", { name: "Audio track" }), {
+        target: { value: "3" },
+      });
+      expect(hlsHarness.audioTrackSelections).toEqual([5]);
+      expect(client.prepare).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(client.prepare).toHaveBeenCalledTimes(2);
+      expect(client.prepare).toHaveBeenLastCalledWith(
+        media.id,
+        expect.any(Number),
+        expect.any(AbortSignal),
+        expect.objectContaining({ audioStreamIndex: 3 }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces interrupted progress sync without interrupting playback", async () => {
