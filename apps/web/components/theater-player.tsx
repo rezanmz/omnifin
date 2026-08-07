@@ -1,7 +1,11 @@
 "use client";
 
 import type { LibraryMovieMediaSource } from "@omnifin/contracts/library";
-import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
+import {
+  DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackNegotiationResponse,
+  type PlaybackPreferences as AccountPlaybackPreferences,
+} from "@omnifin/contracts/playback";
 import {
   Bug,
   Captions,
@@ -32,6 +36,11 @@ import {
   type HlsLevelSummary,
   type PlayerHandle,
 } from "../lib/player-engine";
+import { resolvePlaybackPreferences } from "../lib/playback-preference-resolution";
+import {
+  playbackPreferenceClient,
+  type PlaybackPreferenceClient,
+} from "../lib/playback-preferences";
 import { resolveSubtitleTier } from "../lib/player-subtitles";
 import {
   browserPlaybackPath,
@@ -72,6 +81,7 @@ export interface TheaterPlayerProperties {
   client?: PlaybackClient;
   media: TheaterMedia;
   onClose: () => void;
+  preferenceClient?: PlaybackPreferenceClient;
   startWhenReady?: boolean;
   subtitleClient?: SubtitleClient;
 }
@@ -106,6 +116,21 @@ const QUALITY_PRESETS = {
   QualityPreset,
   { bitrate: number; label: string; mode: "auto" | "direct" | "transcode" }
 >;
+
+function qualityPresetForBitrate(bitrateCap: number): QualityPreset {
+  const entries = Object.entries(QUALITY_PRESETS) as Array<
+    [QualityPreset, (typeof QUALITY_PRESETS)[QualityPreset]]
+  >;
+  const affordable = entries.filter(([, option]) => option.bitrate <= bitrateCap);
+  if (affordable.length === 0) {
+    // Below every preset's bitrate: clamp to the smallest preset.
+    return entries.reduce((smallest, entry) =>
+      entry[1].bitrate < smallest[1].bitrate ? entry : smallest,
+    )[0];
+  }
+  // The largest preset whose bitrate fits within the cap.
+  return affordable.reduce((best, entry) => (entry[1].bitrate > best[1].bitrate ? entry : best))[0];
+}
 
 const ISSUE_CATEGORIES = [
   { label: "Buffering", value: "buffering" },
@@ -203,6 +228,7 @@ export function TheaterPlayer({
   client = playbackClient,
   media,
   onClose,
+  preferenceClient = playbackPreferenceClient,
   startWhenReady = false,
   subtitleClient,
 }: TheaterPlayerProperties) {
@@ -239,6 +265,7 @@ export function TheaterPlayer({
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
   const subtitleTracksByIndexReference = useRef(new Map<number, TextTrack | null>());
   const subtitleSuppressedReference = useRef(false);
+  const appliedInitialPreferencesReference = useRef(false);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
@@ -247,6 +274,10 @@ export function TheaterPlayer({
     quality: "original",
     subtitleStreamIndex: null,
   });
+  const [accountPreferences, setAccountPreferences] = useState<{
+    networkClass: "home" | "remote";
+    preferences: AccountPlaybackPreferences;
+  } | null>(null);
   const [sourceReferenceId, setSourceReferenceId] = useState(media.sourceReferenceId ?? null);
   const [prepared, setPrepared] = useState<PreparedPlayback | null>(null);
   const [status, setStatus] = useState<PlayerStatus>("preparing");
@@ -567,6 +598,66 @@ export function TheaterPlayer({
       });
     return () => controller.abort();
   }, [attempt, client, media.id, media.sourceReferenceId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void preferenceClient
+      .load(controller.signal)
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setAccountPreferences({
+          networkClass: response.networkClass,
+          preferences: response.preferences,
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setAccountPreferences({
+          networkClass: "remote",
+          preferences: DEFAULT_PLAYBACK_PREFERENCES,
+        });
+        setTransitionMessage(
+          "Account defaults were unavailable; conservative playback defaults are in use.",
+        );
+      });
+    return () => controller.abort();
+  }, [preferenceClient]);
+
+  useEffect(() => {
+    if (appliedInitialPreferencesReference.current) return;
+    if (accountPreferences === null) return;
+    const session = preparedReference.current?.session;
+    if (session === undefined) return;
+    appliedInitialPreferencesReference.current = true;
+    const resolved = resolvePlaybackPreferences(
+      accountPreferences.preferences,
+      accountPreferences.networkClass,
+      { audioTracks: session.audioTracks, subtitleTracks: session.subtitleTracks },
+    );
+    const nextPreferences = {
+      audioStreamIndex: resolved.audioStreamIndex,
+      quality: qualityPresetForBitrate(resolved.maxStreamingBitrate),
+      subtitleStreamIndex: resolved.subtitleStreamIndex,
+    } satisfies PlaybackPreferences;
+    const unchanged =
+      nextPreferences.audioStreamIndex === preferencesReference.current.audioStreamIndex &&
+      nextPreferences.quality === preferencesReference.current.quality &&
+      nextPreferences.subtitleStreamIndex === preferencesReference.current.subtitleStreamIndex;
+    preferencesReference.current = nextPreferences;
+    setPreferences(nextPreferences);
+    // The initial negotiation already ran with conservative defaults. When the
+    // account defaults actually differ and playback has not started (and no
+    // autoplay is pending), re-negotiate once so the account defaults shape
+    // the initial session; active or pending playback is never disrupted.
+    if (
+      !unchanged &&
+      !playing &&
+      !startWhenReadyReference.current &&
+      preparedReference.current !== null
+    ) {
+      void replacePlayback(nextPreferences, absolutePosition(), "Applying your playback defaults…");
+    }
+  }, [accountPreferences, absolutePosition, playing, prepared, replacePlayback]);
 
   useEffect(() => {
     if (!prepared) return;
