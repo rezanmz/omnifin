@@ -21,6 +21,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
@@ -182,10 +183,6 @@ async function defaultRevokeAllSessions(csrfToken: string) {
   }
 }
 
-function defaultSignedOutNavigation() {
-  window.location.assign("/login");
-}
-
 function healthLabel(health: ServiceIdentityLink["health"]) {
   return {
     linked: "Connected",
@@ -210,10 +207,15 @@ export function AccountSecurityPanel({
   initialConfirmation = null,
   initialOutcome,
   loadAccount = defaultLoadAccount,
-  onSignedOut = defaultSignedOutNavigation,
+  onSignedOut,
   revokeAllSessions = defaultRevokeAllSessions,
   revokeIdentity = defaultRevokeIdentity,
 }: AccountSecurityPanelProperties) {
+  const router = useRouter();
+  const handleSignedOut = () => {
+    if (onSignedOut === undefined) void router.push("/login");
+    else onSignedOut();
+  };
   const [outcome, setOutcome] = useState<AccountSecurityLoadOutcome | null>(initialOutcome ?? null);
   const [operation, setOperation] = useState<"idle" | "logout" | "provider" | "revoke">("idle");
   const [confirmation, setConfirmation] = useState<"logout" | "provider" | "revoke" | null>(
@@ -256,7 +258,7 @@ export function AccountSecurityPanel({
     setOperation("idle");
     setConfirmation(null);
     if (result.status === "session_changed") {
-      onSignedOut();
+      handleSignedOut();
       return;
     }
     if (result.status === "failed") {
@@ -266,7 +268,7 @@ export function AccountSecurityPanel({
       return;
     }
     if (result.principal === null) {
-      onSignedOut();
+      handleSignedOut();
       return;
     }
     setOutcome({
@@ -283,7 +285,7 @@ export function AccountSecurityPanel({
     setOperation("idle");
     setConfirmation(null);
     if (succeeded) {
-      onSignedOut();
+      handleSignedOut();
       return;
     }
     setOperationError("Sessions could not be revoked. You remain signed in on this browser.");
