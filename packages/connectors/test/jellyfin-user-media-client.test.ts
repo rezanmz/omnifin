@@ -1465,6 +1465,394 @@ describe("JellyfinUserMediaClient", () => {
     }
   });
 
+  it("reads trusted playback markers and the canonical next episode", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-1",
+      IndexNumber: 2,
+      Name: "Aperture",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const nextEpisode = {
+      ...currentEpisode,
+      Id: "episode-upstream-2",
+      ImageTags: { Primary: "next-still" },
+      IndexNumber: 3,
+      Name: "The Long Meridian",
+      UserData: { Played: false, PlaybackPositionTicks: 0 },
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({
+        Items: [
+          {
+            EndTicks: 860_000_000,
+            Id: "segment-intro-1",
+            ItemId: "episode-upstream-1",
+            StartTicks: 40_000_000,
+            Type: "Intro",
+          },
+          {
+            EndTicks: 2_690_000_000,
+            Id: "segment-outro-1",
+            ItemId: "episode-upstream-1",
+            StartTicks: 2_610_000_000,
+            Type: "Outro",
+          },
+        ],
+        StartIndex: 0,
+        TotalRecordCount: 2,
+      }),
+      jsonResponse({ Items: [nextEpisode], StartIndex: 1, TotalRecordCount: 2 }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toEqual({
+      current: {
+        durationSeconds: 270,
+        episodeNumber: 2,
+        seasonNumber: 1,
+        seriesId: "series-upstream-1",
+      },
+      nextEpisode: {
+        artwork: {
+          accentColor: null,
+          backdrop: null,
+          blurHash: null,
+          poster: { itemId: "episode-upstream-2", type: "Primary" },
+        },
+        durationSeconds: 270,
+        externalId: "episode-upstream-2",
+        episodeNumber: 3,
+        seasonNumber: 1,
+        seriesTitle: "Northern Lights",
+        title: "The Long Meridian",
+        year: null,
+      },
+      nextState: "ready",
+      segments: [
+        { endSeconds: 86, kind: "intro", startSeconds: 4 },
+        { endSeconds: 269, kind: "credits", startSeconds: 261 },
+      ],
+      segmentsState: "ready",
+    });
+    expect(requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/Items/episode-upstream-1",
+      "/base/MediaSegments/episode-upstream-1",
+      "/base/Shows/series-upstream-1/Episodes",
+    ]);
+    expect(Object.fromEntries(requests[1]!.url.searchParams)).toEqual({
+      includeSegmentTypes: "Intro,Outro",
+    });
+    expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
+      EnableUserData: "true",
+      IsUnaired: "false",
+      Limit: "8",
+      SortBy: "IndexNumber",
+      StartIndex: "1",
+      StartItemId: "episode-upstream-1",
+      UserId: "paired-user-id",
+    });
+    expect(requests[2]!.url.searchParams.has("IsMissing")).toBe(false);
+    expect(requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
+  });
+
+  it("keeps next-episode context when Jellyfin markers are unavailable", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-1",
+      IndexNumber: 2,
+      Name: "Aperture",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ message: "private marker failure" }, { status: 503 }),
+      jsonResponse({
+        Items: [
+          {
+            ...currentEpisode,
+            Id: "episode-upstream-2",
+            IndexNumber: 3,
+            Name: "The Long Meridian",
+          },
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      nextEpisode: { externalId: "episode-upstream-2" },
+      nextState: "ready",
+      segments: [],
+      segmentsState: "unavailable",
+    });
+  });
+
+  it("treats an incoherent cross-series next item as unavailable instead of ending the series", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({
+        Items: [
+          {
+            ...currentEpisode,
+            Id: "foreign-episode-upstream-1",
+            IndexNumber: 1,
+            ParentIndexNumber: 2,
+            SeriesId: "different-series-upstream-1",
+          },
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({ nextEpisode: null, nextState: "unavailable" });
+  });
+
+  it("accepts Jellyfin's canonical season-boundary result without inferring filenames", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      IndexNumberEnd: 11,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 5_400_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({
+        Items: [
+          {
+            ...currentEpisode,
+            Id: "episode-upstream-12",
+            IndexNumber: 1,
+            Name: "After the Solstice",
+            ParentIndexNumber: 2,
+            RunTimeTicks: 2_700_000_000,
+          },
+        ],
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      nextEpisode: {
+        episodeNumber: 1,
+        externalId: "episode-upstream-12",
+        seasonNumber: 2,
+        title: "After the Solstice",
+      },
+      nextState: "ready",
+    });
+  });
+
+  it("skips an unexpected special when a regular canonical successor is available", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({
+        Items: [
+          {
+            ...currentEpisode,
+            Id: "special-upstream-1",
+            IndexNumber: 1,
+            Name: "A Winter Signal",
+            ParentIndexNumber: 0,
+          },
+          {
+            ...currentEpisode,
+            Id: "episode-upstream-11",
+            IndexNumber: 1,
+            Name: "After the Solstice",
+            ParentIndexNumber: 2,
+          },
+        ],
+        StartIndex: 1,
+        TotalRecordCount: 3,
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      nextEpisode: {
+        externalId: "episode-upstream-11",
+        seasonNumber: 2,
+        title: "After the Solstice",
+      },
+      nextState: "ready",
+    });
+    expect(requests[2]!.url.searchParams.get("Limit")).toBe("8");
+  });
+
+  it("fails closed when the bounded look-ahead cannot get past specials", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({
+        Items: Array.from({ length: 8 }, (_, index) => ({
+          ...currentEpisode,
+          Id: `special-upstream-${index + 1}`,
+          IndexNumber: index + 1,
+          Name: `Special ${index + 1}`,
+          ParentIndexNumber: 0,
+        })),
+        StartIndex: 1,
+        TotalRecordCount: 20,
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({ nextEpisode: null, nextState: "unavailable" });
+  });
+
+  it("returns a definitive end state when Jellyfin has no later available episode", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({ Items: [], StartIndex: 1, TotalRecordCount: 1 }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({ nextEpisode: null, nextState: "end" });
+  });
+
+  it("reports a missing aired canonical episode as requestable without making it playable", async () => {
+    const currentEpisode = {
+      Id: "episode-upstream-10",
+      IndexNumber: 10,
+      Name: "The Crossing",
+      ParentIndexNumber: 1,
+      RunTimeTicks: 2_700_000_000,
+      SeriesId: "series-upstream-1",
+      SeriesName: "Northern Lights",
+      Type: "Episode",
+    };
+    const { client, requests } = clientWithResponses([
+      jsonResponse(currentEpisode),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+      jsonResponse({
+        Items: [
+          {
+            Id: "episode-upstream-11",
+            IndexNumber: 11,
+            LocationType: "Virtual",
+            Name: "Event Horizon",
+            ParentIndexNumber: 1,
+            PremiereDate: "2026-07-01T00:00:00.000Z",
+            SeriesId: "series-upstream-1",
+            SeriesName: "Northern Lights",
+            Type: "Episode",
+          },
+        ],
+        StartIndex: 1,
+        TotalRecordCount: 2,
+      }),
+    ]);
+
+    await expect(
+      client.readPlaybackContext({
+        itemId: "episode-upstream-10",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toMatchObject({
+      nextEpisode: {
+        durationSeconds: null,
+        episodeNumber: 11,
+        externalId: "episode-upstream-11",
+        seasonNumber: 1,
+        seriesTitle: "Northern Lights",
+        title: "Event Horizon",
+      },
+      nextState: "requestable",
+    });
+    expect(Object.fromEntries(requests[2]!.url.searchParams)).toMatchObject({
+      IsUnaired: "false",
+      Limit: "8",
+      StartIndex: "1",
+      StartItemId: "episode-upstream-10",
+    });
+    expect(requests[2]!.url.searchParams.has("IsMissing")).toBe(false);
+  });
+
   it("marks paired-user media watched and reconciles the authoritative Jellyfin state", async () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({ Played: true, PlaybackPositionTicks: 0 }),
