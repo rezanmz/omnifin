@@ -1,4 +1,7 @@
-import type { JellyfinPlaybackResult } from "@omnifin/connectors/media/jellyfin-playback-client";
+import type {
+  JellyfinPlaybackBytesResult,
+  JellyfinPlaybackResult,
+} from "@omnifin/connectors/media/jellyfin-playback-client";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { playbackIssueSchema } from "@omnifin/contracts/issues";
 import {
@@ -95,6 +98,9 @@ async function harness(
   const config = testConfig();
   const negotiate = vi.fn(async () => playbackResult());
   const readPlaybackTarget = vi.fn();
+  const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
+    throw new Error("Subtitle bytes were not requested by this route test.");
+  });
   const reportPlaybackEvent = vi.fn(async () => undefined);
   const streamPlaybackTarget = vi.fn();
   const resolvePlaybackTarget = vi.fn(
@@ -107,6 +113,7 @@ async function harness(
   const createPlaybackClient = vi.fn((_input: { maxResponseBytes?: number }) => ({
     negotiate,
     readPlaybackTarget,
+    readSubtitleStream,
     reportPlaybackEvent,
     resolvePlaybackTarget,
     streamPlaybackTarget,
@@ -250,6 +257,7 @@ async function harness(
     headers,
     negotiate,
     readPlaybackTarget,
+    readSubtitleStream,
     referenceId,
     reportPlaybackEvent,
     resolvePlaybackTarget,
@@ -1418,6 +1426,68 @@ describe("playback routes", () => {
       expect(unsatisfied.rawPayload).toHaveLength(0);
       expect(unsatisfied.body).not.toContain("private upstream error");
       expect(unsatisfied.headers["content-range"]).toBe("bytes */72000000");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("serves masked WebVTT subtitles only for negotiated text tracks", async () => {
+    const { app, headers, negotiate, readSubtitleStream, referenceId } = await harness();
+    negotiate.mockResolvedValueOnce({
+      ...playbackResult(),
+      playMethod: "DirectPlay",
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 5,
+          language: "eng",
+          selected: false,
+          title: "English",
+        },
+      ],
+      upstreamTarget: { path: `Videos/${privateItemId}/stream`, query: "static=true" },
+    });
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      expect(playback.subtitleTracks[0]?.subtitlePath).toBe(
+        `/v1/playback/${playback.sessionId}/subtitle/5`,
+      );
+      const vtt = new TextEncoder().encode("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello");
+      readSubtitleStream.mockResolvedValueOnce({
+        body: vtt,
+        headers: new Headers({ "content-type": "text/vtt" }),
+        status: 200,
+      });
+
+      const subtitle = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/subtitle/5`,
+      });
+      expect(subtitle.statusCode).toBe(200);
+      expect(subtitle.rawPayload).toEqual(Buffer.from(vtt));
+      expect(subtitle.headers["content-type"]).toContain("text/vtt");
+      expect(readSubtitleStream).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: privateItemId, subtitleIndex: 5 }),
+      );
+
+      const denied = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playback.sessionId}/subtitle/999`,
+      });
+      expect(denied.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(denied.json()).error.code).toBe("playback_session_not_found");
+      expect(readSubtitleStream).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }

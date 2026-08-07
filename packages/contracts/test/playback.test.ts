@@ -110,6 +110,44 @@ describe("playback contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts masked subtitle paths bound to their own session and track", () => {
+    const withPath = {
+      ...response(),
+      subtitleTracks: [
+        {
+          ...response().subtitleTracks[0],
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/4`,
+        },
+      ],
+    } as const;
+    expect(playbackNegotiationResponseSchema.parse(withPath)).toEqual(withPath);
+  });
+
+  it("rejects subtitle paths from another session or another track", () => {
+    expect(
+      playbackNegotiationResponseSchema.safeParse({
+        ...response(),
+        subtitleTracks: [
+          {
+            ...response().subtitleTracks[0],
+            subtitlePath: "/v1/playback/playback_CCCCCCCCCCCCCCCCCCCCCC/subtitle/4",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      playbackNegotiationResponseSchema.safeParse({
+        ...response(),
+        subtitleTracks: [
+          {
+            ...response().subtitleTracks[0],
+            subtitlePath: `/v1/playback/${sessionId}/subtitle/5`,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires coherent playback position and unique track selections", () => {
     expect(
       playbackNegotiationResponseSchema.safeParse({

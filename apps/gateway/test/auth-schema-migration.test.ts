@@ -1105,7 +1105,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe("0029_saved_lists.sql");
+      expect(migrationFilenames.at(-1)).toBe("0030_saved_lists.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
@@ -1147,6 +1147,13 @@ describe("authentication schema invariants", () => {
           }[]
         ).map(({ name }) => name),
       ).toContain("public_ui_url");
+      expect(
+        (
+          database.sqlite.pragma("table_info(users)") as {
+            name: string;
+          }[]
+        ).map(({ name }) => name),
+      ).toContain("theme_preference");
       expect(
         database.sqlite
           .prepare(

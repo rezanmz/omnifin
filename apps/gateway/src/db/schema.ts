@@ -35,6 +35,9 @@ export const users = sqliteTable(
     status: text("status", { enum: ["active", "pending_link", "disabled"] })
       .notNull()
       .default("pending_link"),
+    themePreference: text("theme_preference", {
+      enum: ["system", "light", "dark"],
+    }),
     ...timestamps,
   },
   (table) => [
@@ -45,6 +48,10 @@ export const users = sqliteTable(
       sql`${table.roleSource} in ('default', 'oidc_mapping', 'manual', 'recovery_bootstrap')`,
     ),
     check("users_status_check", sql`${table.status} in ('active', 'pending_link', 'disabled')`),
+    check(
+      "users_theme_preference_check",
+      sql`${table.themePreference} is null or ${table.themePreference} in ('system', 'light', 'dark')`,
+    ),
   ],
 );
 

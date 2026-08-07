@@ -1,6 +1,7 @@
 "use client";
 
-import type HlsType from "hls.js";
+import "video.js/dist/video-js.css";
+import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import {
   Bug,
   Captions,
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   browserPlaybackPath,
+  browserPlaybackSubtitlePath,
   playbackClient,
   type PlaybackClient,
   type PlaybackPreparationOptions,
@@ -63,18 +65,26 @@ export interface TheaterPlayerProperties {
 }
 
 type PlayerStatus = "error" | "preparing" | "ready" | "unsupported";
+
+interface PlayerHandle {
+  dispose(): void;
+  error(): { code?: number; message?: string } | null;
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  one(event: string, listener: () => void): void;
+  play(): Promise<void>;
+  src(source: { src: string; type: string }): void;
+}
+
 type ReportedState = "negotiated" | "paused" | "playing" | "stopped";
 type QualityPreset = "auto" | "balanced" | "data-saver" | "high" | "original";
 type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "video_quality";
 type IssueStatus = "error" | "idle" | "submitting" | "success";
-type HlsFailureRecovery = "media_recovery" | "network_retry" | "stopped";
-type HlsFailureStage = "engine" | "fragment" | "manifest" | "media" | "playlist";
+type MediaFailureRecovery = "media_recovery" | "network_retry" | "stopped";
 
-interface HlsFailureData {
+interface MediaFailureData {
+  code?: unknown;
   details?: unknown;
-  fatal?: unknown;
-  response?: { code?: unknown } | null;
-  type?: unknown;
+  source?: unknown;
 }
 
 interface PlaybackPreferences {
@@ -103,55 +113,44 @@ const ISSUE_CATEGORIES = [
   { label: "Other", value: "other" },
 ] as const satisfies readonly { label: string; value: IssueCategory }[];
 
-const SAFE_HLS_DIAGNOSTIC_VALUE = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
+const SAFE_MEDIA_DIAGNOSTIC_VALUE = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
 
-function safeHlsDiagnosticValue(value: unknown) {
-  return typeof value === "string" && SAFE_HLS_DIAGNOSTIC_VALUE.test(value) ? value : "unknown";
+function safeMediaDiagnosticValue(value: unknown) {
+  return typeof value === "string" && SAFE_MEDIA_DIAGNOSTIC_VALUE.test(value) ? value : "unknown";
 }
 
-function hlsFailureStage(details: string): HlsFailureStage {
-  const normalized = details.toLowerCase();
-  if (normalized.includes("manifest")) return "manifest";
-  if (normalized.includes("level") || normalized.includes("track")) return "playlist";
-  if (normalized.includes("frag") || normalized.includes("key")) return "fragment";
-  if (normalized.includes("buffer") || normalized.includes("media") || normalized.includes("mux")) {
-    return "media";
-  }
-  return "engine";
-}
-
-function recordHlsFailure(data: HlsFailureData, recovery: HlsFailureRecovery) {
-  const details = safeHlsDiagnosticValue(data.details);
-  const responseCode = data.response?.code;
-  const httpStatus =
-    typeof responseCode === "number" &&
-    Number.isInteger(responseCode) &&
-    responseCode >= 100 &&
-    responseCode <= 599
-      ? responseCode
-      : null;
+function recordMediaFailure(data: MediaFailureData, recovery: MediaFailureRecovery) {
+  const details = safeMediaDiagnosticValue(data.details);
+  const code = safeMediaDiagnosticValue(data.code);
   console.warn(
     JSON.stringify({
+      code,
       details,
-      event: "hls_playback_failure",
-      fatal: data.fatal === true,
-      httpStatus,
+      event: "media_playback_failure",
       recovery,
-      stage: hlsFailureStage(details),
-      type: safeHlsDiagnosticValue(data.type),
+      source: safeMediaDiagnosticValue(data.source),
     }),
   );
 }
 
-function preparationOptions(preferences: PlaybackPreferences): PlaybackPreparationOptions {
+function preparationOptions(
+  preferences: PlaybackPreferences,
+  session?: PlaybackNegotiationResponse | null,
+): PlaybackPreparationOptions {
   const quality = QUALITY_PRESETS[preferences.quality];
-  const customTracks =
-    preferences.audioStreamIndex !== null || preferences.subtitleStreamIndex !== null;
+  const customTracks = preferences.audioStreamIndex !== null;
+  const selectedSubtitle = session?.subtitleTracks.find(
+    (track) => track.index === preferences.subtitleStreamIndex,
+  );
+  const clientRenderedSubtitle =
+    selectedSubtitle !== undefined &&
+    selectedSubtitle.subtitlePath !== undefined &&
+    subtitleKind(selectedSubtitle) !== undefined;
   return {
     audioStreamIndex: preferences.audioStreamIndex,
     maxStreamingBitrate: quality.bitrate,
     mode: customTracks ? "transcode" : quality.mode,
-    subtitleStreamIndex: preferences.subtitleStreamIndex,
+    subtitleStreamIndex: clientRenderedSubtitle ? null : preferences.subtitleStreamIndex,
   };
 }
 
@@ -180,6 +179,18 @@ function formatTime(seconds: number) {
     : `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
+function subtitleKind(track: { codec: string | null; delivery: "external" | "hls" | "video" }) {
+  if (track.delivery === "hls") return undefined;
+  const codec = track.codec?.toLowerCase();
+  if (
+    codec &&
+    ["ass", "mov_text", "sami", "smi", "srt", "ssa", "subrip", "vtt", "webvtt"].includes(codec)
+  ) {
+    return "subtitles" as const;
+  }
+  return undefined;
+}
+
 function isInteractiveTarget(target: EventTarget | null) {
   return (
     target instanceof HTMLElement && Boolean(target.closest("button, input, select, textarea"))
@@ -194,8 +205,9 @@ export function TheaterPlayer({
   subtitleClient,
 }: TheaterPlayerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
+  const stageReference = useRef<HTMLDivElement>(null);
   const videoReference = useRef<HTMLVideoElement>(null);
-  const hlsReference = useRef<HlsType | null>(null);
+  const playerReference = useRef<PlayerHandle | null>(null);
   const reportQueueReference = useRef(Promise.resolve());
   const reportedStateReference = useRef<ReportedState>("negotiated");
   const preparedReference = useRef<PreparedPlayback | null>(null);
@@ -218,9 +230,12 @@ export function TheaterPlayer({
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimerReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestedPositionReference = useRef(media.positionSeconds);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
+  const subtitleTracksByIndexReference = useRef(new Map<number, TextTrack | null>());
+  const subtitleSuppressedReference = useRef(false);
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
@@ -350,6 +365,65 @@ export function TheaterPlayer({
     absolutePositionReference.current = absolutePosition;
   }, [absolutePosition]);
 
+  const replacePlayback = useCallback(
+    async (nextPreferences: PlaybackPreferences, nextPosition: number, nextMessage: string) => {
+      const active = preparedReference.current;
+      if (!active) return;
+      const previousPosition = absolutePosition();
+      const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
+      const generation = replacementGenerationReference.current + 1;
+      replacementGenerationReference.current = generation;
+      replacementControllerReference.current?.abort();
+      const controller = new AbortController();
+      replacementControllerReference.current = controller;
+      setSwitching(true);
+      setTransitionMessage(nextMessage);
+      setSettingsOpen(false);
+      try {
+        const result = await client.prepare(
+          media.id,
+          safePosition,
+          controller.signal,
+          preparationOptions(nextPreferences, active.session),
+        );
+        if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
+          stopSession(result, safePosition);
+          return;
+        }
+        replacementReference.current = {
+          generation,
+          previous: active,
+          previousPosition,
+          previousPreferences: preferencesReference.current,
+          resume: playing,
+        };
+        preferencesReference.current = nextPreferences;
+        preparedReference.current = result;
+        reportedStateReference.current = "negotiated";
+        startWhenReadyReference.current = playing;
+        setPreferences(nextPreferences);
+        setPrepared(result);
+        setPlaying(false);
+        setBuffering(false);
+        setCurrentTime(safePosition);
+        setSeekPreview(null);
+        setStatus("preparing");
+        setMessage(nextMessage);
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          generation !== replacementGenerationReference.current ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        setSwitching(false);
+        setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
+      }
+    },
+    [absolutePosition, client, duration, media.id, playing, stopSession],
+  );
+
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -367,6 +441,70 @@ export function TheaterPlayer({
       else dialog.setAttribute("open", "");
     }
   }, []);
+
+  const selectSubtitleTrack = useCallback((subtitleStreamIndex: number | null) => {
+    const tracks = subtitleTracksByIndexReference.current;
+    if (tracks.size === 0) return subtitleStreamIndex === null;
+    let resolved = subtitleStreamIndex === null;
+    for (const [index, track] of tracks.entries()) {
+      if (track === null) continue;
+      try {
+        if (subtitleStreamIndex !== null && index === subtitleStreamIndex) {
+          track.mode = "showing";
+          resolved = true;
+        } else if (track.mode === "showing" || track.mode === "hidden") {
+          track.mode = "disabled";
+        }
+      } catch {
+        // Mode assignment is a browser-owned property; ignore unsupported setters.
+      }
+    }
+    return resolved;
+  }, []);
+
+  const setSubtitleTrack = useCallback(
+    (subtitleStreamIndex: number | null) => {
+      const active = prepared;
+      if (!active) return;
+      const track =
+        subtitleStreamIndex === null
+          ? null
+          : (active.session.subtitleTracks.find(
+              (candidate) => candidate.index === subtitleStreamIndex,
+            ) ?? null);
+      const clientToggleableTrack =
+        subtitleStreamIndex !== null
+          ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
+          : active.session.subtitleTracks.some(
+              (candidate) => candidate.subtitlePath !== undefined && subtitleKind(candidate),
+            );
+      const toggleable = clientToggleableTrack && selectSubtitleTrack(subtitleStreamIndex);
+      if (toggleable) {
+        const nextPreferences = { ...preferences, subtitleStreamIndex };
+        preferencesReference.current = nextPreferences;
+        subtitleSuppressedReference.current = subtitleStreamIndex === null;
+        setPreferences(nextPreferences);
+        setTransitionMessage(
+          subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+        );
+        return;
+      }
+      const nextPreferences = {
+        ...preferences,
+        quality:
+          subtitleStreamIndex !== null && preferences.quality === "original"
+            ? "auto"
+            : preferences.quality,
+        subtitleStreamIndex,
+      } satisfies PlaybackPreferences;
+      void replacePlayback(
+        nextPreferences,
+        absolutePosition(),
+        subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+      );
+    },
+    [absolutePosition, preferences, prepared, replacePlayback, selectSubtitleTrack],
+  );
 
   useEffect(() => {
     if (!restoreSubtitleFocusReference.current || subtitleWorkbenchOpen || !settingsOpen) return;
@@ -388,7 +526,7 @@ export function TheaterPlayer({
         media.id,
         requestedPositionReference.current,
         controller.signal,
-        preparationOptions(preferencesReference.current),
+        preparationOptions(preferencesReference.current, preparedReference.current?.session),
       )
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -422,43 +560,91 @@ export function TheaterPlayer({
             );
           }, 15_000);
     const source = browserPlaybackPath(prepared.session.streamPath);
+    const clearTracks = () => {
+      for (const child of Array.from(video.children)) {
+        if (child instanceof HTMLTrackElement) child.remove();
+      }
+      subtitleTracksByIndexReference.current = new Map();
+    };
+    const attachSubtitles = () => {
+      subtitleTracksByIndexReference.current = new Map();
+      for (const track of prepared.session.subtitleTracks) {
+        if (track.subtitlePath === undefined) continue;
+        const kind = subtitleKind(track);
+        if (kind === undefined) continue;
+        const trackElement = document.createElement("track");
+        trackElement.kind = kind;
+        trackElement.label = track.title ?? `Track ${track.index}`;
+        if (track.language !== null && track.language !== undefined) {
+          trackElement.srclang = track.language;
+        }
+        if (track.selected) trackElement.default = true;
+        trackElement.src = browserPlaybackSubtitlePath(track.subtitlePath);
+        video.appendChild(trackElement);
+        let textTrack: TextTrack | null = null;
+        try {
+          textTrack = trackElement.track ?? null;
+          if (textTrack) textTrack.mode = "disabled";
+        } catch {
+          textTrack = null;
+        }
+        subtitleTracksByIndexReference.current.set(track.index, textTrack);
+      }
+      const preferredIndex = subtitleSuppressedReference.current
+        ? null
+        : (preferencesReference.current.subtitleStreamIndex ??
+          prepared.session.subtitleTracks.find((track) => track.selected)?.index ??
+          null);
+      selectSubtitleTrack(preferredIndex);
+    };
     const attach = async () => {
       if (prepared.session.delivery === "direct") {
+        const activePlayer = playerReference.current;
+        if (activePlayer) {
+          playerReference.current = null;
+          activePlayer.dispose();
+        }
+        if (stageReference.current && !video.parentNode) {
+          stageReference.current.insertBefore(video, stageReference.current.firstChild);
+        }
+        if (typeof styles.video === "string") video.className = styles.video;
+        clearTracks();
+        attachSubtitles();
         video.src = source;
         setStatus("ready");
         setMessage("Ready to resume");
         return;
       }
-      const hlsModule = await import("hls.js");
-      if (cancelled) return;
-      const Hls = hlsModule.default;
-      if (Hls.isSupported()) {
-        const hls = new Hls({
-          backBufferLength: 90,
-          capLevelToPlayerSize: true,
-          enableWorker: true,
-          lowLatencyMode: false,
-          maxBufferLength: 30,
-        });
-        hlsReference.current = hls;
-        let networkRecoveries = 0;
-        let mediaRecoveries = 0;
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (!data.fatal) return;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
-            networkRecoveries += 1;
-            recordHlsFailure(data, "network_retry");
-            setBuffering(true);
-            hls.startLoad();
-            return;
-          }
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
-            mediaRecoveries += 1;
-            recordHlsFailure(data, "media_recovery");
-            hls.recoverMediaError();
-            return;
-          }
-          recordHlsFailure(data, "stopped");
+      let player = playerReference.current;
+      if (!player) {
+        const videojsModule = await import("video.js");
+        if (cancelled) return;
+        const videojs = videojsModule.default;
+        player = videojs(video, {
+          autoplay: false,
+          controls: false,
+          fill: true,
+          fluid: false,
+          html5: {
+            vhs: {
+              limitRenditionByPlayerDimensions: true,
+              overrideNative: false,
+            },
+          },
+          liveui: false,
+          preload: "metadata",
+        }) as unknown as PlayerHandle;
+        playerReference.current = player;
+        player.on("error", () => {
+          const currentError = player!.error();
+          recordMediaFailure(
+            {
+              code: currentError?.code,
+              details: currentError?.message,
+              source: "video.js",
+            },
+            "stopped",
+          );
           if (
             !rollbackReplacement(
               "That playback change could not be applied. The previous stream was restored.",
@@ -468,26 +654,25 @@ export function TheaterPlayer({
             setMessage("The stream stopped responding. Your saved progress is safe.");
           }
         });
-        hls.loadSource(source);
-        hls.attachMedia(video);
-        setStatus("ready");
-        setMessage("Ready to resume");
-        return;
+        player.on("ready", () => {
+          if (cancelled) return;
+          clearTracks();
+          attachSubtitles();
+          setStatus("ready");
+          setMessage("Ready to resume");
+          if (!startWhenReadyReference.current) return;
+          startWhenReadyReference.current = false;
+          void player!.play().catch(() => {
+            setTransitionMessage("Ready to play — your browser needs one more tap to start.");
+          });
+        });
       }
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = source;
-        setStatus("ready");
-        setMessage("Ready to resume");
-        return;
-      }
-      if (
-        !rollbackReplacement(
-          "That playback change is not supported here. The previous stream was restored.",
-        )
-      ) {
-        setStatus("unsupported");
-        setMessage("This browser cannot play the negotiated HLS stream.");
-      }
+      clearTracks();
+      attachSubtitles();
+      player.src({
+        src: source,
+        type: "application/x-mpegURL",
+      });
     };
     void attach().catch(() => {
       if (
@@ -503,12 +688,11 @@ export function TheaterPlayer({
     return () => {
       cancelled = true;
       if (readinessTimeout) clearTimeout(readinessTimeout);
-      hlsReference.current?.destroy();
-      hlsReference.current = null;
+      clearTracks();
       video.removeAttribute("src");
       video.load();
     };
-  }, [prepared, rollbackReplacement]);
+  }, [prepared, rollbackReplacement, selectSubtitleTrack]);
 
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -524,6 +708,10 @@ export function TheaterPlayer({
   useEffect(
     () => () => {
       replacementControllerReference.current?.abort();
+      if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
+      const player = playerReference.current;
+      playerReference.current = null;
+      if (player && typeof player.dispose === "function") player.dispose();
       const active = preparedReference.current;
       if (active) stopSession(active, absolutePositionReference.current(), true);
       const replacement = replacementReference.current;
@@ -542,66 +730,6 @@ export function TheaterPlayer({
       await video.play().catch(() => undefined);
     } else {
       video.pause();
-    }
-  }
-
-  async function replacePlayback(
-    nextPreferences: PlaybackPreferences,
-    nextPosition: number,
-    nextMessage: string,
-  ) {
-    const active = preparedReference.current;
-    if (!active) return;
-    const previousPosition = absolutePosition();
-    const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
-    const generation = replacementGenerationReference.current + 1;
-    replacementGenerationReference.current = generation;
-    replacementControllerReference.current?.abort();
-    const controller = new AbortController();
-    replacementControllerReference.current = controller;
-    setSwitching(true);
-    setTransitionMessage(nextMessage);
-    setSettingsOpen(false);
-    try {
-      const result = await client.prepare(
-        media.id,
-        safePosition,
-        controller.signal,
-        preparationOptions(nextPreferences),
-      );
-      if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
-        stopSession(result, safePosition);
-        return;
-      }
-      replacementReference.current = {
-        generation,
-        previous: active,
-        previousPosition,
-        previousPreferences: preferencesReference.current,
-        resume: playing,
-      };
-      preferencesReference.current = nextPreferences;
-      preparedReference.current = result;
-      reportedStateReference.current = "negotiated";
-      startWhenReadyReference.current = playing;
-      setPreferences(nextPreferences);
-      setPrepared(result);
-      setPlaying(false);
-      setBuffering(false);
-      setCurrentTime(safePosition);
-      setSeekPreview(null);
-      setStatus("preparing");
-      setMessage(nextMessage);
-    } catch (error) {
-      if (
-        controller.signal.aborted ||
-        generation !== replacementGenerationReference.current ||
-        (error instanceof DOMException && error.name === "AbortError")
-      ) {
-        return;
-      }
-      setSwitching(false);
-      setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
     }
   }
 
@@ -643,10 +771,14 @@ export function TheaterPlayer({
   }
 
   async function toggleFullscreen() {
-    const dialog = dialogReference.current;
-    if (!dialog) return;
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await dialog.requestFullscreen?.();
+    const stage = stageReference.current;
+    if (!stage) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (typeof stage.requestFullscreen === "function") await stage.requestFullscreen();
+    } catch {
+      // Fullscreen can be rejected while a modal dialog is open; keep playback usable.
+    }
   }
 
   async function submitIssue(event: React.FormEvent<HTMLFormElement>) {
@@ -684,21 +816,62 @@ export function TheaterPlayer({
       setSubtitleWorkbenchOpen(false);
       return;
     }
-    if (event.key === " " || event.key.toLowerCase() === "k") {
+    const key = event.key.toLowerCase();
+    if (event.key === " " || key === "k") {
       event.preventDefault();
       void togglePlayback();
-    } else if (event.key === "ArrowLeft") {
+    } else if (event.key === "ArrowLeft" || key === "j") {
       event.preventDefault();
       seekWithinSession(currentTime - 10);
-    } else if (event.key === "ArrowRight") {
+    } else if (event.key === "ArrowRight" || key === "l") {
       event.preventDefault();
       seekWithinSession(currentTime + 10);
-    } else if (event.key.toLowerCase() === "m") {
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) + 0.1)));
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) - 0.1)));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      seekWithinSession(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      seekWithinSession(duration);
+    } else if (/^[0-9]$/u.test(event.key)) {
+      event.preventDefault();
+      const fraction = event.key === "0" ? 1 : Number(event.key) / 9;
+      seekWithinSession(Math.round(duration * fraction));
+    } else if (key === "m") {
       event.preventDefault();
       toggleMuted();
-    } else if (event.key.toLowerCase() === "f") {
+    } else if (key === "f") {
       event.preventDefault();
       void toggleFullscreen();
+    } else if (key === "c") {
+      event.preventDefault();
+      const active = prepared;
+      if (active && active.session.subtitleTracks.length > 0) {
+        let subtitlesActive = !subtitleSuppressedReference.current;
+        if (subtitlesActive && preferences.subtitleStreamIndex === null) {
+          subtitlesActive = Array.from(subtitleTracksByIndexReference.current.values()).some(
+            (track) => track !== null && track.mode === "showing",
+          );
+        }
+        if (subtitlesActive) {
+          setSubtitleTrack(null);
+        } else {
+          const preferredIndex =
+            preferences.subtitleStreamIndex ??
+            active.session.subtitleTracks.find((track) => track.selected)?.index ??
+            active.session.subtitleTracks.find(
+              (track) => track.subtitlePath !== undefined && subtitleKind(track),
+            )?.index ??
+            active.session.subtitleTracks[0]?.index ??
+            null;
+          if (preferredIndex !== null) setSubtitleTrack(preferredIndex);
+        }
+      }
     }
     revealControls();
   }
@@ -733,11 +906,30 @@ export function TheaterPlayer({
     >
       <div
         className={styles.stage}
+        ref={stageReference}
         style={{ "--player-accent": media.accent } as React.CSSProperties}
       >
         <video
           aria-label={`${media.title} video`}
           className={styles.video}
+          onClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
+            clickTimerReference.current = setTimeout(() => {
+              clickTimerReference.current = null;
+              void togglePlayback();
+            }, 260);
+            revealControls();
+          }}
+          onDoubleClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) {
+              clearTimeout(clickTimerReference.current);
+              clickTimerReference.current = null;
+            }
+            void toggleFullscreen();
+            revealControls();
+          }}
           onCanPlay={(event) => {
             const restorePosition = restorePositionReference.current;
             if (restorePosition !== null && prepared) {
@@ -828,7 +1020,9 @@ export function TheaterPlayer({
         </header>
 
         <p className="sr-only" id={descriptionId}>
-          Use Space or K to play and pause, arrow keys to seek, M to mute, and F for full screen.
+          Use Space or K to play and pause, J and L to jump back and forward, arrow keys to seek or
+          change volume, Home and End to jump to the start and end, number keys to seek by
+          percentage, M to mute, C to show or hide captions, and F for full screen.
         </p>
 
         {status === "preparing" && (
@@ -1048,19 +1242,7 @@ export function TheaterPlayer({
                       event.currentTarget.value === "off"
                         ? null
                         : Number(event.currentTarget.value);
-                    const nextPreferences = {
-                      ...preferences,
-                      quality:
-                        nextIndex !== null && preferences.quality === "original"
-                          ? "auto"
-                          : preferences.quality,
-                      subtitleStreamIndex: nextIndex,
-                    } satisfies PlaybackPreferences;
-                    void replacePlayback(
-                      nextPreferences,
-                      absolutePosition(),
-                      nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
-                    );
+                    setSubtitleTrack(nextIndex);
                   }}
                   value={preferences.subtitleStreamIndex ?? "off"}
                 >
@@ -1116,11 +1298,7 @@ export function TheaterPlayer({
                     >
                   ).map(([value, option]) => (
                     <option
-                      disabled={
-                        value === "original" &&
-                        (preferences.audioStreamIndex !== null ||
-                          preferences.subtitleStreamIndex !== null)
-                      }
+                      disabled={value === "original" && preferences.audioStreamIndex !== null}
                       key={value}
                       value={value}
                     >

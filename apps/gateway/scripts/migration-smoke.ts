@@ -388,7 +388,7 @@ const requiredColumns = {
     "state",
     "user_id",
   ],
-  users: ["role_source"],
+  users: ["role_source", "theme_preference"],
 } as const;
 const requiredIndexes = {
   acquisition_grab_operations: [
@@ -594,31 +594,31 @@ function writeHistoricalMigrationFixture() {
     readFileSync(path.join(currentMigrationDirectory, "meta/_journal.json"), "utf8"),
   ) as MigrationJournal;
   const expectedTail = [
-    [26, "0026_media_request_profile_preferences"],
     [27, "0027_connector_public_ui_urls"],
     [28, "0028_library_removal_operations"],
-    [29, "0029_saved_lists"],
+    [29, "0029_theme_preferences"],
+    [30, "0030_saved_lists"],
   ];
   assertCondition(
     JSON.stringify(journal.entries.slice(-4).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent and saved-list ancestry.",
   );
-  const snapshots = [26, 27, 28, 29].map(
+  const snapshots = [27, 28, 29, 30].map(
     (index) =>
       JSON.parse(
         readFileSync(path.join(currentMigrationDirectory, `meta/00${index}_snapshot.json`), "utf8"),
       ) as MigrationSnapshot,
   );
   assertCondition(
-    snapshots[0]?.id === "016e5741-dd87-416d-8b7d-c5a304008173" &&
-      snapshots[1]?.id === "d72bbdc7-4633-464e-b248-cbaf1640ebbe" &&
-      snapshots[2]?.id === "b0bd4167-ae32-4da2-b8b7-ca27eae76fde" &&
-      snapshots[3]?.id === "b95d5b25-0fe6-4b68-8ab4-febf21513aac" &&
+    snapshots[0]?.id === "d72bbdc7-4633-464e-b248-cbaf1640ebbe" &&
+      snapshots[1]?.id === "b0bd4167-ae32-4da2-b8b7-ca27eae76fde" &&
+      snapshots[2]?.id === "5df51154-3db1-4760-b64a-3b5db3e2a7b3" &&
+      snapshots[3]?.id === "d100e329-3adb-4ce6-b942-c2d0c1b2288a" &&
       snapshots.every(
         (snapshot, index) => index === 0 || snapshot.prevId === snapshots[index - 1]?.id,
       ),
-    "Migration snapshots 0026 through 0029 must retain one linear ancestry.",
+    "Migration snapshots 0027 through 0030 must retain one linear ancestry.",
   );
   assertCondition(
     [
@@ -630,7 +630,7 @@ function writeHistoricalMigrationFixture() {
       "saved_lists",
       "saved_targets",
     ].every((table) => Object.hasOwn(snapshots[3]!.tables, table)),
-    "Snapshot 0029 must include all parent and saved-list tables.",
+    "Snapshot 0030 must include all parent and saved-list tables.",
   );
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
@@ -722,8 +722,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0029_saved_lists",
-  "Current migration journal must end at migration 0029_saved_lists.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0030_saved_lists",
+  "Current migration journal must end at migration 0030_saved_lists.",
 );
 
 try {

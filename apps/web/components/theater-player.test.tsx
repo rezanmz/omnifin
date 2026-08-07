@@ -7,54 +7,42 @@ import type { PlaybackClient } from "../lib/playback";
 import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
-interface HlsErrorFixture {
-  details?: string;
-  fatal: boolean;
-  reason?: string;
-  response?: { code?: number; text?: string };
-  type: string;
-  url?: string;
+interface VideoJsPlayerMock {
+  dispose: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+  handlers: Map<string, () => void>;
+  on: ReturnType<typeof vi.fn>;
+  one: ReturnType<typeof vi.fn>;
+  play: ReturnType<typeof vi.fn>;
+  src: ReturnType<typeof vi.fn>;
 }
 
-const hlsHarness = vi.hoisted(() => ({
-  instances: [] as Array<{
-    attachMedia: ReturnType<typeof vi.fn>;
-    destroy: ReturnType<typeof vi.fn>;
-    handlers: Map<string, (event: string, data: HlsErrorFixture) => void>;
-    loadSource: ReturnType<typeof vi.fn>;
-    recoverMediaError: ReturnType<typeof vi.fn>;
-    startLoad: ReturnType<typeof vi.fn>;
-  }>,
-  supported: true,
+const playerHarness = vi.hoisted(() => ({
+  instances: [] as VideoJsPlayerMock[],
+  player: null as VideoJsPlayerMock | null,
 }));
 
-vi.mock("hls.js", () => {
-  class MockHls {
-    static readonly ErrorTypes = {
-      MEDIA_ERROR: "mediaError",
-      NETWORK_ERROR: "networkError",
-    };
-    static readonly Events = { ERROR: "error" };
-    static isSupported = () => hlsHarness.supported;
+function createPlayerMock(): VideoJsPlayerMock {
+  const player: VideoJsPlayerMock = {
+    dispose: vi.fn(),
+    error: vi.fn(() => null),
+    handlers: new Map<string, () => void>(),
+    on: vi.fn((event: string, handler: () => void) => {
+      player.handlers.set(event, handler);
+    }),
+    one: vi.fn((event: string, handler: () => void) => {
+      player.handlers.set(event, handler);
+    }),
+    play: vi.fn(async () => undefined),
+    src: vi.fn(),
+  };
+  playerHarness.instances.push(player);
+  return player;
+}
 
-    readonly attachMedia = vi.fn();
-    readonly destroy = vi.fn();
-    readonly handlers = new Map<string, (event: string, data: HlsErrorFixture) => void>();
-    readonly loadSource = vi.fn();
-    readonly recoverMediaError = vi.fn();
-    readonly startLoad = vi.fn();
-
-    constructor() {
-      hlsHarness.instances.push(this);
-    }
-
-    on(event: string, handler: (event: string, data: HlsErrorFixture) => void) {
-      this.handlers.set(event, handler);
-    }
-  }
-
-  return { default: MockHls };
-});
+vi.mock("video.js", () => ({
+  default: vi.fn(() => createPlayerMock()),
+}));
 
 const csrfToken = "theater_player_csrf_0123456789abcdefghijklmnopqrstuvwxyz";
 const sessionId = `playback_${"p".repeat(22)}`;
@@ -114,8 +102,8 @@ function readyClient(
 
 describe("TheaterPlayer", () => {
   beforeEach(() => {
-    hlsHarness.instances.length = 0;
-    hlsHarness.supported = true;
+    playerHarness.instances.length = 0;
+    playerHarness.player = null;
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
@@ -268,6 +256,30 @@ describe("TheaterPlayer", () => {
     expect(requestFullscreen).toHaveBeenCalledOnce();
   });
 
+  it("toggles playback on a single click and full screen on a double click", async () => {
+    const requestFullscreen = vi.fn(async () => undefined);
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+      configurable: true,
+      value: requestFullscreen,
+    });
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+
+    fireEvent.click(video);
+    fireEvent.canPlay(video);
+    await waitFor(() => expect(play).toHaveBeenCalled());
+
+    fireEvent.click(video);
+    fireEvent.click(video);
+    fireEvent.doubleClick(video);
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
+  });
+
   it("supports player shortcuts without hijacking range inputs", async () => {
     const client = readyClient();
     render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
@@ -291,7 +303,37 @@ describe("TheaterPlayer", () => {
     expect(video.muted).toBe(true);
   });
 
-  it("recovers bounded HLS failures before presenting a safe retry", async () => {
+  it("supports the standard player keys: volume, jump, edges, and percentage seek", async () => {
+    const client = readyClient();
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const dialog = screen.getByRole("dialog", { name: media.title });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_200;
+    Object.defineProperty(video, "volume", { configurable: true, value: 0.5, writable: true });
+
+    fireEvent.keyDown(dialog, { key: "ArrowUp" });
+    expect(video.volume).toBeCloseTo(0.6);
+    fireEvent.keyDown(dialog, { key: "ArrowDown" });
+    expect(video.volume).toBeCloseTo(0.5);
+
+    fireEvent.keyDown(dialog, { key: "j" });
+    expect(video.currentTime).toBe(1_190);
+    fireEvent.keyDown(dialog, { key: "l" });
+    expect(video.currentTime).toBe(1_200);
+
+    fireEvent.keyDown(dialog, { key: "Home" });
+    expect(video.currentTime).toBe(0);
+    fireEvent.keyDown(dialog, { key: "End" });
+    expect(video.currentTime).toBe(7_200);
+
+    video.currentTime = 1_200;
+    fireEvent.keyDown(dialog, { key: "5" });
+    expect(video.currentTime).toBe(4_000);
+  });
+
+  it("attaches the masked HLS manifest through video.js and surfaces a safe failure", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
@@ -302,47 +344,22 @@ describe("TheaterPlayer", () => {
       <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
     );
 
-    await screen.findByRole("button", { name: `Resume ${media.title}` });
-    const instance = hlsHarness.instances[0];
+    await waitFor(() => expect(playerHarness.instances).toHaveLength(1));
+    const instance = playerHarness.instances[0];
     expect(instance).toBeDefined();
-    expect(instance?.loadSource).toHaveBeenCalledWith(`/api/playback/${sessionId}/master.m3u8`);
-    expect(instance?.attachMedia).toHaveBeenCalledWith(
-      screen.getByLabelText(`${media.title} video`),
-    );
-    const onError = instance?.handlers.get("error");
-    expect(onError).toBeDefined();
+    expect(instance?.src).toHaveBeenCalledWith({
+      src: `/api/playback/${sessionId}/master.m3u8`,
+      type: "application/x-mpegURL",
+    });
+    instance?.handlers.get("ready")?.();
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
 
-    onError?.("error", { fatal: false, type: "networkError" });
-    expect(instance?.startLoad).not.toHaveBeenCalled();
-    const privateFailure = {
-      details: "levelLoadError",
-      fatal: true,
-      reason: "private upstream response",
-      response: { code: 404, text: "private response body" },
-      type: "networkError",
-      url: `/v1/playback/${sessionId}/hls/asset_h1.${"a".repeat(22)}`,
-    };
-    onError?.("error", privateFailure);
-    onError?.("error", privateFailure);
-    expect(instance?.startLoad).toHaveBeenCalledTimes(2);
-    expect(await screen.findByLabelText("Buffering")).toBeVisible();
-
-    onError?.("error", privateFailure);
+    instance?.error.mockReturnValue({ code: 2, message: "private upstream response" });
+    instance?.handlers.get("error")?.();
     expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
-    expect(warning).toHaveBeenLastCalledWith(
-      JSON.stringify({
-        details: "levelLoadError",
-        event: "hls_playback_failure",
-        fatal: true,
-        httpStatus: 404,
-        recovery: "stopped",
-        stage: "playlist",
-        type: "networkError",
-      }),
-    );
     const diagnostics = warning.mock.calls.flat().join("\n");
     expect(diagnostics).not.toMatch(
-      new RegExp(`${sessionId}|asset_h1|private response|private upstream|/v1/playback`, "u"),
+      new RegExp(`${sessionId}|asset_h1|private upstream|/v1/playback`, "u"),
     );
   });
 
@@ -565,12 +582,13 @@ describe("TheaterPlayer", () => {
       screen.getByRole("combobox", { name: "Playback quality" }),
       "balanced",
     );
-    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
-    const onError = hlsHarness.instances[0]?.handlers.get("error");
-    const failure = { details: "levelLoadError", fatal: true, type: "networkError" };
-    onError?.("error", failure);
-    onError?.("error", failure);
-    onError?.("error", failure);
+    await waitFor(() => expect(playerHarness.instances).toHaveLength(1));
+    const instance = playerHarness.instances[0];
+    expect(instance?.src).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "application/x-mpegURL" }),
+    );
+    instance?.error.mockReturnValue({ code: 4, message: "private stream unavailable" });
+    instance?.handlers.get("error")?.();
 
     expect(await screen.findByText(/previous stream was restored/u)).toBeVisible();
     await waitFor(() => expect(video).toHaveAttribute("src", `/api/playback/${sessionId}/stream`));
@@ -634,6 +652,89 @@ describe("TheaterPlayer", () => {
     expect(restoredTrigger).toHaveFocus();
   });
 
+  it("renders client-side captions and switches text tracks without renegotiating", async () => {
+    const user = userEvent.setup();
+    const selectableSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "direct",
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 5,
+          language: "eng",
+          selected: true,
+          title: "English",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/5`,
+        },
+      ],
+    };
+    const client = readyClient(selectableSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    const track = video.querySelector("track");
+    expect(track).not.toBeNull();
+    expect(track?.getAttribute("src")).toBe(`/api/playback/${sessionId}/subtitle/5`);
+    expect(track?.getAttribute("kind")).toBe("subtitles");
+    expect(track?.getAttribute("default")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Subtitle track" }), "off");
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles captions with C and remembers the chosen track", async () => {
+    const user = userEvent.setup();
+    const captionedSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "direct",
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 5,
+          language: "eng",
+          selected: true,
+          title: "English",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/5`,
+        },
+      ],
+    };
+    const client = readyClient(captionedSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const dialog = screen.getByRole("dialog", { name: media.title });
+    const settingsButton = () => screen.getByRole("button", { name: "Playback settings" });
+
+    // Opening settings mid-renegotiation is a no-op (the button is disabled
+    // until the replacement stream is ready), so retry until the panel opens
+    // and reflects the expected track after the caption toggle settles.
+    const openSettingsAndExpect = async (value: string) => {
+      await waitFor(async () => {
+        await user.click(settingsButton());
+        expect(screen.queryByRole("combobox", { name: "Subtitle track" })).toHaveValue(value);
+      });
+    };
+
+    fireEvent.keyDown(dialog, { key: "c" });
+    await openSettingsAndExpect("5");
+
+    await user.click(settingsButton());
+    fireEvent.keyDown(dialog, { key: "c" });
+    await openSettingsAndExpect("off");
+
+    await user.click(settingsButton());
+    fireEvent.keyDown(dialog, { key: "c" });
+    await openSettingsAndExpect("5");
+  });
+
   it("submits a private playback issue with category, note, and current timestamp", async () => {
     const user = userEvent.setup();
     const client = readyClient();
@@ -692,6 +793,8 @@ describe("TheaterPlayer", () => {
     const client = readyClient(hlsSession);
     render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
 
+    await waitFor(() => expect(playerHarness.instances).toHaveLength(1));
+    playerHarness.instances[0]?.handlers.get("ready")?.();
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const progress = screen.getByRole("slider", { name: "Playback position" });
     expect(progress).toHaveAttribute("min", "0");
@@ -707,8 +810,7 @@ describe("TheaterPlayer", () => {
     );
   });
 
-  it("recovers one fatal HLS media error and destroys the engine on close", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("destroys the video.js engine on close", async () => {
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
@@ -719,49 +821,11 @@ describe("TheaterPlayer", () => {
       <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={onClose} />,
     );
 
-    await screen.findByRole("button", { name: `Resume ${media.title}` });
-    const instance = hlsHarness.instances[0];
-    instance?.handlers.get("error")?.("error", { fatal: true, type: "mediaError" });
-    expect(instance?.recoverMediaError).toHaveBeenCalledOnce();
-    expect(warning).toHaveBeenLastCalledWith(
-      JSON.stringify({
-        details: "unknown",
-        event: "hls_playback_failure",
-        fatal: true,
-        httpStatus: null,
-        recovery: "media_recovery",
-        stage: "engine",
-        type: "mediaError",
-      }),
-    );
+    await waitFor(() => expect(playerHarness.instances).toHaveLength(1));
+    const instance = playerHarness.instances[0];
+    expect(instance).toBeDefined();
     unmount();
-    expect(instance?.destroy).toHaveBeenCalledOnce();
-  });
-
-  it("uses native HLS when available and explains unsupported browsers", async () => {
-    const hlsSession: PlaybackNegotiationResponse = {
-      ...session,
-      delivery: "hls",
-      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
-    };
-    hlsHarness.supported = false;
-    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("maybe");
-    const { unmount } = render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
-    );
-    expect(await screen.findByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
-    expect(screen.getByLabelText(`${media.title} video`)).toHaveAttribute(
-      "src",
-      `/api/playback/${sessionId}/master.m3u8`,
-    );
-
-    unmount();
-    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("");
-    render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent("cannot play the negotiated HLS");
-    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(instance?.dispose).toHaveBeenCalledOnce();
   });
 
   it("surfaces interrupted progress sync without interrupting playback", async () => {
