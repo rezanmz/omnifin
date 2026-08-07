@@ -21,7 +21,6 @@ import {
   WifiOff,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
@@ -183,6 +182,13 @@ async function defaultRevokeAllSessions(csrfToken: string) {
   }
 }
 
+function defaultSignedOutNavigation() {
+  // Full-page navigation is deliberate: signing out must discard all client
+  // state, and useRouter is unavailable outside the App Router (Storybook).
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login");
+}
+
 function healthLabel(health: ServiceIdentityLink["health"]) {
   return {
     linked: "Connected",
@@ -207,15 +213,10 @@ export function AccountSecurityPanel({
   initialConfirmation = null,
   initialOutcome,
   loadAccount = defaultLoadAccount,
-  onSignedOut,
+  onSignedOut = defaultSignedOutNavigation,
   revokeAllSessions = defaultRevokeAllSessions,
   revokeIdentity = defaultRevokeIdentity,
 }: AccountSecurityPanelProperties) {
-  const router = useRouter();
-  const handleSignedOut = () => {
-    if (onSignedOut === undefined) void router.push("/login");
-    else onSignedOut();
-  };
   const [outcome, setOutcome] = useState<AccountSecurityLoadOutcome | null>(initialOutcome ?? null);
   const [operation, setOperation] = useState<"idle" | "logout" | "provider" | "revoke">("idle");
   const [confirmation, setConfirmation] = useState<"logout" | "provider" | "revoke" | null>(
@@ -258,7 +259,7 @@ export function AccountSecurityPanel({
     setOperation("idle");
     setConfirmation(null);
     if (result.status === "session_changed") {
-      handleSignedOut();
+      onSignedOut();
       return;
     }
     if (result.status === "failed") {
@@ -268,7 +269,7 @@ export function AccountSecurityPanel({
       return;
     }
     if (result.principal === null) {
-      handleSignedOut();
+      onSignedOut();
       return;
     }
     setOutcome({
@@ -285,7 +286,7 @@ export function AccountSecurityPanel({
     setOperation("idle");
     setConfirmation(null);
     if (succeeded) {
-      handleSignedOut();
+      onSignedOut();
       return;
     }
     setOperationError("Sessions could not be revoked. You remain signed in on this browser.");

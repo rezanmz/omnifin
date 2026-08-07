@@ -24,13 +24,11 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
-  useCallback,
   useEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import { useRouter } from "next/navigation";
 
 import type { DisplayProfile } from "../lib/dashboard-data";
 import { BrandMark } from "./brand-mark";
@@ -364,6 +362,14 @@ async function defaultPollQuickConnect(
   }
 }
 
+function defaultAuthenticatedNavigation() {
+  // Full-page navigation is deliberate: after authentication the whole
+  // client session must be re-established, and useRouter is unavailable
+  // outside the App Router (Storybook).
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/");
+}
+
 function formattedRemainingTime(expiresAt: string, now: number | null) {
   if (now === null) return "5:00";
   const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1_000));
@@ -393,16 +399,11 @@ export function JellyfinCredentialScreen({
   initialStatus = "idle",
   intent = "sign-in",
   loadPairingSession = defaultLoadPairingSession,
-  onAuthenticated,
+  onAuthenticated = defaultAuthenticatedNavigation,
   pollQuickConnect,
   startQuickConnect,
   submitCredentials,
 }: JellyfinCredentialScreenProperties) {
-  const router = useRouter();
-  const handleAuthenticated = useCallback(
-    (): void => (onAuthenticated === undefined ? void router.push("/") : onAuthenticated()),
-    [onAuthenticated, router],
-  );
   const isBootstrap = intent === "bootstrap";
   const isPairing = intent === "pair";
   const requiresSecureSession = intent !== "sign-in";
@@ -475,7 +476,7 @@ export function JellyfinCredentialScreen({
       if (requestGeneration.current !== generation) return;
       if (outcome.status === "signed_in") {
         requestGeneration.current += 1;
-        handleAuthenticated();
+        onAuthenticated();
         return;
       }
       if (outcome.status === "pending") {
@@ -495,7 +496,7 @@ export function JellyfinCredentialScreen({
   }, [
     autoPollQuickConnect,
     csrfToken,
-    handleAuthenticated,
+    onAuthenticated,
     intent,
     method,
     pollQuickConnect,
@@ -513,7 +514,7 @@ export function JellyfinCredentialScreen({
     setPassword("");
     setPasswordVisible(false);
     if (outcome === "success") {
-      handleAuthenticated();
+      onAuthenticated();
       return;
     }
     restorePasswordFocus.current = true;
