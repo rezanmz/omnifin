@@ -401,7 +401,9 @@ export function SavedLibrary({
         ?.querySelector<HTMLButtonElement>('button[data-saved-card-action="remove"]')
         ?.focus();
     }
-    setFocusAfterRemoval(null);
+    // Defer the one-shot reset out of the synchronous effect body to avoid
+    // cascading renders; the next render with a null flag no-ops.
+    queueMicrotask(() => setFocusAfterRemoval(null));
   }, [focusAfterRemoval, page]);
 
   useEffect(
