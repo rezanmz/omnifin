@@ -1,16 +1,27 @@
 import type HlsType from "hls.js";
 
+/** A single manifest rendition as surfaced by the engine. */
+export interface HlsLevelSummary {
+  bitrate: number;
+  height: number | undefined;
+  index: number;
+}
+
 /**
  * Minimal engine seam the theater player drives. The component only relies on
  * these methods, so the engine behind the seam can be swapped without touching
  * the player's state machine or controls.
  */
 export interface PlayerHandle {
+  currentLevel(): number;
   dispose(): void;
   error(): { code?: number; message?: string } | null;
+  levels(): HlsLevelSummary[];
   on(event: string, listener: (...args: unknown[]) => void): void;
   one(event: string, listener: () => void): void;
   play(): Promise<void>;
+  setAutoLevel(): void;
+  setLevel(index: number): void;
   src(source: { src: string; type: string }): void;
 }
 
@@ -109,6 +120,7 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
   let lastError: { code?: number; message?: string } | null = null;
   let networkRecoveries = 0;
   let mediaRecoveries = 0;
+  let capturedLevels: HlsLevelSummary[] = [];
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (!data.fatal) return;
     if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
@@ -134,23 +146,50 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
     };
     emitter.emit("error");
   });
+  hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+    capturedLevels = (data.levels ?? []).map((level, index) => ({
+      bitrate: level.bitrate,
+      height: level.height,
+      index,
+    }));
+    emitter.emit("levelchanged");
+  });
+  hls.on(Hls.Events.LEVEL_SWITCHED, () => {
+    // The current level is read live from the hls instance; this notification
+    // keeps the component's level state in sync with hls.js's own tracking.
+    emitter.emit("levelchanged");
+  });
   return {
+    currentLevel() {
+      return hls.currentLevel;
+    },
     dispose() {
       hls.destroy();
     },
     error() {
       return lastError;
     },
+    levels() {
+      return capturedLevels;
+    },
     on: emitter.on,
     one: emitter.one,
     play() {
       return video.play();
+    },
+    setAutoLevel() {
+      hls.currentLevel = -1;
+    },
+    setLevel(index) {
+      hls.currentLevel = index;
     },
     src(source) {
       // Each new source gets a fresh recovery budget (the reference player
       // destroyed its Hls instance per stream; this engine reuses one).
       networkRecoveries = 0;
       mediaRecoveries = 0;
+      capturedLevels = [];
+      emitter.emit("levelchanged");
       hls.loadSource(source.src);
       if (!hls.media) hls.attachMedia(video);
       emitter.emit("ready");
@@ -174,6 +213,11 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
   };
   video.addEventListener("error", onVideoError);
   return {
+    currentLevel() {
+      // Native HLS exposes no level introspection; the UI must treat the
+      // stream as a single auto rendition.
+      return -1;
+    },
     dispose() {
       video.removeEventListener("error", onVideoError);
       video.removeAttribute("src");
@@ -182,10 +226,19 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
     error() {
       return lastError;
     },
+    levels() {
+      return [];
+    },
     on: emitter.on,
     one: emitter.one,
     play() {
       return video.play();
+    },
+    setAutoLevel() {
+      // No-op: native HLS has no client-side rendition selection.
+    },
+    setLevel(_index: number) {
+      // No-op: native HLS has no client-side rendition selection.
     },
     src(source) {
       video.src = source.src;
