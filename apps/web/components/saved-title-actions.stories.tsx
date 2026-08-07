@@ -94,7 +94,7 @@ type Story = StoryObj<typeof meta>;
 export const Ready: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("button", { name: "Favorite" })).toBeEnabled();
+    await expect(await canvas.findByRole("button", { name: "Jellyfin Favorite" })).toBeEnabled();
   },
 };
 
