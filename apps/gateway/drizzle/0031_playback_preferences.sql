@@ -1,4 +1,3 @@
--- Semantic playback preferences follow private saved-list state.
 CREATE TABLE `playback_preferences` (
 	`user_id` text PRIMARY KEY NOT NULL,
 	`schema_version` integer DEFAULT 1 NOT NULL,

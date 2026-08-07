@@ -1106,7 +1106,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe("0030_saved_lists.sql");
+      expect(migrationFilenames.at(-1)).toBe("0031_playback_preferences.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
