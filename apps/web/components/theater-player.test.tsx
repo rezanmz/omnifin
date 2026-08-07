@@ -1,5 +1,5 @@
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,24 +7,17 @@ import type { PlaybackClient } from "../lib/playback";
 import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
-interface HlsErrorFixture {
-  details?: string;
-  fatal: boolean;
-  reason?: string;
-  response?: { code?: number; text?: string };
-  type: string;
-  url?: string;
-}
-
 const hlsHarness = vi.hoisted(() => ({
   instances: [] as Array<{
     attachMedia: ReturnType<typeof vi.fn>;
+    currentLevel: number;
     destroy: ReturnType<typeof vi.fn>;
-    handlers: Map<string, (event: string, data: HlsErrorFixture) => void>;
+    handlers: Map<string, (event: string, data: unknown) => void>;
     loadSource: ReturnType<typeof vi.fn>;
     recoverMediaError: ReturnType<typeof vi.fn>;
     startLoad: ReturnType<typeof vi.fn>;
   }>,
+  levelSelections: [] as number[],
   supported: true,
 }));
 
@@ -36,22 +29,33 @@ vi.mock("hls.js", () => {
     };
     static readonly Events = {
       ERROR: "error",
+      LEVEL_SWITCHED: "levelSwitched",
       MANIFEST_PARSED: "manifestParsed",
     };
     static isSupported = () => hlsHarness.supported;
 
     readonly attachMedia = vi.fn();
     readonly destroy = vi.fn();
-    readonly handlers = new Map<string, (event: string, data: HlsErrorFixture) => void>();
+    readonly handlers = new Map<string, (event: string, data: unknown) => void>();
     readonly loadSource = vi.fn();
     readonly recoverMediaError = vi.fn();
     readonly startLoad = vi.fn();
+    #currentLevel = -1;
 
     constructor() {
       hlsHarness.instances.push(this);
     }
 
-    on(event: string, handler: (event: string, data: HlsErrorFixture) => void) {
+    get currentLevel() {
+      return this.#currentLevel;
+    }
+
+    set currentLevel(value: number) {
+      this.#currentLevel = value;
+      hlsHarness.levelSelections.push(value);
+    }
+
+    on(event: string, handler: (event: string, data: unknown) => void) {
       this.handlers.set(event, handler);
     }
   }
@@ -150,6 +154,7 @@ function readyClient(
 describe("TheaterPlayer", () => {
   beforeEach(() => {
     hlsHarness.instances.length = 0;
+    hlsHarness.levelSelections.length = 0;
     hlsHarness.supported = true;
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -1090,6 +1095,92 @@ describe("TheaterPlayer", () => {
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot play the negotiated HLS");
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("switches renditions client-side when the manifest has multiple levels", async () => {
+    const user = userEvent.setup();
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(hlsSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const instance = hlsHarness.instances[0];
+    instance?.handlers.get("manifestParsed")?.("manifestParsed", {
+      levels: [
+        { bitrate: 8_000_000, height: 1080 },
+        { bitrate: 4_000_000, height: 720 },
+      ],
+    });
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    const quality = screen.getByRole("combobox", { name: "Stream quality" });
+    expect(quality).toHaveValue("auto");
+    expect(within(quality).getByRole("option", { name: "Auto" })).toBeVisible();
+    expect(within(quality).getByRole("option", { name: "1080p · 8 Mbps" })).toBeVisible();
+    expect(within(quality).getByRole("option", { name: "720p · 4 Mbps" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toBeVisible();
+
+    await user.selectOptions(quality, "1");
+    expect(hlsHarness.levelSelections).toEqual([1]);
+    expect(screen.getByText("Applying playback quality…")).toBeVisible();
+    instance?.handlers.get("levelSwitched")?.("levelSwitched", { level: 1 });
+    await waitFor(() => expect(quality).toHaveValue("1"));
+
+    await user.selectOptions(quality, "auto");
+    expect(hlsHarness.levelSelections).toEqual([1, -1]);
+    instance?.handlers.get("levelSwitched")?.("levelSwitched", { level: -1 });
+    await waitFor(() => expect(quality).toHaveValue("auto"));
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides stream quality for a single-rendition manifest", async () => {
+    const user = userEvent.setup();
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    render(
+      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    hlsHarness.instances[0]?.handlers.get("manifestParsed")?.("manifestParsed", {
+      levels: [{ bitrate: 8_000_000, height: 1080 }],
+    });
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    expect(screen.queryByRole("combobox", { name: "Stream quality" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toBeVisible();
+  });
+
+  it("hides stream quality on the native HLS path", async () => {
+    const user = userEvent.setup();
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      playMethod: "transcode",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    hlsHarness.supported = false;
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("maybe");
+    render(
+      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    expect(screen.queryByRole("combobox", { name: "Stream quality" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toBeVisible();
   });
 
   it("surfaces interrupted progress sync without interrupting playback", async () => {

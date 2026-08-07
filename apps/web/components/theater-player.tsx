@@ -27,6 +27,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   createHlsPlayerHandle,
   createNativeHlsPlayerHandle,
+  type HlsLevelSummary,
   type PlayerHandle,
 } from "../lib/player-engine";
 import { resolveSubtitleTier } from "../lib/player-subtitles";
@@ -171,6 +172,15 @@ function trackLabel(track: {
   return [primary ?? `Track ${track.index}`, detail, channels].filter(Boolean).join(" · ");
 }
 
+function levelLabel(level: HlsLevelSummary) {
+  const height =
+    level.height !== undefined && level.height > 0
+      ? `${level.height}p`
+      : `Level ${level.index + 1}`;
+  const bitrate = level.bitrate > 0 ? `${Math.round(level.bitrate / 1_000_000)} Mbps` : null;
+  return bitrate === null ? height : `${height} · ${bitrate}`;
+}
+
 function formatTime(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   const hours = Math.floor(safeSeconds / 3_600);
@@ -258,6 +268,9 @@ export function TheaterPlayer({
   const [syncInterrupted, setSyncInterrupted] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [transitionMessage, setTransitionMessage] = useState("");
+  const [engineLevels, setEngineLevels] = useState<HlsLevelSummary[]>([]);
+  const [engineCurrentLevel, setEngineCurrentLevel] = useState(-1);
+  const qualityMessageTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const close = useCallback(() => {
     const dialog = dialogReference.current;
@@ -616,6 +629,8 @@ export function TheaterPlayer({
         if (typeof styles.video === "string") video.className = styles.video;
         clearTracks();
         attachSubtitles();
+        setEngineLevels([]);
+        setEngineCurrentLevel(-1);
         video.src = source;
         setStatus("ready");
         setMessage("Ready to resume");
@@ -673,6 +688,10 @@ export function TheaterPlayer({
             setTransitionMessage("Ready to play — your browser needs one more tap to start.");
           });
         });
+        player.on("levelchanged", () => {
+          setEngineLevels(player!.levels());
+          setEngineCurrentLevel(player!.currentLevel());
+        });
       }
       clearTracks();
       attachSubtitles();
@@ -696,8 +715,14 @@ export function TheaterPlayer({
       cancelled = true;
       if (readinessTimeout) clearTimeout(readinessTimeout);
       clearTracks();
-      video.removeAttribute("src");
-      video.load();
+      // While a replacement is in flight the video element keeps the previous
+      // stream's last frame on screen under the "Preparing your stream"
+      // overlay instead of being blanked immediately; the new src replaces it
+      // once attached. Unmounts, retries, and rollbacks still clear the src.
+      if (replacementReference.current === null) {
+        video.removeAttribute("src");
+        video.load();
+      }
     };
   }, [prepared, rollbackReplacement, selectSubtitleTrack]);
 
@@ -716,6 +741,8 @@ export function TheaterPlayer({
     () => () => {
       replacementControllerReference.current?.abort();
       if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
+      if (qualityMessageTimeoutReference.current)
+        clearTimeout(qualityMessageTimeoutReference.current);
       const player = playerReference.current;
       playerReference.current = null;
       if (player && typeof player.dispose === "function") player.dispose();
@@ -1344,6 +1371,40 @@ export function TheaterPlayer({
                   ))}
                 </select>
               </label>
+              {engineLevels.length > 1 && (
+                <label className={styles.settingField}>
+                  <span>
+                    <Settings2 aria-hidden="true" size={16} /> Stream quality
+                  </span>
+                  <select
+                    aria-label="Stream quality"
+                    disabled={switching}
+                    onChange={(event) => {
+                      const player = playerReference.current;
+                      if (!player) return;
+                      const value = event.currentTarget.value;
+                      if (value === "auto") player.setAutoLevel();
+                      else player.setLevel(Number(value));
+                      setTransitionMessage("Applying playback quality…");
+                      if (qualityMessageTimeoutReference.current) {
+                        clearTimeout(qualityMessageTimeoutReference.current);
+                      }
+                      qualityMessageTimeoutReference.current = setTimeout(() => {
+                        qualityMessageTimeoutReference.current = null;
+                        setTransitionMessage("");
+                      }, 2_000);
+                    }}
+                    value={engineCurrentLevel === -1 ? "auto" : String(engineCurrentLevel)}
+                  >
+                    <option value="auto">Auto</option>
+                    {engineLevels.map((level) => (
+                      <option key={level.index} value={level.index}>
+                        {levelLabel(level)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </section>
           )}
           <label className={styles.progressControl}>
