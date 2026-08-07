@@ -49,3 +49,29 @@ export function clientNetworkGroup(address: unknown) {
     .map((value) => value.toString(16).padStart(4, "0"))
     .join(":")}::/64`;
 }
+
+export function clientNetworkClass(address: unknown): "home" | "remote" {
+  if (typeof address !== "string" || address.length === 0) return "remote";
+  const version = isIP(address);
+  if (version === 4) {
+    const octets = address.split(".").map(Number);
+    return octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && (octets[1] ?? -1) >= 16 && (octets[1] ?? -1) <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+      ? "home"
+      : "remote";
+  }
+  if (version !== 6) return "remote";
+  const values = ipv6Hextets(address);
+  if (values.length !== 8) return "remote";
+  if (values.slice(0, 7).every((value) => value === 0) && values[7] === 1) return "home";
+  if (values.slice(0, 5).every((value) => value === 0) && values[5] === 0xffff) {
+    return clientNetworkClass(
+      [values[6]! >> 8, values[6]! & 0xff, values[7]! >> 8, values[7]! & 0xff].join("."),
+    );
+  }
+  const first = values[0] ?? 0;
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 ? "home" : "remote";
+}

@@ -12,6 +12,7 @@ import {
   ListChecks,
   LoaderCircle,
   LogOut,
+  PlaySquare,
   RefreshCw,
   ScrollText,
   ShieldCheck,
@@ -467,6 +468,14 @@ export function AccountSecurityPanel({
                     </div>
                   ) : (
                     <div className="account-card__actions">
+                      {snapshot!.principal.permissions.includes("playback.use") ? (
+                        <Link
+                          className="account-action account-action--primary"
+                          href="/settings/playback"
+                        >
+                          <PlaySquare aria-hidden="true" size={17} /> Playback defaults
+                        </Link>
+                      ) : null}
                       {snapshot!.principal.permissions.includes("connectors.manage") &&
                       snapshot!.principal.authenticationMethod.kind !== "recovery" ? (
                         <Link className="account-action account-action--primary" href="/onboarding">

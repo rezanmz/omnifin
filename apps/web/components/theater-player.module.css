@@ -156,6 +156,7 @@
 .syncState,
 .iconButton,
 .retryButton,
+.skipButton,
 .controls {
   -webkit-backdrop-filter: blur(22px) saturate(145%);
   backdrop-filter: blur(22px) saturate(145%);
@@ -215,6 +216,7 @@
 .iconButton:focus-visible,
 .primaryPlay:focus-visible,
 .retryButton:focus-visible,
+.skipButton:focus-visible,
 .issueDone:focus-visible,
 .issueSubmit:focus-visible,
 .issueCategories input:focus-visible + span,
@@ -266,6 +268,119 @@
     0 18px 52px rgb(0 0 0 / 36%);
   display: flex;
   justify-content: center;
+}
+
+.skipButton {
+  border-radius: 999px;
+  bottom: clamp(126px, 17vh, 180px);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 680;
+  min-height: 44px;
+  padding: 0 18px;
+  position: absolute;
+  right: clamp(18px, 4vw, 62px);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    transform 150ms ease-out;
+  z-index: 5;
+}
+
+.skipButton:hover {
+  background-color: rgb(255 255 255 / 22%);
+  border-color: rgb(255 255 255 / 34%);
+  transform: translateY(-1px);
+}
+
+.skipButton:active {
+  transform: scale(0.97);
+}
+
+.skipButtonCredits {
+  left: clamp(18px, 4vw, 62px);
+  right: auto;
+}
+
+.upNext {
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 22%), transparent 36%), rgb(19 25 23 / 72%);
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 24px;
+  bottom: clamp(132px, 19vh, 196px);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    0 24px 72px rgb(0 0 0 / 42%);
+  display: grid;
+  gap: 4px;
+  max-width: min(390px, calc(100vw - 32px));
+  padding: 17px;
+  position: absolute;
+  right: clamp(16px, 3vw, 48px);
+  width: 100%;
+  z-index: 5;
+}
+
+.upNextEyebrow {
+  color: rgb(241 247 243 / 58%);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.upNext strong {
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.upNext > span:not(.upNextEyebrow) {
+  color: rgb(241 247 243 / 68%);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.upNext button {
+  align-items: center;
+  background: color-mix(in srgb, var(--player-accent) 48%, rgb(34 42 39 / 78%));
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 680;
+  gap: 7px;
+  justify-content: center;
+  justify-self: start;
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.upNextActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.upNext button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--player-accent) 78%, white);
+  outline-offset: 3px;
+}
+
+.upNext button.upNextSecondary {
+  background: rgb(255 255 255 / 8%);
+  color: rgb(241 247 243 / 82%);
+}
+
+.upNext button.upNextSecondary:hover {
+  background: rgb(255 255 255 / 14%);
 }
 
 .stateOrb {
@@ -613,6 +728,53 @@
   font-size: 0.64rem;
 }
 
+.preferenceContext {
+  align-items: center;
+  background: color-mix(in srgb, var(--player-accent) 10%, rgb(255 255 255 / 6%));
+  border: 1px solid color-mix(in srgb, var(--player-accent) 20%, rgb(255 255 255 / 10%));
+  border-radius: 16px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 10px 10px 13px;
+}
+
+.preferenceContext > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferenceContext strong {
+  font-size: 0.68rem;
+}
+
+.preferenceContext span {
+  color: rgb(241 247 243 / 54%);
+  font-size: 0.6rem;
+  line-height: 1.45;
+}
+
+.preferenceContext a {
+  align-items: center;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 12px;
+  color: color-mix(in srgb, var(--player-accent) 54%, white);
+  display: inline-flex;
+  font-size: 0.6rem;
+  font-weight: 680;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 11px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.preferenceContext a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--player-accent) 78%, white);
+  outline-offset: 3px;
+}
+
 .settingField {
   align-items: center;
   background: rgb(255 255 255 / 7%);
@@ -905,6 +1067,14 @@
 
   .settingField {
     grid-template-columns: 84px minmax(0, 1fr);
+  }
+
+  .preferenceContext {
+    grid-template-columns: 1fr;
+  }
+
+  .preferenceContext a {
+    width: 100%;
   }
 }
 
