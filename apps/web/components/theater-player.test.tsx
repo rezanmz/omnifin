@@ -786,6 +786,60 @@ describe("TheaterPlayer", () => {
     expect(client.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("labels burn-in subtitle tracks and restarts the stream to select them", async () => {
+    const user = userEvent.setup();
+    const tieredSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "direct",
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 5,
+          language: "eng",
+          selected: true,
+          title: "English",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/5`,
+        },
+        {
+          codec: "ass",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 7,
+          language: "eng",
+          selected: false,
+          title: "English SDH",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/7`,
+        },
+      ],
+    };
+    const client = readyClient(tieredSession);
+    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    video.currentTime = 1_333;
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+
+    const subtitles = screen.getByRole("combobox", { name: "Subtitle track" });
+    const nativeOption = screen.getByRole("option", { name: /^English · ENG/u });
+    expect(nativeOption).toBeVisible();
+    expect(nativeOption.textContent).not.toContain("restarts stream");
+    expect(screen.getByRole("option", { name: /restarts stream$/u })).toBeVisible();
+
+    await user.selectOptions(subtitles, "7");
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(
+      media.id,
+      1_333,
+      expect.any(AbortSignal),
+      expect.objectContaining({ subtitleStreamIndex: 7 }),
+    );
+  });
+
   it("toggles captions with C and remembers the chosen track", async () => {
     const user = userEvent.setup();
     const captionedSession: PlaybackNegotiationResponse = {

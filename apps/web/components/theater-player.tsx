@@ -30,6 +30,7 @@ import {
   type HlsLevelSummary,
   type PlayerHandle,
 } from "../lib/player-engine";
+import { resolveSubtitleTier } from "../lib/player-subtitles";
 import {
   browserPlaybackPath,
   browserPlaybackSubtitlePath,
@@ -146,7 +147,7 @@ function preparationOptions(
   const clientRenderedSubtitle =
     selectedSubtitle !== undefined &&
     selectedSubtitle.subtitlePath !== undefined &&
-    subtitleKind(selectedSubtitle) !== undefined;
+    resolveSubtitleTier(selectedSubtitle) === "native";
   return {
     audioStreamIndex: preferences.audioStreamIndex,
     maxStreamingBitrate: quality.bitrate,
@@ -188,18 +189,6 @@ function formatTime(seconds: number) {
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
     : `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
-
-function subtitleKind(track: { codec: string | null; delivery: "external" | "hls" | "video" }) {
-  if (track.delivery === "hls") return undefined;
-  const codec = track.codec?.toLowerCase();
-  if (
-    codec &&
-    ["ass", "mov_text", "sami", "smi", "srt", "ssa", "subrip", "vtt", "webvtt"].includes(codec)
-  ) {
-    return "subtitles" as const;
-  }
-  return undefined;
 }
 
 function isInteractiveTarget(target: EventTarget | null) {
@@ -498,9 +487,12 @@ export function TheaterPlayer({
             ) ?? null);
       const clientToggleableTrack =
         subtitleStreamIndex !== null
-          ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
+          ? track !== null &&
+            track.subtitlePath !== undefined &&
+            resolveSubtitleTier(track) === "native"
           : active.session.subtitleTracks.some(
-              (candidate) => candidate.subtitlePath !== undefined && subtitleKind(candidate),
+              (candidate) =>
+                candidate.subtitlePath !== undefined && resolveSubtitleTier(candidate) === "native",
             );
       const toggleable = clientToggleableTrack && selectSubtitleTrack(subtitleStreamIndex);
       if (toggleable) {
@@ -598,10 +590,9 @@ export function TheaterPlayer({
       subtitleTracksByIndexReference.current = new Map();
       for (const track of prepared.session.subtitleTracks) {
         if (track.subtitlePath === undefined) continue;
-        const kind = subtitleKind(track);
-        if (kind === undefined) continue;
+        if (resolveSubtitleTier(track) !== "native") continue;
         const trackElement = document.createElement("track");
-        trackElement.kind = kind;
+        trackElement.kind = "subtitles";
         trackElement.label = track.title ?? `Track ${track.index}`;
         if (track.language !== null && track.language !== undefined) {
           trackElement.srclang = track.language;
@@ -908,7 +899,8 @@ export function TheaterPlayer({
             preferences.subtitleStreamIndex ??
             active.session.subtitleTracks.find((track) => track.selected)?.index ??
             active.session.subtitleTracks.find(
-              (track) => track.subtitlePath !== undefined && subtitleKind(track),
+              (track) =>
+                track.subtitlePath !== undefined && resolveSubtitleTier(track) === "native",
             )?.index ??
             active.session.subtitleTracks[0]?.index ??
             null;
@@ -1322,6 +1314,7 @@ export function TheaterPlayer({
                     <option key={track.index} value={track.index}>
                       {trackLabel(track)}
                       {track.forced ? " · Forced" : ""}
+                      {resolveSubtitleTier(track) === "burn-in" ? " · restarts stream" : ""}
                     </option>
                   ))}
                 </select>
