@@ -364,6 +364,11 @@ const jellyfinPlaybackStateItemSchema = z.object({
   }),
 });
 
+const jellyfinFavoriteStateItemSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  UserData: z.object({ IsFavorite: z.boolean() }),
+});
+
 const jellyfinLibraryQuerySchema = z.strictObject({
   kind: z.enum(["all", "movies", "series"]),
   limit: z.int().positive().max(JELLYFIN_LIBRARY_BROWSE_LIMIT),
@@ -449,6 +454,18 @@ const jellyfinLibrarySeasonEpisodesQuerySchema = z.strictObject({
 
 const jellyfinPlaybackStateMutationInputSchema = z.strictObject({
   action: z.enum(["mark_watched", "mark_unwatched", "reset_progress"]),
+  itemId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
+const jellyfinFavoriteStateInputSchema = z.strictObject({
+  favorite: z.boolean(),
   itemId: z
     .string()
     .trim()
@@ -2251,6 +2268,60 @@ export class JellyfinUserMediaClient {
           : playback.positionSeconds === 0;
     if (!reconciled) throw mutationError ?? this.#client.invalidResponse("media.playback_state");
     return playback;
+  }
+
+  public async readFavoriteState(
+    rawInput: { itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const input = jellyfinFavoriteStateInputSchema.omit({ favorite: true }).parse(rawInput);
+    return this.#readFavoriteState(input.itemId, input.userId, signal);
+  }
+
+  public async updateFavoriteState(
+    rawInput: { favorite: boolean; itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const input = jellyfinFavoriteStateInputSchema.parse(rawInput);
+    let mutationError: unknown;
+    try {
+      await this.#client.requestBytes(`UserFavoriteItems/${input.itemId}`, {
+        headers: { authorization: this.#authorization },
+        method: input.favorite ? "POST" : "DELETE",
+        operation: "media.favorite",
+        query: { userId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      if (!(error instanceof SafeConnectorError) || !error.retryable) throw error;
+      mutationError = error;
+    }
+
+    let favorite: boolean;
+    try {
+      favorite = await this.#readFavoriteState(input.itemId, input.userId, signal);
+    } catch (error) {
+      throw mutationError ?? error;
+    }
+    if (favorite !== input.favorite) {
+      throw mutationError ?? this.#client.invalidResponse("media.favorite");
+    }
+    return favorite;
+  }
+
+  async #readFavoriteState(itemId: string, userId: string, signal?: AbortSignal) {
+    const item = await this.#client.requestJson(
+      `Items/${itemId}`,
+      jellyfinFavoriteStateItemSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.favorite",
+        query: { EnableUserData: "true", UserId: userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    if (item.Id !== itemId) throw this.#client.invalidResponse("media.favorite");
+    return item.UserData.IsFavorite;
   }
 
   async #readPlaybackState(

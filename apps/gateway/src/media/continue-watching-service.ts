@@ -2984,6 +2984,13 @@ export class ContinueWatchingService {
     try {
       this.#database.sqlite
         .transaction(() => {
+          if (state === "succeeded") {
+            this.#invalidateSavedOwnershipAfterLibraryRemoval(
+              context.principal.userId!,
+              terminal.referenceId,
+              completedAt.getTime(),
+            );
+          }
           const updated = this.#database.sqlite
             .prepare(
               `update library_removal_operations
@@ -3018,6 +3025,70 @@ export class ContinueWatchingService {
     } catch (error) {
       throw new LibraryRemovalError("storage_failure", { cause: error });
     }
+  }
+
+  #invalidateSavedOwnershipAfterLibraryRemoval(userId: string, referenceId: string, now: number) {
+    const exhausted = this.#database.sqlite
+      .prepare(
+        `select 1
+         from saved_lists
+         join saved_list_items on saved_list_items.list_id = saved_lists.id
+         join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+         where saved_lists.user_id = ? and saved_lists.deleted_at is null
+           and saved_catalog_items.user_id = ?
+           and saved_catalog_items.library_reference_id = ?
+           and saved_lists.revision >= 2147483647
+         limit 1`,
+      )
+      .get(userId, userId, referenceId);
+    if (exhausted) throw new LibraryRemovalError("storage_failure");
+    this.#database.sqlite
+      .prepare(
+        `update saved_lists set revision = revision + 1, updated_at = ?
+         where user_id = ? and deleted_at is null and id in (
+           select saved_list_items.list_id
+           from saved_list_items
+           join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+           where saved_list_items.user_id = ? and saved_catalog_items.user_id = ?
+             and saved_catalog_items.library_reference_id = ?
+         )`,
+      )
+      .run(now, userId, userId, userId, referenceId);
+    this.#database.sqlite
+      .prepare(
+        `delete from saved_targets
+         where user_id = ? and identity_digest in (
+           select identity_digest from saved_catalog_items
+           where user_id = ? and library_reference_id = ?
+         )`,
+      )
+      .run(userId, userId, referenceId);
+    // Invalidate the reference only while it is still owned by a saved catalog
+    // item (before the ownership link is cleared below), so removal of a title
+    // that is not saved does not break later same-target removal commits.
+    this.#database.sqlite
+      .prepare(
+        `update media_references
+         set link_revision = case
+               when link_revision < 2147483647 then link_revision + 1
+               else link_revision - 1
+             end,
+             updated_at = ?
+         where id = ? and user_id = ?
+           and exists (
+             select 1 from saved_catalog_items
+             where user_id = ? and library_reference_id = media_references.id
+           )`,
+      )
+      .run(now, referenceId, userId, userId);
+    this.#database.sqlite
+      .prepare(
+        `update saved_catalog_items
+         set library_reference_id = null, library_reference_user_id = null,
+             last_resolved_at = null, updated_at = ?
+         where user_id = ? and library_reference_id = ?`,
+      )
+      .run(now, userId, referenceId);
   }
 
   #recoverStaleLibraryRemovalOperation(

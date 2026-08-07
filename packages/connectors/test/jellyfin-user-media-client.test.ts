@@ -1550,6 +1550,107 @@ describe("JellyfinUserMediaClient", () => {
     ).rejects.toMatchObject({ code: "response_invalid", operation: "media.playback_state" });
   });
 
+  it("reads and changes the paired user's authoritative favorite state", async () => {
+    const current = clientWithResponses([
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      current.client.readFavoriteState({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(false);
+    expect(current.requests[0]?.url.pathname).toBe("/base/Items/movie-upstream-1");
+    expect(Object.fromEntries(current.requests[0]!.url.searchParams)).toEqual({
+      EnableUserData: "true",
+      UserId: "paired-user-id",
+    });
+
+    const marked = clientWithResponses([
+      jsonResponse({ IsFavorite: true }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: true } }),
+    ]);
+    await expect(
+      marked.client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(true);
+    expect(marked.requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/UserFavoriteItems/movie-upstream-1",
+      "/base/Items/movie-upstream-1",
+    ]);
+    expect(marked.requests[0]?.init.method).toBe("POST");
+    expect(marked.requests[0]?.url.searchParams.get("userId")).toBe("paired-user-id");
+    expect(marked.requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
+
+    const unmarked = clientWithResponses([
+      jsonResponse({ IsFavorite: false }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      unmarked.client.updateFavoriteState({
+        favorite: false,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(false);
+    expect(unmarked.requests[0]?.init.method).toBe("DELETE");
+  });
+
+  it("reconciles an unknown favorite mutation outcome before reporting success", async () => {
+    let attempt = 0;
+    const client = new JellyfinUserMediaClient({
+      accessToken: "private-access-token",
+      deviceId: "installation-1",
+      target: {
+        baseUrl: "https://jellyfin.example.test/base/",
+        connectorId: "jellyfin-home",
+        displayName: "Home Jellyfin",
+        resolveHost: publicResolver,
+        transport: async () => {
+          attempt += 1;
+          if (attempt === 1) throw new Error("connection ended after favorite write");
+          return jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: true } });
+        },
+      },
+    });
+
+    await expect(
+      client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(true);
+    expect(attempt).toBe(2);
+  });
+
+  it("fails closed when favorite state is malformed or does not converge", async () => {
+    const malformed = clientWithResponses([
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: "yes" } }),
+    ]);
+    await expect(
+      malformed.client.readFavoriteState({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.favorite" });
+
+    const divergent = clientWithResponses([
+      jsonResponse({ IsFavorite: true }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      divergent.client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.favorite" });
+  });
+
   it("fails closed on malformed resume data and unsafe tokens", async () => {
     const malformed = clientWithResponses([
       jsonResponse({ Items: [{ ...movie, RunTimeTicks: "7200000000" }] }),

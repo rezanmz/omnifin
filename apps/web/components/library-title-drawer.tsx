@@ -54,6 +54,7 @@ import {
   type MediaLibraryClient,
 } from "../lib/media-library";
 import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
+import { SavedTitleActions } from "./saved-title-actions";
 
 const MediaDetailDrawer = dynamic(() =>
   import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
@@ -1880,6 +1881,12 @@ export function LibraryTitleDrawer({
                         ))}
                       </nav>
                     ) : null}
+                    <SavedTitleActions
+                      eager
+                      key={detail!.media.id}
+                      referenceId={detail!.media.id}
+                      title={detail!.media.title}
+                    />
                     {detail!.movie?.tagline ? (
                       <blockquote className="library-title__tagline">
                         {detail!.movie.tagline}

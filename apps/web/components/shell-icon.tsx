@@ -1,6 +1,7 @@
 import type { SVGProps } from "react";
 
 export type ShellIconName =
+  | "bookmark"
   | "calendar"
   | "check"
   | "clipboard"
@@ -35,6 +36,9 @@ export function ShellIcon({
       xmlns="http://www.w3.org/2000/svg"
       {...props}
     >
+      {name === "bookmark" ? (
+        <path d="M6 4.8A2.8 2.8 0 0 1 8.8 2h6.4A2.8 2.8 0 0 1 18 4.8V22l-6-3.8L6 22z" />
+      ) : null}
       {name === "calendar" ? (
         <>
           <path d="M8 2v4M16 2v4M3 10h18" />

@@ -878,6 +878,59 @@ describe("ContinueWatchingService", () => {
           .prepare("select consumed_at as consumedAt from library_removal_previews")
           .get(),
       ).toEqual({ consumedAt: null });
+      const savedCatalogId = `catalog_${"s".repeat(22)}`;
+      const savedListId = `saved_list_${"s".repeat(22)}`;
+      database.sqlite
+        .prepare(
+          `insert into saved_catalog_items (
+             id, user_id, identity_digest, encrypted_identity, encrypted_snapshot,
+             library_reference_id, library_reference_user_id, last_resolved_at,
+             created_at, updated_at
+           ) values (?, 'viewer-user', ?, 'sealed', 'sealed', ?, 'viewer-user', ?, ?, ?)`,
+        )
+        .run(
+          savedCatalogId,
+          "s".repeat(22),
+          referenceId,
+          now.getTime(),
+          now.getTime(),
+          now.getTime(),
+        );
+      database.sqlite
+        .prepare(
+          `insert into saved_lists (
+             id, user_id, kind, encrypted_name, revision, created_at, updated_at
+           ) values (?, 'viewer-user', 'watch_later', 'sealed', 0, ?, ?)`,
+        )
+        .run(savedListId, now.getTime(), now.getTime());
+      database.sqlite
+        .prepare(
+          `insert into saved_list_items (
+             id, user_id, list_id, catalog_item_id, position, created_at, updated_at
+           ) values (?, 'viewer-user', ?, ?, 0, ?, ?)`,
+        )
+        .run(
+          `saved_item_${"s".repeat(22)}`,
+          savedListId,
+          savedCatalogId,
+          now.getTime(),
+          now.getTime(),
+        );
+      database.sqlite
+        .prepare(
+          `insert into saved_targets (
+             id, user_id, service_identity_link_id, link_revision, identity_digest,
+             encrypted_payload, last_used_at, expires_at, created_at, updated_at
+           ) values (?, 'viewer-user', 'viewer-link', 3, ?, 'sealed', ?, ?, ?, ?)`,
+        )
+        .run(
+          `save_target_${"s".repeat(22)}`,
+          "s".repeat(22),
+          now.getTime(),
+          now.getTime() + 60_000,
+          now.getTime(),
+          now.getTime(),
+        );
       const first = await service.commitLibraryRemoval(
         referenceId,
         request,
@@ -941,6 +994,26 @@ describe("ContinueWatchingService", () => {
         ),
       ).toBe(JSON.stringify({ schemaVersion: 1, state: "cleared" }));
       expect(storedOperation).toMatchObject({ state: "succeeded" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select saved_lists.revision as revision,
+                    saved_catalog_items.library_reference_id as libraryReferenceId
+             from saved_lists
+             join saved_list_items on saved_list_items.list_id = saved_lists.id
+             join saved_catalog_items on saved_catalog_items.id = saved_list_items.catalog_item_id
+             where saved_lists.id = ?`,
+          )
+          .get(savedListId),
+      ).toEqual({ libraryReferenceId: null, revision: 1 });
+      expect(database.sqlite.prepare("select count(*) as count from saved_targets").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        database.sqlite
+          .prepare("select link_revision as linkRevision from media_references where id = ?")
+          .get(referenceId),
+      ).toEqual({ linkRevision: 4 });
       expect(
         database.sqlite
           .prepare("select consumed_at as consumedAt from library_removal_previews")

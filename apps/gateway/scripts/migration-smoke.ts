@@ -41,6 +41,11 @@ const requiredTables = [
   "playback_asset_handles",
   "playback_sessions",
   "role_mappings",
+  "saved_catalog_items",
+  "saved_list_items",
+  "saved_list_operations",
+  "saved_lists",
+  "saved_targets",
   "service_identity_links",
   "session_rotation_aliases",
   "session_secret_reservations",
@@ -280,6 +285,45 @@ const requiredColumns = {
     "state",
     "user_id",
   ],
+  saved_catalog_items: [
+    "encrypted_identity",
+    "encrypted_snapshot",
+    "identity_digest",
+    "last_resolved_at",
+    "library_reference_id",
+    "library_reference_user_id",
+    "user_id",
+  ],
+  saved_list_items: ["catalog_item_id", "list_id", "position", "user_id"],
+  saved_list_operations: [
+    "completed_at",
+    "encrypted_response",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "kind",
+    "resource_id",
+    "state",
+    "user_id",
+  ],
+  saved_lists: [
+    "deleted_at",
+    "encrypted_description",
+    "encrypted_name",
+    "kind",
+    "revision",
+    "undo_expires_at",
+    "user_id",
+  ],
+  saved_targets: [
+    "encrypted_payload",
+    "expires_at",
+    "identity_digest",
+    "last_used_at",
+    "link_revision",
+    "service_identity_link_id",
+    "user_id",
+  ],
   oidc_logout_receipts: ["expires_at", "issued_at", "jti_hash", "provider_id", "received_at"],
   oidc_providers: [
     "approved_endpoint_origins_json",
@@ -410,6 +454,7 @@ const requiredIndexes = {
   ],
   media_references: [
     "media_references_expiry_idx",
+    "media_references_id_user_unique",
     "media_references_link_item_unique",
     "media_references_user_last_used_idx",
   ],
@@ -442,6 +487,30 @@ const requiredIndexes = {
     "playback_asset_handles_session_target_idx",
   ],
   playback_sessions: ["playback_sessions_expiry_idx", "playback_sessions_user_updated_idx"],
+  saved_catalog_items: [
+    "saved_catalog_items_id_user_unique",
+    "saved_catalog_items_library_reference_idx",
+    "saved_catalog_items_user_identity_unique",
+    "saved_catalog_items_user_updated_idx",
+  ],
+  saved_list_items: [
+    "saved_list_items_catalog_idx",
+    "saved_list_items_list_catalog_unique",
+    "saved_list_items_list_position_unique",
+    "saved_list_items_user_created_idx",
+  ],
+  saved_list_operations: [
+    "saved_list_operations_resource_idx",
+    "saved_list_operations_state_created_idx",
+    "saved_list_operations_user_key_unique",
+  ],
+  saved_lists: [
+    "saved_lists_id_user_unique",
+    "saved_lists_undo_expiry_idx",
+    "saved_lists_user_updated_idx",
+    "saved_lists_user_watch_later_unique",
+  ],
+  saved_targets: ["saved_targets_expiry_idx", "saved_targets_user_identity_unique"],
   service_identity_links: ["service_identity_links_connector_idx"],
   session_rotation_aliases: [
     "session_rotation_aliases_expiry_idx",
@@ -478,6 +547,7 @@ const requiredTriggers = [
   "audit_budget_entries_update_immutable",
   "audit_budget_scopes_delete_protected",
   "audit_budget_scopes_update_guarded",
+  "saved_catalog_media_reference_before_delete",
   "session_rotation_aliases_update_immutable",
   "session_secret_reservations_delete_immutable",
   "session_secret_reservations_update_immutable",
@@ -501,6 +571,12 @@ interface MigrationJournal {
   version: string;
 }
 
+interface MigrationSnapshot {
+  id: string;
+  prevId: string;
+  tables: Record<string, unknown>;
+}
+
 interface LegacySessionFixture {
   createdAt: number;
   csrfTokenHash: string;
@@ -517,6 +593,45 @@ function writeHistoricalMigrationFixture() {
   const journal = JSON.parse(
     readFileSync(path.join(currentMigrationDirectory, "meta/_journal.json"), "utf8"),
   ) as MigrationJournal;
+  const expectedTail = [
+    [27, "0027_connector_public_ui_urls"],
+    [28, "0028_library_removal_operations"],
+    [29, "0029_theme_preferences"],
+    [30, "0030_saved_lists"],
+  ];
+  assertCondition(
+    JSON.stringify(journal.entries.slice(-4).map(({ idx, tag }) => [idx, tag])) ===
+      JSON.stringify(expectedTail),
+    "Current migration journal must preserve the linear parent and saved-list ancestry.",
+  );
+  const snapshots = [27, 28, 29, 30].map(
+    (index) =>
+      JSON.parse(
+        readFileSync(path.join(currentMigrationDirectory, `meta/00${index}_snapshot.json`), "utf8"),
+      ) as MigrationSnapshot,
+  );
+  assertCondition(
+    snapshots[0]?.id === "d72bbdc7-4633-464e-b248-cbaf1640ebbe" &&
+      snapshots[1]?.id === "b0bd4167-ae32-4da2-b8b7-ca27eae76fde" &&
+      snapshots[2]?.id === "5df51154-3db1-4760-b64a-3b5db3e2a7b3" &&
+      snapshots[3]?.id === "d100e329-3adb-4ce6-b942-c2d0c1b2288a" &&
+      snapshots.every(
+        (snapshot, index) => index === 0 || snapshot.prevId === snapshots[index - 1]?.id,
+      ),
+    "Migration snapshots 0027 through 0030 must retain one linear ancestry.",
+  );
+  assertCondition(
+    [
+      "library_removal_operations",
+      "media_request_profile_preferences",
+      "saved_catalog_items",
+      "saved_list_items",
+      "saved_list_operations",
+      "saved_lists",
+      "saved_targets",
+    ].every((table) => Object.hasOwn(snapshots[3]!.tables, table)),
+    "Snapshot 0030 must include all parent and saved-list tables.",
+  );
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
     historicalEntries.length === 3 &&
@@ -607,8 +722,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0029_theme_preferences",
-  "Current migration journal must end at migration 0029_theme_preferences.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0030_saved_lists",
+  "Current migration journal must end at migration 0030_saved_lists.",
 );
 
 try {

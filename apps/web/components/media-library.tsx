@@ -45,6 +45,7 @@ import {
 import type { PlaybackClient } from "../lib/playback";
 import type { ThemePreference } from "../lib/theme";
 import { ApplicationShellContent } from "./application-shell";
+import { SavedTitleActions } from "./saved-title-actions";
 import theaterStyles from "./theater-player.module.css";
 import type { PlayableLibrarySelection } from "./library-title-drawer";
 import styles from "./media-library.module.css";
@@ -332,6 +333,7 @@ function LibraryCard({ item, onSelect }: { item: LibraryBrowseItem; onSelect: ()
   const caption = itemCaption(item);
   return (
     <article className={styles.card} style={{ "--library-accent": accent } as PosterStyle}>
+      <SavedTitleActions compact referenceId={item.media.id} title={item.media.title} />
       <button
         aria-label={`View details for ${item.media.title}${caption ? `, ${caption}` : ""}`}
         className={styles.cardAction}

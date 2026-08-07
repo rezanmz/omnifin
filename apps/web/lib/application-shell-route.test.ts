@@ -7,4 +7,9 @@ describe("application shell route mapping", () => {
     expect(applicationDestinationForPath("/history")).toBe("library");
     expect(applicationDestinationForPath("/history/older")).toBe("library");
   });
+
+  it("keeps private lists inside a dedicated Saved destination", () => {
+    expect(applicationDestinationForPath("/saved")).toBe("saved");
+    expect(applicationDestinationForPath("/saved/watch-later")).toBe("saved");
+  });
 });

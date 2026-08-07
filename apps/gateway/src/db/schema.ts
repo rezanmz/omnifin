@@ -463,6 +463,7 @@ export const mediaReferences = sqliteTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("media_references_id_user_unique").on(table.id, table.userId),
     uniqueIndex("media_references_link_item_unique").on(
       table.serviceIdentityLinkId,
       table.linkRevision,
@@ -1339,6 +1340,307 @@ export const userMediaStateOperations = sqliteTable(
     ),
     check(
       "user_media_state_operations_timestamp_order_check",
+      sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const savedLists = sqliteTable(
+  "saved_lists",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["watch_later", "custom"] }).notNull(),
+    encryptedName: text("encrypted_name").notNull(),
+    encryptedDescription: text("encrypted_description"),
+    revision: integer("revision").notNull().default(0),
+    deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
+    undoExpiresAt: integer("undo_expires_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saved_lists_id_user_unique").on(table.id, table.userId),
+    uniqueIndex("saved_lists_user_watch_later_unique")
+      .on(table.userId)
+      .where(sql`${table.kind} = 'watch_later'`),
+    index("saved_lists_user_updated_idx").on(table.userId, table.deletedAt, table.updatedAt),
+    index("saved_lists_undo_expiry_idx").on(table.undoExpiresAt),
+    check(
+      "saved_lists_id_check",
+      sql`length(${table.id}) = 33
+        and substr(${table.id}, 1, 11) = 'saved_list_'
+        and substr(${table.id}, 12) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("saved_lists_kind_check", sql`${table.kind} in ('watch_later', 'custom')`),
+    check("saved_lists_name_check", sql`length(${table.encryptedName}) between 1 and 4096`),
+    check(
+      "saved_lists_description_check",
+      sql`${table.encryptedDescription} is null
+        or length(${table.encryptedDescription}) between 1 and 8192`,
+    ),
+    check("saved_lists_revision_check", sql`${table.revision} between 0 and 2147483647`),
+    check(
+      "saved_lists_deletion_check",
+      sql`(
+          ${table.kind} = 'watch_later'
+          and ${table.deletedAt} is null
+          and ${table.undoExpiresAt} is null
+        ) or (
+          ${table.kind} = 'custom'
+          and (
+            (${table.deletedAt} is null and ${table.undoExpiresAt} is null)
+            or (${table.deletedAt} is not null and ${table.undoExpiresAt} > ${table.deletedAt})
+          )
+        )`,
+    ),
+    check(
+      "saved_lists_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.deletedAt} is null or ${table.deletedAt} between ${table.createdAt} and ${table.updatedAt})`,
+    ),
+  ],
+);
+
+export const savedCatalogItems = sqliteTable(
+  "saved_catalog_items",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    identityDigest: text("identity_digest").notNull(),
+    encryptedIdentity: text("encrypted_identity").notNull(),
+    encryptedSnapshot: text("encrypted_snapshot").notNull(),
+    libraryReferenceId: text("library_reference_id"),
+    libraryReferenceUserId: text("library_reference_user_id"),
+    lastResolvedAt: integer("last_resolved_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saved_catalog_items_id_user_unique").on(table.id, table.userId),
+    uniqueIndex("saved_catalog_items_user_identity_unique").on(table.userId, table.identityDigest),
+    index("saved_catalog_items_user_updated_idx").on(table.userId, table.updatedAt),
+    index("saved_catalog_items_library_reference_idx").on(table.libraryReferenceId),
+    foreignKey({
+      columns: [table.libraryReferenceId, table.libraryReferenceUserId],
+      foreignColumns: [mediaReferences.id, mediaReferences.userId],
+      name: "saved_catalog_items_library_reference_fk",
+    }).onDelete("set null"),
+    check(
+      "saved_catalog_items_id_check",
+      sql`length(${table.id}) = 30
+        and substr(${table.id}, 1, 8) = 'catalog_'
+        and substr(${table.id}, 9) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_catalog_items_identity_digest_check",
+      sql`length(${table.identityDigest}) = 22
+        and ${table.identityDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_catalog_items_identity_check",
+      sql`length(${table.encryptedIdentity}) between 1 and 16384`,
+    ),
+    check(
+      "saved_catalog_items_snapshot_check",
+      sql`length(${table.encryptedSnapshot}) between 1 and 65536`,
+    ),
+    check(
+      "saved_catalog_items_library_reference_check",
+      sql`(
+          ${table.libraryReferenceId} is null
+          and ${table.libraryReferenceUserId} is null
+        ) or (
+          length(${table.libraryReferenceId}) = 28
+          and substr(${table.libraryReferenceId}, 1, 6) = 'media_'
+          and substr(${table.libraryReferenceId}, 7) not glob '*[^A-Za-z0-9_-]*'
+          and ${table.libraryReferenceUserId} = ${table.userId}
+        )`,
+    ),
+    check(
+      "saved_catalog_items_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.lastResolvedAt} is null or ${table.lastResolvedAt} between ${table.createdAt} and ${table.updatedAt})`,
+    ),
+  ],
+);
+
+export const savedListItems = sqliteTable(
+  "saved_list_items",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    listId: text("list_id").notNull(),
+    catalogItemId: text("catalog_item_id").notNull(),
+    position: integer("position").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saved_list_items_list_catalog_unique").on(table.listId, table.catalogItemId),
+    uniqueIndex("saved_list_items_list_position_unique").on(table.listId, table.position),
+    index("saved_list_items_user_created_idx").on(table.userId, table.createdAt),
+    index("saved_list_items_catalog_idx").on(table.catalogItemId),
+    foreignKey({
+      columns: [table.listId, table.userId],
+      foreignColumns: [savedLists.id, savedLists.userId],
+      name: "saved_list_items_list_owner_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.catalogItemId, table.userId],
+      foreignColumns: [savedCatalogItems.id, savedCatalogItems.userId],
+      name: "saved_list_items_catalog_owner_fk",
+    }).onDelete("cascade"),
+    check(
+      "saved_list_items_id_check",
+      sql`length(${table.id}) = 33
+        and substr(${table.id}, 1, 11) = 'saved_item_'
+        and substr(${table.id}, 12) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("saved_list_items_position_check", sql`${table.position} between 0 and 499`),
+    check(
+      "saved_list_items_timestamp_order_check",
+      sql`${table.createdAt} >= 0 and ${table.createdAt} <= ${table.updatedAt}`,
+    ),
+  ],
+);
+
+export const savedTargets = sqliteTable(
+  "saved_targets",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    serviceIdentityLinkId: text("service_identity_link_id").notNull(),
+    linkRevision: integer("link_revision").notNull(),
+    identityDigest: text("identity_digest").notNull(),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saved_targets_user_identity_unique").on(
+      table.userId,
+      table.serviceIdentityLinkId,
+      table.linkRevision,
+      table.identityDigest,
+    ),
+    index("saved_targets_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.serviceIdentityLinkId, table.userId],
+      foreignColumns: [serviceIdentityLinks.id, serviceIdentityLinks.userId],
+      name: "saved_targets_service_identity_link_fk",
+    }).onDelete("cascade"),
+    check(
+      "saved_targets_id_check",
+      sql`length(${table.id}) = 34
+        and substr(${table.id}, 1, 12) = 'save_target_'
+        and substr(${table.id}, 13) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_targets_identity_digest_check",
+      sql`length(${table.identityDigest}) = 22
+        and ${table.identityDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_targets_payload_check",
+      sql`length(${table.encryptedPayload}) between 1 and 65536`,
+    ),
+    check("saved_targets_link_revision_check", sql`${table.linkRevision} between 0 and 2147483647`),
+    check(
+      "saved_targets_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and ${table.createdAt} <= ${table.lastUsedAt}
+        and ${table.lastUsedAt} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+export const savedListOperations = sqliteTable(
+  "saved_list_operations",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["create_list", "restore_list", "add_item", "reorder_items", "favorite"],
+    }).notNull(),
+    resourceId: text("resource_id"),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", {
+      enum: ["pending", "succeeded", "reconcile_required", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    encryptedResponse: text("encrypted_response"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saved_list_operations_user_key_unique").on(table.userId, table.idempotencyKeyHash),
+    index("saved_list_operations_state_created_idx").on(table.state, table.createdAt),
+    index("saved_list_operations_resource_idx").on(table.userId, table.resourceId, table.createdAt),
+    check(
+      "saved_list_operations_id_check",
+      sql`length(${table.id}) = 38
+        and substr(${table.id}, 1, 16) = 'saved_operation_'
+        and substr(${table.id}, 17) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_list_operations_kind_check",
+      sql`${table.kind} in ('create_list', 'restore_list', 'add_item', 'reorder_items', 'favorite')`,
+    ),
+    check(
+      "saved_list_operations_key_hash_check",
+      sql`length(${table.idempotencyKeyHash}) = 43
+        and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_list_operations_fingerprint_hash_check",
+      sql`length(${table.fingerprintHash}) = 22
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "saved_list_operations_state_check",
+      sql`${table.state} in ('pending', 'succeeded', 'reconcile_required', 'failed')`,
+    ),
+    check(
+      "saved_list_operations_response_check",
+      sql`${table.encryptedResponse} is null
+        or length(${table.encryptedResponse}) between 1 and 131072`,
+    ),
+    check(
+      "saved_list_operations_outcome_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.encryptedResponse} is null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.encryptedResponse} is not null
+          and ${table.failureCode} is null
+          and ${table.completedAt} is not null
+        ) or (
+          ${table.state} in ('reconcile_required', 'failed')
+          and ${table.encryptedResponse} is null
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null
+        )`,
+    ),
+    check(
+      "saved_list_operations_timestamp_order_check",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
     ),
   ],

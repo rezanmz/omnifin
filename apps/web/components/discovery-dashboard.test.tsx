@@ -1,3 +1,4 @@
+import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -68,6 +69,12 @@ describe("DiscoveryDashboard", () => {
       "/browse?kind=movie",
     );
     expect(screen.getAllByRole("button", { name: "Request The Far Meridian" })).not.toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "Toggle The Far Meridian in Watch Later" }),
+    ).not.toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Toggle Glass Horizon in Watch Later" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "The Far Meridian" })).toHaveAttribute(
       "data-artwork-source",
       "remote",
@@ -90,6 +97,29 @@ describe("DiscoveryDashboard", () => {
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("omits saved actions for unknown discovery titles", () => {
+    const unknownFeed: DiscoveryFeedResponse = {
+      ...demoDiscoveryFeed,
+      rails: demoDiscoveryFeed.rails.map((rail) => ({
+        ...rail,
+        items: rail.items.map((item) =>
+          item.id === "movie:603" ? { ...item, availability: "unknown" } : item,
+        ),
+      })),
+    };
+
+    render(
+      <DiscoveryDashboard initialFeed={unknownFeed} live={false} showContinueWatching={false} />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Toggle The Far Meridian in Watch Later" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "Toggle Violet Crossing in Watch Later" }),
+    ).not.toHaveLength(0);
   });
 
   it("opens the guarded request composer directly from a discovery card", async () => {
