@@ -711,21 +711,28 @@ describe("TheaterPlayer", () => {
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const dialog = screen.getByRole("dialog", { name: media.title });
-    const subtitleSelect = () => screen.getByRole("combobox", { name: "Subtitle track" });
+    const settingsButton = () => screen.getByRole("button", { name: "Playback settings" });
+
+    // Opening settings mid-renegotiation is a no-op (the button is disabled
+    // until the replacement stream is ready), so retry until the panel opens
+    // and reflects the expected track after the caption toggle settles.
+    const openSettingsAndExpect = async (value: string) => {
+      await waitFor(async () => {
+        await user.click(settingsButton());
+        expect(screen.queryByRole("combobox", { name: "Subtitle track" })).toHaveValue(value);
+      });
+    };
 
     fireEvent.keyDown(dialog, { key: "c" });
-    await user.click(screen.getByRole("button", { name: "Playback settings" }));
-    expect(subtitleSelect()).toHaveValue("5");
+    await openSettingsAndExpect("5");
 
-    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.click(settingsButton());
     fireEvent.keyDown(dialog, { key: "c" });
-    await user.click(screen.getByRole("button", { name: "Playback settings" }));
-    expect(subtitleSelect()).toHaveValue("off");
+    await openSettingsAndExpect("off");
 
-    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.click(settingsButton());
     fireEvent.keyDown(dialog, { key: "c" });
-    await user.click(screen.getByRole("button", { name: "Playback settings" }));
-    expect(subtitleSelect()).toHaveValue("5");
+    await openSettingsAndExpect("5");
   });
 
   it("submits a private playback issue with category, note, and current timestamp", async () => {
