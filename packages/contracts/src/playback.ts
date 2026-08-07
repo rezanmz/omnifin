@@ -51,9 +51,11 @@ export type PlaybackNegotiationRequest = z.infer<typeof playbackNegotiationReque
 export const playbackAudioTrackSchema = z.strictObject({
   channels: z.int().positive().max(64).nullable(),
   codec: codecSchema,
+  commentary: z.boolean().optional(),
   default: z.boolean(),
   index: streamIndexSchema,
   language: languageSchema,
+  original: z.boolean().optional(),
   selected: z.boolean(),
   title: compactTextSchema,
 });
@@ -65,9 +67,11 @@ const playbackSubtitlePathSchema = z
 
 export const playbackSubtitleTrackSchema = z.strictObject({
   codec: codecSchema,
+  commentary: z.boolean().optional(),
   default: z.boolean(),
   delivery: z.enum(["external", "hls", "video"]),
   forced: z.boolean(),
+  hearingImpaired: z.boolean().optional(),
   index: streamIndexSchema,
   language: languageSchema,
   selected: z.boolean(),
@@ -173,6 +177,96 @@ export const playbackProgressResponseSchema = z.strictObject({
 });
 export type PlaybackProgressResponse = z.infer<typeof playbackProgressResponseSchema>;
 
+export const PLAYBACK_PREFERENCE_MAX_LANGUAGES = 8;
+export const PLAYBACK_PREFERENCE_BITRATES = [
+  2_000_000, 4_000_000, 10_000_000, 20_000_000, 40_000_000, 80_000_000,
+] as const;
+export const playbackPreferenceBitrateSchema = z.union(
+  PLAYBACK_PREFERENCE_BITRATES.map((bitrate) => z.literal(bitrate)),
+);
+export const playbackPreferenceLanguageSchema = z
+  .string()
+  .trim()
+  .max(35)
+  .regex(/^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/u);
+
+const orderedLanguagesSchema = z
+  .array(playbackPreferenceLanguageSchema)
+  .max(PLAYBACK_PREFERENCE_MAX_LANGUAGES)
+  .superRefine((languages, context) => {
+    if (new Set(languages).size !== languages.length) {
+      context.addIssue({ code: "custom", message: "Preferred languages must be unique." });
+    }
+  });
+
+export const playbackPreferencesSchema = z.strictObject({
+  audio: z.strictObject({
+    languages: orderedLanguagesSchema,
+    preferOriginalLanguage: z.boolean(),
+  }),
+  episodes: z.strictObject({
+    autoplay: z.boolean(),
+    countdownSeconds: z.int().min(3).max(30),
+    skipCredits: z.boolean(),
+    skipIntro: z.boolean(),
+    stillWatchingAfter: z.int().min(2).max(12).nullable(),
+  }),
+  quality: z.strictObject({
+    defaultNetworkPolicy: z.enum(["auto", "home", "remote"]),
+    homeMaxBitrate: playbackPreferenceBitrateSchema.nullable(),
+    remoteMaxBitrate: playbackPreferenceBitrateSchema,
+  }),
+  schemaVersion: z.literal(1),
+  subtitles: z.strictObject({
+    allowCommentary: z.boolean(),
+    languages: orderedLanguagesSchema,
+    mode: z.enum(["off", "forced", "always", "automatic"]),
+    preferForced: z.boolean(),
+    preferHearingImpaired: z.boolean(),
+  }),
+});
+export type PlaybackPreferences = z.infer<typeof playbackPreferencesSchema>;
+
+export const DEFAULT_PLAYBACK_PREFERENCES = Object.freeze({
+  audio: { languages: [], preferOriginalLanguage: true },
+  episodes: {
+    autoplay: false,
+    countdownSeconds: 10,
+    skipCredits: true,
+    skipIntro: true,
+    stillWatchingAfter: 3,
+  },
+  quality: {
+    defaultNetworkPolicy: "auto",
+    homeMaxBitrate: null,
+    remoteMaxBitrate: 10_000_000,
+  },
+  schemaVersion: 1,
+  subtitles: {
+    allowCommentary: false,
+    languages: [],
+    mode: "automatic",
+    preferForced: true,
+    preferHearingImpaired: false,
+  },
+} satisfies PlaybackPreferences);
+
+export const playbackPreferencesResponseSchema = z.strictObject({
+  networkClass: z.enum(["home", "remote"]),
+  preferences: playbackPreferencesSchema,
+  revision: z.int().nonnegative().max(2_147_483_647),
+  updatedAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export type PlaybackPreferencesResponse = z.infer<typeof playbackPreferencesResponseSchema>;
+
+export const playbackPreferencesUpdateRequestSchema = z.strictObject({
+  expectedRevision: z.int().nonnegative().max(2_147_483_646),
+  preferences: playbackPreferencesSchema,
+});
+export type PlaybackPreferencesUpdateRequest = z.infer<
+  typeof playbackPreferencesUpdateRequestSchema
+>;
+
 const playbackSessionJsonPattern = "^playback_[A-Za-z0-9_-]{22}$";
 const streamIndexJsonSchema = { type: "integer", minimum: 0, maximum: 4_095 } as const;
 const nullableTrackIndexJsonSchema = {
@@ -237,9 +331,11 @@ export const playbackNegotiationResponseJsonSchema = {
         properties: {
           channels: { anyOf: [{ type: "integer", minimum: 1, maximum: 64 }, { type: "null" }] },
           codec: nullableCodecJsonSchema,
+          commentary: { type: "boolean" },
           default: { type: "boolean" },
           index: streamIndexJsonSchema,
           language: nullableLanguageJsonSchema,
+          original: { type: "boolean" },
           selected: { type: "boolean" },
           title: nullableCompactTextJsonSchema,
         },
@@ -300,9 +396,11 @@ export const playbackNegotiationResponseJsonSchema = {
         ],
         properties: {
           codec: nullableCodecJsonSchema,
+          commentary: { type: "boolean" },
           default: { type: "boolean" },
           delivery: { enum: ["external", "hls", "video"] },
           forced: { type: "boolean" },
+          hearingImpaired: { type: "boolean" },
           index: streamIndexJsonSchema,
           language: nullableLanguageJsonSchema,
           selected: { type: "boolean" },
@@ -338,3 +436,19 @@ export const playbackProgressResponseJsonSchema = {
     state: { enum: ["playing", "paused", "stopped"] },
   },
 } as const;
+
+function withoutSchemaDialect<T extends z.ZodType>(schema: T) {
+  const jsonSchema = z.toJSONSchema(schema, {
+    io: "input",
+    reused: "inline",
+  });
+  delete jsonSchema.$schema;
+  return jsonSchema;
+}
+
+export const playbackPreferencesResponseJsonSchema = withoutSchemaDialect(
+  playbackPreferencesResponseSchema,
+);
+export const playbackPreferencesUpdateRequestJsonSchema = withoutSchemaDialect(
+  playbackPreferencesUpdateRequestSchema,
+);

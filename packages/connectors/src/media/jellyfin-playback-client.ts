@@ -89,8 +89,11 @@ const mediaStreamSchema = z.object({
   Height: z.int().nonnegative().max(16_384).nullish(),
   Index: optionalIndexSchema,
   IsDefault: z.boolean().optional(),
+  IsCommentary: z.boolean().optional(),
   IsExternal: z.boolean().optional(),
   IsForced: z.boolean().optional(),
+  IsHearingImpaired: z.boolean().optional(),
+  IsOriginal: z.boolean().optional(),
   Language: z.string().trim().min(1).max(64).nullish(),
   Title: nullableBoundedTextSchema,
   Type: z.enum(["Audio", "Subtitle", "Video"]),
@@ -229,6 +232,8 @@ export interface JellyfinPlaybackResult {
   audioTracks: Array<
     JellyfinPlaybackTrack & {
       channels: number | null;
+      commentary?: boolean;
+      original?: boolean;
     }
   >;
   delivery: "direct" | "hls";
@@ -251,6 +256,8 @@ export interface JellyfinPlaybackResult {
     JellyfinPlaybackTrack & {
       delivery: "external" | "hls" | "video";
       forced: boolean;
+      commentary?: boolean;
+      hearingImpaired?: boolean;
     }
   >;
   upstreamTarget: {
@@ -334,9 +341,11 @@ function audioTracks(source: z.infer<typeof mediaSourceSchema>, selectedIndex: n
     .map((stream) => ({
       channels: stream.Channels ?? null,
       codec: codec(stream.Codec),
+      ...(stream.IsCommentary === undefined ? {} : { commentary: stream.IsCommentary }),
       default: stream.IsDefault ?? false,
       index: stream.Index,
       language: language(stream.Language),
+      ...(stream.IsOriginal === undefined ? {} : { original: stream.IsOriginal }),
       selected: stream.Index === selected,
       title: title(stream),
     }));
@@ -357,9 +366,13 @@ function subtitleTracks(source: z.infer<typeof mediaSourceSchema>, selectedIndex
     .slice(0, 128)
     .map((stream) => ({
       codec: codec(stream.Codec),
+      ...(stream.IsCommentary === undefined ? {} : { commentary: stream.IsCommentary }),
       default: stream.IsDefault ?? false,
       delivery: subtitleDelivery(stream.DeliveryMethod),
       forced: stream.IsForced ?? false,
+      ...(stream.IsHearingImpaired === undefined
+        ? {}
+        : { hearingImpaired: stream.IsHearingImpaired }),
       index: stream.Index,
       language: language(stream.Language),
       selected: stream.Index === selectedIndex,

@@ -39,6 +39,7 @@ const requiredTables = [
   "oidc_providers",
   "operational_failures",
   "playback_asset_handles",
+  "playback_preferences",
   "playback_sessions",
   "role_mappings",
   "saved_catalog_items",
@@ -272,6 +273,14 @@ const requiredColumns = {
     "last_used_at",
     "playback_session_id",
     "target_digest",
+  ],
+  playback_preferences: [
+    "created_at",
+    "preferences_json",
+    "revision",
+    "schema_version",
+    "updated_at",
+    "user_id",
   ],
   playback_sessions: [
     "encrypted_payload",
@@ -598,11 +607,12 @@ function writeHistoricalMigrationFixture() {
     [28, "0028_library_removal_operations"],
     [29, "0029_theme_preferences"],
     [30, "0030_saved_lists"],
+    [31, "0031_playback_preferences"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-4).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-5).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
-    "Current migration journal must preserve the linear parent and saved-list ancestry.",
+    "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
   const snapshots = [27, 28, 29, 30].map(
     (index) =>
@@ -722,8 +732,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0030_saved_lists",
-  "Current migration journal must end at migration 0030_saved_lists.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0031_playback_preferences",
+  "Current migration journal must end at migration 0031_playback_preferences.",
 );
 
 try {
@@ -1212,7 +1222,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0029.",
+      "Production migration did not advance the historical fixture exactly through migration 0031.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1377,7 +1387,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0029, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0031, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
