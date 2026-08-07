@@ -3590,6 +3590,14 @@
             "expires_at"
           ],
           "isUnique": false
+        },
+        "media_references_id_user_unique": {
+          "name": "media_references_id_user_unique",
+          "columns": [
+            "id",
+            "user_id"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {
