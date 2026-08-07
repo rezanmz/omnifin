@@ -623,7 +623,7 @@ function MediaSourceCard({
       {source.audio.length > 0 || source.subtitles.length > 0 ? (
         <div className="library-title__track-groups">
           {source.audio.length > 0 ? (
-            <section aria-label="Audio tracks">
+            <section aria-label={`Audio tracks · ${source.label}`}>
               <p>
                 <AudioLines aria-hidden="true" /> Audio
               </p>
@@ -647,7 +647,7 @@ function MediaSourceCard({
             </section>
           ) : null}
           {source.subtitles.length > 0 ? (
-            <section aria-label="Subtitle tracks">
+            <section aria-label={`Subtitle tracks · ${source.label}`}>
               <p>
                 <Captions aria-hidden="true" /> Subtitles
               </p>
