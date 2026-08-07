@@ -177,6 +177,114 @@ export const playbackProgressResponseSchema = z.strictObject({
 });
 export type PlaybackProgressResponse = z.infer<typeof playbackProgressResponseSchema>;
 
+export const PLAYBACK_CONTEXT_MAX_SEGMENTS = 8;
+const playbackContextSegmentSchema = z
+  .strictObject({
+    endSeconds: z.int().positive().max(10_000_000),
+    kind: z.enum(["credits", "intro"]),
+    startSeconds: z.int().nonnegative().max(9_999_999),
+  })
+  .refine((segment) => segment.endSeconds > segment.startSeconds, {
+    message: "Playback segments must have a positive duration.",
+    path: ["endSeconds"],
+  });
+
+const playbackContextArtworkPathSchema = z
+  .string()
+  .regex(/^\/v1\/media\/media_[A-Za-z0-9_-]{22}\/images\/(?:backdrop|poster)$/u)
+  .nullable();
+
+export const playbackContextResponseSchema = z
+  .strictObject({
+    currentDurationSeconds: z.int().positive().max(10_000_000),
+    generatedAt: z.iso.datetime({ offset: true }),
+    mediaReferenceId: mediaReferenceIdSchema,
+    nextEpisode: z
+      .strictObject({
+        artworkPath: playbackContextArtworkPathSchema,
+        durationSeconds: z.int().positive().max(10_000_000).nullable(),
+        episodeNumber: z.int().nonnegative().max(100_000).nullable(),
+        mediaReferenceId: mediaReferenceIdSchema,
+        seasonNumber: z.int().nonnegative().max(100_000).nullable(),
+        seriesTitle: z.string().trim().min(1).max(300),
+        title: z.string().trim().min(1).max(300),
+      })
+      .nullable(),
+    nextState: z.enum(["end", "ready", "requestable", "unavailable"]),
+    segments: z.array(playbackContextSegmentSchema).max(PLAYBACK_CONTEXT_MAX_SEGMENTS),
+    segmentsState: z.enum(["empty", "ready", "unavailable"]),
+  })
+  .superRefine((response, context) => {
+    const hasNextEpisode = response.nextState === "ready" || response.nextState === "requestable";
+    if (hasNextEpisode !== (response.nextEpisode !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "A known next episode must include its bounded metadata.",
+        path: ["nextEpisode"],
+      });
+    }
+    if (response.nextState === "ready" && response.nextEpisode?.durationSeconds === null) {
+      context.addIssue({
+        code: "custom",
+        message: "A playable next episode must include its duration.",
+        path: ["nextEpisode", "durationSeconds"],
+      });
+    }
+    if (response.nextState === "requestable" && response.nextEpisode?.durationSeconds !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "A requestable next episode cannot be advertised as playable.",
+        path: ["nextEpisode", "durationSeconds"],
+      });
+    }
+    if (response.nextEpisode?.mediaReferenceId === response.mediaReferenceId) {
+      context.addIssue({
+        code: "custom",
+        message: "The next episode must differ from the current media item.",
+        path: ["nextEpisode", "mediaReferenceId"],
+      });
+    }
+    if (
+      response.nextEpisode?.artworkPath !== null &&
+      response.nextEpisode !== null &&
+      !response.nextEpisode.artworkPath.startsWith(
+        `/v1/media/${response.nextEpisode.mediaReferenceId}/images/`,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Next-episode artwork must belong to its opaque media reference.",
+        path: ["nextEpisode", "artworkPath"],
+      });
+    }
+    const segmentKinds = new Set<string>();
+    for (const [index, segment] of response.segments.entries()) {
+      if (segment.endSeconds > response.currentDurationSeconds) {
+        context.addIssue({
+          code: "custom",
+          message: "Playback segments cannot exceed the current media duration.",
+          path: ["segments", index, "endSeconds"],
+        });
+      }
+      if (segmentKinds.has(segment.kind)) {
+        context.addIssue({
+          code: "custom",
+          message: "Playback segment kinds must be unique.",
+          path: ["segments", index, "kind"],
+        });
+      }
+      segmentKinds.add(segment.kind);
+    }
+    if ((response.segmentsState === "ready") !== response.segments.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Ready playback segments must contain at least one trusted marker.",
+        path: ["segments"],
+      });
+    }
+  });
+export type PlaybackContextResponse = z.infer<typeof playbackContextResponseSchema>;
+
 export const PLAYBACK_PREFERENCE_MAX_LANGUAGES = 8;
 export const PLAYBACK_PREFERENCE_BITRATES = [
   2_000_000, 4_000_000, 10_000_000, 20_000_000, 40_000_000, 80_000_000,
@@ -451,4 +559,7 @@ export const playbackPreferencesResponseJsonSchema = withoutSchemaDialect(
 );
 export const playbackPreferencesUpdateRequestJsonSchema = withoutSchemaDialect(
   playbackPreferencesUpdateRequestSchema,
+);
+export const playbackContextResponseJsonSchema = withoutSchemaDialect(
+  playbackContextResponseSchema,
 );
