@@ -245,6 +245,7 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
               container: "MKV",
               label: "4K · HEVC · MKV",
               sizeBytes: 6_979_321_856,
+              sourceReferenceId: `source_${"a".repeat(22)}`,
               subtitles: [
                 {
                   codec: "SUBRIP",
@@ -263,6 +264,34 @@ function titleDetail(item: LibraryBrowseItem): LibraryTitleDetailResponse {
                 height: 1_606,
                 profile: "Main 10",
                 width: 3_840,
+              },
+            },
+            {
+              audio: [
+                {
+                  bitrateKbps: 384,
+                  channels: 6,
+                  codec: "AAC",
+                  language: "English",
+                  title: "English 5.1",
+                },
+              ],
+              audioTruncated: false,
+              bitrateKbps: 5_800,
+              container: "MP4",
+              label: "1080p · H.264 · MP4",
+              sizeBytes: 4_381_147_136,
+              sourceReferenceId: `source_${"b".repeat(22)}`,
+              subtitles: [],
+              subtitlesTruncated: false,
+              video: {
+                bitrateKbps: 5_400,
+                bitDepth: 8,
+                codec: "H.264",
+                hdrFormat: null,
+                height: 1_080,
+                profile: "High",
+                width: 1_920,
               },
             },
           ],

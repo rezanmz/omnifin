@@ -64,7 +64,9 @@ type InspectableCredit = Pick<LibraryMovieCredit, "name" | "personReferenceId">;
 
 export interface PlayableLibrarySelection {
   media: LibrarySeasonEpisode["media"] | LibraryBrowseItem["media"];
+  mediaSources?: LibraryMovieMediaSource[];
   playback: LibraryPlaybackState;
+  sourceReferenceId?: string;
   startPositionSeconds?: number;
 }
 
@@ -538,14 +540,22 @@ function PersonPortrait({ credit }: { credit: LibraryMovieDetail["cast"][number]
   );
 }
 
-function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
+function MediaSourceCard({
+  onSelect,
+  selected,
+  source,
+}: {
+  onSelect?: () => void;
+  selected: boolean;
+  source: LibraryMovieMediaSource;
+}) {
   const size = formatBytes(source.sizeBytes);
   const bitrate = formatBitrate(source.bitrateKbps);
   const video = source.video;
   const resolution =
     video?.width && video.height ? `${video.width} × ${video.height}` : (video?.height ?? null);
   return (
-    <article className="library-title__source-card">
+    <article className="library-title__source-card" data-selected={selected || undefined}>
       <header>
         <div>
           <span className="library-title__source-icon" aria-hidden="true">
@@ -556,7 +566,23 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
             <p>{[size, bitrate].filter(Boolean).join(" · ") || "Technical details unavailable"}</p>
           </div>
         </div>
-        {source.container ? <span>{source.container}</span> : null}
+        <div className="library-title__source-actions">
+          {source.container ? <span>{source.container}</span> : null}
+          {onSelect ? (
+            <button
+              aria-checked={selected}
+              aria-label={`${source.label}${selected ? ", selected" : ""}`}
+              data-directional-item
+              onClick={onSelect}
+              role="radio"
+              tabIndex={selected ? 0 : -1}
+              type="button"
+            >
+              <Check aria-hidden="true" />
+              {selected ? "Selected" : "Choose"}
+            </button>
+          ) : null}
+        </div>
       </header>
 
       {video ? (
@@ -597,7 +623,7 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
       {source.audio.length > 0 || source.subtitles.length > 0 ? (
         <div className="library-title__track-groups">
           {source.audio.length > 0 ? (
-            <section aria-label="Audio tracks">
+            <section aria-label={`Audio tracks · ${source.label}`}>
               <p>
                 <AudioLines aria-hidden="true" /> Audio
               </p>
@@ -621,7 +647,7 @@ function MediaSourceCard({ source }: { source: LibraryMovieMediaSource }) {
             </section>
           ) : null}
           {source.subtitles.length > 0 ? (
-            <section aria-label="Subtitle tracks">
+            <section aria-label={`Subtitle tracks · ${source.label}`}>
               <p>
                 <Captions aria-hidden="true" /> Subtitles
               </p>
@@ -748,11 +774,15 @@ function TitleCredits({
 function MovieInformation({
   movie,
   onInspectPerson,
+  onSelectSource,
   resolvingReferenceId,
+  selectedSourceReferenceId,
 }: {
   movie: LibraryMovieDetail;
   onInspectPerson: (credit: InspectableCredit) => void;
+  onSelectSource: (sourceReferenceId: string) => void;
   resolvingReferenceId: string | null;
+  selectedSourceReferenceId: string | null;
 }) {
   const premiereDate = formatAirDate(movie.premiereDate);
   const hasEditorialFacts =
@@ -818,10 +848,22 @@ function MovieInformation({
           </span>
           <ChevronDown aria-hidden="true" />
         </summary>
-        <div className="library-title__media-information-body">
+        <div
+          {...(movie.mediaSources.length > 1
+            ? { "aria-label": "Movie version", role: "radiogroup" }
+            : {})}
+          className="library-title__media-information-body"
+        >
           {movie.mediaSources.length > 0 ? (
-            movie.mediaSources.map((source, index) => (
-              <MediaSourceCard key={`${source.label}:${index}`} source={source} />
+            movie.mediaSources.map((source) => (
+              <MediaSourceCard
+                key={source.sourceReferenceId}
+                {...(movie.mediaSources.length > 1
+                  ? { onSelect: () => onSelectSource(source.sourceReferenceId) }
+                  : {})}
+                selected={source.sourceReferenceId === selectedSourceReferenceId}
+                source={source}
+              />
             ))
           ) : (
             <p>Playback is available, but this Jellyfin item has no reviewed media-source facts.</p>
@@ -1415,6 +1457,7 @@ export function LibraryTitleDrawer({
   } | null>(null);
   const [resolvingPersonReferenceId, setResolvingPersonReferenceId] = useState<string | null>(null);
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
+  const [selectedSourceReferenceId, setSelectedSourceReferenceId] = useState<string | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
   const referenceId = item?.media.id ?? "none";
   const requestKey = `${referenceId}:${attempt}`;
@@ -1519,6 +1562,10 @@ export function LibraryTitleDrawer({
     return titleState;
   }, [item, open, requestKey, titleState]);
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
+  const selectedMovieSource =
+    detail?.movie?.mediaSources.find(
+      (source) => source.sourceReferenceId === selectedSourceReferenceId,
+    ) ?? detail?.movie?.mediaSources[0];
 
   useEffect(() => {
     if (!open || !item || detail?.media.id !== item.media.id || !client.loadConnectedActions) {
@@ -1902,7 +1949,13 @@ export function LibraryTitleDrawer({
                         onPlay={(startPositionSeconds) =>
                           onPlay({
                             media: detail!.media,
+                            ...(detail!.movie?.mediaSources.length
+                              ? { mediaSources: detail!.movie.mediaSources }
+                              : {}),
                             playback: detail!.playback!,
+                            ...(selectedMovieSource === undefined
+                              ? {}
+                              : { sourceReferenceId: selectedMovieSource.sourceReferenceId }),
                             ...(startPositionSeconds === undefined ? {} : { startPositionSeconds }),
                           })
                         }
@@ -1930,7 +1983,9 @@ export function LibraryTitleDrawer({
                   <MovieInformation
                     movie={detail!.movie}
                     onInspectPerson={(credit) => void inspectPerson(credit)}
+                    onSelectSource={setSelectedSourceReferenceId}
                     resolvingReferenceId={resolvingPersonReferenceId}
+                    selectedSourceReferenceId={selectedMovieSource?.sourceReferenceId ?? null}
                   />
                 ) : null}
 

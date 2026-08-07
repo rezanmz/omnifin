@@ -93,6 +93,15 @@ const directSource = {
     "/base/Videos/movie-upstream-1/master.m3u8?MediaSourceId=media-source-1&PlaySessionId=play-session-upstream-1",
 };
 
+const negotiationInput = {
+  audioStreamIndex: null,
+  itemId: "movie-upstream-1",
+  maxStreamingBitrate: 20_000_000,
+  mode: "auto" as const,
+  positionSeconds: 180,
+  subtitleStreamIndex: null,
+};
+
 describe("JellyfinPlaybackClient", () => {
   it("negotiates an authenticated direct-play source with bounded browser capabilities", async () => {
     const { client, requests } = clientWithResponses([
@@ -218,6 +227,77 @@ describe("JellyfinPlaybackClient", () => {
         }),
       ],
     });
+  });
+
+  it("selects only the requested owned source and fails closed when it is stale", async () => {
+    const alternateSource = {
+      ...directSource,
+      Bitrate: 18_000_000,
+      Id: "media-source-edition-2",
+    };
+    const selected = clientWithResponses([
+      jsonResponse({
+        MediaSources: [directSource, alternateSource],
+        PlaySessionId: "play-session-upstream-2",
+      }),
+    ]);
+
+    await expect(
+      selected.client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 20_000_000,
+        mediaSourceId: "media-source-edition-2",
+        mode: "auto",
+        positionSeconds: 180,
+        subtitleStreamIndex: null,
+      }),
+    ).resolves.toMatchObject({ media: { bitrate: 18_000_000 }, mediaSourceId: alternateSource.Id });
+
+    const stale = clientWithResponses([
+      jsonResponse({ MediaSources: [directSource], PlaySessionId: "play-session-upstream-3" }),
+    ]);
+    await expect(
+      stale.client.negotiate({
+        audioStreamIndex: null,
+        itemId: "movie-upstream-1",
+        maxStreamingBitrate: 20_000_000,
+        mediaSourceId: "deleted-source",
+        mode: "auto",
+        positionSeconds: 180,
+        subtitleStreamIndex: null,
+      }),
+    ).rejects.toBeInstanceOf(JellyfinPlaybackUnavailableError);
+  });
+
+  it("applies an opaque source matcher before choosing a delivery path", async () => {
+    const alternateSource = {
+      ...directSource,
+      Bitrate: 18_000_000,
+      Id: "media-source-edition-2",
+    };
+    const selected = clientWithResponses([
+      jsonResponse({
+        MediaSources: [directSource, alternateSource],
+        PlaySessionId: "play-session-upstream-4",
+      }),
+    ]);
+
+    await expect(
+      selected.client.negotiate(negotiationInput, undefined, {
+        matchesSourceId: (sourceId) => sourceId === alternateSource.Id,
+      }),
+    ).resolves.toMatchObject({
+      media: { bitrate: 18_000_000 },
+      mediaSourceId: alternateSource.Id,
+    });
+
+    const stale = clientWithResponses([
+      jsonResponse({ MediaSources: [directSource], PlaySessionId: "play-session-upstream-5" }),
+    ]);
+    await expect(
+      stale.client.negotiate(negotiationInput, undefined, { matchesSourceId: () => false }),
+    ).rejects.toBeInstanceOf(JellyfinPlaybackUnavailableError);
   });
 
   it("ignores embedded artwork streams without weakening playback-stream validation", async () => {

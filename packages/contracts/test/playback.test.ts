@@ -16,6 +16,7 @@ import {
 
 const mediaReferenceId = "media_AAAAAAAAAAAAAAAAAAAAAA";
 const sessionId = "playback_BBBBBBBBBBBBBBBBBBBBBB";
+const sourceReferenceId = "source_VVVVVVVVVVVVVVVVVVVVVV";
 
 function response() {
   return {
@@ -46,6 +47,7 @@ function response() {
     mediaReferenceId,
     positionSeconds: 1_200,
     sessionId,
+    sourceReferenceId,
     streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     subtitleTracks: [
       {
@@ -72,6 +74,7 @@ describe("playback contracts", () => {
         maxStreamingBitrate: 12_000_000,
         mode: "auto",
         positionSeconds: 1_200,
+        sourceReferenceId,
         subtitleStreamIndex: 4,
       }),
     ).toEqual({
@@ -79,6 +82,7 @@ describe("playback contracts", () => {
       maxStreamingBitrate: 12_000_000,
       mode: "auto",
       positionSeconds: 1_200,
+      sourceReferenceId,
       subtitleStreamIndex: 4,
     });
   });
@@ -91,6 +95,16 @@ describe("playback contracts", () => {
         mode: "auto",
         positionSeconds: 0,
         subtitleStreamIndex: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      playbackNegotiationRequestSchema.safeParse({
+        audioStreamIndex: null,
+        maxStreamingBitrate: 8_000_000,
+        mode: "auto",
+        positionSeconds: 0,
+        sourceReferenceId: "media-source-private-upstream-id",
+        subtitleStreamIndex: null,
       }).success,
     ).toBe(false);
     expect(
