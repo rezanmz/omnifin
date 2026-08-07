@@ -109,10 +109,12 @@ const session: PlaybackNegotiationResponse = {
     container: "mp4",
     durationSeconds: 7_200,
     height: 1080,
+    streamBitrate: null,
     videoCodec: "h264",
     width: 1920,
   },
   mediaReferenceId: media.id,
+  playMethod: "direct_stream",
   positionSeconds: media.positionSeconds,
   sessionId,
   streamPath: `/v1/playback/${sessionId}/stream`,
@@ -383,6 +385,7 @@ describe("TheaterPlayer", () => {
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
+      playMethod: "transcode",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     render(
@@ -651,6 +654,7 @@ describe("TheaterPlayer", () => {
     const replacementSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
+      playMethod: "transcode",
       positionSeconds: 1_333,
       sessionId: replacementSessionId,
       streamPath: `/v1/playback/${replacementSessionId}/master.m3u8`,
@@ -878,6 +882,7 @@ describe("TheaterPlayer", () => {
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
+      playMethod: "transcode",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     const client = readyClient(hlsSession);
@@ -905,6 +910,7 @@ describe("TheaterPlayer", () => {
     const hlsSession: PlaybackNegotiationResponse = {
       ...session,
       delivery: "hls",
+      playMethod: "transcode",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     const onClose = vi.fn();
