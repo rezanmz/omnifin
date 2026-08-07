@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.11.0](https://github.com/rezanmz/omnifin/compare/v0.10.0...v0.11.0) (2026-08-07)
+
+
+### Features
+
+* **auth:** establish household policy boundary ([#265](https://github.com/rezanmz/omnifin/issues/265)) ([aa65607](https://github.com/rezanmz/omnifin/commit/aa65607f470dca08be62001b8ad3baa9d85b3c22))
+* **connectors:** add browser-facing service URLs ([#296](https://github.com/rezanmz/omnifin/issues/296)) ([c820fbe](https://github.com/rezanmz/omnifin/commit/c820fbebac45534f2933202d34225e328765c877))
+* **connectors:** add guarded removal writes ([#272](https://github.com/rezanmz/omnifin/issues/272)) ([7f5640b](https://github.com/rezanmz/omnifin/commit/7f5640b5f06658d5f184cdc0befd980947a14d70))
+* **connectors:** add safe library title actions ([#297](https://github.com/rezanmz/omnifin/issues/297)) ([0e402b9](https://github.com/rezanmz/omnifin/commit/0e402b98ca4d7c4fd110900e7cfb23848e4736d4))
+* **db:** persist guarded removal previews ([#271](https://github.com/rezanmz/omnifin/issues/271)) ([e2caaff](https://github.com/rezanmz/omnifin/commit/e2caaff41f6b3c7470e68929df020479ef33be9b))
+* **discovery:** link canonical rating providers ([0e851c7](https://github.com/rezanmz/omnifin/commit/0e851c73b33eb29100861703be93836d0dadc442)), closes [#282](https://github.com/rezanmz/omnifin/issues/282)
+* **discovery:** paginate person filmography ([ac789f2](https://github.com/rezanmz/omnifin/commit/ac789f24e77b14d8f2d53aca0c5d4d4d4138b43b))
+* **gateway:** add original media downloads ([#277](https://github.com/rezanmz/omnifin/issues/277)) ([31ea02f](https://github.com/rezanmz/omnifin/commit/31ea02fda6d389cff5d3c6299b63069a4dfba8e6))
+* **gateway:** execute guarded library removals ([#316](https://github.com/rezanmz/omnifin/issues/316)) ([b4a8f26](https://github.com/rezanmz/omnifin/commit/b4a8f26cf0afa2b8e0a470cf16d965b5473fcae3))
+* **gateway:** expose guarded removal previews ([#270](https://github.com/rezanmz/omnifin/issues/270)) ([75a7135](https://github.com/rezanmz/omnifin/commit/75a71351d7e2db1d7ecc619ec30b838a64616f8e))
+* **ui:** open library person profiles ([296ac9b](https://github.com/rezanmz/omnifin/commit/296ac9b71a83bf02f7e980f46d6e230e67add949))
+* **ui:** open person profiles from search ([d0d29f8](https://github.com/rezanmz/omnifin/commit/d0d29f8d694f0cf184033708bb74bea9315d298c))
+* **web:** make request profiles first class ([#294](https://github.com/rezanmz/omnifin/issues/294)) ([326bb41](https://github.com/rezanmz/omnifin/commit/326bb418bce6717dc4de150930cc77809a23ef3c))
+* **web:** replace player with video.js and masked WebVTT captions ([#317](https://github.com/rezanmz/omnifin/issues/317)) ([55b57d3](https://github.com/rezanmz/omnifin/commit/55b57d3a334c4267c0a578d723f0fdff9f67d40e))
+
+
+### Fixes
+
+* **ci:** avoid misleading release cancellations ([#305](https://github.com/rezanmz/omnifin/issues/305)) ([a7ba626](https://github.com/rezanmz/omnifin/commit/a7ba6268213215b7a09b41f459af34e0172faa86))
+* **ci:** make registry publication rerun-safe ([#298](https://github.com/rezanmz/omnifin/issues/298)) ([61b27e9](https://github.com/rezanmz/omnifin/commit/61b27e9742d8aa8fecc08ad20fe0fc0b2a13798f))
+* **ci:** retry transient dependency installs ([#303](https://github.com/rezanmz/omnifin/issues/303)) ([cbc3cab](https://github.com/rezanmz/omnifin/commit/cbc3cabc327e001ff4005aceaa8407167d08e545))
+* **ci:** tolerate slow browser dependency mirrors ([#295](https://github.com/rezanmz/omnifin/issues/295)) ([3e9cb3a](https://github.com/rezanmz/omnifin/commit/3e9cb3a7b47d0789182c8e578ac2911fa925382c))
+* **connectors:** parse download metadata narrowly ([#313](https://github.com/rezanmz/omnifin/issues/313)) ([5fabc14](https://github.com/rezanmz/omnifin/commit/5fabc1411ddc15782d97806468344572962f2877))
+* **connectors:** report exact library result totals ([#288](https://github.com/rezanmz/omnifin/issues/288)) ([e0131cf](https://github.com/rezanmz/omnifin/commit/e0131cf6b24cdd2b3927f51d2e257fe10ab80464)), closes [#285](https://github.com/rezanmz/omnifin/issues/285)
+* **discovery:** accept large Seerr page totals ([#287](https://github.com/rezanmz/omnifin/issues/287)) ([3ec2de0](https://github.com/rezanmz/omnifin/commit/3ec2de0dd796847ba945a33256a3dc5127208659)), closes [#284](https://github.com/rezanmz/omnifin/issues/284)
+* **gateway:** accept large bounded VOD manifests ([#314](https://github.com/rezanmz/omnifin/issues/314)) ([a8c7701](https://github.com/rezanmz/omnifin/commit/a8c770136ed0017b8b97e53e149953430f3349ea))
+* **gateway:** verify request routes before creation ([#293](https://github.com/rezanmz/omnifin/issues/293)) ([72502bd](https://github.com/rezanmz/omnifin/commit/72502bd8e5bee46f80f66d716b73f21fa8e86591)), closes [#291](https://github.com/rezanmz/omnifin/issues/291)
+* **security:** resolve CodeQL findings ([#307](https://github.com/rezanmz/omnifin/issues/307)) ([e8be9db](https://github.com/rezanmz/omnifin/commit/e8be9dbc249071edb08859dd67b68f7ef088bfac)), closes [#306](https://github.com/rezanmz/omnifin/issues/306)
+* **web:** player fill/click/fullscreen, hero overflow, account theme ([#318](https://github.com/rezanmz/omnifin/issues/318)) ([cc9c8c5](https://github.com/rezanmz/omnifin/commit/cc9c8c589955b1f07207be8ddcf40486fe689b8d))
+* **web:** stabilize caption-toggle test against renegotiation race ([#321](https://github.com/rezanmz/omnifin/issues/321)) ([79f8647](https://github.com/rezanmz/omnifin/commit/79f86470bee77d75d64922dfcfb38fa379596580))
+* **web:** stabilize lazy search scroll handoff ([#312](https://github.com/rezanmz/omnifin/issues/312)) ([76a1128](https://github.com/rezanmz/omnifin/commit/76a1128dd8072e78b24766b522c88f029b208dcf))
+* **web:** stabilize WebKit search scroll ([#281](https://github.com/rezanmz/omnifin/issues/281)) ([3d9c567](https://github.com/rezanmz/omnifin/commit/3d9c567ed657bd6ea2f7526a6d9b8616014f01e3))
+
 ## [0.10.0](https://github.com/rezanmz/omnifin/compare/v0.9.1...v0.10.0) (2026-08-04)
 
 
