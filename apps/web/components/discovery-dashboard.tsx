@@ -93,7 +93,11 @@ function discoveryLanguage() {
   return /^[a-z]{2}$/u.test(base) ? base : "en";
 }
 
-function cardFor(item: DiscoveryFeedItem, locallyRequested: boolean): MediaCardModel {
+function cardFor(
+  item: DiscoveryFeedItem,
+  locallyRequested: boolean,
+  language: string,
+): MediaCardModel {
   const metadata = [
     item.year,
     item.voteAverage === null ? null : `${item.voteAverage.toFixed(1)} ★`,
@@ -107,6 +111,9 @@ function cardFor(item: DiscoveryFeedItem, locallyRequested: boolean): MediaCardM
     eyebrow: locallyRequested ? "Requested" : metadata || availabilityLabel(item),
     id: item.id,
     requestable: requestable(item) && !locallyRequested,
+    ...(item.availability === "available" || item.availability === "unknown"
+      ? {}
+      : { savedDiscoveryTarget: { kind: item.kind, language, tmdbId: item.tmdbId } }),
     title: item.title,
   };
 }
@@ -491,7 +498,7 @@ function DiscoveryDashboardContent({
             <MediaRail
               emptyCopy={RAIL_EMPTY_COPY[rail.kind]}
               emptyTitle="No titles in this rail"
-              items={rail.items.map((item) => cardFor(item, requestedIds.has(item.id)))}
+              items={rail.items.map((item) => cardFor(item, requestedIds.has(item.id), language))}
               key={rail.kind}
               onSelect={(card) => {
                 const item = itemById.get(card.id);

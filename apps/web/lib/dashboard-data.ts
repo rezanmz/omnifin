@@ -11,6 +11,7 @@ export interface MediaCardModel {
   positionSeconds?: number;
   progress?: number;
   requestable?: boolean;
+  savedDiscoveryTarget?: SavedDiscoveryTargetIssueRequest;
   title: string;
 }
 
@@ -282,3 +283,4 @@ import type {
   AcquisitionProvenanceResponse,
   AcquisitionTargetInput,
 } from "@omnifin/contracts/acquisition";
+import type { SavedDiscoveryTargetIssueRequest } from "@omnifin/contracts/saved";

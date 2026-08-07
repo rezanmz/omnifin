@@ -54,6 +54,7 @@ const pendingRequest: RequestReviewItem = {
   id: "request:101",
   is4k: false,
   kind: "movie",
+  qualityProfile: "1080p",
   requestedBy: "alex",
   seasons: null,
   source: "seerr",

@@ -2,6 +2,7 @@ import {
   SeerrAdapter,
   SeerrRequestError,
   type SeerrRequestRouting,
+  type SeerrRequestAuthorization,
   type SeerrRequestRoutingCatalog,
   type SeerrUserIdentity,
 } from "@omnifin/connectors/adapters/seerr";
@@ -18,10 +19,12 @@ import {
   mediaRequestResponseSchema,
   mediaRequestRoutingOptionsQuerySchema,
   mediaRequestRoutingOptionsResponseSchema,
+  mediaRequestRoutingPreferenceInputSchema,
   type MediaRequestInput,
   type MediaRequestResponse,
   type MediaRequestRoutingOptionsQuery,
   type MediaRequestRoutingOptionsResponse,
+  type MediaRequestRoutingPreferenceInput,
   type MediaRequestRoutingSelection,
 } from "@omnifin/contracts/requests";
 import { randomUUID, X509Certificate } from "node:crypto";
@@ -36,6 +39,11 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const REQUEST_ROUTING_REFERENCE_PREFIX = "routing-v1.";
 const REQUEST_ROUTING_TTL_MS = 15 * 60 * 1_000;
+const persistedMediaRequestResponseSchema = mediaRequestResponseSchema.or(
+  mediaRequestResponseSchema
+    .omit({ qualityProfile: true })
+    .transform((response) => ({ ...response, qualityProfile: "Profile unavailable" })),
+);
 
 interface SeerrConnectorRow {
   baseUrl: string;
@@ -67,19 +75,33 @@ interface IdempotencyRow {
   state: string;
 }
 
+interface MediaRequestProfilePreferenceRow {
+  destinationId: number;
+  profileId: number;
+}
+
+interface ResolvedRequestRouting {
+  qualityProfile: string;
+  routing: SeerrRequestRouting;
+}
+
 export interface MediaRequestAdapter {
   createMediaRequest(
     input: MediaRequestInput,
     seerrUserId: number,
     signal?: AbortSignal,
     routing?: SeerrRequestRouting,
-  ): Promise<MediaRequestResponse>;
+  ): Promise<Omit<MediaRequestResponse, "qualityProfile">>;
   listRequestRouting(
     kind: "movie" | "series",
     is4k: boolean,
     signal?: AbortSignal,
   ): Promise<SeerrRequestRoutingCatalog>;
-  resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number>;
+  resolveUser(
+    identity: SeerrUserIdentity,
+    authorization: SeerrRequestAuthorization,
+    signal?: AbortSignal,
+  ): Promise<number>;
 }
 
 export interface MediaRequestDependencies {
@@ -291,7 +313,7 @@ function rootFolderLabels(paths: string[]) {
   });
 }
 
-function defaultRequestRouting(catalog: SeerrRequestRoutingCatalog): SeerrRequestRouting {
+function defaultRequestRouting(catalog: SeerrRequestRoutingCatalog): ResolvedRequestRouting {
   const defaults = catalog.destinations.filter((destination) => destination.isDefault);
   if (defaults.length !== 1) throw new MediaRequestServiceError("routing_unavailable");
   const destination = defaults[0]!;
@@ -311,10 +333,13 @@ function defaultRequestRouting(catalog: SeerrRequestRoutingCatalog): SeerrReques
     throw new MediaRequestServiceError("routing_unavailable");
   }
   return {
-    ...(languageProfile === null ? {} : { languageProfileId: languageProfile.id }),
-    profileId: qualityProfile.id,
-    rootFolder: rootFolder.path,
-    serverId: destination.id,
+    qualityProfile: qualityProfile.label,
+    routing: {
+      ...(languageProfile === null ? {} : { languageProfileId: languageProfile.id }),
+      profileId: qualityProfile.id,
+      rootFolder: rootFolder.path,
+      serverId: destination.id,
+    },
   };
 }
 
@@ -412,26 +437,27 @@ export class MediaRequestService {
 
     let adapter: MediaRequestAdapter;
     let seerrUserId: number;
-    let routing: SeerrRequestRouting | undefined;
+    let resolvedRouting: ResolvedRequestRouting;
     try {
       const connection = this.#connection("request.create", "request.configure");
       adapter = connection.adapter;
-      const routingPromise = input.routing
-        ? Promise.resolve(
-            this.#resolveRouting(
-              input.routing,
-              principal.userId,
-              principal.sessionId,
-              connection.connectorId,
-              input.kind,
-              input.is4k,
-            ),
-          )
-        : adapter.listRequestRouting(input.kind, input.is4k, signal).then(defaultRequestRouting);
-      [seerrUserId, routing] = await Promise.all([
-        adapter.resolveUser(identity, signal),
-        routingPromise,
+      const [resolvedUserId, loadedCatalog] = await Promise.all([
+        adapter.resolveUser(identity, { is4k: input.is4k, kind: input.kind }, signal),
+        adapter.listRequestRouting(input.kind, input.is4k, signal),
       ]);
+      const catalog = this.#routingCatalogWithPreference(loadedCatalog, connection.connectorId);
+      seerrUserId = resolvedUserId;
+      resolvedRouting = input.routing
+        ? this.#resolveRouting(
+            input.routing,
+            principal.userId,
+            principal.sessionId,
+            connection.connectorId,
+            input.kind,
+            input.is4k,
+            catalog,
+          )
+        : defaultRequestRouting(catalog);
     } catch (error) {
       const failureCode = knownFailure(error);
       this.#completeFailure(reservation.operationId, failureCode, input, context);
@@ -440,9 +466,15 @@ export class MediaRequestService {
 
     let response: MediaRequestResponse;
     try {
-      response = mediaRequestResponseSchema.parse(
-        await adapter.createMediaRequest(withoutRouting(input), seerrUserId, signal, routing),
-      );
+      response = mediaRequestResponseSchema.parse({
+        ...(await adapter.createMediaRequest(
+          withoutRouting(input),
+          seerrUserId,
+          signal,
+          resolvedRouting.routing,
+        )),
+        qualityProfile: resolvedRouting.qualityProfile,
+      });
     } catch (error) {
       const failureCode = knownFailure(error);
       this.#completeFailure(reservation.operationId, failureCode, input, context);
@@ -465,15 +497,56 @@ export class MediaRequestService {
     const identity = this.#identity(principal);
     try {
       const connection = this.#connection("request.configure");
-      const [, catalog] = await Promise.all([
-        connection.adapter.resolveUser(identity, signal),
+      const [, loadedCatalog] = await Promise.all([
+        connection.adapter.resolveUser(identity, { is4k: query.is4k, kind: query.kind }, signal),
         connection.adapter.listRequestRouting(query.kind, query.is4k, signal),
       ]);
+      const catalog = this.#routingCatalogWithPreference(loadedCatalog, connection.connectorId);
       return this.#routingOptionsResponse(
         catalog,
         principal.userId,
         principal.sessionId,
         connection.connectorId,
+      );
+    } catch (error) {
+      if (error instanceof MediaRequestServiceError) throw error;
+      throw new MediaRequestServiceError(knownFailure(error), { cause: error });
+    }
+  }
+
+  public async setRoutingPreference(
+    rawInput: MediaRequestRoutingPreferenceInput,
+    context: MediaRequestContext,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const principal = requirePermission(context.principal, "connectors.manage");
+    if (principal.accountState !== "active" || !principal.userId) {
+      throw new MediaRequestServiceError("identity_link_required");
+    }
+    const input = mediaRequestRoutingPreferenceInputSchema.parse(rawInput);
+    const identity = this.#identity(principal);
+    try {
+      const connection = this.#connection("request.configure");
+      const [, catalog] = await Promise.all([
+        connection.adapter.resolveUser(identity, { is4k: input.is4k, kind: input.kind }, signal),
+        connection.adapter.listRequestRouting(input.kind, input.is4k, signal),
+      ]);
+      const resolved = this.#resolveRouting(
+        input.routing,
+        principal.userId,
+        principal.sessionId,
+        connection.connectorId,
+        input.kind,
+        input.is4k,
+        catalog,
+      );
+      this.#storeRoutingPreference(
+        connection.connectorId,
+        input.kind,
+        input.is4k,
+        resolved,
+        principal.userId,
+        context,
       );
     } catch (error) {
       if (error instanceof MediaRequestServiceError) throw error;
@@ -577,6 +650,108 @@ export class MediaRequestService {
     return mediaRequestRoutingOptionsResponseSchema.parse(response);
   }
 
+  #routingCatalogWithPreference(
+    catalog: SeerrRequestRoutingCatalog,
+    connectorId: string,
+  ): SeerrRequestRoutingCatalog {
+    let preference: MediaRequestProfilePreferenceRow | undefined;
+    try {
+      preference = this.#database.sqlite
+        .prepare(
+          `select
+             destination_id as destinationId,
+             profile_id as profileId
+           from media_request_profile_preferences
+           where connector_id = ? and kind = ? and is_4k = ?
+           limit 1`,
+        )
+        .get(connectorId, catalog.kind, catalog.is4k ? 1 : 0) as
+        MediaRequestProfilePreferenceRow | undefined;
+    } catch (error) {
+      throw new MediaRequestServiceError("storage_failure", { cause: error });
+    }
+    if (!preference) return catalog;
+    const destination = catalog.destinations.find(
+      (candidate) => candidate.id === preference.destinationId,
+    );
+    if (!destination?.profiles.some((profile) => profile.id === preference.profileId)) {
+      return catalog;
+    }
+    return {
+      ...catalog,
+      destinations: catalog.destinations.map((candidate) => ({
+        ...candidate,
+        activeProfileId:
+          candidate.id === preference.destinationId
+            ? preference.profileId
+            : candidate.activeProfileId,
+        isDefault: candidate.id === preference.destinationId,
+      })),
+    };
+  }
+
+  #storeRoutingPreference(
+    connectorId: string,
+    kind: "movie" | "series",
+    is4k: boolean,
+    preference: ResolvedRequestRouting,
+    userId: string,
+    context: MediaRequestContext,
+  ) {
+    try {
+      const now = this.#now();
+      this.#database.sqlite.transaction(() => {
+        this.#database.sqlite
+          .prepare(
+            `insert into media_request_profile_preferences (
+               connector_id, kind, is_4k, destination_id, profile_id,
+               updated_by_user_id, created_at, updated_at
+             ) values (?, ?, ?, ?, ?, ?, ?, ?)
+             on conflict (connector_id, kind, is_4k) do update set
+               destination_id = excluded.destination_id,
+               profile_id = excluded.profile_id,
+               updated_by_user_id = excluded.updated_by_user_id,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            connectorId,
+            kind,
+            is4k ? 1 : 0,
+            preference.routing.serverId,
+            preference.routing.profileId,
+            userId,
+            now,
+            now,
+          );
+        this.#database.sqlite
+          .prepare(
+            `insert into audit_events (
+               id, actor_user_id, actor_session_id, actor_auth_method,
+               event_type, outcome, target_type, target_id, request_id,
+               metadata_json, ip_hash, created_at
+             ) values (?, ?, ?, ?, 'media.request.preference.updated', 'success',
+               'connector', ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            this.#id(),
+            userId,
+            context.principal.sessionId,
+            context.principal.authenticationMethod.kind,
+            connectorId,
+            context.requestId ?? null,
+            JSON.stringify({ is4k, kind, qualityProfile: preference.qualityProfile }),
+            context.ipAddress
+              ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+              : null,
+            now,
+          );
+      })();
+    } catch (error) {
+      if (error instanceof MediaRequestServiceError) throw error;
+      throw new MediaRequestServiceError("storage_failure", { cause: error });
+    }
+  }
+
   #routingReference(payload: RequestRoutingReferencePayload, userId: string, sessionId: string) {
     const parsed = requestRoutingReferencePayloadSchema.parse(payload);
     return `${REQUEST_ROUTING_REFERENCE_PREFIX}${this.#cipher.encrypt(
@@ -592,7 +767,8 @@ export class MediaRequestService {
     connectorId: string,
     kind: "movie" | "series",
     is4k: boolean,
-  ): SeerrRequestRouting {
+    catalog: SeerrRequestRoutingCatalog,
+  ): ResolvedRequestRouting {
     try {
       const destination = this.#decodeRoutingReference(selection.destination, userId, sessionId);
       const qualityProfile = this.#decodeRoutingReference(
@@ -607,12 +783,28 @@ export class MediaRequestService {
       const references = [destination, qualityProfile, rootFolder, languageProfile].filter(
         (reference): reference is RequestRoutingReferencePayload => reference !== null,
       );
+      const currentDestination = catalog.destinations.find(
+        (candidate) => candidate.id === destination.destinationId,
+      );
+      const currentQualityProfile =
+        qualityProfile.type === "quality_profile"
+          ? currentDestination?.profiles.find((profile) => profile.id === qualityProfile.profileId)
+          : undefined;
       const now = this.#now();
       if (
+        catalog.kind !== kind ||
+        catalog.is4k !== is4k ||
         destination.type !== "destination" ||
         qualityProfile.type !== "quality_profile" ||
         rootFolder.type !== "root_folder" ||
         (languageProfile !== null && languageProfile.type !== "language_profile") ||
+        !currentDestination ||
+        !currentQualityProfile ||
+        !currentDestination.rootFolders.some((folder) => folder.path === rootFolder.path) ||
+        (languageProfile !== null &&
+          !currentDestination.languageProfiles.some(
+            (profile) => profile.id === languageProfile.profileId,
+          )) ||
         references.some(
           (reference) =>
             reference.connectorId !== connectorId ||
@@ -628,10 +820,13 @@ export class MediaRequestService {
         throw new Error("invalid");
       }
       return {
-        ...(languageProfile === null ? {} : { languageProfileId: languageProfile.profileId }),
-        profileId: qualityProfile.profileId,
-        rootFolder: rootFolder.path,
-        serverId: destination.destinationId,
+        qualityProfile: currentQualityProfile.label,
+        routing: {
+          ...(languageProfile === null ? {} : { languageProfileId: languageProfile.profileId }),
+          profileId: qualityProfile.profileId,
+          rootFolder: rootFolder.path,
+          serverId: destination.destinationId,
+        },
       };
     } catch (error) {
       throw new MediaRequestServiceError("routing_invalid", { cause: error });
@@ -752,7 +947,9 @@ export class MediaRequestService {
             try {
               return {
                 kind: "replay" as const,
-                response: mediaRequestResponseSchema.parse(JSON.parse(existing.responseJson)),
+                response: persistedMediaRequestResponseSchema.parse(
+                  JSON.parse(existing.responseJson),
+                ),
               };
             } catch (error) {
               throw new MediaRequestServiceError("integrity_failure", { cause: error });
@@ -821,7 +1018,15 @@ export class MediaRequestService {
             operationId,
           );
         if (update.changes !== 1) throw new MediaRequestServiceError("integrity_failure");
-        this.#audit(outcome, response?.id ?? operationId, input, context, now, failureCode);
+        this.#audit(
+          outcome,
+          response?.id ?? operationId,
+          input,
+          context,
+          now,
+          failureCode,
+          response?.qualityProfile ?? null,
+        );
       })();
     } catch (error) {
       if (error instanceof MediaRequestServiceError) throw error;
@@ -836,6 +1041,7 @@ export class MediaRequestService {
     context: MediaRequestContext,
     createdAt: number,
     failureCode: MediaRequestFailureCode | null,
+    qualityProfile: string | null,
   ) {
     this.#database.sqlite
       .prepare(
@@ -867,6 +1073,7 @@ export class MediaRequestService {
           ...(failureCode ? { failureCode } : {}),
           is4k: input.is4k,
           kind: input.kind,
+          ...(qualityProfile ? { qualityProfile } : {}),
           tmdbId: input.tmdbId,
         }),
         context.ipAddress

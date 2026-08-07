@@ -34,6 +34,7 @@ describe("directional navigation", () => {
 
     expect(screen.getByRole("link", { name: "Library" })).toHaveFocus();
     expect(screen.getByRole("link", { name: "Library" })).toHaveAttribute("href", "/library");
+    expect(screen.getByRole("link", { name: "Saved" })).toHaveAttribute("href", "/saved");
     expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute("href", "/calendar");
     expect(screen.getByRole("link", { name: "Operations" })).toHaveAttribute(
       "href",

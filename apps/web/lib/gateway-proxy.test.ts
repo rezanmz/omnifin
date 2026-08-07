@@ -71,7 +71,9 @@ describe("gateway proxy target resolution", () => {
 
 describe("trusted edge address selection", () => {
   it("keeps forwarding assertions untrusted by default", () => {
-    const headers = new Headers({ "x-forwarded-for": "192.0.2.10, 198.51.100.22" });
+    const headers = new Headers({
+      "x-forwarded-for": "192.0.2.10, 198.51.100.22",
+    });
 
     expect(selectTrustedClientAddress(headers, 0)).toBeUndefined();
   });
@@ -241,7 +243,10 @@ describe("gateway proxy transport", () => {
       vi.fn(async (endpoint: URL | string | Request, init?: RequestInit) => {
         sentEndpoint = endpoint;
         sentInit = init;
-        return new Response("proxied", { headers: upstreamHeaders, status: 303 });
+        return new Response("proxied", {
+          headers: upstreamHeaders,
+          status: 303,
+        });
       }),
     );
 
@@ -272,7 +277,11 @@ describe("gateway proxy transport", () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
     );
     expect(sentHeaders.get("x-request-id")).not.toBe("attacker-selected-correlation");
-    expect(sentInit).toMatchObject({ cache: "no-store", method: "GET", redirect: "manual" });
+    expect(sentInit).toMatchObject({
+      cache: "no-store",
+      method: "GET",
+      redirect: "manual",
+    });
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/settings");
     expect(response.headers.get("x-private-response")).toBeNull();
@@ -281,6 +290,33 @@ describe("gateway proxy transport", () => {
       "second=two; HttpOnly; Path=/",
     ]);
     await expect(response.text()).resolves.toBe("proxied");
+  });
+
+  it("passes an external service redirect to the browser without fetching its destination", async () => {
+    const upstream = vi.fn(async (_endpoint: URL | string | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, {
+        headers: {
+          location: "https://movies.example.test/radarr/movie/the-far-meridian",
+          "referrer-policy": "no-referrer",
+        },
+        status: 303,
+      });
+    });
+    vi.stubGlobal("fetch", upstream);
+
+    const response = await proxyGatewayRequest(
+      requestFixture({
+        path: `/api/media/library/media_${"m".repeat(22)}/actions/radarr`,
+      }),
+    );
+
+    expect(upstream).toHaveBeenCalledOnce();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "https://movies.example.test/radarr/movie/the-far-meridian",
+    );
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("forwards one canonical address from an explicitly trusted edge chain", async () => {
@@ -346,7 +382,9 @@ describe("gateway proxy transport", () => {
   });
 
   it("does not truncate a response body after the gateway returns its headers", async () => {
-    const proxyWithShortHeaderDeadline = createGatewayProxy({ headerTimeoutMs: 5 });
+    const proxyWithShortHeaderDeadline = createGatewayProxy({
+      headerTimeoutMs: 5,
+    });
     let releaseBody: (() => void) | undefined;
     vi.stubGlobal(
       "fetch",
@@ -452,7 +490,9 @@ describe("gateway proxy transport", () => {
   });
 
   it("aborts a gateway request that does not return headers before the deadline", async () => {
-    const proxyWithShortHeaderDeadline = createGatewayProxy({ headerTimeoutMs: 5 });
+    const proxyWithShortHeaderDeadline = createGatewayProxy({
+      headerTimeoutMs: 5,
+    });
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.stubGlobal(
       "fetch",
@@ -464,7 +504,9 @@ describe("gateway proxy transport", () => {
               reject(new Error("Expected the gateway request to have an abort signal."));
               return;
             }
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
           }),
       ),
     );
@@ -475,7 +517,9 @@ describe("gateway proxy transport", () => {
   });
 
   it("cancels the header deadline when the gateway request fails", async () => {
-    const proxyWithShortHeaderDeadline = createGatewayProxy({ headerTimeoutMs: 5 });
+    const proxyWithShortHeaderDeadline = createGatewayProxy({
+      headerTimeoutMs: 5,
+    });
     let gatewaySignal: AbortSignal | undefined;
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.stubGlobal(
@@ -524,7 +568,10 @@ describe("gateway proxy transport", () => {
       },
     });
     expect(errorLog).toHaveBeenCalledWith(
-      JSON.stringify({ event: "gateway_proxy_unavailable", requestId: payload.error.requestId }),
+      JSON.stringify({
+        event: "gateway_proxy_unavailable",
+        requestId: payload.error.requestId,
+      }),
     );
     const serializedLog = JSON.stringify(errorLog.mock.calls);
     expect(serializedLog).not.toContain("private-code");

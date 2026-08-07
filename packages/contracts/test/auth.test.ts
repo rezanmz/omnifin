@@ -6,6 +6,7 @@ import {
   PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
+  appearanceUpdateResponseSchema,
   authenticatedSessionResponseSchema,
   authProviderSchema,
   externalIdentitySchema,
@@ -696,8 +697,10 @@ describe("authentication contracts", () => {
   it("keeps role permissions monotonic", () => {
     expect(ROLE_PERMISSIONS.viewer).toEqual(
       expect.arrayContaining([
+        "favorites.self.manage",
         "identities.self.manage",
         "playback.history.self.manage",
+        "saved.lists.self.manage",
         "sessions.self.revoke",
       ]),
     );
@@ -946,6 +949,41 @@ describe("authentication contracts", () => {
 
     expect(sessionResponseSchema.safeParse({ principal: activePrincipal }).success).toBe(false);
     expect(sessionResponseSchema.safeParse({ csrfToken: validCsrfToken }).success).toBe(false);
+  });
+
+  it("carries an optional account theme on authenticated sessions", () => {
+    expect(
+      sessionResponseSchema.safeParse({
+        principal: activePrincipal,
+        csrfToken: validCsrfToken,
+        theme: "dark",
+      }).success,
+    ).toBe(true);
+    expect(
+      sessionResponseSchema.safeParse({
+        principal: activePrincipal,
+        csrfToken: validCsrfToken,
+        theme: "system",
+      }).success,
+    ).toBe(true);
+    expect(
+      sessionResponseSchema.safeParse({
+        principal: activePrincipal,
+        csrfToken: validCsrfToken,
+        theme: "sepia",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates bounded appearance update requests and responses", () => {
+    for (const theme of ["system", "light", "dark"]) {
+      const response = appearanceUpdateResponseSchema.parse({ theme });
+      expect(response).toEqual({ theme });
+      expect(appearanceUpdateResponseSchema.safeParse({ theme, extra: true }).success).toBe(false);
+    }
+    for (const theme of ["sepia", "", "Light"]) {
+      expect(appearanceUpdateResponseSchema.safeParse({ theme }).success).toBe(false);
+    }
   });
 
   it("rejects permissions that exceed the principal role", () => {

@@ -258,6 +258,7 @@ describe("media detail drawer", () => {
       "https://www.youtube.com/watch?v=m8e-FF8MsqU",
     );
     expect(screen.getByRole("button", { name: /The Matrix Reloaded/iu })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Watch Later" })).toBeVisible();
     expect(screen.queryByText(/raw-|jellyfin|serviceUrl/iu)).not.toBeInTheDocument();
     expect(load).toHaveBeenCalledWith(
       { kind: "movie", tmdbId: 603 },
@@ -265,6 +266,27 @@ describe("media detail drawer", () => {
       expect.any(AbortSignal),
     );
   });
+
+  it.each(["available", "unknown"] as const)(
+    "does not issue a discovery save target for %s detail",
+    async (availability) => {
+      const response: DiscoveryMediaDetailResponse = {
+        ...movieResponse,
+        item: { ...movieResponse.item, availability },
+      };
+      render(
+        <MediaDetailDrawer
+          client={client(async () => response)}
+          media={{ ...movie, availability }}
+          onOpenChange={vi.fn()}
+          open
+        />,
+      );
+
+      expect(await screen.findByRole("heading", { name: "The Matrix" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Watch Later" })).not.toBeInTheDocument();
+    },
+  );
 
   it("renders proxied artwork and falls back cleanly when an individual image fails", async () => {
     const artworkResponse: DiscoveryMediaDetailResponse = {

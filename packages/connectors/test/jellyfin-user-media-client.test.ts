@@ -55,6 +55,35 @@ const series = {
 };
 
 describe("JellyfinUserMediaClient", () => {
+  it("deletes one exact item through the paired user's authenticated endpoint", async () => {
+    const { client, requests } = clientWithResponses([new Response(null, { status: 204 })]);
+
+    await client.deleteLibraryItem("movie-upstream-1");
+
+    expect(requests[0]?.url.pathname).toBe("/base/Items/movie-upstream-1");
+    expect(requests[0]?.url.search).toBe("");
+    expect(requests[0]?.init.method).toBe("DELETE");
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
+  it("rejects a non-canonical deletion target before issuing a request", async () => {
+    const { client, requests } = clientWithResponses([]);
+
+    await expect(client.deleteLibraryItem("../another-title")).rejects.toBeDefined();
+    expect(requests).toHaveLength(0);
+  });
+
+  it("rejects an unexpected successful status for item deletion", async () => {
+    const { client } = clientWithResponses([new Response("accepted", { status: 200 })]);
+
+    await expect(client.deleteLibraryItem("movie-upstream-1")).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "library.removal.file_delete",
+    });
+  });
+
   it("reads the inferred user's modern resume feed and normalizes movies", async () => {
     const { client, requests } = clientWithResponses([
       jsonResponse({ Items: [movie], StartIndex: 0, TotalRecordCount: 1 }),
@@ -891,9 +920,16 @@ describe("JellyfinUserMediaClient", () => {
       jsonResponse({
         ...movie,
         CanDownload: true,
-        Container: "mkv",
         Etag: "private-source-version",
-        MediaSources: [{ Container: "mkv", Size: 50_000_000_000 }],
+        MediaSources: [
+          { Container: "mp4", Id: "alternate-source", Size: 1_000 },
+          {
+            Container: "mkv",
+            Id: "movie-upstream-1",
+            MediaStreams: [{ Height: 0, Type: "Subtitle", Width: 0 }],
+            Size: 50_000_000_000,
+          },
+        ],
         Path: "/private/library/The Far Meridian.mkv",
       }),
       new Response(original, {
@@ -953,7 +989,7 @@ describe("JellyfinUserMediaClient", () => {
         CanDownload: false,
         Container: "mp4",
         Etag: "private-denied-version",
-        MediaSources: [{ Container: "mp4", Size: 9_000 }],
+        MediaSources: [{ Container: "mp4", Id: "movie-upstream-1", Size: 9_000 }],
       }),
     ]);
     await expect(
@@ -998,7 +1034,14 @@ describe("JellyfinUserMediaClient", () => {
         Etag: "private-episode-version",
         Id: "episode-upstream-1",
         IndexNumber: 3,
-        MediaSources: [{ Container: "mkv", Size: 1_250_000_000 }],
+        MediaSources: [
+          {
+            Container: "mkv",
+            Id: "episode-upstream-1",
+            MediaStreams: [{ Height: 0, Type: "Subtitle", Width: 0 }],
+            Size: 1_250_000_000,
+          },
+        ],
         Name: "The Long Meridian",
         ParentIndexNumber: 2,
         ProductionYear: 2026,
@@ -1022,6 +1065,26 @@ describe("JellyfinUserMediaClient", () => {
       year: 2026,
     });
     expect(JSON.stringify(episodeDownload.requests)).not.toContain("private-episode-version");
+  });
+
+  it("rejects malformed required original download source metadata", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({
+        ...movie,
+        CanDownload: true,
+        MediaSources: [{ Container: "mkv", Id: "movie-upstream-1", Size: "50000000000" }],
+      }),
+    ]);
+
+    await expect(
+      client.readOriginalDownloadMetadata({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "media.original_download.metadata",
+    });
   });
 
   it("reads parent-scoped local extras and normalizes every reviewed Jellyfin type", async () => {
@@ -1485,6 +1548,107 @@ describe("JellyfinUserMediaClient", () => {
         userId: "paired-user-id",
       }),
     ).rejects.toMatchObject({ code: "response_invalid", operation: "media.playback_state" });
+  });
+
+  it("reads and changes the paired user's authoritative favorite state", async () => {
+    const current = clientWithResponses([
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      current.client.readFavoriteState({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(false);
+    expect(current.requests[0]?.url.pathname).toBe("/base/Items/movie-upstream-1");
+    expect(Object.fromEntries(current.requests[0]!.url.searchParams)).toEqual({
+      EnableUserData: "true",
+      UserId: "paired-user-id",
+    });
+
+    const marked = clientWithResponses([
+      jsonResponse({ IsFavorite: true }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: true } }),
+    ]);
+    await expect(
+      marked.client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(true);
+    expect(marked.requests.map(({ url }) => url.pathname)).toEqual([
+      "/base/UserFavoriteItems/movie-upstream-1",
+      "/base/Items/movie-upstream-1",
+    ]);
+    expect(marked.requests[0]?.init.method).toBe("POST");
+    expect(marked.requests[0]?.url.searchParams.get("userId")).toBe("paired-user-id");
+    expect(marked.requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
+
+    const unmarked = clientWithResponses([
+      jsonResponse({ IsFavorite: false }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      unmarked.client.updateFavoriteState({
+        favorite: false,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(false);
+    expect(unmarked.requests[0]?.init.method).toBe("DELETE");
+  });
+
+  it("reconciles an unknown favorite mutation outcome before reporting success", async () => {
+    let attempt = 0;
+    const client = new JellyfinUserMediaClient({
+      accessToken: "private-access-token",
+      deviceId: "installation-1",
+      target: {
+        baseUrl: "https://jellyfin.example.test/base/",
+        connectorId: "jellyfin-home",
+        displayName: "Home Jellyfin",
+        resolveHost: publicResolver,
+        transport: async () => {
+          attempt += 1;
+          if (attempt === 1) throw new Error("connection ended after favorite write");
+          return jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: true } });
+        },
+      },
+    });
+
+    await expect(
+      client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).resolves.toBe(true);
+    expect(attempt).toBe(2);
+  });
+
+  it("fails closed when favorite state is malformed or does not converge", async () => {
+    const malformed = clientWithResponses([
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: "yes" } }),
+    ]);
+    await expect(
+      malformed.client.readFavoriteState({
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.favorite" });
+
+    const divergent = clientWithResponses([
+      jsonResponse({ IsFavorite: true }),
+      jsonResponse({ Id: "movie-upstream-1", UserData: { IsFavorite: false } }),
+    ]);
+    await expect(
+      divergent.client.updateFavoriteState({
+        favorite: true,
+        itemId: "movie-upstream-1",
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.favorite" });
   });
 
   it("fails closed on malformed resume data and unsafe tokens", async () => {

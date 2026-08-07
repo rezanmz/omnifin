@@ -1,0 +1,229 @@
+.actions {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  width: min(100%, 560px);
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.buttons button {
+  min-height: 44px;
+}
+
+.buttons svg {
+  height: 16px;
+  width: 16px;
+}
+
+.status {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  min-height: 1em;
+}
+
+.status[data-state="error"] {
+  color: var(--danger);
+}
+
+.status[data-state="ready"]:not(:empty) {
+  color: var(--acid);
+}
+
+.listPicker {
+  background: color-mix(in srgb, var(--glass-fill) 58%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.listPicker summary {
+  align-items: center;
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.74rem;
+  font-weight: 650;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+
+.listPicker summary::-webkit-details-marker {
+  display: none;
+}
+
+.listPicker summary > svg {
+  height: 16px;
+  width: 16px;
+}
+
+.listPicker summary > span {
+  align-items: center;
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  display: flex;
+  font-variant-numeric: tabular-nums;
+  height: 22px;
+  justify-content: center;
+  margin-left: auto;
+  min-width: 22px;
+}
+
+.listPicker[open] summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.listOptions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 8px;
+}
+
+.listOptions button {
+  align-items: center;
+  background: var(--fill-subtle);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 0.72rem;
+  gap: 7px;
+  min-height: 44px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.listOptions button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--acid) 45%, var(--line-soft));
+  color: var(--acid);
+}
+
+.listOptions button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--acid) 58%, transparent);
+  outline-offset: 2px;
+}
+
+.listOptions button svg {
+  flex: 0 0 auto;
+  height: 15px;
+  width: 15px;
+}
+
+.listOptions p {
+  color: var(--paper-2);
+  font-size: 0.72rem;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+  padding: 6px;
+}
+
+.listOptions a {
+  color: var(--paper-0);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.compact {
+  align-items: center;
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  background:
+    radial-gradient(ellipse at 28% 0%, rgb(255 255 255 / 34%), transparent 56%),
+    color-mix(in srgb, var(--glass-fill-strong) 86%, transparent);
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-bright),
+    0 10px 24px color-mix(in srgb, var(--glass-cast-shadow) 64%, transparent);
+  color: var(--paper-0);
+  cursor: pointer;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    color 160ms ease-out,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  width: 44px;
+  z-index: 8;
+}
+
+.compact:hover,
+.compact:focus-visible,
+.compact[data-active="true"] {
+  background-color: color-mix(in srgb, var(--acid) 18%, var(--glass-fill-strong));
+  border-color: color-mix(in srgb, var(--acid) 48%, var(--glass-edge));
+  color: var(--acid);
+  transform: scale(1.05);
+}
+
+.compact[data-placement="before-primary"] {
+  right: 102px;
+}
+
+.compact:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--acid) 62%, transparent);
+  outline-offset: 3px;
+}
+
+.compact:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.compact svg {
+  height: 18px;
+  width: 18px;
+}
+
+.spin {
+  animation: saved-title-spin 760ms linear infinite;
+}
+
+@keyframes saved-title-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact {
+    transition: none;
+  }
+
+  .spin {
+    animation: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .listOptions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (forced-colors: active) {
+  .compact {
+    background: ButtonFace;
+    border: 1px solid ButtonText;
+    color: ButtonText;
+  }
+
+  .compact[data-active="true"] {
+    color: Highlight;
+  }
+}

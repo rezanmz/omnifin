@@ -429,12 +429,13 @@ test("request composer has no automatically detectable accessibility violations"
   );
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockDiscoverySearch(page);
-  await mockMediaRequestSession(page);
+  await mockMediaRequestSession(page, { canManageRouting: true });
   await mockMediaRequestRouting(page);
   await page.goto("/");
   await page.getByRole("combobox").fill("matrix");
   await page.getByRole("button", { name: "Request The Matrix" }).click();
   await expect(page.getByRole("dialog", { name: "Compose request" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set household default" })).toBeVisible();
   await page.getByText("Advanced routing").click();
   await expect(page.getByRole("combobox", { name: /Destination/i })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();

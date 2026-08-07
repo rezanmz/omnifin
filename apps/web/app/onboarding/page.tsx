@@ -59,7 +59,7 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
   const preference = await readThemePreference();
 
   return (
-    <ThemeProvider initialPreference={preference}>
+    <ThemeProvider accountSync={false} initialPreference={preference}>
       <OnboardingDashboard
         displayProfile={displayProfile}
         {...(initialOutcome ? { initialOutcome } : {})}

@@ -580,6 +580,32 @@ describe("JellyfinPlaybackClient", () => {
     );
   });
 
+  it("reads a masked WebVTT subtitle stream bound to its session source", async () => {
+    const vtt = new TextEncoder().encode("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello");
+    const { client, requests } = clientWithResponses([
+      new Response(vtt, { headers: { "content-type": "text/vtt" } }),
+    ]);
+
+    const response = await client.readSubtitleStream({
+      itemId: "movie-upstream-1",
+      mediaSourceId: "media-source-1",
+      subtitleIndex: 3,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(vtt);
+    expect(response.headers.get("content-type")).toBe("text/vtt");
+    expect(requests[0]?.url.pathname).toBe(
+      "/base/Videos/movie-upstream-1/media-source-1/Subtitles/3/Stream.vtt",
+    );
+    expect(requests[0]?.init.headers.get("accept")).toBe(
+      "text/vtt,text/plain,application/octet-stream",
+    );
+    expect(requests[0]?.init.headers.get("authorization")).toContain(
+      'Token="private-access-token"',
+    );
+  });
+
   it("normalizes same-server HLS assets while rejecting traversal and external URLs", () => {
     const { client } = clientWithResponses([]);
     const parent = {

@@ -53,6 +53,10 @@
       "types": "./dist/issues.d.ts",
       "default": "./dist/issues.js"
     },
+    "./households": {
+      "types": "./dist/households.d.ts",
+      "default": "./dist/households.js"
+    },
     "./library": {
       "types": "./dist/library.d.ts",
       "default": "./dist/library.js"
@@ -68,6 +72,10 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "default": "./dist/runtime.js"
+    },
+    "./saved": {
+      "types": "./dist/saved.d.ts",
+      "default": "./dist/saved.js"
     },
     "./setup": {
       "types": "./dist/setup.d.ts",

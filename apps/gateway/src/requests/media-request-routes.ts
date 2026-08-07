@@ -6,6 +6,8 @@ import {
   mediaRequestRoutingOptionsQuerySchema,
   mediaRequestRoutingOptionsResponseJsonSchema,
   mediaRequestRoutingOptionsResponseSchema,
+  mediaRequestRoutingPreferenceInputJsonSchema,
+  mediaRequestRoutingPreferenceInputSchema,
 } from "@omnifin/contracts/requests";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
@@ -214,6 +216,46 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
         return mediaRequestResponseSchema.parse(result.request);
+      } catch (error) {
+        if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
+        throw error;
+      } finally {
+        request.raw.off("aborted", abort);
+      }
+    },
+  );
+
+  app.put(
+    "/v1/requests/routing-preference",
+    {
+      bodyLimit: 8 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: { body: mediaRequestRoutingPreferenceInputJsonSchema },
+    },
+    async (request, reply) => {
+      const principal = requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "connectors.manage",
+      );
+      const input = mediaRequestRoutingPreferenceInputSchema.parse(request.body);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.raw.once("aborted", abort);
+      try {
+        await mediaRequests.setRoutingPreference(
+          input,
+          {
+            ipAddress: request.ip,
+            principal,
+            requestId: request.id,
+          },
+          controller.signal,
+        );
+        return reply.status(204).send();
       } catch (error) {
         if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
         throw error;

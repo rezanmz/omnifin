@@ -1,5 +1,6 @@
 import {
   JellyfinPlaybackClient,
+  type JellyfinPlaybackBytesResult,
   type JellyfinPlaybackResult,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTransport } from "@omnifin/connectors/types";
@@ -210,6 +211,9 @@ function harness(
   const readPlaybackTarget = vi.fn(async () => {
     throw new Error("Playback bytes were not expected in this service test.");
   });
+  const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
+    throw new Error("Subtitle bytes were not expected in this service test.");
+  });
   const streamPlaybackTarget = vi.fn(async () => {
     throw new Error("Playback streams were not expected in this service test.");
   });
@@ -218,6 +222,7 @@ function harness(
   const mockedCreateClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
     negotiate,
     readPlaybackTarget,
+    readSubtitleStream,
     reportPlaybackEvent,
     resolvePlaybackTarget,
     streamPlaybackTarget,
@@ -228,7 +233,17 @@ function harness(
     createClient,
     createToken: () => "p".repeat(22),
   });
-  return { config, createClient, database, negotiate, reference, reportPlaybackEvent, service };
+  return {
+    config,
+    createClient,
+    database,
+    negotiate,
+    readPlaybackTarget,
+    readSubtitleStream,
+    reference,
+    reportPlaybackEvent,
+    service,
+  };
 }
 
 const negotiation = {
@@ -609,6 +624,53 @@ describe("PlaybackSessionService", () => {
       expect(
         database.sqlite.prepare("select count(*) as count from playback_sessions").get(),
       ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("exposes masked WebVTT paths and reads only text subtitles from the negotiated session", async () => {
+    const vtt = new TextEncoder().encode("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello");
+    const { database, readSubtitleStream, reference, service } = harness();
+    readSubtitleStream.mockResolvedValue({
+      body: vtt,
+      headers: new Headers({ "content-type": "text/vtt" }),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      expect(playback.subtitleTracks).toEqual([
+        expect.objectContaining({
+          codec: "vtt",
+          delivery: "external",
+          index: 2,
+          subtitlePath: `/v1/playback/${playback.sessionId}/subtitle/2`,
+        }),
+      ]);
+
+      const subtitle = await service.readSubtitle(
+        { principal: principal() },
+        playback.sessionId,
+        2,
+      );
+      expect(subtitle).toEqual({ body: vtt, contentType: "text/vtt", status: 200 });
+      expect(readSubtitleStream).toHaveBeenCalledWith({
+        itemId: privateItemId,
+        mediaSourceId: "private-media-source",
+        subtitleIndex: 2,
+      });
+
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 999),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(readSubtitleStream).toHaveBeenCalledTimes(1);
+
+      database.sqlite
+        .prepare("update playback_sessions set state = 'stopped' where id = ?")
+        .run(playback.sessionId);
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).rejects.toMatchObject({ reason: "not_found" });
     } finally {
       database.close();
     }

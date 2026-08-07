@@ -41,6 +41,7 @@ import {
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
 import { titleProviderHref } from "../lib/title-provider-reference";
+import { SavedTitleActions } from "./saved-title-actions";
 
 export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
 
@@ -290,6 +291,7 @@ function DetailContent({
   const runtime = formatRuntime(detail.runtimeMinutes);
   const ratings = formatRatings(detail.voteCount);
   const requestable = detail.availability === "unavailable" || detail.availability === "partial";
+  const saveable = detail.availability !== "available" && detail.availability !== "unknown";
   return (
     <div className="media-detail__content">
       <section className="media-detail__hero">
@@ -336,6 +338,13 @@ function DetailContent({
                 <li key={genre}>{genre}</li>
               ))}
             </ul>
+          ) : null}
+          {saveable ? (
+            <SavedTitleActions
+              discovery={{ kind: detail.kind, language: detailLanguage(), tmdbId: detail.tmdbId }}
+              eager
+              title={detail.title}
+            />
           ) : null}
         </div>
       </section>

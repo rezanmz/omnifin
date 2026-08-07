@@ -328,6 +328,20 @@ const seerrUserIdentitySchema = z.strictObject({
   jellyfinUserId: z.string().trim().min(1).max(256),
   jellyfinUsername: z.string().trim().min(1).max(160),
 });
+const seerrRequestAuthorizationSchema = z.strictObject({
+  is4k: z.boolean(),
+  kind: z.enum(["movie", "series"]),
+});
+
+const SEERR_REQUEST_PERMISSIONS = {
+  admin: 2,
+  movie: 262_144,
+  movie4k: 2_048,
+  request: 32,
+  request4k: 1_024,
+  series: 524_288,
+  series4k: 4_096,
+} as const;
 
 const seerrRequestServerSchema = z.object({
   activeDirectory: z.string().trim().min(1).max(1_024),
@@ -404,6 +418,7 @@ const seerrUserListResponseSchema = z.object({
         id: z.int().positive().max(2_147_483_647),
         jellyfinUserId: z.string().trim().min(1).max(256).nullish(),
         jellyfinUsername: z.string().trim().min(1).max(160).nullish(),
+        permissions: z.int().nonnegative().max(2_147_483_647),
       }),
     )
     .max(100),
@@ -434,6 +449,7 @@ const seerrReviewRequestSchema = z.object({
     mediaType: z.enum(["movie", "tv"]),
     tmdbId: upstreamIdentifierSchema,
   }),
+  profileId: z.int().positive().max(2_147_483_647).nullish().default(null),
   requestedBy: z.object({
     jellyfinUsername: z.string().trim().min(1).max(160).nullish(),
     username: z.string().trim().min(1).max(160).nullish(),
@@ -442,6 +458,7 @@ const seerrReviewRequestSchema = z.object({
     .array(z.object({ seasonNumber: z.int().nonnegative().max(10_000) }))
     .max(100)
     .default([]),
+  serverId: z.int().nonnegative().max(2_147_483_647).nullish().default(null),
   status: z.int().min(1).max(5),
   updatedAt: z.iso.datetime({ offset: true }),
 });
@@ -486,6 +503,11 @@ export interface SeerrUserIdentity {
   jellyfinUsername: string;
 }
 
+export interface SeerrRequestAuthorization {
+  is4k: boolean;
+  kind: "movie" | "series";
+}
+
 export type SeerrRequestErrorReason =
   | "identity_ambiguous"
   | "identity_not_found"
@@ -514,6 +536,24 @@ function yearFromDate(value: string | null | undefined) {
   const match = /^(\d{4})(?:-\d{2}-\d{2})?$/u.exec(value ?? "");
   const year = match?.[1] ? Number(match[1]) : Number.NaN;
   return Number.isInteger(year) && year >= 1870 && year <= 2200 ? year : null;
+}
+
+function canCreateRequest(permissions: number, authorization: SeerrRequestAuthorization) {
+  if ((permissions & SEERR_REQUEST_PERMISSIONS.admin) !== 0) return true;
+  const required = authorization.is4k
+    ? [
+        SEERR_REQUEST_PERMISSIONS.request4k,
+        authorization.kind === "movie"
+          ? SEERR_REQUEST_PERMISSIONS.movie4k
+          : SEERR_REQUEST_PERMISSIONS.series4k,
+      ]
+    : [
+        SEERR_REQUEST_PERMISSIONS.request,
+        authorization.kind === "movie"
+          ? SEERR_REQUEST_PERMISSIONS.movie
+          : SEERR_REQUEST_PERMISSIONS.series,
+      ];
+  return required.some((permission) => (permissions & permission) !== 0);
 }
 
 function availabilityFromMediaInfo(mediaInfo: UpstreamMediaInfo): DiscoveryAvailability {
@@ -1747,7 +1787,11 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     });
   }
 
-  async resolveUser(identity: SeerrUserIdentity, signal?: AbortSignal): Promise<number> {
+  async resolveUser(
+    identity: SeerrUserIdentity,
+    authorization?: SeerrRequestAuthorization,
+    signal?: AbortSignal,
+  ): Promise<number> {
     if (!this.#apiKey) {
       throw new SafeConnectorError({
         code: "configuration_invalid",
@@ -1773,7 +1817,14 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     );
     if (matches.length === 0) throw new SeerrRequestError("identity_not_found");
     if (matches.length > 1) throw new SeerrRequestError("identity_ambiguous");
-    return matches[0]!.id;
+    const user = matches[0]!;
+    if (
+      authorization &&
+      !canCreateRequest(user.permissions, seerrRequestAuthorizationSchema.parse(authorization))
+    ) {
+      throw new SeerrRequestError("request_denied");
+    }
+    return user.id;
   }
 
   #artworkClient() {
@@ -1893,7 +1944,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     seerrUserId: number,
     signal?: AbortSignal,
     routing?: SeerrRequestRouting,
-  ): Promise<MediaRequestResponse> {
+  ): Promise<Omit<MediaRequestResponse, "qualityProfile">> {
     if (!this.#apiKey) {
       throw new SafeConnectorError({
         code: "configuration_invalid",
@@ -1962,7 +2013,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     ) {
       throw new SeerrRequestError("routing_unavailable");
     }
-    return mediaRequestResponseSchema.parse({
+    return mediaRequestResponseSchema.omit({ qualityProfile: true }).parse({
       createdAt: created.createdAt,
       id: `request:${created.id}`,
       is4k: created.is4k,
@@ -1999,12 +2050,16 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       ...(signal ? { signal } : {}),
     });
     const items: RequestReviewItem[] = [];
+    const destinationDetails = new Map<
+      string,
+      Promise<z.infer<typeof seerrRequestServerDetailsSchema> | null>
+    >();
     for (let index = 0; index < response.results.length; index += 5) {
       items.push(
         ...(await Promise.all(
           response.results
             .slice(index, index + 5)
-            .map((request) => this.#reviewItem(request, signal)),
+            .map((request) => this.#reviewItem(request, destinationDetails, signal)),
         )),
       );
     }
@@ -2060,7 +2115,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     if (requestStatus(reviewed.status, "request.review") !== expectedStatus) {
       throw invalidRequestResponse("request.review");
     }
-    return this.#reviewItem(reviewed, signal);
+    return this.#reviewItem(reviewed, new Map(), signal);
   }
 
   #requireRequestReview() {
@@ -2077,6 +2132,10 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
 
   async #reviewItem(
     request: z.infer<typeof seerrReviewRequestSchema>,
+    destinationDetails: Map<
+      string,
+      Promise<z.infer<typeof seerrRequestServerDetailsSchema> | null>
+    >,
     signal?: AbortSignal,
   ): Promise<RequestReviewItem> {
     const common = {
@@ -2097,7 +2156,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       updatedAt: request.updatedAt,
     };
     if (request.media.mediaType === "movie") {
-      const details = await this.client.requestJson(
+      const detailsPromise = this.client.requestJson(
         `api/v1/movie/${request.media.tmdbId}`,
         seerrMovieDetailsSchema,
         {
@@ -2106,14 +2165,19 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
           ...(signal ? { signal } : {}),
         },
       );
+      const [details, qualityProfile] = await Promise.all([
+        detailsPromise,
+        this.#reviewQualityProfile(request, destinationDetails, signal),
+      ]);
       return requestReviewItemSchema.parse({
         ...common,
         kind: "movie",
+        qualityProfile,
         title: details.title,
         year: yearFromDate(details.releaseDate),
       });
     }
-    const details = await this.client.requestJson(
+    const detailsPromise = this.client.requestJson(
       `api/v1/tv/${request.media.tmdbId}`,
       seerrSeriesDetailsSchema,
       {
@@ -2122,11 +2186,58 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         ...(signal ? { signal } : {}),
       },
     );
+    const [details, qualityProfile] = await Promise.all([
+      detailsPromise,
+      this.#reviewQualityProfile(request, destinationDetails, signal),
+    ]);
     return requestReviewItemSchema.parse({
       ...common,
       kind: "series",
+      qualityProfile,
       title: details.name,
       year: yearFromDate(details.firstAirDate),
     });
+  }
+
+  async #reviewQualityProfile(
+    request: z.infer<typeof seerrReviewRequestSchema>,
+    destinationDetails: Map<
+      string,
+      Promise<z.infer<typeof seerrRequestServerDetailsSchema> | null>
+    >,
+    signal?: AbortSignal,
+  ) {
+    if (request.serverId === null || request.profileId === null) return "Removed profile";
+    const service = request.media.mediaType === "movie" ? "radarr" : "sonarr";
+    const key = `${service}:${request.serverId}`;
+    let detailsPromise = destinationDetails.get(key);
+    if (!detailsPromise) {
+      detailsPromise = this.client
+        .requestJson(
+          `api/v1/service/${service}/${request.serverId}`,
+          seerrRequestServerDetailsSchema,
+          {
+            headers: { "X-Api-Key": this.#apiKey! },
+            operation: "request.review.profile",
+            ...(signal ? { signal } : {}),
+          },
+        )
+        .then((details) =>
+          details.server.id === request.serverId && details.server.is4k === request.is4k
+            ? details
+            : null,
+        )
+        .catch((error: unknown) => {
+          if (signal?.aborted) throw error;
+          return null;
+        });
+      destinationDetails.set(key, detailsPromise);
+    }
+    const details = await detailsPromise;
+    if (!details) return "Profile unavailable";
+    return (
+      details.profiles.find((profile) => profile.id === request.profileId)?.name ??
+      "Removed profile"
+    );
   }
 }

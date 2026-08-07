@@ -318,7 +318,7 @@
   border-radius: 28px;
   box-shadow: 0 20px 48px var(--glass-cast-shadow);
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   inset: auto;
   padding: 8px 4px;
   position: relative;
@@ -407,7 +407,7 @@
     bottom: max(8px, env(safe-area-inset-bottom));
     box-shadow: 0 20px 48px var(--glass-cast-shadow);
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     left: 12px;
     padding: 7px 4px;
     position: fixed;

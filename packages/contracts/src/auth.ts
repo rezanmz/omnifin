@@ -6,6 +6,9 @@ export const AUTH_PROVIDERS_RESPONSE_MAX_BYTES = 1_048_576;
 export const OIDC_ISSUER_MAX_LENGTH = 2_048;
 export const OIDC_ROLE_MAPPINGS_MAX_COUNT = 512;
 
+export const themePreferenceSchema = z.enum(["system", "light", "dark"]);
+export type ThemePreference = z.infer<typeof themePreferenceSchema>;
+
 const identifierSchema = z.string().trim().min(1).max(128);
 const displayNameSchema = z.string().trim().min(1).max(160);
 const oidcIssuerSchema = z
@@ -99,6 +102,8 @@ export const permissionSchema = z.enum([
   "media.download",
   "playback.use",
   "playback.history.self.manage",
+  "saved.lists.self.manage",
+  "favorites.self.manage",
   "request.create",
   "request.review",
   "acquisition.manage",
@@ -153,6 +158,8 @@ export const ROLE_PERMISSIONS = {
     "media.view",
     "playback.use",
     "playback.history.self.manage",
+    "saved.lists.self.manage",
+    "favorites.self.manage",
     "identities.self.manage",
     "sessions.self.revoke",
   ],
@@ -160,6 +167,8 @@ export const ROLE_PERMISSIONS = {
     "media.view",
     "playback.use",
     "playback.history.self.manage",
+    "saved.lists.self.manage",
+    "favorites.self.manage",
     "identities.self.manage",
     "sessions.self.revoke",
     "request.create",
@@ -168,6 +177,8 @@ export const ROLE_PERMISSIONS = {
     "media.view",
     "playback.use",
     "playback.history.self.manage",
+    "saved.lists.self.manage",
+    "favorites.self.manage",
     "identities.self.manage",
     "sessions.self.revoke",
     "request.create",
@@ -765,6 +776,7 @@ export type JellyfinPasswordPairingRequest = z.infer<typeof jellyfinPasswordPair
 export const authenticatedSessionResponseSchema = z.object({
   principal: sessionPrincipalSchema,
   csrfToken: csrfTokenSchema,
+  theme: themePreferenceSchema.optional(),
 });
 export type AuthenticatedSessionResponse = z.infer<typeof authenticatedSessionResponseSchema>;
 
@@ -901,3 +913,20 @@ export const sessionResponseSchema = z.union([
   }),
 ]);
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
+
+export const appearanceUpdateRequestSchema = z.strictObject({
+  theme: themePreferenceSchema,
+});
+export type AppearanceUpdateRequest = z.infer<typeof appearanceUpdateRequestSchema>;
+
+export const appearanceUpdateResponseSchema = z.strictObject({
+  theme: themePreferenceSchema,
+});
+export type AppearanceUpdateResponse = z.infer<typeof appearanceUpdateResponseSchema>;
+
+export const appearanceUpdateResponseJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["theme"],
+  properties: { theme: { type: "string", enum: ["system", "light", "dark"] } },
+} as const;

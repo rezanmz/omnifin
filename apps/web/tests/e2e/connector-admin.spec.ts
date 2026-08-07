@@ -56,6 +56,7 @@ const jellyfin = {
   id: "jellyfin-primary",
   insecureHttpApproved: false,
   lastProbe: null,
+  publicUiUrl: null,
   revision: "revision_0123456789abcdef",
   service: "jellyfin",
   tlsCaCertificateConfigured: false,
@@ -207,7 +208,7 @@ test("sends a new API key to the gateway once and never renders it back", async 
 
   await page.goto("/settings/connectors");
   await page.getByRole("button", { name: "Radarr", exact: true }).click();
-  await page.getByRole("textbox", { name: "Service URL" }).fill(radarr.baseUrl);
+  await page.getByRole("textbox", { name: /^Service URL\b/u }).fill(radarr.baseUrl);
   await page.getByRole("textbox", { name: "API key" }).fill(privateApiKey);
   await page.getByRole("button", { name: "Save disabled connector" }).click();
 

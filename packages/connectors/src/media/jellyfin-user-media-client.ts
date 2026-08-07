@@ -50,6 +50,7 @@ const JELLYFIN_TICKS_PER_SECOND = 10_000_000;
 const MAX_RUNTIME_TICKS = 60_000_000_000_000;
 const BLUR_HASH_ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
+const jellyfinItemIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u);
 
 const imageTagsSchema = z.record(
   z.string().trim().min(1).max(80),
@@ -194,9 +195,31 @@ const jellyfinLibraryItemSchema = z.object({
     .catch(null),
 });
 
-const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema.extend({
-  Type: z.enum(["Episode", "Movie"]),
-});
+const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema
+  .pick({
+    CanDownload: true,
+    Container: true,
+    Etag: true,
+    Id: true,
+    IndexNumber: true,
+    Name: true,
+    ParentIndexNumber: true,
+    ProductionYear: true,
+    SeriesName: true,
+  })
+  .extend({
+    MediaSources: z
+      .array(
+        z.object({
+          Container: z.string().trim().min(1).max(64).nullish(),
+          Id: z.string().trim().min(1).max(256),
+          Size: z.int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+        }),
+      )
+      .max(64)
+      .nullish(),
+    Type: z.enum(["Episode", "Movie"]),
+  });
 
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
@@ -341,6 +364,11 @@ const jellyfinPlaybackStateItemSchema = z.object({
   }),
 });
 
+const jellyfinFavoriteStateItemSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  UserData: z.object({ IsFavorite: z.boolean() }),
+});
+
 const jellyfinLibraryQuerySchema = z.strictObject({
   kind: z.enum(["all", "movies", "series"]),
   limit: z.int().positive().max(JELLYFIN_LIBRARY_BROWSE_LIMIT),
@@ -397,7 +425,11 @@ const jellyfinOriginalDownloadInputSchema = z
       (end !== null && !Number.isSafeInteger(end)) ||
       (start !== null && end !== null && start > end)
     ) {
-      context.addIssue({ code: "custom", message: "The byte range is invalid.", path: ["range"] });
+      context.addIssue({
+        code: "custom",
+        message: "The byte range is invalid.",
+        path: ["range"],
+      });
     }
   });
 
@@ -422,6 +454,18 @@ const jellyfinLibrarySeasonEpisodesQuerySchema = z.strictObject({
 
 const jellyfinPlaybackStateMutationInputSchema = z.strictObject({
   action: z.enum(["mark_watched", "mark_unwatched", "reset_progress"]),
+  itemId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
+const jellyfinFavoriteStateInputSchema = z.strictObject({
+  favorite: z.boolean(),
   itemId: z
     .string()
     .trim()
@@ -537,6 +581,15 @@ export interface JellyfinLibrarySeason {
 
 export interface JellyfinLibraryTitleResult {
   item: JellyfinLibraryItem;
+  managementIdentity:
+    | {
+        kind: "movie";
+        providerIds: { imdb: string | null; tmdb: number | null };
+      }
+    | {
+        kind: "series";
+        providerIds: { tmdb: number | null; tvdb: number | null };
+      };
   movie: JellyfinLibraryMovieDetail | null;
   providerReferences: TitleProviderReference[];
   removal?: JellyfinLibraryRemovalFacts | null;
@@ -950,12 +1003,46 @@ function normalizeMovieDetail(
 
 function normalizedProviderId(
   providerIds: Record<string, string> | null | undefined,
-  provider: "imdb" | "tmdb",
+  provider: "imdb" | "tmdb" | "tvdb",
 ) {
   const value = Object.entries(providerIds ?? {}).find(
     ([key]) => key.toLocaleLowerCase("en-US") === provider,
   )?.[1];
   return value?.trim() ?? null;
+}
+
+function normalizedPositiveProviderNumber(
+  providerIds: Record<string, string> | null | undefined,
+  provider: "tmdb" | "tvdb",
+) {
+  const value = normalizedProviderId(providerIds, provider);
+  if (value === null || !/^[1-9][0-9]{0,15}$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeTitleManagementIdentity(
+  item: z.infer<typeof jellyfinLibraryItemSchema>,
+  kind: "movie" | "series",
+): JellyfinLibraryTitleResult["managementIdentity"] {
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
+  if (kind === "series") {
+    return {
+      kind,
+      providerIds: {
+        tmdb,
+        tvdb: normalizedPositiveProviderNumber(item.ProviderIds, "tvdb"),
+      },
+    };
+  }
+  const imdb = normalizedProviderId(item.ProviderIds, "imdb");
+  return {
+    kind,
+    providerIds: {
+      imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
+      tmdb,
+    },
+  };
 }
 
 function normalizedTmdbPersonId(providerIds: Record<string, string> | null | undefined) {
@@ -1032,7 +1119,13 @@ function normalizeTitleProviderReferences(
       : []),
     ...(rottenTomatoes === null
       ? []
-      : [{ identifier: rottenTomatoes, mediaKind, provider: "rotten_tomatoes" as const }]),
+      : [
+          {
+            identifier: rottenTomatoes,
+            mediaKind,
+            provider: "rotten_tomatoes" as const,
+          },
+        ]),
   ];
 }
 
@@ -1040,8 +1133,7 @@ function normalizeMovieRemovalFacts(
   item: z.infer<typeof jellyfinLibraryItemSchema>,
 ): JellyfinLibraryRemovalFacts {
   const imdb = normalizedProviderId(item.ProviderIds, "imdb");
-  const tmdb = normalizedProviderId(item.ProviderIds, "tmdb");
-  const parsedTmdb = tmdb !== null && /^[1-9][0-9]{0,15}$/u.test(tmdb) ? Number(tmdb) : null;
+  const tmdb = normalizedPositiveProviderNumber(item.ProviderIds, "tmdb");
   const sizes = (item.MediaSources ?? []).map(({ Size }) => Size ?? null);
   const sizeBytes =
     sizes.length > 0 && sizes.every((size): size is number => size !== null)
@@ -1051,10 +1143,7 @@ function normalizeMovieRemovalFacts(
     canDelete: item.CanDelete === true,
     providerIds: {
       imdb: imdb !== null && /^tt[0-9]{5,12}$/u.test(imdb) ? imdb : null,
-      tmdb:
-        parsedTmdb !== null && Number.isSafeInteger(parsedTmdb) && parsedTmdb > 0
-          ? parsedTmdb
-          : null,
+      tmdb,
     },
     sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : null,
   };
@@ -1497,7 +1586,10 @@ function viewingHistoryItemTypes(kind: ViewingHistoryKind) {
 function librarySort(sort: JellyfinLibraryBrowseInput["sort"]) {
   if (sort === "title") return { SortBy: "SortName", SortOrder: "Ascending" };
   if (sort === "year") {
-    return { SortBy: "ProductionYear,SortName", SortOrder: "Descending,Ascending" };
+    return {
+      SortBy: "ProductionYear,SortName",
+      SortOrder: "Descending,Ascending",
+    };
   }
   return { SortBy: "DateCreated", SortOrder: "Descending" };
 }
@@ -1529,6 +1621,20 @@ export class JellyfinUserMediaClient {
       ...(target.tlsPolicy === undefined ? {} : { tlsPolicy: target.tlsPolicy }),
       ...(target.transport === undefined ? {} : { transport: target.transport }),
     });
+  }
+
+  public async deleteLibraryItem(rawItemId: string, signal?: AbortSignal): Promise<void> {
+    const itemId = jellyfinItemIdSchema.parse(rawItemId);
+    const response = await this.#client.requestText(`Items/${itemId}`, {
+      acceptedStatuses: [204],
+      headers: { authorization: this.#authorization },
+      method: "DELETE",
+      operation: "library.removal.file_delete",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (response.status !== 204) {
+      throw this.#client.invalidResponse("library.removal.file_delete");
+    }
   }
 
   public async readContinueWatching(signal?: AbortSignal): Promise<JellyfinContinueWatchingResult> {
@@ -1789,6 +1895,7 @@ export class JellyfinUserMediaClient {
     if (item.kind === "movie") {
       return {
         item,
+        managementIdentity: normalizeTitleManagementIdentity(itemResponse, "movie"),
         movie: { ...normalizeMovieDetail(itemResponse), ...credits },
         providerReferences: normalizeTitleProviderReferences(itemResponse),
         removal: normalizeMovieRemovalFacts(itemResponse),
@@ -1849,6 +1956,7 @@ export class JellyfinUserMediaClient {
     }
     return {
       item,
+      managementIdentity: normalizeTitleManagementIdentity(itemResponse, "series"),
       movie: null,
       providerReferences: normalizeTitleProviderReferences(itemResponse),
       seasons: seasonItems.map((season) =>
@@ -1874,18 +1982,26 @@ export class JellyfinUserMediaClient {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    if (!response.Name || response.Id !== input.itemId) {
+    const matchingSources = (response.MediaSources ?? []).filter(
+      (candidate) => candidate.Id === input.itemId,
+    );
+    const source = matchingSources.length === 1 ? matchingSources[0]! : null;
+    const canDownload = response.CanDownload === true;
+    if (
+      !response.Name ||
+      response.Id !== input.itemId ||
+      (canDownload && (!source || !source.Size))
+    ) {
       throw this.#client.invalidResponse("media.original_download.metadata");
     }
-    const source = response.MediaSources?.[0];
     const episodeTitle =
       response.Type === "Episode"
         ? [response.SeriesName, episodeLabel(response)].filter(Boolean).join(" - ")
         : response.Name;
     return {
-      canDownload: response.CanDownload === true,
+      canDownload,
       container:
-        compactText(response.Container ?? source?.Container, 64)?.toLocaleLowerCase("en-US") ??
+        compactText(source?.Container ?? response.Container, 64)?.toLocaleLowerCase("en-US") ??
         null,
       etag: response.Etag ?? null,
       externalId: response.Id,
@@ -1996,7 +2112,12 @@ export class JellyfinUserMediaClient {
   }
 
   public async readLibraryExtras(
-    rawInput: { itemId: string; limit: number; startIndex: number; userId: string },
+    rawInput: {
+      itemId: string;
+      limit: number;
+      startIndex: number;
+      userId: string;
+    },
     signal?: AbortSignal,
   ): Promise<JellyfinLibraryExtrasResult> {
     const input = jellyfinLibraryExtrasQuerySchema.parse(rawInput);
@@ -2147,6 +2268,60 @@ export class JellyfinUserMediaClient {
           : playback.positionSeconds === 0;
     if (!reconciled) throw mutationError ?? this.#client.invalidResponse("media.playback_state");
     return playback;
+  }
+
+  public async readFavoriteState(
+    rawInput: { itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const input = jellyfinFavoriteStateInputSchema.omit({ favorite: true }).parse(rawInput);
+    return this.#readFavoriteState(input.itemId, input.userId, signal);
+  }
+
+  public async updateFavoriteState(
+    rawInput: { favorite: boolean; itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const input = jellyfinFavoriteStateInputSchema.parse(rawInput);
+    let mutationError: unknown;
+    try {
+      await this.#client.requestBytes(`UserFavoriteItems/${input.itemId}`, {
+        headers: { authorization: this.#authorization },
+        method: input.favorite ? "POST" : "DELETE",
+        operation: "media.favorite",
+        query: { userId: input.userId },
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      if (!(error instanceof SafeConnectorError) || !error.retryable) throw error;
+      mutationError = error;
+    }
+
+    let favorite: boolean;
+    try {
+      favorite = await this.#readFavoriteState(input.itemId, input.userId, signal);
+    } catch (error) {
+      throw mutationError ?? error;
+    }
+    if (favorite !== input.favorite) {
+      throw mutationError ?? this.#client.invalidResponse("media.favorite");
+    }
+    return favorite;
+  }
+
+  async #readFavoriteState(itemId: string, userId: string, signal?: AbortSignal) {
+    const item = await this.#client.requestJson(
+      `Items/${itemId}`,
+      jellyfinFavoriteStateItemSchema,
+      {
+        headers: { authorization: this.#authorization },
+        operation: "media.favorite",
+        query: { EnableUserData: "true", UserId: userId },
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    if (item.Id !== itemId) throw this.#client.invalidResponse("media.favorite");
+    return item.UserData.IsFavorite;
   }
 
   async #readPlaybackState(
