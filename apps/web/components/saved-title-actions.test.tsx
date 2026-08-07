@@ -31,7 +31,7 @@ function client(input: { customListIds?: string[]; watchLater?: boolean } = {}) 
   const issued = summary(input.watchLater, input.customListIds);
   return {
     ...savedListsDemoClient,
-    addItem: vi.fn(async (listId) => ({
+    addItem: vi.fn(async (listId, _input, _options) => ({
       data: {
         created: true,
         item: {
@@ -62,15 +62,18 @@ function client(input: { customListIds?: string[]; watchLater?: boolean } = {}) 
       etag: nextEtag,
       replayed: false,
     })),
-    issueDiscoveryTarget: vi.fn(async () => issued),
-    issueLibraryTarget: vi.fn(async () => issued),
+    issueDiscoveryTarget: vi.fn(async (_referenceId, _options) => issued),
+    issueLibraryTarget: vi.fn(async (_referenceId, _options) => issued),
     load: vi.fn<SavedListsClient["load"]>(async () => readySavedOutcome),
-    readList: vi.fn(async () => ({ data: readySavedOutcome.snapshot.lists.watchLater, etag })),
-    removeItem: vi.fn(async (listId, catalogId) => ({
+    readList: vi.fn(async (_listId, _signal) => ({
+      data: readySavedOutcome.snapshot.lists.watchLater,
+      etag,
+    })),
+    removeItem: vi.fn(async (listId, catalogId, _options) => ({
       data: { catalogReferenceId: catalogId, listId, removed: true, revision: 2 },
       etag: nextEtag,
     })),
-    updateFavorite: vi.fn(async (_target, input) => ({
+    updateFavorite: vi.fn(async (_target, input, _options) => ({
       favorite: input.favorite,
       synchronizedAt: now,
       targetReferenceId,
