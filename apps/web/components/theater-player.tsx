@@ -27,6 +27,8 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   createHlsPlayerHandle,
   createNativeHlsPlayerHandle,
+  matchEngineAudioTrack,
+  type HlsAudioTrackSummary,
   type HlsLevelSummary,
   type PlayerHandle,
 } from "../lib/player-engine";
@@ -270,7 +272,9 @@ export function TheaterPlayer({
   const [transitionMessage, setTransitionMessage] = useState("");
   const [engineLevels, setEngineLevels] = useState<HlsLevelSummary[]>([]);
   const [engineCurrentLevel, setEngineCurrentLevel] = useState(-1);
+  const [engineAudioTracks, setEngineAudioTracks] = useState<HlsAudioTrackSummary[]>([]);
   const qualityMessageTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioSwitchTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const close = useCallback(() => {
     const dialog = dialogReference.current;
@@ -631,6 +635,7 @@ export function TheaterPlayer({
         attachSubtitles();
         setEngineLevels([]);
         setEngineCurrentLevel(-1);
+        setEngineAudioTracks([]);
         video.src = source;
         setStatus("ready");
         setMessage("Ready to resume");
@@ -692,6 +697,9 @@ export function TheaterPlayer({
           setEngineLevels(player!.levels());
           setEngineCurrentLevel(player!.currentLevel());
         });
+        player.on("audiotrackchanged", () => {
+          setEngineAudioTracks(player!.audioTracks());
+        });
       }
       clearTracks();
       attachSubtitles();
@@ -743,6 +751,7 @@ export function TheaterPlayer({
       if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
       if (qualityMessageTimeoutReference.current)
         clearTimeout(qualityMessageTimeoutReference.current);
+      if (audioSwitchTimeoutReference.current) clearTimeout(audioSwitchTimeoutReference.current);
       const player = playerReference.current;
       playerReference.current = null;
       if (player && typeof player.dispose === "function") player.dispose();
@@ -1277,6 +1286,46 @@ export function TheaterPlayer({
                       audioStreamIndex: nextIndex === defaultIndex ? null : nextIndex,
                       quality: preferences.quality === "original" ? "auto" : preferences.quality,
                     } satisfies PlaybackPreferences;
+                    const player = playerReference.current;
+                    const target =
+                      prepared.session.audioTracks.find((track) => track.index === nextIndex) ??
+                      null;
+                    const matched =
+                      target === null ? null : matchEngineAudioTrack(target, engineAudioTracks);
+                    if (player !== null && matched !== null) {
+                      const sessionAtChange = prepared;
+                      player.setAudioTrack(matched.id);
+                      preferencesReference.current = nextPreferences;
+                      setPreferences(nextPreferences);
+                      setTransitionMessage("Switching audio track…");
+                      if (qualityMessageTimeoutReference.current) {
+                        clearTimeout(qualityMessageTimeoutReference.current);
+                      }
+                      qualityMessageTimeoutReference.current = setTimeout(() => {
+                        qualityMessageTimeoutReference.current = null;
+                        setTransitionMessage("");
+                      }, 2_000);
+                      if (audioSwitchTimeoutReference.current) {
+                        clearTimeout(audioSwitchTimeoutReference.current);
+                      }
+                      // Stall fallback: if the engine never switches to the
+                      // requested rendition, re-negotiate the stream instead.
+                      audioSwitchTimeoutReference.current = setTimeout(() => {
+                        audioSwitchTimeoutReference.current = null;
+                        if (
+                          playerReference.current === player &&
+                          preparedReference.current === sessionAtChange &&
+                          player.audioTrack() !== matched.id
+                        ) {
+                          void replacePlayback(
+                            nextPreferences,
+                            absolutePosition(),
+                            "Switching audio track…",
+                          );
+                        }
+                      }, 2_000);
+                      return;
+                    }
                     void replacePlayback(
                       nextPreferences,
                       absolutePosition(),
