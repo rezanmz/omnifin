@@ -1,9 +1,15 @@
-import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
+import {
+  DEFAULT_PLAYBACK_PREFERENCES,
+  type PlaybackNegotiationResponse,
+  type PlaybackPreferences,
+  type PlaybackPreferencesResponse,
+} from "@omnifin/contracts/playback";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlaybackClient } from "../lib/playback";
+import type { PlaybackPreferenceClient } from "../lib/playback-preferences";
 import type { SubtitleClient } from "../lib/subtitles";
 import { TheaterPlayer, type TheaterMedia } from "./theater-player";
 
@@ -151,6 +157,17 @@ function readyClient(
   return { prepare, report, reportIssue };
 }
 
+function readyPreferenceClient(
+  response: PlaybackPreferencesResponse = {
+    networkClass: "home",
+    preferences: DEFAULT_PLAYBACK_PREFERENCES,
+    revision: 1,
+    updatedAt: null,
+  },
+): PlaybackPreferenceClient {
+  return { load: vi.fn(async () => response), save: vi.fn() };
+}
+
 describe("TheaterPlayer", () => {
   beforeEach(() => {
     hlsHarness.instances.length = 0;
@@ -167,7 +184,14 @@ describe("TheaterPlayer", () => {
       report: vi.fn(),
       reportIssue: vi.fn(),
     };
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     expect(screen.getByRole("status")).toHaveTextContent("Preparing your stream");
     expect(screen.getByRole("dialog", { name: media.title })).toHaveAttribute(
@@ -179,7 +203,14 @@ describe("TheaterPlayer", () => {
   it("loads a direct stream, starts reporting on play, and keeps controls accessible", async () => {
     const user = userEvent.setup();
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     const resume = await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText(`${media.title} video`);
@@ -203,7 +234,14 @@ describe("TheaterPlayer", () => {
 
   it("uses source-quality compatibility negotiation by default", async () => {
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     expect(client.prepare).toHaveBeenCalledWith(media.id, 1_200, expect.any(AbortSignal), {
@@ -221,7 +259,13 @@ describe("TheaterPlayer", () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play");
     const client = readyClient();
     const { unmount } = render(
-      <TheaterPlayer client={client} media={media} onClose={() => undefined} startWhenReady />,
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+        startWhenReady
+      />,
     );
 
     const video = await screen.findByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -236,6 +280,7 @@ describe("TheaterPlayer", () => {
         client={readyClient()}
         media={media}
         onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
         startWhenReady
       />,
     );
@@ -258,7 +303,14 @@ describe("TheaterPlayer", () => {
       configurable: true,
       value: requestFullscreen,
     });
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -315,7 +367,14 @@ describe("TheaterPlayer", () => {
       value: requestFullscreen,
     });
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -334,7 +393,14 @@ describe("TheaterPlayer", () => {
 
   it("supports player shortcuts without hijacking range inputs", async () => {
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const dialog = screen.getByRole("dialog", { name: media.title });
@@ -357,7 +423,14 @@ describe("TheaterPlayer", () => {
 
   it("supports the standard player keys: volume, jump, edges, and percentage seek", async () => {
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const dialog = screen.getByRole("dialog", { name: media.title });
@@ -394,7 +467,12 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
@@ -462,7 +540,14 @@ describe("TheaterPlayer", () => {
       ],
     };
     const client = readyClient(selectableSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -515,7 +600,14 @@ describe("TheaterPlayer", () => {
   it("keeps the active stream alive when replacement negotiation fails", async () => {
     const user = userEvent.setup();
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     const resume = await screen.findByRole("button", { name: `Resume ${media.title}` });
     client.prepare.mockRejectedValueOnce(new Error("incompatible replacement"));
@@ -545,7 +637,14 @@ describe("TheaterPlayer", () => {
   it("switches owned versions transactionally while preserving the playback position", async () => {
     const user = userEvent.setup();
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={versionedMedia} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={versionedMedia}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     expect(client.prepare).toHaveBeenNthCalledWith(
@@ -590,7 +689,14 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${replacementSessionId}/stream`,
     };
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -665,7 +771,14 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${replacementSessionId}/master.m3u8`,
     };
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -710,6 +823,7 @@ describe("TheaterPlayer", () => {
         client={readyClient(session, false)}
         media={media}
         onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
       />,
     );
 
@@ -719,7 +833,12 @@ describe("TheaterPlayer", () => {
 
     unmount();
     render(
-      <TheaterPlayer client={readyClient(session, true)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(session, true)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
@@ -737,6 +856,7 @@ describe("TheaterPlayer", () => {
         client={readyClient(session, true)}
         media={media}
         onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
         subtitleClient={subtitles}
       />,
     );
@@ -771,7 +891,14 @@ describe("TheaterPlayer", () => {
       ],
     };
     const client = readyClient(selectableSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -817,7 +944,14 @@ describe("TheaterPlayer", () => {
       ],
     };
     const client = readyClient(tieredSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -860,7 +994,14 @@ describe("TheaterPlayer", () => {
       ],
     };
     const client = readyClient(captionedSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const dialog = screen.getByRole("dialog", { name: media.title });
@@ -891,7 +1032,14 @@ describe("TheaterPlayer", () => {
   it("submits a private playback issue with category, note, and current timestamp", async () => {
     const user = userEvent.setup();
     const client = readyClient();
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
@@ -927,7 +1075,14 @@ describe("TheaterPlayer", () => {
     client.reportIssue.mockRejectedValueOnce(
       new Error("Issue reporting is temporarily unavailable."),
     );
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     await user.click(screen.getByRole("button", { name: "Report playback issue" }));
@@ -945,7 +1100,14 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     const client = readyClient(hlsSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
     await screen.findByRole("button", { name: `Resume ${media.title}` });
@@ -974,7 +1136,12 @@ describe("TheaterPlayer", () => {
     };
     const onClose = vi.fn();
     const { unmount } = render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={onClose} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={onClose}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
@@ -992,7 +1159,12 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
@@ -1048,7 +1220,12 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
@@ -1080,7 +1257,12 @@ describe("TheaterPlayer", () => {
     hlsHarness.supported = false;
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("maybe");
     const { unmount } = render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
     expect(await screen.findByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
     expect(screen.getByLabelText(`${media.title} video`)).toHaveAttribute(
@@ -1091,7 +1273,12 @@ describe("TheaterPlayer", () => {
     unmount();
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("");
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot play the negotiated HLS");
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
@@ -1106,7 +1293,14 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     const client = readyClient(hlsSession);
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
     const instance = hlsHarness.instances[0];
@@ -1148,7 +1342,12 @@ describe("TheaterPlayer", () => {
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
@@ -1173,7 +1372,12 @@ describe("TheaterPlayer", () => {
     hlsHarness.supported = false;
     vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("maybe");
     render(
-      <TheaterPlayer client={readyClient(hlsSession)} media={media} onClose={() => undefined} />,
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
     );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
@@ -1183,10 +1387,207 @@ describe("TheaterPlayer", () => {
     expect(screen.getByRole("combobox", { name: "Playback quality" })).toBeVisible();
   });
 
+  it("applies account defaults to the initial negotiation before playback starts", async () => {
+    const user = userEvent.setup();
+    const selectableSession: PlaybackNegotiationResponse = {
+      ...session,
+      audioTracks: [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ],
+      subtitleTracks: [
+        {
+          codec: "webvtt",
+          default: false,
+          delivery: "external",
+          forced: false,
+          index: 7,
+          language: "spa",
+          selected: false,
+          title: "Español",
+          subtitlePath: `/v1/playback/${sessionId}/subtitle/7`,
+        },
+      ],
+    };
+    const preferences: PlaybackPreferences = {
+      ...DEFAULT_PLAYBACK_PREFERENCES,
+      audio: { languages: ["es"], preferOriginalLanguage: true },
+      quality: {
+        defaultNetworkPolicy: "auto",
+        homeMaxBitrate: null,
+        remoteMaxBitrate: 10_000_000,
+      },
+      subtitles: {
+        allowCommentary: false,
+        languages: ["es"],
+        mode: "always",
+        preferForced: false,
+        preferHearingImpaired: false,
+      },
+    };
+    const client = readyClient(selectableSession);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient({
+          networkClass: "remote",
+          preferences,
+          revision: 1,
+          updatedAt: null,
+        })}
+      />,
+    );
+
+    // The first negotiation used conservative defaults; the account defaults
+    // are applied by re-negotiating once before playback has started.
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: 3,
+      maxStreamingBitrate: 10_000_000,
+      mode: "transcode",
+      subtitleStreamIndex: null,
+    });
+    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("combobox", { name: "Audio track" })).toHaveValue("3");
+  });
+
+  it("falls back to conservative defaults when account preferences are unavailable", async () => {
+    const user = userEvent.setup();
+    const failingPreferenceClient: PlaybackPreferenceClient = {
+      load: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      save: vi.fn(),
+    };
+    const client = readyClient();
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={failingPreferenceClient}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Account defaults were unavailable; conservative playback defaults are in use.",
+      ),
+    ).toBeVisible();
+    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    // Soft-fail defaults (remote, 10 Mbps ceiling) map to the balanced preset.
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("balanced");
+  });
+
+  it("maps a home network bitrate cap to the closest quality preset", async () => {
+    const user = userEvent.setup();
+    const client = readyClient();
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient({
+          networkClass: "home",
+          preferences: {
+            ...DEFAULT_PLAYBACK_PREFERENCES,
+            quality: {
+              ...DEFAULT_PLAYBACK_PREFERENCES.quality,
+              homeMaxBitrate: 10_000_000,
+            },
+          },
+          revision: 1,
+          updatedAt: null,
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: null,
+      maxStreamingBitrate: 10_000_000,
+      mode: "transcode",
+      subtitleStreamIndex: null,
+    });
+    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("balanced");
+  });
+
+  it("does not disrupt playback when preferences arrive after playback started", async () => {
+    const user = userEvent.setup();
+    let resolveLoad: (response: PlaybackPreferencesResponse) => void;
+    const deferredPreferenceClient: PlaybackPreferenceClient = {
+      load: vi.fn(
+        () =>
+          new Promise<PlaybackPreferencesResponse>((resolve) => {
+            resolveLoad = resolve;
+          }),
+      ),
+      save: vi.fn(),
+    };
+    const client = readyClient();
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={deferredPreferenceClient}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+
+    resolveLoad!({
+      networkClass: "remote",
+      preferences: DEFAULT_PLAYBACK_PREFERENCES,
+      revision: 1,
+      updatedAt: null,
+    });
+    await screen.findByRole("button", { name: "Playback settings" });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    // The account defaults updated the per-item state (balanced from the
+    // remote 10 Mbps ceiling) without re-negotiating the active session.
+    expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("balanced");
+    expect(client.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces interrupted progress sync without interrupting playback", async () => {
     const client = readyClient();
     client.report.mockRejectedValue(new Error("offline"));
-    render(<TheaterPlayer client={client} media={media} onClose={() => undefined} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     fireEvent.play(screen.getByLabelText(`${media.title} video`));
@@ -1199,7 +1600,14 @@ describe("TheaterPlayer", () => {
     const client = readyClient();
     client.prepare.mockRejectedValueOnce(new Error("Jellyfin is waking up."));
     const onClose = vi.fn();
-    render(<TheaterPlayer client={client} media={media} onClose={onClose} />);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={onClose}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Jellyfin is waking up");
     await user.click(screen.getByRole("button", { name: "Try again" }));
