@@ -6,6 +6,18 @@ import { purgeExpiredSavedState, SAVED_OPERATION_RETENTION_MS } from "../src/sav
 const now = 20 * 24 * 60 * 60 * 1_000;
 
 describe("saved-state maintenance", () => {
+  it("rejects an invalid clock or batch size before touching the database", () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      expect(() => purgeExpiredSavedState(database, -1)).toThrow(TypeError);
+      expect(() => purgeExpiredSavedState(database, Number.NaN)).toThrow(TypeError);
+      expect(() => purgeExpiredSavedState(database, now, 0)).toThrow(TypeError);
+    } finally {
+      database.close();
+    }
+  });
+
   it("purges every expired category in independent bounded batches", () => {
     const database = openDatabase(":memory:");
     try {

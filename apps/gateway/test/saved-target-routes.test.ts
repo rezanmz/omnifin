@@ -384,4 +384,124 @@ describe("saved target routes", () => {
       await app.close();
     }
   });
+
+  it("rejects a reused idempotency key for a different favorite state", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+
+      const first = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-conflict" },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(first.statusCode, first.body).toBe(200);
+
+      const conflicting = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-conflict" },
+        method: "PUT",
+        payload: { favorite: true },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(conflicting.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(conflicting.json()).error.code).toBe("idempotency_key_conflict");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports an unknown Jellyfin outcome without leaking private detail", async () => {
+    const { app, headers, referenceId, updateFavoriteState } = await harness();
+    updateFavoriteState.mockRejectedValue(new Error("jellyfin write exploded"));
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+
+      const unknown = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-unknown-outcome" },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(unknown.statusCode).toBe(503);
+      expect(unknown.headers["retry-after"]).toBe("2");
+      expect(apiErrorSchema.parse(unknown.json()).error.code).toBe(
+        "saved_favorite_outcome_unknown",
+      );
+      expect(unknown.body).not.toMatch(/jellyfin|exploded/u);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when Jellyfin retains an unconfirmed favorite state", async () => {
+    const { app, headers, referenceId, readFavoriteState, updateFavoriteState } = await harness();
+    const applied = false;
+    readFavoriteState.mockImplementation(async () => applied);
+    updateFavoriteState.mockImplementation(async () => false); // connector never applies the change
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+
+      const unconfirmed = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-unconfirmed" },
+        method: "PUT",
+        payload: { favorite: true },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(unconfirmed.statusCode).toBe(502);
+      expect(apiErrorSchema.parse(unconfirmed.json()).error.code).toBe(
+        "saved_favorite_not_confirmed",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects favorite changes through an unlinked connector as unavailable", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const issuedResponse = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/saved/targets/library/${referenceId}`,
+      });
+      const issued = savedMembershipSummarySchema.parse(issuedResponse.json());
+
+      app.database.sqlite
+        .prepare("update service_identity_links set health_state = 'unavailable' where id = ?")
+        .run("target-viewer-link");
+
+      const unavailable = await app.inject({
+        headers: { ...headers, "idempotency-key": "favorite-route-unlinked" },
+        method: "PUT",
+        payload: { favorite: false },
+        url: `/v1/saved/favorites/${issued.targetReferenceId}`,
+      });
+      expect(unavailable.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
+        "saved_favorite_connector_unavailable",
+      );
+    } finally {
+      await app.close();
+    }
+  });
 });
