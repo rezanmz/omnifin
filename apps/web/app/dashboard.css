@@ -320,6 +320,7 @@
   flex-direction: column;
   inset: auto auto clamp(48px, 7vw, 90px) clamp(28px, 5vw, 76px);
   max-width: 610px;
+  min-width: 0;
   position: absolute;
   z-index: 4;
 }
@@ -394,6 +395,8 @@
   line-height: 0.84;
   margin: 15px 0 20px;
   max-width: 11ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .hero-spotlight__facts {
@@ -428,6 +431,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .button {

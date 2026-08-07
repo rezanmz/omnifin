@@ -1,9 +1,12 @@
-import { sessionResponseSchema } from "@omnifin/contracts/auth";
+import { sessionResponseSchema, themePreferenceSchema } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync } from "fastify";
 import { requireSelfSessionRevocation } from "./authorization.js";
+import { AppearanceService } from "./appearance-service.js";
 import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "./session-cookie.js";
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
+  const appearance = new AppearanceService(app.database);
+
   app.get(
     "/v1/auth/session",
     { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
@@ -31,9 +34,23 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      const theme =
+        session.principal.userId === null
+          ? undefined
+          : (() => {
+              try {
+                return themePreferenceSchema.parse(
+                  appearance.read({ principal: session.principal }).theme,
+                );
+              } catch {
+                return undefined;
+              }
+            })();
+
       return sessionResponseSchema.parse({
         csrfToken: session.csrfToken,
         principal: session.principal,
+        ...(theme === undefined ? {} : { theme }),
       });
     },
   );

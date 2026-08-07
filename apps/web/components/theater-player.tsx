@@ -230,6 +230,7 @@ export function TheaterPlayer({
   const lastProgressReference = useRef(0);
   const absolutePositionReference = useRef<() => number>(() => media.positionSeconds);
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimerReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestedPositionReference = useRef(media.positionSeconds);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
@@ -364,6 +365,65 @@ export function TheaterPlayer({
     absolutePositionReference.current = absolutePosition;
   }, [absolutePosition]);
 
+  const replacePlayback = useCallback(
+    async (nextPreferences: PlaybackPreferences, nextPosition: number, nextMessage: string) => {
+      const active = preparedReference.current;
+      if (!active) return;
+      const previousPosition = absolutePosition();
+      const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
+      const generation = replacementGenerationReference.current + 1;
+      replacementGenerationReference.current = generation;
+      replacementControllerReference.current?.abort();
+      const controller = new AbortController();
+      replacementControllerReference.current = controller;
+      setSwitching(true);
+      setTransitionMessage(nextMessage);
+      setSettingsOpen(false);
+      try {
+        const result = await client.prepare(
+          media.id,
+          safePosition,
+          controller.signal,
+          preparationOptions(nextPreferences, active.session),
+        );
+        if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
+          stopSession(result, safePosition);
+          return;
+        }
+        replacementReference.current = {
+          generation,
+          previous: active,
+          previousPosition,
+          previousPreferences: preferencesReference.current,
+          resume: playing,
+        };
+        preferencesReference.current = nextPreferences;
+        preparedReference.current = result;
+        reportedStateReference.current = "negotiated";
+        startWhenReadyReference.current = playing;
+        setPreferences(nextPreferences);
+        setPrepared(result);
+        setPlaying(false);
+        setBuffering(false);
+        setCurrentTime(safePosition);
+        setSeekPreview(null);
+        setStatus("preparing");
+        setMessage(nextMessage);
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          generation !== replacementGenerationReference.current ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        setSwitching(false);
+        setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
+      }
+    },
+    [absolutePosition, client, duration, media.id, playing, stopSession],
+  );
+
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -401,6 +461,50 @@ export function TheaterPlayer({
     }
     return resolved;
   }, []);
+
+  const setSubtitleTrack = useCallback(
+    (subtitleStreamIndex: number | null) => {
+      const active = prepared;
+      if (!active) return;
+      const track =
+        subtitleStreamIndex === null
+          ? null
+          : (active.session.subtitleTracks.find(
+              (candidate) => candidate.index === subtitleStreamIndex,
+            ) ?? null);
+      const clientToggleableTrack =
+        subtitleStreamIndex !== null
+          ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
+          : active.session.subtitleTracks.some(
+              (candidate) => candidate.subtitlePath !== undefined && subtitleKind(candidate),
+            );
+      const toggleable = clientToggleableTrack && selectSubtitleTrack(subtitleStreamIndex);
+      if (toggleable) {
+        const nextPreferences = { ...preferences, subtitleStreamIndex };
+        preferencesReference.current = nextPreferences;
+        subtitleSuppressedReference.current = subtitleStreamIndex === null;
+        setPreferences(nextPreferences);
+        setTransitionMessage(
+          subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+        );
+        return;
+      }
+      const nextPreferences = {
+        ...preferences,
+        quality:
+          subtitleStreamIndex !== null && preferences.quality === "original"
+            ? "auto"
+            : preferences.quality,
+        subtitleStreamIndex,
+      } satisfies PlaybackPreferences;
+      void replacePlayback(
+        nextPreferences,
+        absolutePosition(),
+        subtitleStreamIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
+      );
+    },
+    [absolutePosition, preferences, prepared, replacePlayback, selectSubtitleTrack],
+  );
 
   useEffect(() => {
     if (!restoreSubtitleFocusReference.current || subtitleWorkbenchOpen || !settingsOpen) return;
@@ -519,6 +623,8 @@ export function TheaterPlayer({
         player = videojs(video, {
           autoplay: false,
           controls: false,
+          fill: true,
+          fluid: false,
           html5: {
             vhs: {
               limitRenditionByPlayerDimensions: true,
@@ -602,6 +708,7 @@ export function TheaterPlayer({
   useEffect(
     () => () => {
       replacementControllerReference.current?.abort();
+      if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
       const player = playerReference.current;
       playerReference.current = null;
       if (player && typeof player.dispose === "function") player.dispose();
@@ -623,66 +730,6 @@ export function TheaterPlayer({
       await video.play().catch(() => undefined);
     } else {
       video.pause();
-    }
-  }
-
-  async function replacePlayback(
-    nextPreferences: PlaybackPreferences,
-    nextPosition: number,
-    nextMessage: string,
-  ) {
-    const active = preparedReference.current;
-    if (!active) return;
-    const previousPosition = absolutePosition();
-    const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
-    const generation = replacementGenerationReference.current + 1;
-    replacementGenerationReference.current = generation;
-    replacementControllerReference.current?.abort();
-    const controller = new AbortController();
-    replacementControllerReference.current = controller;
-    setSwitching(true);
-    setTransitionMessage(nextMessage);
-    setSettingsOpen(false);
-    try {
-      const result = await client.prepare(
-        media.id,
-        safePosition,
-        controller.signal,
-        preparationOptions(nextPreferences, active.session),
-      );
-      if (controller.signal.aborted || generation !== replacementGenerationReference.current) {
-        stopSession(result, safePosition);
-        return;
-      }
-      replacementReference.current = {
-        generation,
-        previous: active,
-        previousPosition,
-        previousPreferences: preferencesReference.current,
-        resume: playing,
-      };
-      preferencesReference.current = nextPreferences;
-      preparedReference.current = result;
-      reportedStateReference.current = "negotiated";
-      startWhenReadyReference.current = playing;
-      setPreferences(nextPreferences);
-      setPrepared(result);
-      setPlaying(false);
-      setBuffering(false);
-      setCurrentTime(safePosition);
-      setSeekPreview(null);
-      setStatus("preparing");
-      setMessage(nextMessage);
-    } catch (error) {
-      if (
-        controller.signal.aborted ||
-        generation !== replacementGenerationReference.current ||
-        (error instanceof DOMException && error.name === "AbortError")
-      ) {
-        return;
-      }
-      setSwitching(false);
-      setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
     }
   }
 
@@ -724,10 +771,14 @@ export function TheaterPlayer({
   }
 
   async function toggleFullscreen() {
-    const dialog = dialogReference.current;
-    if (!dialog) return;
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await dialog.requestFullscreen?.();
+    const stage = stageReference.current;
+    if (!stage) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (typeof stage.requestFullscreen === "function") await stage.requestFullscreen();
+    } catch {
+      // Fullscreen can be rejected while a modal dialog is open; keep playback usable.
+    }
   }
 
   async function submitIssue(event: React.FormEvent<HTMLFormElement>) {
@@ -765,21 +816,62 @@ export function TheaterPlayer({
       setSubtitleWorkbenchOpen(false);
       return;
     }
-    if (event.key === " " || event.key.toLowerCase() === "k") {
+    const key = event.key.toLowerCase();
+    if (event.key === " " || key === "k") {
       event.preventDefault();
       void togglePlayback();
-    } else if (event.key === "ArrowLeft") {
+    } else if (event.key === "ArrowLeft" || key === "j") {
       event.preventDefault();
       seekWithinSession(currentTime - 10);
-    } else if (event.key === "ArrowRight") {
+    } else if (event.key === "ArrowRight" || key === "l") {
       event.preventDefault();
       seekWithinSession(currentTime + 10);
-    } else if (event.key.toLowerCase() === "m") {
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) + 0.1)));
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      changeVolume(Math.min(1, Math.max(0, (videoReference.current?.volume ?? volume) - 0.1)));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      seekWithinSession(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      seekWithinSession(duration);
+    } else if (/^[0-9]$/u.test(event.key)) {
+      event.preventDefault();
+      const fraction = event.key === "0" ? 1 : Number(event.key) / 9;
+      seekWithinSession(Math.round(duration * fraction));
+    } else if (key === "m") {
       event.preventDefault();
       toggleMuted();
-    } else if (event.key.toLowerCase() === "f") {
+    } else if (key === "f") {
       event.preventDefault();
       void toggleFullscreen();
+    } else if (key === "c") {
+      event.preventDefault();
+      const active = prepared;
+      if (active && active.session.subtitleTracks.length > 0) {
+        let subtitlesActive = !subtitleSuppressedReference.current;
+        if (subtitlesActive && preferences.subtitleStreamIndex === null) {
+          subtitlesActive = Array.from(subtitleTracksByIndexReference.current.values()).some(
+            (track) => track !== null && track.mode === "showing",
+          );
+        }
+        if (subtitlesActive) {
+          setSubtitleTrack(null);
+        } else {
+          const preferredIndex =
+            preferences.subtitleStreamIndex ??
+            active.session.subtitleTracks.find((track) => track.selected)?.index ??
+            active.session.subtitleTracks.find(
+              (track) => track.subtitlePath !== undefined && subtitleKind(track),
+            )?.index ??
+            active.session.subtitleTracks[0]?.index ??
+            null;
+          if (preferredIndex !== null) setSubtitleTrack(preferredIndex);
+        }
+      }
     }
     revealControls();
   }
@@ -820,6 +912,24 @@ export function TheaterPlayer({
         <video
           aria-label={`${media.title} video`}
           className={styles.video}
+          onClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
+            clickTimerReference.current = setTimeout(() => {
+              clickTimerReference.current = null;
+              void togglePlayback();
+            }, 260);
+            revealControls();
+          }}
+          onDoubleClick={() => {
+            if (status !== "ready") return;
+            if (clickTimerReference.current) {
+              clearTimeout(clickTimerReference.current);
+              clickTimerReference.current = null;
+            }
+            void toggleFullscreen();
+            revealControls();
+          }}
           onCanPlay={(event) => {
             const restorePosition = restorePositionReference.current;
             if (restorePosition !== null && prepared) {
@@ -910,7 +1020,9 @@ export function TheaterPlayer({
         </header>
 
         <p className="sr-only" id={descriptionId}>
-          Use Space or K to play and pause, arrow keys to seek, M to mute, and F for full screen.
+          Use Space or K to play and pause, J and L to jump back and forward, arrow keys to seek or
+          change volume, Home and End to jump to the start and end, number keys to seek by
+          percentage, M to mute, C to show or hide captions, and F for full screen.
         </p>
 
         {status === "preparing" && (
@@ -1130,43 +1242,7 @@ export function TheaterPlayer({
                       event.currentTarget.value === "off"
                         ? null
                         : Number(event.currentTarget.value);
-                    const track =
-                      nextIndex === null
-                        ? null
-                        : (prepared.session.subtitleTracks.find(
-                            (candidate) => candidate.index === nextIndex,
-                          ) ?? null);
-                    const clientToggleableTrack =
-                      nextIndex !== null
-                        ? track !== null && track.subtitlePath !== undefined && subtitleKind(track)
-                        : prepared.session.subtitleTracks.some(
-                            (candidate) =>
-                              candidate.subtitlePath !== undefined && subtitleKind(candidate),
-                          );
-                    const toggleable = clientToggleableTrack && selectSubtitleTrack(nextIndex);
-                    if (toggleable) {
-                      const nextPreferences = { ...preferences, subtitleStreamIndex: nextIndex };
-                      preferencesReference.current = nextPreferences;
-                      subtitleSuppressedReference.current = nextIndex === null;
-                      setPreferences(nextPreferences);
-                      setTransitionMessage(
-                        nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
-                      );
-                      return;
-                    }
-                    const nextPreferences = {
-                      ...preferences,
-                      quality:
-                        nextIndex !== null && preferences.quality === "original"
-                          ? "auto"
-                          : preferences.quality,
-                      subtitleStreamIndex: nextIndex,
-                    } satisfies PlaybackPreferences;
-                    void replacePlayback(
-                      nextPreferences,
-                      absolutePosition(),
-                      nextIndex === null ? "Turning subtitles off…" : "Loading subtitles…",
-                    );
+                    setSubtitleTrack(nextIndex);
                   }}
                   value={preferences.subtitleStreamIndex ?? "off"}
                 >
