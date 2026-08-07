@@ -156,9 +156,7 @@ function preparationOptions(
     maxStreamingBitrate: quality.bitrate,
     mode: customTracks ? "transcode" : quality.mode,
     subtitleStreamIndex: clientRenderedSubtitle ? null : preferences.subtitleStreamIndex,
-    ...(sourceReferenceId === undefined || sourceReferenceId === null
-      ? {}
-      : { sourceReferenceId }),
+    ...(sourceReferenceId === undefined || sourceReferenceId === null ? {} : { sourceReferenceId }),
   };
 }
 
