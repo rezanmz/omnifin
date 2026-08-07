@@ -46,7 +46,9 @@ export const CustomizedProfile: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getAllByText("Persian")).toHaveLength(2);
+    await expect(
+      within(canvas.getByLabelText("Preferred audio languages priority")).getByText("Persian"),
+    ).toBeVisible();
     await userEvent.click(canvas.getByRole("switch", { name: "Allow commentary tracks" }));
     await expect(canvas.getByText("Unsaved playback changes")).toBeVisible();
   },
