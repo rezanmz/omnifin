@@ -184,6 +184,9 @@ async function defaultRevokeAllSessions(csrfToken: string) {
 }
 
 function defaultSignedOutNavigation() {
+  // Full-page navigation is deliberate: signing out must discard all client
+  // state, and useRouter is unavailable outside the App Router (Storybook).
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.assign("/login");
 }
 

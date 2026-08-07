@@ -363,6 +363,10 @@ async function defaultPollQuickConnect(
 }
 
 function defaultAuthenticatedNavigation() {
+  // Full-page navigation is deliberate: after authentication the whole
+  // client session must be re-established, and useRouter is unavailable
+  // outside the App Router (Storybook).
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.assign("/");
 }
 
@@ -492,9 +496,9 @@ export function JellyfinCredentialScreen({
   }, [
     autoPollQuickConnect,
     csrfToken,
+    onAuthenticated,
     intent,
     method,
-    onAuthenticated,
     pollQuickConnect,
     quickConnectState,
   ]);

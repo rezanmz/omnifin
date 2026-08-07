@@ -50,12 +50,12 @@
     "@commitlint/config-conventional": "21.2.0",
     "cross-env": "10.1.0",
     "eslint": "9.39.5",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "16.3.0",
     "prettier": "3.9.6",
     "prettier-plugin-tailwindcss": "0.8.1",
-    "turbo": "2.10.7",
+    "turbo": "2.10.8",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.65.0",
+    "typescript-eslint": "8.66.0",
     "yaml": "2.9.0"
   }
 }
