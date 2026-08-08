@@ -243,7 +243,6 @@ export function inspectDatabaseFile<T>(
   dependencies: FileInspectionDependencies = {},
 ) {
   const hadSidecars = existsSync(`${databasePath}-wal`) || existsSync(`${databasePath}-shm`);
-  let inspectionPath = databasePath;
   let temporaryDirectory: string | undefined;
   let primaryError: unknown;
   try {
@@ -271,7 +270,7 @@ export function inspectDatabaseFile<T>(
     }
     temporaryDirectory = mkdtempSync(path.join(stagingDirectory, ".omnifin-inspect-"));
     chmodSync(temporaryDirectory, 0o700);
-    inspectionPath = path.join(temporaryDirectory, "database.sqlite");
+    const inspectionPath = path.join(temporaryDirectory, "database.sqlite");
     const copy = dependencies.copyFile ?? copyFileSync;
     copy(databasePath, inspectionPath, constants.COPYFILE_EXCL);
     chmodSync(inspectionPath, 0o600);
