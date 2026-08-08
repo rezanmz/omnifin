@@ -23,6 +23,7 @@ import {
   DiscoveryArtworkError,
   DiscoverySearchService,
   type DiscoverySearchAdapter,
+  type DiscoverySearchDependencies,
 } from "../src/discovery/search-service.js";
 import type { DiscoverySearchError } from "../src/discovery/search-service.js";
 import { connectorConfigs, users } from "../src/db/schema.js";
@@ -54,7 +55,7 @@ function testConfig(): AppConfig {
   };
 }
 
-function principal(kind: "recovery" | "viewer" = "viewer"): SessionPrincipal {
+function principal(kind: "operator" | "recovery" | "viewer" = "viewer"): SessionPrincipal {
   if (kind === "recovery") {
     return sessionPrincipalSchema.parse({
       absoluteExpiresAt: "2026-07-27T06:15:00.000Z",
@@ -71,11 +72,12 @@ function principal(kind: "recovery" | "viewer" = "viewer"): SessionPrincipal {
       userId: null,
     });
   }
+  const role = kind === "operator" ? "operator" : "viewer";
   return sessionPrincipalSchema.parse({
     absoluteExpiresAt: "2026-08-26T06:00:00.000Z",
     accountState: "active",
     authenticationMethod: { kind: "jellyfin" },
-    displayName: "Viewer",
+    displayName: role === "operator" ? "Operator" : "Viewer",
     externalIdentity: null,
     inactivityExpiresAt: "2026-07-27T07:00:00.000Z",
     issuedAt: now.toISOString(),
@@ -91,8 +93,8 @@ function principal(kind: "recovery" | "viewer" = "viewer"): SessionPrincipal {
         username: "viewer",
       },
     ],
-    permissions: ROLE_PERMISSIONS.viewer,
-    role: "viewer",
+    permissions: ROLE_PERMISSIONS[role],
+    role,
     sessionId: "viewer-session",
     userId: "viewer-user",
   });
@@ -213,6 +215,7 @@ function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-ma
 
 function harness(
   options: {
+    resolveConnectedAction?: NonNullable<DiscoverySearchDependencies["resolveConnectedAction"]>;
     withArtwork?: boolean;
     withBrowse?: boolean;
     withConnector?: boolean;
@@ -318,6 +321,9 @@ function harness(
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
+    ...(options.resolveConnectedAction
+      ? { resolveConnectedAction: options.resolveConnectedAction }
+      : {}),
   });
   return {
     config,
@@ -737,6 +743,113 @@ describe("discovery search service", () => {
       expect(JSON.stringify(normalizedDetailResponse)).not.toContain(privateApiKey);
     } finally {
       database.close();
+    }
+  });
+
+  it("offers an exact connected-service action only to acquisition operators", async () => {
+    const resolveConnectedAction = vi.fn(async () => ({
+      publicUiUrl: "https://movies.example.test/radarr/",
+      service: "radarr" as const,
+      titleSlug: "the-matrix",
+    }));
+    const test = harness({ resolveConnectedAction });
+    try {
+      await expect(
+        test.service.readConnectedActions(
+          { kind: "movie", tmdbId: 603 },
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ code: "permission_denied", statusCode: 403 });
+      expect(resolveConnectedAction).not.toHaveBeenCalled();
+
+      const actions = await test.service.readConnectedActions(
+        { kind: "movie", tmdbId: 603 },
+        { principal: principal("operator") },
+      );
+      expect(actions.actions).toEqual([
+        {
+          href: "/v1/discovery/details/movie/603/actions/radarr",
+          kind: "service_navigation",
+          label: "Open in Radarr",
+          service: "radarr",
+        },
+      ]);
+      expect(resolveConnectedAction).toHaveBeenCalledWith(
+        { kind: "movie", providerIds: { imdb: null, tmdb: 603 } },
+        expect.any(AbortSignal),
+      );
+      expect(JSON.stringify(actions)).not.toContain("movies.example.test");
+
+      await expect(
+        test.service.openConnectedAction({ kind: "movie", tmdbId: 603 }, "radarr", {
+          principal: principal("operator"),
+        }),
+      ).resolves.toEqual(new URL("https://movies.example.test/radarr/movie/the-matrix"));
+      await expect(
+        test.service.openConnectedAction({ kind: "movie", tmdbId: 603 }, "sonarr", {
+          principal: principal("operator"),
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("keeps detail available when connected navigation degrades and fails redirects closed", async () => {
+    const unavailable = harness({
+      resolveConnectedAction: async () => {
+        throw new Error("private upstream failure");
+      },
+    });
+    try {
+      await expect(
+        unavailable.service.detail(
+          { kind: "movie", tmdbId: 603 },
+          { language: "en" },
+          { principal: principal("operator") },
+        ),
+      ).resolves.toMatchObject({ item: { kind: "movie", tmdbId: 603 } });
+      await expect(
+        unavailable.service.readConnectedActions(
+          { kind: "movie", tmdbId: 603 },
+          { principal: principal("operator") },
+        ),
+      ).resolves.toMatchObject({ actions: [] });
+      await expect(
+        unavailable.service.openConnectedAction({ kind: "movie", tmdbId: 603 }, "radarr", {
+          principal: principal("operator"),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+    } finally {
+      unavailable.database.close();
+    }
+
+    const missing = harness({ resolveConnectedAction: async () => null });
+    try {
+      await expect(
+        missing.service.openConnectedAction({ kind: "movie", tmdbId: 603 }, "radarr", {
+          principal: principal("operator"),
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+    } finally {
+      missing.database.close();
+    }
+
+    const unsafe = harness({
+      resolveConnectedAction: async () => ({
+        publicUiUrl: "https://movies.example.test/radarr/",
+        service: "radarr",
+        titleSlug: "../private",
+      }),
+    });
+    try {
+      await expect(
+        unsafe.service.openConnectedAction({ kind: "movie", tmdbId: 603 }, "radarr", {
+          principal: principal("operator"),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+    } finally {
+      unsafe.database.close();
     }
   });
 

@@ -49,7 +49,17 @@ describe("DiscoveryDashboard", () => {
     const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
     const { container } = render(
       <DiscoveryDashboard
-        detailClient={{ load }}
+        detailClient={{
+          load,
+          loadConnectedActions: vi.fn<DiscoveryMediaDetailClient["loadConnectedActions"]>(
+            async () => ({
+              actions: [],
+              generatedAt: "2026-07-28T20:00:00.000Z",
+              kind: "movie",
+              tmdbId: 603,
+            }),
+          ),
+        }}
         initialFeed={demoDiscoveryFeed}
         live={false}
         showContinueWatching={false}

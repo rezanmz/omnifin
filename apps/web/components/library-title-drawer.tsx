@@ -54,6 +54,7 @@ import {
   type MediaLibraryClient,
 } from "../lib/media-library";
 import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
+import { ConnectedServiceActions } from "./connected-service-actions";
 import { SavedTitleActions } from "./saved-title-actions";
 
 const MediaDetailDrawer = dynamic(() =>
@@ -356,32 +357,6 @@ function PlaybackActions({
             : ""}
       </p>
     </div>
-  );
-}
-
-function ConnectedServiceActions({ actions }: { actions: LibraryConnectedAction[] }) {
-  const safeActions = actions.flatMap((action) => {
-    const href = sameOriginMediaPath(action.href);
-    return href === undefined ? [] : [{ ...action, href }];
-  });
-  if (safeActions.length === 0) return null;
-  return (
-    <nav aria-label="Connected services" className="library-title__connected-actions">
-      {safeActions.map((action) => (
-        <a
-          aria-label={`${action.label} in a new tab`}
-          className="button button--glass"
-          data-directional-item
-          href={action.href}
-          key={action.service}
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          <ExternalLink aria-hidden="true" />
-          {action.label}
-        </a>
-      ))}
-    </nav>
   );
 }
 
@@ -1969,6 +1944,8 @@ export function LibraryTitleDrawer({
                       actions={
                         connectedActions?.requestKey === requestKey ? connectedActions.actions : []
                       }
+                      className="library-title__connected-actions"
+                      linkClassName="button button--glass"
                     />
                   </div>
                 </section>

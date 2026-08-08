@@ -306,8 +306,16 @@ const seriesResponse: DiscoveryMediaDetailResponse = {
   },
 };
 
-function client(load: DiscoveryMediaDetailClient["load"]): DiscoveryMediaDetailClient {
-  return { load };
+function client(
+  load: DiscoveryMediaDetailClient["load"],
+  loadConnectedActions: DiscoveryMediaDetailClient["loadConnectedActions"] = async () => ({
+    actions: [],
+    generatedAt: "2026-07-28T20:00:00.000Z",
+    kind: "movie",
+    tmdbId: 603,
+  }),
+): DiscoveryMediaDetailClient {
+  return { load, loadConnectedActions };
 }
 
 function personClient(load: DiscoveryPersonDetailClient["load"]): DiscoveryPersonDetailClient {
@@ -351,6 +359,33 @@ export const Movie: Story = {
     const canvas = within(canvasElement.ownerDocument.body);
     await waitFor(() => expect(canvas.getByRole("heading", { name: "The Matrix" })).toBeVisible());
     expect(canvas.getByText("Free your mind.")).toBeVisible();
+  },
+};
+
+export const ConnectedService: Story = {
+  args: {
+    client: client(
+      async () => movieResponse,
+      async () => ({
+        actions: [
+          {
+            href: "/api/discovery/details/movie/603/actions/radarr",
+            kind: "service_navigation",
+            label: "Open in Radarr",
+            service: "radarr",
+          },
+        ],
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        kind: "movie",
+        tmdbId: 603,
+      }),
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement.ownerDocument.body);
+    await waitFor(() =>
+      expect(canvas.getByRole("link", { name: "Open in Radarr in a new tab" })).toBeVisible(),
+    );
   },
 };
 

@@ -3,6 +3,7 @@
 import "./media-detail-drawer.css";
 
 import type {
+  DiscoveryConnectedActionsResponse,
   DiscoveryMediaDetail,
   DiscoveryMediaRecommendation,
   DiscoveryMovieResult,
@@ -41,6 +42,7 @@ import {
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
 import { titleProviderHref } from "../lib/title-provider-reference";
+import { ConnectedServiceActions } from "./connected-service-actions";
 import { SavedTitleActions } from "./saved-title-actions";
 
 export type DetailMedia = DiscoveryMovieResult | DiscoverySeriesResult;
@@ -52,7 +54,11 @@ export interface DetailPerson {
 
 type DetailState =
   | { kind: "loading"; requestKey: string }
-  | { detail: DiscoveryMediaDetail; kind: "ready"; requestKey: string }
+  | {
+      detail: DiscoveryMediaDetail;
+      kind: "ready";
+      requestKey: string;
+    }
   | { errorKind: MediaDetailClientErrorKind; kind: "error"; requestKey: string };
 
 type PersonState =
@@ -276,12 +282,14 @@ function DetailError({
 }
 
 function DetailContent({
+  connectedActions,
   detail,
   media,
   onInspectMedia,
   onInspectPerson,
   onRequest,
 }: {
+  connectedActions: DiscoveryConnectedActionsResponse["actions"];
   detail: DiscoveryMediaDetail;
   media: DetailMedia;
   onInspectMedia: (media: DetailMedia) => void;
@@ -365,6 +373,13 @@ function DetailContent({
             Request title <Sparkles aria-hidden="true" />
           </button>
         </aside>
+      ) : null}
+
+      {connectedActions.length > 0 ? (
+        <ConnectedServiceActions
+          actions={connectedActions}
+          className="media-detail__service-actions"
+        />
       ) : null}
 
       <section className="media-detail__overview">
@@ -800,6 +815,10 @@ export function MediaDetailDrawer({
   const [personAttempt, setPersonAttempt] = useState(0);
   const [personState, setPersonState] = useState<PersonState | null>(null);
   const [state, setState] = useState<DetailState | null>(null);
+  const [connectedActions, setConnectedActions] = useState<{
+    actions: DiscoveryConnectedActionsResponse["actions"];
+    requestKey: string;
+  } | null>(null);
   const rootKey = media
     ? `media:${media.kind}:${media.tmdbId}`
     : person
@@ -842,7 +861,13 @@ export function MediaDetailDrawer({
         controller.signal,
       )
       .then((response) => {
-        if (current) setState({ detail: response.item, kind: "ready", requestKey });
+        if (current) {
+          setState({
+            detail: response.item,
+            kind: "ready",
+            requestKey,
+          });
+        }
       })
       .catch((error: unknown) => {
         if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
@@ -857,6 +882,31 @@ export function MediaDetailDrawer({
       controller.abort();
     };
   }, [activeMedia, client, open, personId, requestKey]);
+
+  useEffect(() => {
+    if (!open || !activeMedia || personId !== null || state?.kind !== "ready") return;
+    const controller = new AbortController();
+    let current = true;
+    void client
+      .loadConnectedActions(
+        { kind: activeMedia.kind, tmdbId: activeMedia.tmdbId },
+        controller.signal,
+      )
+      .then((response) => {
+        if (current) {
+          setConnectedActions({ actions: response.actions, requestKey });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
+        // Bounded optional lookup: connector degradation never blocks details.
+        setConnectedActions({ actions: [], requestKey });
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [activeMedia, client, open, personId, requestKey, state?.kind]);
 
   useEffect(() => {
     if (!open || personId === null) return;
@@ -1014,6 +1064,9 @@ export function MediaDetailDrawer({
             <DetailSkeleton title="person context" />
           ) : visibleState?.kind === "ready" && activeMedia ? (
             <DetailContent
+              connectedActions={
+                connectedActions?.requestKey === requestKey ? connectedActions.actions : []
+              }
               detail={visibleState.detail}
               media={activeMedia}
               onInspectMedia={inspectMedia}

@@ -217,8 +217,16 @@ const seriesResponse: DiscoveryMediaDetailResponse = {
   },
 };
 
-function client(load: DiscoveryMediaDetailClient["load"] = async () => movieResponse) {
-  return { load } satisfies DiscoveryMediaDetailClient;
+function client(
+  load: DiscoveryMediaDetailClient["load"] = async () => movieResponse,
+  loadConnectedActions: DiscoveryMediaDetailClient["loadConnectedActions"] = async () => ({
+    actions: [],
+    generatedAt: "2026-07-28T20:00:00.000Z",
+    kind: "movie",
+    tmdbId: 603,
+  }),
+) {
+  return { load, loadConnectedActions } satisfies DiscoveryMediaDetailClient;
 }
 
 function personClient(load: DiscoveryPersonDetailClient["load"] = async () => personResponse) {
@@ -287,6 +295,37 @@ describe("media detail drawer", () => {
       expect(screen.queryByRole("button", { name: "Watch Later" })).not.toBeInTheDocument();
     },
   );
+
+  it("presents an operator's connected-service action as an explicit new-tab link", async () => {
+    render(
+      <MediaDetailDrawer
+        client={client(
+          async () => movieResponse,
+          async () => ({
+            actions: [
+              {
+                href: "/api/discovery/details/movie/603/actions/radarr",
+                kind: "service_navigation",
+                label: "Open in Radarr",
+                service: "radarr",
+              },
+            ],
+            generatedAt: "2026-07-28T20:00:00.000Z",
+            kind: "movie",
+            tmdbId: 603,
+          }),
+        )}
+        media={movie}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    const action = await screen.findByRole("link", { name: "Open in Radarr in a new tab" });
+    expect(action).toHaveAttribute("href", "/api/discovery/details/movie/603/actions/radarr");
+    expect(action).toHaveAttribute("target", "_blank");
+    expect(action).toHaveAttribute("rel", "noopener noreferrer");
+  });
 
   it("renders proxied artwork and falls back cleanly when an individual image fails", async () => {
     const artworkResponse: DiscoveryMediaDetailResponse = {

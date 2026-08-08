@@ -141,6 +141,38 @@ describe("media detail client", () => {
     });
   });
 
+  it("rewrites validated connected-service actions through the same-origin gateway", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          actions: [
+            {
+              href: "/v1/discovery/details/movie/603/actions/radarr",
+              kind: "service_navigation",
+              label: "Open in Radarr",
+              service: "radarr",
+            },
+          ],
+          generatedAt: "2026-07-28T20:00:00.000Z",
+          kind: "movie",
+          tmdbId: 603,
+        }),
+      ),
+    );
+
+    await expect(
+      discoveryMediaDetailClient.loadConnectedActions({ kind: "movie", tmdbId: 603 }),
+    ).resolves.toMatchObject({
+      actions: [
+        {
+          href: "/api/discovery/details/movie/603/actions/radarr",
+          service: "radarr",
+        },
+      ],
+    });
+  });
+
   it.each([
     { code: "authentication_required", expected: "signed_out", status: 401 },
     { code: "permission_denied", expected: "forbidden", status: 403 },
