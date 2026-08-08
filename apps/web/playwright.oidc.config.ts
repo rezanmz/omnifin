@@ -1,10 +1,14 @@
 import { defineConfig } from "@playwright/test";
 
-const webOrigin = "http://127.0.0.1:3000";
+// Keep this canary off the normal browser-test port so sequential CI runs do
+// not race the previous Next.js process while it releases port 3000.
+const webPort = 4316;
+const webOrigin = `http://127.0.0.1:${webPort}`;
 // Deliberately differs from the source and image defaults so the production
 // canary proves that the immutable web build honors its runtime gateway URL.
 const gatewayPort = 4317;
 const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+const gracefulShutdown = { signal: "SIGTERM" as const, timeout: 5_000 };
 
 export default defineConfig({
   expect: { timeout: 10_000 },
@@ -26,9 +30,15 @@ export default defineConfig({
         OMNIFIN_OIDC_REWRITE_GATEWAY_PORT: String(gatewayPort),
         OMNIFIN_OIDC_REWRITE_WEB_ORIGIN: webOrigin,
       },
+      gracefulShutdown,
+      name: "Synthetic OIDC gateway",
       reuseExistingServer: false,
-      timeout: 120_000,
-      url: `${gatewayOrigin}/readyz`,
+      stderr: "pipe",
+      stdout: "pipe",
+      timeout: 60_000,
+      // Phase 0 readiness requires production database key state. This
+      // in-memory rewrite fixture needs liveness; each test proves route health.
+      url: `${gatewayOrigin}/healthz`,
     },
     {
       command: "pnpm start",
@@ -37,9 +47,13 @@ export default defineConfig({
         OMNIFIN_GATEWAY_URL: gatewayOrigin,
         OMNIFIN_TEST_MODE: "false",
         OMNIFIN_WEB_TRUST_PROXY_HOPS: "1",
+        PORT: String(webPort),
       },
+      name: "Production web",
       reuseExistingServer: false,
-      timeout: 120_000,
+      stderr: "pipe",
+      stdout: "pipe",
+      timeout: 60_000,
       url: `${webOrigin}/login`,
     },
   ],
