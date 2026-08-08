@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.12.0](https://github.com/rezanmz/omnifin/compare/v0.11.0...v0.12.0) (2026-08-08)
+
+
+### Features
+
+* **web:** add audio-track fast path with re-init fallback ([#331](https://github.com/rezanmz/omnifin/issues/331)) ([6d23047](https://github.com/rezanmz/omnifin/commit/6d23047c5de89025f9a423461692ca64dfab475b))
+* **web:** add hls.js level menu and preserve the last frame during switches ([#328](https://github.com/rezanmz/omnifin/issues/328)) ([eb12f16](https://github.com/rezanmz/omnifin/commit/eb12f168282a04fb2236986ded936a37d8aa4dba))
+* **web:** add private saved lists ([#289](https://github.com/rezanmz/omnifin/issues/289)) ([7fd4296](https://github.com/rezanmz/omnifin/commit/7fd42961144272dc1afd83ea203cb7ef3e88ff43)), closes [#252](https://github.com/rezanmz/omnifin/issues/252)
+* **web:** add safe episodic continuation ([#268](https://github.com/rezanmz/omnifin/issues/268)) ([019bc92](https://github.com/rezanmz/omnifin/commit/019bc922dbfcd7030b2659f19bbd8141c7bd9006))
+* **web:** apply persisted account defaults to initial playback ([#332](https://github.com/rezanmz/omnifin/issues/332)) ([bae533a](https://github.com/rezanmz/omnifin/commit/bae533ac84911e35f78088d0a4ccaa3cc285a477))
+* **web:** expose negotiated play method and stream bitrate ([#326](https://github.com/rezanmz/omnifin/issues/326)) ([8c6bd11](https://github.com/rezanmz/omnifin/commit/8c6bd11db4fea1851b853a52bd7d0715ac6e975c))
+* **web:** persist semantic playback preferences ([#267](https://github.com/rezanmz/omnifin/issues/267)) ([de61f46](https://github.com/rezanmz/omnifin/commit/de61f46c946a77be0db1d9d3f7dda98396013ff4)), closes [#255](https://github.com/rezanmz/omnifin/issues/255)
+* **web:** select movie versions safely ([#269](https://github.com/rezanmz/omnifin/issues/269)) ([7caf6b9](https://github.com/rezanmz/omnifin/commit/7caf6b9beb473530a49ede4462ac62e58ce5de2e)), closes [#254](https://github.com/rezanmz/omnifin/issues/254) [#254](https://github.com/rezanmz/omnifin/issues/254) [#254](https://github.com/rezanmz/omnifin/issues/254)
+* **web:** swap player engine to hls.js behind the PlayerHandle seam ([#325](https://github.com/rezanmz/omnifin/issues/325)) ([39c36f9](https://github.com/rezanmz/omnifin/commit/39c36f9a413a6c77ada6090e51446d09f37081ba))
+* **web:** tighten client-renderable subtitles to native WebVTT codecs ([#327](https://github.com/rezanmz/omnifin/issues/327)) ([aa2a46b](https://github.com/rezanmz/omnifin/commit/aa2a46b8f4f9df72b3afbcd5a89cd99965e88022))
+
+
+### Fixes
+
+* **web:** gate dashboard scroll test on sticky search engagement ([#334](https://github.com/rezanmz/omnifin/issues/334)) ([13a0530](https://github.com/rezanmz/omnifin/commit/13a0530e206cb1c2efa1d5035e2b94af77a3a96a))
+
 ## [0.11.0](https://github.com/rezanmz/omnifin/compare/v0.10.0...v0.11.0) (2026-08-07)
 
 
