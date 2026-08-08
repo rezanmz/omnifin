@@ -639,7 +639,9 @@ export const discoveryConnectedActionsResponseSchema = z
       }
     }
   });
-export type DiscoveryConnectedActionsResponse = z.infer<typeof discoveryConnectedActionsResponseSchema>;
+export type DiscoveryConnectedActionsResponse = z.infer<
+  typeof discoveryConnectedActionsResponseSchema
+>;
 
 export const discoveryMediaDetailResponseSchema = z
   .strictObject({

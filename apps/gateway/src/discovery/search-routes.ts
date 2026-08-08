@@ -412,11 +412,7 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
       request.raw.once("aborted", abort);
       try {
         return discoveryConnectedActionsResponseSchema.parse(
-          await discovery.readConnectedActions(
-            { kind, tmdbId },
-            { principal },
-            controller.signal,
-          ),
+          await discovery.readConnectedActions({ kind, tmdbId }, { principal }, controller.signal),
         );
       } catch (error) {
         if (error instanceof DiscoveryConnectedActionError) {

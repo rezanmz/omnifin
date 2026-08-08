@@ -210,14 +210,11 @@ export const discoveryMediaDetailClient: DiscoveryMediaDetailClient = {
     const params = schemas.discovery.discoveryMediaDetailParamsSchema.parse(paramsInput);
     let response: Response;
     try {
-      response = await fetch(
-        `/api/discovery/details/${params.kind}/${params.tmdbId}/actions`,
-        {
-          cache: "no-store",
-          credentials: "same-origin",
-          ...(signal ? { signal } : {}),
-        },
-      );
+      response = await fetch(`/api/discovery/details/${params.kind}/${params.tmdbId}/actions`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        ...(signal ? { signal } : {}),
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new MediaDetailClientError(
