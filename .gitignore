@@ -24,6 +24,9 @@ data/
 *-shm
 *-wal
 
+# Release migration evidence is intentionally versioned; runtime databases remain ignored.
+!apps/gateway/test/fixtures/v0.12.0/v0.12.0.sqlite
+
 # Local configuration and secrets
 .env
 .env.*

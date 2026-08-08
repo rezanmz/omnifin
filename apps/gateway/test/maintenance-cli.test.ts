@@ -40,7 +40,7 @@ async function runMaintenance(
       NODE_ENV: "production",
       OMNIFIN_BACKUP_DIRECTORY: fixture.directory,
       OMNIFIN_DATABASE_URL: fixture.databasePath,
-      OMNIFIN_IMAGE_REF: "ghcr.io/rezanmz/omnifin@sha256:fixture",
+      OMNIFIN_IMAGE_REF: `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`,
     },
   });
 }

@@ -126,6 +126,12 @@ export interface JellyfinRemoteImageResult {
   contentType: "image/avif" | "image/jpeg" | "image/png" | "image/webp";
 }
 
+export interface JellyfinLibraryMetadataState {
+  overview: string | null;
+  title: string;
+  year: number | null;
+}
+
 export interface JellyfinLibraryClientOptions {
   accessToken: string;
   deviceId: string;
@@ -328,6 +334,24 @@ export class JellyfinLibraryClient {
       operation: "library.item.update",
       ...(signal === undefined ? {} : { signal }),
     });
+  }
+
+  public async readMetadata(
+    itemId: string,
+    signal?: AbortSignal,
+  ): Promise<JellyfinLibraryMetadataState> {
+    const safeItemId = identifierSchema.parse(itemId);
+    const current = await this.#client.requestJson(`Items/${safeItemId}`, editableItemSchema, {
+      headers: { authorization: this.#authorization },
+      operation: "library.item.read",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (current.Id !== safeItemId) throw this.#client.invalidResponse("library.item.read");
+    return {
+      overview: current.Overview ?? null,
+      title: current.Name,
+      year: current.ProductionYear ?? null,
+    };
   }
 
   public async searchRemoteArtwork(

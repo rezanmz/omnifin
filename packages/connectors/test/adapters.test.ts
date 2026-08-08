@@ -268,6 +268,19 @@ describe.each(credentialReflectionCases)("$name credential reflection", (probeCa
   );
 });
 
+describe("Jellyfin stable instance probe", () => {
+  it("retains the server Id only in the internal result", async () => {
+    const mock = createMockTransport([jsonResponse(probeFixtures.jellyfin)]);
+    const adapter = new JellyfinAdapter(target("jellyfin", mock.transport));
+
+    const result = await adapter.probeWithIdentity();
+
+    expect(result.stableInstanceIdentity).toBe("fixture-server");
+    expect(result.health).toMatchObject({ status: "healthy", version: "10.11.2" });
+    expect(JSON.stringify(result.health)).not.toContain("fixture-server");
+  });
+});
+
 describe("qBittorrent adapter", () => {
   it("accepts only the legacy 200 and current empty 204 login responses", () => {
     expect(isQBittorrentLoginResponseAccepted(200, "Ok.")).toBe(true);

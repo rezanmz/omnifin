@@ -15,6 +15,8 @@ const ROOT_KEY_BYTES = 32;
 const DERIVATION_SALT = Buffer.from("omnifin:v1:key-derivation", "utf8");
 const ENVELOPE_KEY_PURPOSE = "omnifin:v1:envelope:aes-256-gcm";
 const PRIVACY_HASH_KEY_PURPOSE = "omnifin:v1:privacy-hash:hmac-sha256";
+const DATABASE_KEY_VERIFIER_PURPOSE = "omnifin:v1:database-key-verifier:hmac-sha256";
+const DATABASE_KEY_VERIFIER_MESSAGE = "omnifin database key verifier v1";
 
 export type PrivacyHashDomain =
   | "acquisition_event"
@@ -148,4 +150,19 @@ export function constantTimeTextEqual(left: string, right: string) {
   const leftDigest = createHash("sha256").update(left, "utf8").digest();
   const rightDigest = createHash("sha256").update(right, "utf8").digest();
   return timingSafeEqual(leftDigest, rightDigest);
+}
+
+/**
+ * Produces a non-secret, domain-separated proof that a database and root key belong together.
+ * The verifier cannot be used as an envelope key and contains no encrypted secret material.
+ */
+export function databaseKeyVerifier(rootKey: Buffer) {
+  const verifierKey = deriveDomainKey(rootKey, DATABASE_KEY_VERIFIER_PURPOSE);
+  try {
+    return createHmac("sha256", verifierKey)
+      .update(DATABASE_KEY_VERIFIER_MESSAGE, "utf8")
+      .digest("base64url");
+  } finally {
+    verifierKey.fill(0);
+  }
 }

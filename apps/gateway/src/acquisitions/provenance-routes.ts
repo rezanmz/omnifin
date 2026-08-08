@@ -66,6 +66,7 @@ function configurationError(error: AcquisitionProvenanceError) {
     case "identity_required":
     case "operation_failed":
     case "operation_limit_reached":
+    case "outcome_uncertain":
     case "outcome_unconfirmed":
     case "rate_limited":
     case "reference_expired":
@@ -113,6 +114,14 @@ function searchError(error: AcquisitionProvenanceError, reply: FastifyReply) {
         code: "acquisition_search_rate_limited",
         message: "The acquisition service is cooling down before another search.",
         statusCode: 429,
+      });
+    case "outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "acquisition_search_outcome_uncertain",
+        message:
+          "The acquisition search may have been queued. Verify acquisition history before acting again.",
+        statusCode: 409,
       });
     case "response_invalid":
       return new SafeHttpError({
@@ -178,6 +187,7 @@ function monitoringError(error: AcquisitionProvenanceError) {
     case "storage_failure":
     case "operation_failed":
     case "operation_limit_reached":
+    case "outcome_uncertain":
     case "outcome_unconfirmed":
     case "reference_expired":
     case "reference_invalid":
@@ -263,6 +273,7 @@ function recoveryError(error: AcquisitionProvenanceError, reply: FastifyReply) {
       });
     case "response_invalid":
     case "outcome_unconfirmed":
+    case "outcome_uncertain":
       return new SafeHttpError({
         cause: error,
         code: "acquisition_queue_recovery_unconfirmed",

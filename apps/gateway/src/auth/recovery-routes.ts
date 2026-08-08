@@ -1,7 +1,13 @@
-import { sessionResponseSchema } from "@omnifin/contracts/auth";
+import {
+  administratorRecoveryPreviewRequestSchema,
+  administratorRecoveryPreviewResponseSchema,
+  sessionResponseSchema,
+} from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { SafeHttpError } from "../http-error.js";
+import { AdministratorRecoveryService } from "./administrator-recovery-service.js";
+import { requirePermission } from "./authorization.js";
 import {
   RecoveryAccessService,
   type RecoveryAccessServiceDependencies,
@@ -88,6 +94,12 @@ export const recoveryRoutes: FastifyPluginAsync<RecoveryRoutesOptions> = async (
     app.appConfig,
     options.dependencies,
   );
+  const administratorRecovery = new AdministratorRecoveryService(
+    app.database,
+    app.sessionService,
+    app.appConfig,
+    options.dependencies?.clock === undefined ? {} : { clock: options.dependencies.clock },
+  );
   const recordedRequests = new WeakSet<FastifyRequest>();
 
   app.post(
@@ -154,6 +166,38 @@ export const recoveryRoutes: FastifyPluginAsync<RecoveryRoutesOptions> = async (
       });
       writeSessionCookie(reply, app.appConfig, session.sessionToken, session.absoluteExpiresAt);
       return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/recovery/administrator-replacement/preview",
+    {
+      bodyLimit: 16,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request) => {
+      const principal = app.sessionService.resolveValidatedSessionPrincipal(
+        request.validatedSession,
+      );
+      requirePermission(principal, "recovery.administrator.replace");
+      if (!administratorRecoveryPreviewRequestSchema.safeParse(request.body).success) {
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator recovery preview request is invalid.",
+          statusCode: 400,
+        });
+      }
+      return administratorRecoveryPreviewResponseSchema.parse(
+        administratorRecovery.preview(principal),
+      );
     },
   );
 };

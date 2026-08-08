@@ -38,6 +38,7 @@ export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EPISODE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EXTRAS_LIMIT = LIBRARY_EXTRAS_MAX_ITEMS;
+export const JELLYFIN_OWNERSHIP_LOOKUP_LIMIT = 2;
 export const JELLYFIN_LIBRARY_SEASON_LIMIT = 100;
 export const JELLYFIN_VIEWING_HISTORY_LIMIT = 50;
 const JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE = 100;
@@ -228,6 +229,20 @@ const jellyfinOriginalDownloadItemSchema = jellyfinLibraryItemSchema
 const jellyfinLibraryResponseSchema = z.object({
   Items: z.array(jellyfinLibraryItemSchema).max(JELLYFIN_LIBRARY_BROWSE_LIMIT + 1),
   TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS).nullish(),
+});
+
+const jellyfinOwnershipItemSchema = z.object({
+  Id: jellyfinItemIdSchema,
+  ProviderIds: z
+    .record(z.string().trim().min(1).max(64), z.string().trim().min(1).max(128))
+    .refine((ids) => Object.keys(ids).length <= 32),
+  Type: z.enum(["Movie", "Series"]),
+});
+
+const jellyfinOwnershipResponseSchema = z.object({
+  Items: z.array(jellyfinOwnershipItemSchema).max(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT),
+  StartIndex: z.literal(0).nullish(),
+  TotalRecordCount: z.int().nonnegative().max(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT).nullish(),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -430,6 +445,15 @@ const jellyfinLibraryTitleQuerySchema = z.strictObject({
     .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
 });
 
+const jellyfinExactOwnershipInputSchema = z.strictObject({
+  kind: z.enum(["movie", "series"]),
+  tmdbId: z.int().positive().max(2_147_483_647),
+  userId: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u),
+});
+
 export const JELLYFIN_ORIGINAL_DOWNLOAD_MAX_BYTES = 128 * 1_024 * 1_024 * 1_024 * 1_024;
 
 const jellyfinOriginalDownloadInputSchema = z
@@ -613,6 +637,17 @@ export interface JellyfinLibraryResult {
   nextStartIndex: number | null;
   totalResults: number | null;
   truncated: boolean;
+}
+
+export interface JellyfinExactOwnershipInput {
+  kind: "movie" | "series";
+  tmdbId: number;
+  userId: string;
+}
+
+export interface JellyfinExactOwnershipResult {
+  itemId: string | null;
+  owned: boolean;
 }
 
 export interface JellyfinLibrarySeason {
@@ -1781,6 +1816,26 @@ export class JellyfinUserMediaClient {
     }
   }
 
+  public async readLibraryItemPresence(rawItemId: string, signal?: AbortSignal): Promise<boolean> {
+    const itemId = jellyfinItemIdSchema.parse(rawItemId);
+    try {
+      const item = await this.#client.requestJson(
+        `Items/${itemId}`,
+        jellyfinFavoriteStateItemSchema.pick({ Id: true }),
+        {
+          headers: { authorization: this.#authorization },
+          operation: "library.removal.reconcile",
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      if (item.Id !== itemId) throw this.#client.invalidResponse("library.removal.reconcile");
+      return true;
+    } catch (error) {
+      if (error instanceof SafeConnectorError && error.status === 404) return false;
+      throw error;
+    }
+  }
+
   public async readContinueWatching(signal?: AbortSignal): Promise<JellyfinContinueWatchingResult> {
     const response = await this.#client.requestJson(
       "UserItems/Resume",
@@ -1946,6 +2001,64 @@ export class JellyfinUserMediaClient {
       totalResults,
       truncated: nextStartIndex !== null,
     };
+  }
+
+  public async readExactOwnership(
+    rawInput: JellyfinExactOwnershipInput,
+    signal?: AbortSignal,
+  ): Promise<JellyfinExactOwnershipResult> {
+    const input = jellyfinExactOwnershipInputSchema.parse(rawInput);
+    const expectedType = input.kind === "movie" ? "Movie" : "Series";
+    signal?.throwIfAborted();
+    let response: z.infer<typeof jellyfinOwnershipResponseSchema>;
+    try {
+      response = await this.#client.requestJson(
+        `Users/${input.userId}/Items`,
+        jellyfinOwnershipResponseSchema,
+        {
+          headers: { authorization: this.#authorization },
+          operation: "media.ownership",
+          query: {
+            AnyProviderIdEquals: `Tmdb.${input.tmdbId}`,
+            EnableImages: "false",
+            EnableTotalRecordCount: "true",
+            EnableUserData: "false",
+            Fields: "ProviderIds",
+            IncludeItemTypes: expectedType,
+            IsMissing: "false",
+            IsVirtualItem: "false",
+            Limit: String(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT),
+            Recursive: "true",
+            StartIndex: "0",
+          },
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw error;
+    }
+    if (
+      response.Items.length > 1 ||
+      (response.TotalRecordCount !== null &&
+        response.TotalRecordCount !== undefined &&
+        response.TotalRecordCount !== response.Items.length)
+    ) {
+      throw this.#client.invalidResponse("media.ownership");
+    }
+    const item = response.Items[0];
+    if (!item) return { itemId: null, owned: false };
+    const tmdbIds = Object.entries(item.ProviderIds).filter(
+      ([provider]) => provider.toLocaleLowerCase("en-US") === "tmdb",
+    );
+    if (
+      item.Type !== expectedType ||
+      tmdbIds.length !== 1 ||
+      tmdbIds[0]?.[1] !== String(input.tmdbId)
+    ) {
+      throw this.#client.invalidResponse("media.ownership");
+    }
+    return { itemId: item.Id, owned: true };
   }
 
   async #readPersonIdentities(
@@ -2536,6 +2649,14 @@ export class JellyfinUserMediaClient {
           : playback.positionSeconds === 0;
     if (!reconciled) throw mutationError ?? this.#client.invalidResponse("media.playback_state");
     return playback;
+  }
+
+  public async readPlaybackState(
+    rawInput: { itemId: string; userId: string },
+    signal?: AbortSignal,
+  ): Promise<LibraryPlaybackState> {
+    const input = jellyfinPlaybackStateMutationInputSchema.omit({ action: true }).parse(rawInput);
+    return this.#readPlaybackState(input.itemId, input.userId, signal);
   }
 
   public async readFavoriteState(

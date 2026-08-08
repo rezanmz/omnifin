@@ -123,9 +123,21 @@ describe("JellyfinLibraryClient", () => {
         Type: "Movie",
       }),
       new Response(null, { status: 204 }),
+      jsonResponse({
+        Id: "movie-upstream-1",
+        Name: "The Far Meridian",
+        Overview: null,
+        ProductionYear: 2026,
+        Type: "Movie",
+      }),
     ]);
 
     await client.updateMetadata("movie-upstream-1", {
+      overview: null,
+      title: "The Far Meridian",
+      year: 2026,
+    });
+    await expect(client.readMetadata("movie-upstream-1")).resolves.toEqual({
       overview: null,
       title: "The Far Meridian",
       year: 2026,
@@ -142,6 +154,7 @@ describe("JellyfinLibraryClient", () => {
     });
     expect(requests[1]?.url.pathname).toBe("/base/Items/movie-upstream-1");
     expect(requests[1]?.init.headers.get("content-type")).toBe("application/json");
+    expect(requests[2]?.url.pathname).toBe("/base/Items/movie-upstream-1");
   });
 
   it("normalizes remote artwork and applies only exact HTTPS provider results", async () => {

@@ -40,6 +40,7 @@ import {
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
+import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
 import { titleProviderHref } from "../lib/title-provider-reference";
 import { SavedTitleActions } from "./saved-title-actions";
 
@@ -290,7 +291,7 @@ function DetailContent({
 }) {
   const runtime = formatRuntime(detail.runtimeMinutes);
   const ratings = formatRatings(detail.voteCount);
-  const requestable = detail.availability === "unavailable" || detail.availability === "partial";
+  const requestable = discoveryAvailabilityIsRequestable(detail.availability);
   const saveable = detail.availability !== "available" && detail.availability !== "unknown";
   return (
     <div className="media-detail__content">

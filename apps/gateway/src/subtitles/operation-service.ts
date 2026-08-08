@@ -26,12 +26,18 @@ import {
   type SubtitleMediaTarget,
   type SubtitleSearchResponse,
 } from "@omnifin/contracts/subtitles";
-import { randomUUID, X509Certificate } from "node:crypto";
+import { createHmac, randomUUID, X509Certificate } from "node:crypto";
 import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
+import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+  type JsonValue,
+} from "../operations/external-mutation-journal.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import {
   MediaReferenceError,
@@ -43,6 +49,7 @@ const SEARCH_TTL_MS = 20 * 60 * 1_000;
 const MAX_ACTIVE_SEARCHES_PER_USER = 20;
 const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const STALE_PENDING_OPERATION_MS = 5 * 60 * 1_000;
+const DISPATCH_LEASE_MS = 30_000;
 const MAX_OPERATIONS_PER_USER = 4_096;
 const MAX_ID_ATTEMPTS = 8;
 const MAX_ENCRYPTED_SEARCH_BYTES = 4_194_304;
@@ -82,11 +89,13 @@ type StoredSearchPayload = z.infer<typeof storedSearchPayloadSchema>;
 interface BazarrConnectorRow {
   baseUrl: string;
   capabilitySnapshotJson: string;
+  configGeneration: number;
   displayName: string;
   encryptedCredentials: string;
   healthState: string;
   id: string;
   insecureHttpApproved: number;
+  instanceGeneration: number;
   tlsPolicy: string;
   type: string;
 }
@@ -106,6 +115,7 @@ interface MediaReferenceRow {
 
 interface SubtitleSearchRow {
   connectorId: string;
+  connectorInstanceGeneration: number;
   currentLinkRevision: number;
   encryptedPayload: string;
   expiresAt: number;
@@ -116,8 +126,17 @@ interface SubtitleSearchRow {
 interface DownloadOperationRow {
   failureCode: string | null;
   fingerprintHash: string;
+  id: string;
   responseJson: string | null;
   state: string;
+  updatedAt: number;
+}
+
+interface SubtitleDownloadSelection {
+  candidate: BazarrSubtitleCandidate;
+  connectorId: string;
+  connectorInstanceGeneration: number;
+  payload: StoredSearchPayload;
 }
 
 export interface SubtitleAdapter {
@@ -125,6 +144,7 @@ export interface SubtitleAdapter {
     target: BazarrSubtitleTarget,
     candidate: BazarrSubtitleCandidate,
     signal?: AbortSignal,
+    operationId?: string,
   ): Promise<void>;
   searchSubtitles(
     input: SubtitleMediaTarget,
@@ -142,6 +162,8 @@ export interface SubtitleOperationDependencies {
   clock?: () => Date;
   createAdapter?: (config: ApiKeyConnectorConfig) => SubtitleAdapter;
   createAuditId?: () => string;
+  createDispatchId?: () => string;
+  createLeaseOwner?: () => string;
   createOperationToken?: () => string;
   createResultToken?: () => string;
   createSearchToken?: () => string;
@@ -179,6 +201,7 @@ export type SubtitleOperationErrorReason =
   | "media_not_found"
   | "media_unsupported"
   | "operation_limit_reached"
+  | "outcome_uncertain"
   | "storage_failure"
   | "target_ambiguous"
   | "target_not_found";
@@ -322,6 +345,20 @@ function knownDownloadFailure(error: unknown): SubtitleDownloadFailureCode {
   return "temporarily_unavailable";
 }
 
+function ambiguousDispatchFailure(error: unknown) {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (!(error instanceof SafeConnectorError)) return true;
+  if (["response_invalid", "timeout", "unreachable"].includes(error.code)) return true;
+  return error.code === "upstream_error" && (error.status === null || error.status >= 500);
+}
+
+function mutationTargetDigest(value: unknown, key: Buffer) {
+  return createHmac("sha256", key)
+    .update("omnifin:v1:external-mutation-target\0", "utf8")
+    .update(JSON.stringify(value), "utf8")
+    .digest("base64url");
+}
+
 function defaultAdapter(config: ApiKeyConnectorConfig) {
   return new BazarrAdapter(config);
 }
@@ -332,10 +369,13 @@ export class SubtitleOperationService {
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<SubtitleOperationDependencies["createAdapter"]>;
   readonly #createAuditId: () => string;
+  readonly #createDispatchId: () => string;
+  readonly #createLeaseOwner: () => string;
   readonly #createOperationToken: () => string;
   readonly #createResultToken: () => string;
   readonly #createSearchToken: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
   readonly #references: MediaReferenceService;
 
   public constructor(
@@ -349,10 +389,15 @@ export class SubtitleOperationService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
     this.#createAuditId = dependencies.createAuditId ?? randomUUID;
+    this.#createDispatchId =
+      dependencies.createDispatchId ?? (() => `mutation_dispatch_${randomToken(16)}`);
+    this.#createLeaseOwner =
+      dependencies.createLeaseOwner ?? (() => `mutation_lease_${randomToken(16)}`);
     this.#createOperationToken = dependencies.createOperationToken ?? (() => randomToken(16));
     this.#createResultToken = dependencies.createResultToken ?? (() => randomToken(16));
     this.#createSearchToken = dependencies.createSearchToken ?? (() => randomToken(16));
     this.#references = new MediaReferenceService(database, config, dependencies.mediaReferences);
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
   }
 
   public async search(
@@ -365,7 +410,7 @@ export class SubtitleOperationService {
       rawReferenceId,
       principal,
     );
-    const { adapter, connectorId } = this.#adapter();
+    const { adapter, row } = this.#adapter();
     let result: BazarrSubtitleSearchResult;
     try {
       result = await adapter.searchSubtitles(media, signal);
@@ -423,8 +468,9 @@ export class SubtitleOperationService {
             .prepare(
               `insert into subtitle_searches (
                  id, user_id, service_identity_link_id, link_revision, media_reference_id,
-                 connector_id, encrypted_payload, expires_at, created_at, updated_at
-               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 connector_id, connector_instance_generation, encrypted_payload,
+                 expires_at, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               searchId,
@@ -432,7 +478,8 @@ export class SubtitleOperationService {
               serviceIdentityLinkId,
               linkRevision,
               referenceId,
-              connectorId,
+              row.id,
+              row.instanceGeneration,
               encryptedPayload,
               expiresAt,
               now,
@@ -443,7 +490,7 @@ export class SubtitleOperationService {
             "success",
             searchId,
             {
-              connectorId,
+              connectorId: row.id,
               mediaKind: media.kind,
               mediaReferenceId: referenceId,
               resultCount: candidates.length,
@@ -491,19 +538,89 @@ export class SubtitleOperationService {
     if (reservation.kind === "failure") {
       throw new SubtitleOperationError(reservation.failureCode);
     }
+    if (reservation.kind === "uncertain") throw new SubtitleOperationError("outcome_uncertain");
     if (reservation.kind === "conflict") throw new SubtitleOperationError("idempotency_conflict");
     if (reservation.kind === "pending") {
-      throw new SubtitleOperationError("idempotency_in_progress");
+      const priorDispatch = this.#journal.replay({
+        kind: "subtitle.download",
+        parentOperationId: reservation.operationId,
+        parentOperationType: "subtitle_download_operation",
+      });
+      if (priorDispatch && ["dispatched", "reconcile_required"].includes(priorDispatch.state)) {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          priorDispatch.connectorId,
+          searchId,
+          resultId,
+          context,
+          priorDispatch.id,
+        );
+        throw new SubtitleOperationError("outcome_uncertain");
+      }
+      if (
+        reservation.updatedAt + STALE_PENDING_OPERATION_MS > this.#now() ||
+        (priorDispatch &&
+          (priorDispatch.state !== "reserved" || priorDispatch.leaseExpiresAt! >= this.#now()))
+      ) {
+        throw new SubtitleOperationError("idempotency_in_progress");
+      }
     }
 
     let connectorId: string | undefined;
+    let dispatch: ExternalMutationRecord | undefined;
+    let crossedDispatchBoundary = false;
     try {
       const stored = this.#candidate(principal, searchId, resultId);
       connectorId = stored.connectorId;
-      const { adapter } = this.#adapter(connectorId);
-      await adapter.downloadSubtitle(stored.payload.target, stored.candidate, signal);
+      const { adapter, row } = this.#adapter(connectorId);
+      if (row.instanceGeneration !== stored.connectorInstanceGeneration) {
+        throw new SubtitleOperationError("search_expired");
+      }
+      dispatch = this.#reserveDispatch(reservation.operationId, principal.userId, stored, row);
+      this.#journal.markDispatched({
+        id: dispatch.id,
+        leaseOwner: dispatch.leaseOwner!,
+        now: this.#now(),
+      });
+      crossedDispatchBoundary = true;
+      await adapter.downloadSubtitle(stored.payload.target, stored.candidate, signal, dispatch.id);
     } catch (error) {
+      if (crossedDispatchBoundary && dispatch && ambiguousDispatchFailure(error)) {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          connectorId,
+          searchId,
+          resultId,
+          context,
+          dispatch.id,
+        );
+        throw new SubtitleOperationError("outcome_uncertain", { cause: error });
+      }
+      if (error instanceof SubtitleOperationError && error.reason === "outcome_uncertain") {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          connectorId,
+          searchId,
+          resultId,
+          context,
+        );
+        throw error;
+      }
       const failureCode = knownDownloadFailure(error);
+      const reservedDispatch = this.#journal.replay({
+        kind: "subtitle.download",
+        parentOperationId: reservation.operationId,
+        parentOperationType: "subtitle_download_operation",
+      });
       this.#complete(
         reservation.operationId,
         "failure",
@@ -513,6 +630,7 @@ export class SubtitleOperationService {
         searchId,
         resultId,
         context,
+        dispatch?.id ?? (reservedDispatch?.state === "reserved" ? reservedDispatch.id : undefined),
       );
       throw new SubtitleOperationError(failureCode, { cause: error });
     }
@@ -532,6 +650,7 @@ export class SubtitleOperationService {
       searchId,
       resultId,
       context,
+      dispatch!.id,
     );
     return { download: response, replayed: false };
   }
@@ -642,6 +761,7 @@ export class SubtitleOperationService {
         .prepare(
           `select
              subtitle_searches.connector_id as connectorId,
+             subtitle_searches.connector_instance_generation as connectorInstanceGeneration,
              subtitle_searches.encrypted_payload as encryptedPayload,
              subtitle_searches.expires_at as expiresAt,
              subtitle_searches.service_identity_link_id as serviceIdentityLinkId,
@@ -685,6 +805,7 @@ export class SubtitleOperationService {
     return {
       candidate: downloadCandidate(candidate),
       connectorId: row.connectorId,
+      connectorInstanceGeneration: row.connectorInstanceGeneration,
       payload,
     };
   }
@@ -721,7 +842,7 @@ export class SubtitleOperationService {
             ? {}
             : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
         }),
-        connectorId: row.id,
+        row,
       };
     } catch (error) {
       if (error instanceof SubtitleOperationError) throw error;
@@ -737,7 +858,9 @@ export class SubtitleOperationService {
                   encrypted_credentials as encryptedCredentials,
                   capability_snapshot_json as capabilitySnapshotJson,
                   health_state as healthState, tls_policy as tlsPolicy,
-                  insecure_http_approved as insecureHttpApproved
+                  insecure_http_approved as insecureHttpApproved,
+                  instance_generation as instanceGeneration,
+                  config_generation as configGeneration
            from connector_configs
            where type = 'bazarr' and enabled = 1 and (? is null or id = ?)
            order by id asc
@@ -757,6 +880,83 @@ export class SubtitleOperationService {
     }
   }
 
+  #reserveDispatch(
+    operationId: string,
+    userId: string,
+    stored: SubtitleDownloadSelection,
+    row: BazarrConnectorRow,
+  ) {
+    const existing = this.#journal.replay({
+      kind: "subtitle.download",
+      parentOperationId: operationId,
+      parentOperationType: "subtitle_download_operation",
+    });
+    const now = this.#now();
+    const leaseOwner = this.#createLeaseOwner();
+    if (existing) {
+      if (
+        existing.state !== "reserved" ||
+        existing.connectorId !== row.id ||
+        existing.connectorInstanceGeneration !== row.instanceGeneration ||
+        existing.connectorConfigGeneration !== row.configGeneration
+      ) {
+        throw new SubtitleOperationError(
+          existing.state === "uncertain" || existing.state === "reconcile_required"
+            ? "outcome_uncertain"
+            : "connector_integrity_failure",
+        );
+      }
+      if (existing.leaseExpiresAt! >= now) {
+        throw new SubtitleOperationError("idempotency_in_progress");
+      }
+      return this.#journal.claimStaleReserved({
+        expectedLeaseExpiresAt: existing.leaseExpiresAt!,
+        expectedLeaseOwner: existing.leaseOwner!,
+        id: existing.id,
+        leaseExpiresAt: now + DISPATCH_LEASE_MS,
+        leaseOwner,
+        now,
+      });
+    }
+    try {
+      return this.#journal.reserve({
+        connectorConfigGeneration: row.configGeneration,
+        connectorId: row.id,
+        connectorInstanceGeneration: row.instanceGeneration,
+        id: this.#createDispatchId(),
+        kind: "subtitle.download",
+        leaseExpiresAt: now + DISPATCH_LEASE_MS,
+        leaseOwner,
+        normalizedRequest: JSON.parse(
+          JSON.stringify({
+            action: "subtitle_download",
+            candidate: stored.candidate,
+            target: stored.payload.target,
+          }),
+        ) as JsonValue,
+        now,
+        parentOperationId: operationId,
+        parentOperationType: "subtitle_download_operation",
+        targetDigest: mutationTargetDigest(
+          {
+            action: "subtitle_download",
+            candidate: stored.candidate,
+            connectorId: row.id,
+            connectorInstanceGeneration: row.instanceGeneration,
+            target: stored.payload.target,
+          },
+          this.#config.encryptionKey,
+        ),
+        userId,
+      });
+    } catch (error) {
+      if (error instanceof ExternalMutationJournalError && error.code === "target_locked") {
+        throw new SubtitleOperationError("outcome_uncertain", { cause: error });
+      }
+      throw error;
+    }
+  }
+
   #reserve(
     userId: string,
     searchId: string,
@@ -771,8 +971,9 @@ export class SubtitleOperationService {
           this.#pruneOperations(userId, now);
           const existing = this.#database.sqlite
             .prepare(
-              `select fingerprint_hash as fingerprintHash, state,
-                      response_json as responseJson, failure_code as failureCode
+              `select id, fingerprint_hash as fingerprintHash, state,
+                      response_json as responseJson, failure_code as failureCode,
+                      updated_at as updatedAt
                from subtitle_download_operations
                where user_id = ? and idempotency_key_hash = ?
                limit 1`,
@@ -780,7 +981,16 @@ export class SubtitleOperationService {
             .get(userId, keyHash) as DownloadOperationRow | undefined;
           if (existing) {
             if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" as const };
-            if (existing.state === "pending") return { kind: "pending" as const };
+            if (existing.state === "pending") {
+              return {
+                kind: "pending" as const,
+                operationId: existing.id,
+                updatedAt: existing.updatedAt,
+              };
+            }
+            if (existing.state === "uncertain" || existing.state === "reconcile_required") {
+              return { kind: "uncertain" as const };
+            }
             if (existing.state === "failed") {
               if (
                 !existing.failureCode ||
@@ -827,18 +1037,32 @@ export class SubtitleOperationService {
 
   #complete(
     operationId: string,
-    outcome: "success" | "failure",
+    outcome: "success" | "failure" | "uncertain",
     response: SubtitleDownloadResponse | null,
-    failureCode: SubtitleDownloadFailureCode | null,
+    failureCode: SubtitleDownloadFailureCode | "outcome_uncertain" | null,
     connectorId: string | undefined,
     searchId: string,
     resultId: string,
     context: SubtitleOperationContext,
+    dispatchId?: string,
   ) {
     try {
       const now = this.#now();
       this.#database.sqlite
         .transaction(() => {
+          if (dispatchId) {
+            if (outcome === "success") {
+              this.#journal.completeSucceeded({ id: dispatchId, now });
+            } else if (outcome === "uncertain") {
+              this.#journal.completeUncertain({
+                failureCode: "outcome_uncertain",
+                id: dispatchId,
+                now,
+              });
+            } else {
+              this.#journal.completeFailed({ failureCode: failureCode!, id: dispatchId, now });
+            }
+          }
           const updated = this.#database.sqlite
             .prepare(
               `update subtitle_download_operations
@@ -846,7 +1070,7 @@ export class SubtitleOperationService {
                where id = ? and state = 'pending'`,
             )
             .run(
-              outcome === "success" ? "succeeded" : "failed",
+              outcome === "success" ? "succeeded" : outcome === "failure" ? "failed" : "uncertain",
               response ? JSON.stringify(response) : null,
               failureCode,
               now,
@@ -858,7 +1082,7 @@ export class SubtitleOperationService {
           }
           this.#audit(
             outcome === "success" ? "subtitle.download.accepted" : "subtitle.download.failed",
-            outcome,
+            outcome === "success" ? "success" : "failure",
             operationId,
             {
               ...(connectorId ? { connectorId } : {}),
@@ -893,21 +1117,13 @@ export class SubtitleOperationService {
   }
 
   #pruneOperations(userId: string, now: number) {
-    const stalePendingBefore = now - STALE_PENDING_OPERATION_MS;
-    this.#database.sqlite
-      .prepare(
-        `update subtitle_download_operations
-         set state = 'failed', failure_code = 'temporarily_unavailable',
-             completed_at = ?, updated_at = ?
-         where user_id = ? and state = 'pending' and created_at <= ?`,
-      )
-      .run(now, now, userId, stalePendingBefore);
-    this.#database.sqlite
-      .prepare(
-        `delete from subtitle_download_operations
-         where user_id = ? and state <> 'pending' and completed_at <= ?`,
-      )
-      .run(userId, now - OPERATION_RETENTION_MS);
+    const cleanup = this.#journal.cleanupTerminalParents({
+      completedBefore: now - OPERATION_RETENTION_MS,
+      limit: 100,
+      parentOperationType: "subtitle_download_operation",
+      userId,
+    });
+    if (cleanup.mismatchedParents > 0) throw new SubtitleOperationError("storage_failure");
   }
 
   #searchId() {

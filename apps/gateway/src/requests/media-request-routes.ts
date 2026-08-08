@@ -28,7 +28,22 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
 }
 
 function requestError(error: MediaRequestServiceError, reply: FastifyReply) {
+  if (error.operationId) reply.header("operation-id", error.operationId);
   switch (error.reason) {
+    case "title_already_owned":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_title_already_owned",
+        message: "This title is already available in the linked Jellyfin library.",
+        statusCode: 409,
+      });
+    case "availability_unverified":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_availability_unverified",
+        message: "Jellyfin ownership could not be verified before creating the request.",
+        statusCode: 503,
+      });
     case "identity_link_required":
       return new SafeHttpError({
         cause: error,
@@ -91,6 +106,13 @@ function requestError(error: MediaRequestServiceError, reply: FastifyReply) {
         cause: error,
         code: "request_outcome_pending",
         message: "The outcome of this request is still being determined.",
+        statusCode: 409,
+      });
+    case "request_outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_outcome_uncertain",
+        message: "The media request outcome is uncertain and will not be sent again.",
         statusCode: 409,
       });
     case "response_invalid":

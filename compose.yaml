@@ -1,7 +1,7 @@
 name: omnifin
 
 x-omnifin-service: &omnifin-service
-  image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}
+  image: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}
   build:
     context: .
     target: runtime
@@ -24,10 +24,13 @@ services:
       - gateway
     environment:
       NODE_ENV: production
+      OMNIFIN_BACKUP_DIRECTORY: /backups
+      OMNIFIN_BACKUP_RETENTION_COUNT: ${OMNIFIN_BACKUP_RETENTION_COUNT:-14}
       OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
       OMNIFIN_DATABASE_URL: /data/omnifin.db
       OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key
       OMNIFIN_HOST: 0.0.0.0
+      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}
       # The default is an explicit loopback-only source preview. Set a public HTTPS
       # OMNIFIN_BASE_URL for any non-loopback deployment.
       OMNIFIN_INSECURE_LOOPBACK_PREVIEW: ${OMNIFIN_INSECURE_LOOPBACK_PREVIEW:-true}
@@ -44,6 +47,13 @@ services:
       - omnifin_recovery_secret
     volumes:
       - omnifin_data:/data
+      # Startup migrations publish a verified retained recovery pair before opening
+      # the database writable. This is the gateway's only writable non-data mount.
+      - type: bind
+        source: ${OMNIFIN_BACKUP_DIRECTORY:-./backups}
+        target: /backups
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
@@ -107,9 +117,12 @@ services:
       OMNIFIN_BACKUP_DIRECTORY: /backups
       OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}
       OMNIFIN_DATABASE_URL: /data/omnifin.db
+      OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key
       OMNIFIN_GATEWAY_HEALTH_URL: http://gateway:4000/healthz
       OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz
-      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}
+      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}
+    secrets:
+      - omnifin_encryption_key
     volumes:
       - omnifin_data:/data
       - type: bind

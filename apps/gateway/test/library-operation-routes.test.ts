@@ -10,7 +10,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
-import type { LibraryOperationClient } from "../src/library/operation-service.js";
+import {
+  LibraryOperationError,
+  LibraryOperationService,
+  type LibraryOperationClient,
+  type LibraryOperationErrorReason,
+} from "../src/library/operation-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T16:00:00.000Z");
@@ -71,7 +76,11 @@ async function harness() {
   }));
   const scanLibrary = vi.fn(async () => undefined);
   const refreshItem = vi.fn(async () => undefined);
-  const updateMetadata = vi.fn(async () => undefined);
+  let metadataState = { overview: null, title: "Ember Coast", year: 2026 };
+  const readMetadata = vi.fn(async () => metadataState);
+  const updateMetadata = vi.fn(async (_itemId: string, patch: Partial<typeof metadataState>) => {
+    metadataState = { ...metadataState, ...patch };
+  });
   const searchRemoteArtwork = vi.fn(async () => [
     {
       communityRating: 8.6,
@@ -92,6 +101,7 @@ async function harness() {
   const client: LibraryOperationClient = {
     applyRemoteArtwork,
     listAttentionItems,
+    readMetadata,
     readRemoteArtwork,
     refreshItem,
     scanLibrary,
@@ -261,6 +271,24 @@ describe("library operation routes", () => {
       expect(replay.headers["idempotency-replayed"]).toBe("true");
       expect(libraryMutationResponseSchema.parse(created.json())).toEqual(replay.json());
       expect(scanLibrary).toHaveBeenCalledTimes(1);
+
+      scanLibrary.mockRejectedValueOnce(new Error("route-private ambiguous scan failure"));
+      const uncertainHeaders = {
+        ...headers,
+        "idempotency-key": "library-route-scan-uncertain-0001",
+      };
+      const uncertain = await app.inject({
+        headers: uncertainHeaders,
+        method: "POST",
+        payload: {},
+        url: "/v1/library/scans",
+      });
+      expect(uncertain.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(uncertain.json()).error.code).toBe(
+        "library_operation_outcome_unknown",
+      );
+      expect(scanLibrary).toHaveBeenCalledTimes(2);
+      expect(uncertain.body).not.toContain("route-private");
     } finally {
       await app.close();
     }
@@ -386,6 +414,131 @@ describe("library operation routes", () => {
       expect(response.headers["retry-after"]).toBe("19");
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("library_rate_limited");
       expect(response.body).not.toContain("route-private");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: LibraryOperationErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "library_cursor_invalid", reason: "cursor_invalid", status: 400 },
+    { code: "library_item_not_found", reason: "item_not_found", status: 404 },
+    { code: "library_artwork_search_expired", reason: "search_expired", status: 409 },
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "library_operation_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    { code: "library_operation_outcome_unknown", reason: "outcome_unknown", status: 409 },
+    {
+      code: "library_operation_outcome_unknown",
+      reason: "reconciliation_required",
+      status: 409,
+    },
+    { code: "library_permission_denied", reason: "identity_required", status: 403 },
+    { code: "library_permission_denied", reason: "permission_denied", status: 403 },
+    {
+      code: "library_operation_limit_reached",
+      reason: "operation_limit_reached",
+      retryAfter: "60",
+      status: 429,
+    },
+    { code: "library_rate_limited", reason: "rate_limited", retryAfter: "30", status: 429 },
+    { code: "library_response_invalid", reason: "response_invalid", status: 502 },
+    {
+      code: "library_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    {
+      code: "library_configuration_unavailable",
+      reason: "search_integrity_failure",
+      status: 503,
+    },
+    { code: "library_configuration_unavailable", reason: "storage_failure", status: 503 },
+    { code: "library_temporarily_unavailable", reason: "temporarily_unavailable", status: 503 },
+  ])("maps library operation failure $reason", async ({ code, reason, retryAfter, status }) => {
+    const { app, headers } = await harness();
+    const attention = vi
+      .spyOn(LibraryOperationService.prototype, "attention")
+      .mockRejectedValue(new LibraryOperationError(reason));
+    try {
+      const response = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/library/attention",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      attention.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["response_invalid", undefined, "library_response_invalid", 502],
+    ["unsupported_version", undefined, "library_response_invalid", 502],
+    ["configuration_invalid", undefined, "library_configuration_unavailable", 503],
+    ["destination_blocked", undefined, "library_configuration_unavailable", 503],
+    ["invalid_credentials", undefined, "library_configuration_unavailable", 503],
+    ["timeout", undefined, "library_temporarily_unavailable", 503],
+    ["upstream_error", 403, "library_permission_denied", 403],
+  ] as const)(
+    "maps upstream library %s/%s failures",
+    async (upstreamCode, upstreamStatus, code, status) => {
+      const { app, headers, listAttentionItems } = await harness();
+      listAttentionItems.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: upstreamCode,
+          message: "private upstream library mapping detail",
+          operation: "library.attention",
+          retryable: upstreamCode === "timeout",
+          service: "jellyfin",
+          ...(upstreamStatus === undefined ? {} : { status: upstreamStatus }),
+        }),
+      );
+      try {
+        const response = await app.inject({
+          headers: { cookie: headers.cookie },
+          method: "GET",
+          url: "/v1/library/attention",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(response.body).not.toContain("private upstream library mapping detail");
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it("omits retry guidance when Jellyfin does not provide a bounded delay", async () => {
+    const { app, headers, listAttentionItems } = await harness();
+    listAttentionItems.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "rate_limited",
+        message: "private upstream library mapping detail",
+        operation: "library.attention",
+        retryable: true,
+        service: "jellyfin",
+      }),
+    );
+    try {
+      const response = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/library/attention",
+      });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBeUndefined();
     } finally {
       await app.close();
     }

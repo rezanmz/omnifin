@@ -7,7 +7,10 @@ import type {
   JellyfinPlaybackContextResult,
   JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
-import type { RadarrAdapter } from "@omnifin/connectors/adapters/radarr";
+import type {
+  RadarrAdapter,
+  RadarrLibraryMovieOwnership,
+} from "@omnifin/connectors/adapters/radarr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import type { ApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import {
@@ -453,12 +456,26 @@ function harness(
     body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
     contentType: "image/jpeg" as const,
   }));
-  const updatePlaybackState = vi.fn(async () => ({
+  const initialPlaybackState = {
     durationSeconds: 2_700,
     played: false,
-    positionSeconds: 0,
-  }));
+    positionSeconds: 180,
+  };
+  const readPlaybackState = vi.fn(async () => initialPlaybackState);
+  const updatePlaybackState = vi.fn(async (input: { action: string }) => {
+    return {
+      ...initialPlaybackState,
+      played:
+        input.action === "mark_watched"
+          ? true
+          : input.action === "mark_unwatched"
+            ? false
+            : initialPlaybackState.played,
+      positionSeconds: 0,
+    };
+  });
   const deleteLibraryItem = vi.fn(async () => undefined);
+  const readLibraryItemPresence = vi.fn(async () => true);
   const readViewingHistory = vi.fn(
     async (input: { afterItemId?: string }): Promise<JellyfinViewingHistoryResult> => ({
       boundaryFound: true,
@@ -475,18 +492,21 @@ function harness(
       nextAfterItemId: input.afterItemId === undefined ? privateItemId : null,
     }),
   );
-  const createClient = vi.fn((_input: ContinueWatchingClientFactoryInput) => ({
+  const client = {
     readContinueWatching,
     readImage,
     readLibrary,
     readLibraryExtras,
+    readLibraryItemPresence,
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readPlaybackContext,
+    readPlaybackState,
     readViewingHistory,
     deleteLibraryItem,
     updatePlaybackState,
-  }));
+  };
+  const createClient = vi.fn((_input: ContinueWatchingClientFactoryInput) => client);
   let mediaReferenceIndex = 0;
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
@@ -519,6 +539,7 @@ function harness(
   });
   return {
     config,
+    client,
     createClient,
     database,
     deleteLibraryItem,
@@ -529,6 +550,7 @@ function harness(
     readLibrarySeasonEpisodes,
     readLibraryTitle,
     readPlaybackContext,
+    readPlaybackState,
     readOnlineExtras,
     readViewingHistory,
     service,
@@ -754,7 +776,7 @@ describe("ContinueWatchingService", () => {
       monitored: true,
       sizeBytes: 6_979_321_856,
     };
-    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const resolveLibraryMovie = vi.fn(async (): Promise<RadarrLibraryMovieOwnership> => ownership);
     const deleteLibraryMovieFile = vi.fn(async () => undefined);
     const deleteLibraryMovie = vi.fn(async () => undefined);
     const updateAcquisitionMonitoring = vi.fn(async () => ({
@@ -1221,7 +1243,7 @@ describe("ContinueWatchingService", () => {
       monitored: testCase.monitored,
       sizeBytes: 6_979_321_856,
     };
-    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const resolveLibraryMovie = vi.fn(async (): Promise<RadarrLibraryMovieOwnership> => ownership);
     const deleteLibraryMovieFile = vi.fn(async () => undefined);
     const deleteLibraryMovie = vi.fn(async () => undefined);
     const updateAcquisitionMonitoring = vi.fn(async () => ({
@@ -1667,7 +1689,7 @@ describe("ContinueWatchingService", () => {
       monitored: true,
       sizeBytes: 6_979_321_856,
     };
-    const resolveLibraryMovie = vi.fn(async () => ownership);
+    const resolveLibraryMovie = vi.fn(async (): Promise<RadarrLibraryMovieOwnership> => ownership);
     const deleteLibraryMovieFile = vi.fn(async () => {
       throw new SafeConnectorError({
         code: "timeout",
@@ -1842,6 +1864,33 @@ describe("ContinueWatchingService", () => {
         failureCode: "outcome_unknown",
         state: "reconcile_required",
       });
+
+      resolveLibraryMovie.mockResolvedValueOnce({
+        fileId: null,
+        hasFile: false,
+        mediaId: ownership.mediaId,
+        monitored: ownership.monitored,
+        sizeBytes: null,
+      });
+      const repaired = await service.commitLibraryRemoval(
+        referenceId,
+        request,
+        "remove-uncertain-0001",
+        { principal: adminPrincipal() },
+      );
+      expect(repaired).toMatchObject({
+        operation: {
+          stages: expect.arrayContaining([{ kind: "organized_file_deletion", state: "succeeded" }]),
+          state: "succeeded",
+        },
+        replayed: true,
+      });
+      expect(deleteLibraryMovieFile).toHaveBeenCalledOnce();
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }
@@ -3259,23 +3308,17 @@ describe("ContinueWatchingService", () => {
     }
   });
 
-  it("allows a failed desired-state write to retry safely with the same idempotency key", async () => {
+  it("fails closed when playback readback shows an intervening change", async () => {
     const { database, service, updatePlaybackState } = harness();
-    updatePlaybackState
-      .mockRejectedValueOnce(
-        new SafeConnectorError({
-          code: "timeout",
-          message: "Jellyfin did not respond before the deadline.",
-          operation: "media.playback_state",
-          retryable: true,
-          service: "jellyfin",
-        }),
-      )
-      .mockResolvedValueOnce({
-        durationSeconds: 2_700,
-        played: true,
-        positionSeconds: 0,
-      });
+    updatePlaybackState.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "timeout",
+        message: "Jellyfin did not respond before the deadline.",
+        operation: "media.playback_state",
+        retryable: true,
+        service: "jellyfin",
+      }),
+    );
     try {
       const feed = await service.read({ principal: principal() });
       const referenceId = feed.items[0]!.media.id;
@@ -3294,14 +3337,88 @@ describe("ContinueWatchingService", () => {
           "playback-state-retry",
           { principal: principal() },
         ),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(updatePlaybackState).toHaveBeenCalledOnce();
+      expect(
+        database.sqlite
+          .prepare("select state, failure_code as failureCode from user_media_state_operations")
+          .get(),
+      ).toEqual({ failureCode: "intervening_change", state: "reconcile_required" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("proves a lost playback-state response without a second setter call", async () => {
+    const { database, readPlaybackState, service, updatePlaybackState } = harness();
+    readPlaybackState
+      .mockResolvedValueOnce({ durationSeconds: 2_700, played: false, positionSeconds: 180 })
+      .mockResolvedValueOnce({ durationSeconds: 2_700, played: true, positionSeconds: 0 });
+    updatePlaybackState.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "timeout",
+        message: "Jellyfin did not respond before the deadline.",
+        operation: "media.playback_state",
+        retryable: true,
+        service: "jellyfin",
+      }),
+    );
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      const request = { action: "mark_watched" as const };
+
+      await expect(
+        service.updatePlaybackState(referenceId, request, "playback-state-lost-response", {
+          principal: principal(),
+        }),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.updatePlaybackState(referenceId, request, "playback-state-lost-response", {
+          principal: principal(),
+        }),
       ).resolves.toMatchObject({
         replayed: false,
-        response: {
-          action: "mark_watched",
-          playback: { played: true, positionSeconds: 0 },
-        },
+        response: { action: "mark_watched", playback: { played: true, positionSeconds: 0 } },
       });
-      expect(updatePlaybackState).toHaveBeenCalledTimes(2);
+
+      expect(updatePlaybackState).toHaveBeenCalledOnce();
+      expect(readPlaybackState).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "succeeded" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails a user-media generation mismatch before the playback setter boundary", async () => {
+    const { client, createClient, database, service, updatePlaybackState } = harness();
+    try {
+      const feed = await service.read({ principal: principal() });
+      const referenceId = feed.items[0]!.media.id;
+      updatePlaybackState.mockClear();
+      createClient.mockImplementationOnce(() => {
+        database.sqlite
+          .prepare(
+            "update connector_configs set instance_generation = instance_generation + 1 where id = 'jellyfin-main'",
+          )
+          .run();
+        return client;
+      });
+
+      await expect(
+        service.updatePlaybackState(
+          referenceId,
+          { action: "mark_watched" },
+          "playback-generation-mismatch",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(updatePlaybackState).not.toHaveBeenCalled();
+      expect(
+        database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "failed" });
     } finally {
       database.close();
     }

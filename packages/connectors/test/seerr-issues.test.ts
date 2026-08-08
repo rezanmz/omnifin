@@ -107,6 +107,20 @@ describe("Seerr issue management", () => {
     expect(requests[0]?.init.method).toBe("POST");
   });
 
+  it("reads one exact issue by ID for status reconciliation", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse(issue),
+      jsonResponse({ firstAirDate: "2011-04-17", name: "Northern Lights" }),
+    ]);
+
+    await expect(client.readIssue(19)).resolves.toMatchObject({
+      status: "open",
+      upstreamId: 19,
+    });
+    expect(requests[0]?.url.pathname).toBe("/api/v1/issue/19");
+    expect(requests[0]?.init.method).toBe("GET");
+  });
+
   it.each([
     { reason: "issue_not_found", status: 404 },
     { reason: "issue_conflict", status: 409 },

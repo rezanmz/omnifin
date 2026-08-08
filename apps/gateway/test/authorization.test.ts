@@ -107,8 +107,19 @@ describe("permission authorization", () => {
   it("allows an active admin only through the same permission boundary", () => {
     const principal = activeAdmin();
     for (const permission of permissionSchema.options) {
-      expect(requirePermission(principal, permission)).toBe(principal);
+      if (permission === "recovery.administrator.replace") {
+        expect(() => requirePermission(principal, permission)).toThrow(
+          expect.objectContaining<Partial<SafeHttpError>>({
+            code: "permission_denied",
+            statusCode: 403,
+          }),
+        );
+      } else {
+        expect(requirePermission(principal, permission)).toBe(principal);
+      }
     }
+    expect(ROLE_PERMISSIONS.admin).not.toContain("recovery.administrator.replace");
+    expect(RECOVERY_PERMISSIONS).toContain("recovery.administrator.replace");
   });
 
   it("distinguishes an absent session from a denied capability", () => {

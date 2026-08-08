@@ -712,7 +712,7 @@ describe("database backup maintenance", () => {
 
     const result = await createDatabaseBackup({
       databasePath,
-      imageReference: "ghcr.io/rezanmz/omnifin@sha256:fixture",
+      imageReference: `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`,
       now: new Date("2026-07-28T12:00:00.000Z"),
       outputPath: backupPath,
     });
@@ -723,8 +723,8 @@ describe("database backup maintenance", () => {
     });
     expect(result.bytes).toBeGreaterThan(0);
     expect(result.databaseSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(readMarker(backupPath)).toBe("selected checkpoint");
     await expect(verifyDatabaseBackup({ backupPath })).resolves.toEqual(result);
+    expect(readMarker(backupPath)).toBe("selected checkpoint");
 
     const manifest = await readFile(`${backupPath}.manifest.json`, "utf8");
     expect(manifest).toContain('"format": "omnifin-sqlite-backup"');
@@ -783,13 +783,15 @@ describe("database restore maintenance", () => {
       rollbackOutputPath,
     });
 
-    expect(restored.databaseSha256).toBe(selected.databaseSha256);
+    expect(restored.sourceDatabaseSha256).toBe(selected.databaseSha256);
+    expect(restored.databaseSha256).toBe(restored.sanitizedDatabaseSha256);
+    expect(restored.sanitizedDatabaseSha256).not.toBe(restored.sourceDatabaseSha256);
     expect(restored.restoredFileName).toBe("omnifin.db");
     expect(readMarker(databasePath)).toBe("selected checkpoint");
-    expect(readMarker(rollbackOutputPath)).toBe("state before restore");
     await expect(verifyDatabaseBackup({ backupPath: rollbackOutputPath })).resolves.toEqual(
       restored.rollback,
     );
+    expect(readMarker(rollbackOutputPath)).toBe("state before restore");
   });
 
   it("requires an explicit stopped-gateway confirmation", async () => {

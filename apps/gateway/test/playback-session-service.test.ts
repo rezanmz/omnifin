@@ -24,12 +24,21 @@ import {
   type PlaybackClientFactoryInput,
   type PlaybackSessionDependencies,
 } from "../src/media/playback-session-service.js";
+import { ExternalMutationJournal } from "../src/operations/external-mutation-journal.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:00:00.000Z");
 const privateAccessToken = "private-jellyfin-access-token";
 const privateItemId = "private-upstream-episode";
 const publicResolver = async () => [{ address: "1.1.1.1", family: 4 as const }];
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function testConfig(): AppConfig {
   return {
@@ -191,6 +200,7 @@ function negotiatedResult(): JellyfinPlaybackResult {
 function harness(
   createClientOverride?: NonNullable<PlaybackSessionDependencies["createClient"]>,
   referenceKind: "extra" | "movie" = "movie",
+  dependencyOverrides: Pick<PlaybackSessionDependencies, "beforeProgressCompletion" | "clock"> = {},
 ) {
   const config = testConfig();
   const database = openDatabase(":memory:");
@@ -220,7 +230,9 @@ function harness(
   const streamPlaybackTarget = vi.fn(async () => {
     throw new Error("Playback streams were not expected in this service test.");
   });
-  const reportPlaybackEvent = vi.fn(async () => undefined);
+  const reportPlaybackEvent = vi.fn<JellyfinPlaybackClient["reportPlaybackEvent"]>(
+    async () => undefined,
+  );
   const resolvePlaybackTarget = vi.fn((parent) => parent);
   const mockedCreateClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
     negotiate,
@@ -232,7 +244,8 @@ function harness(
   }));
   const createClient = createClientOverride ?? mockedCreateClient;
   const service = new PlaybackSessionService(database, config, {
-    clock: () => now,
+    ...dependencyOverrides,
+    clock: dependencyOverrides.clock ?? (() => now),
     createClient,
     createToken: () => "p".repeat(22),
   });
@@ -256,6 +269,56 @@ const negotiation = {
   positionSeconds: 900,
   subtitleStreamIndex: null,
 };
+
+function seedProgressReservation(
+  database: DatabaseHandle,
+  config: AppConfig,
+  sessionId: string,
+  state: "dispatched" | "reserved",
+) {
+  const operationId = `playback_progress_operation_${"o".repeat(22)}`;
+  const dispatchId = `mutation_dispatch_${"d".repeat(22)}`;
+  const reserveNow = now.getTime() - 60_000;
+  const leaseExpiresAt = state === "reserved" ? now.getTime() - 30_000 : now.getTime() + 30_000;
+  database.sqlite
+    .prepare(
+      `insert into playback_progress_operations (
+         id, playback_session_id, session_revision, user_id, connector_id,
+         connector_instance_generation, connector_config_generation,
+         position_seconds, state, created_at, updated_at
+       ) values (?, ?, 1, 'viewer-user', 'jellyfin-main', 0, 0, 930, 'pending', ?, ?)`,
+    )
+    .run(operationId, sessionId, reserveNow, reserveNow);
+  const journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
+  journal.reserve({
+    connectorConfigGeneration: 0,
+    connectorId: "jellyfin-main",
+    connectorInstanceGeneration: 0,
+    id: dispatchId,
+    kind: "playback.progress",
+    leaseExpiresAt,
+    leaseOwner: "crashed-playback-worker",
+    normalizedRequest: {
+      event: "progress",
+      playbackSessionId: sessionId,
+      positionSeconds: 930,
+      schemaVersion: 1,
+      sessionRevision: 1,
+    },
+    now: reserveNow,
+    parentOperationId: operationId,
+    parentOperationType: "playback_progress_operation",
+    targetDigest: "t".repeat(22),
+    userId: "viewer-user",
+  });
+  if (state === "dispatched") {
+    journal.markDispatched({
+      id: dispatchId,
+      leaseOwner: "crashed-playback-worker",
+      now: reserveNow + 1,
+    });
+  }
+}
 
 describe("PlaybackSessionService", () => {
   it("uses one injected clock for playback and opaque media-reference resolution", async () => {
@@ -478,6 +541,523 @@ describe("PlaybackSessionService", () => {
           )
           .get(playback.sessionId),
       ).toEqual({ positionSeconds: 940, state: "stopped" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("serializes concurrent progress and stop reports and rejects post-stop work before Jellyfin", async () => {
+    const progressGate = deferred<void>();
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    const events: string[] = [];
+    reportPlaybackEvent.mockImplementation(async ({ event }) => {
+      events.push(event);
+      if (event === "progress") await progressGate.promise;
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+
+      const progress = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 930,
+      });
+      await vi.waitFor(() => expect(events).toEqual(["started", "progress"]));
+      const stop = service.report({ principal: principal() }, playback.sessionId, {
+        event: "stopped",
+        positionSeconds: 940,
+      });
+      const postStop = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 941,
+      });
+      const postStopResult = expect(postStop).rejects.toMatchObject({
+        reason: "transition_invalid",
+      });
+      await Promise.resolve();
+      expect(events).toEqual(["started", "progress"]);
+
+      progressGate.resolve(undefined);
+      await expect(progress).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(stop).resolves.toMatchObject({ positionSeconds: 940, state: "stopped" });
+      await postStopResult;
+
+      expect(events).toEqual(["started", "progress", "stopped"]);
+      expect(
+        database.sqlite
+          .prepare("select state, position_seconds as positionSeconds from playback_sessions")
+          .get(),
+      ).toEqual({ positionSeconds: 940, state: "stopped" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("runs a valid queued report after an earlier transition rejects", async () => {
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const invalid = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 904,
+      });
+      const started = service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+
+      await expect(invalid).rejects.toMatchObject({ reason: "transition_invalid" });
+      await expect(started).resolves.toMatchObject({ positionSeconds: 905, state: "playing" });
+      expect(reportPlaybackEvent).toHaveBeenCalledOnce();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts an uncertain progress report locally and runs its queued stop", async () => {
+    const progressGate = deferred<void>();
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    const events: string[] = [];
+    reportPlaybackEvent.mockImplementation(async ({ event }) => {
+      events.push(event);
+      if (event === "progress") {
+        await progressGate.promise;
+        throw new Error("private progress failure");
+      }
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      const progress = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 930,
+      });
+      await vi.waitFor(() => expect(events).toEqual(["started", "progress"]));
+      const stop = service.report({ principal: principal() }, playback.sessionId, {
+        event: "stopped",
+        positionSeconds: 940,
+      });
+
+      progressGate.resolve(undefined);
+      await expect(progress).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(stop).resolves.toMatchObject({ positionSeconds: 940, state: "stopped" });
+      expect(events).toEqual(["started", "progress", "stopped"]);
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from playback_progress_operations
+             where position_seconds = 930`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "upstream_outcome_uncertain", state: "uncertain" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, dispatch_attempt_count as dispatchAttemptCount
+             from external_mutation_dispatches
+             where state = 'uncertain'`,
+          )
+          .get(),
+      ).toEqual({ dispatchAttemptCount: 1, state: "uncertain" });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from external_mutation_target_locks where target_scope = 'playback_progress'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("coalesces concurrent exact report replays without redispatching Jellyfin", async () => {
+    const gate = deferred<void>();
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    reportPlaybackEvent.mockImplementation(async ({ event, positionSeconds }) => {
+      if (event === "progress" && positionSeconds === 930) await gate.promise;
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      const request = { event: "progress" as const, positionSeconds: 930 };
+      const first = service.report({ principal: principal() }, playback.sessionId, request);
+      await vi.waitFor(() => expect(reportPlaybackEvent).toHaveBeenCalledTimes(2));
+      const replay = service.report({ principal: principal() }, playback.sessionId, request);
+
+      gate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(replay).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      expect(reportPlaybackEvent).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare("select revision, position_seconds as positionSeconds from playback_sessions")
+          .get(),
+      ).toEqual({ positionSeconds: 930, revision: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not resend a lost-response revision and allows the next ordered revision", async () => {
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    let lost = true;
+    reportPlaybackEvent.mockImplementation(async ({ event }) => {
+      if (event === "progress" && lost) {
+        lost = false;
+        throw new Error("private disconnect after upstream acceptance");
+      }
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      const request = { event: "progress" as const, positionSeconds: 930 };
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, request),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, request),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "stopped",
+          positionSeconds: 940,
+        }),
+      ).resolves.toMatchObject({ positionSeconds: 940, state: "stopped" });
+
+      expect(reportPlaybackEvent.mock.calls.map(([input]) => input.event)).toEqual([
+        "started",
+        "progress",
+        "stopped",
+      ]);
+      const audit = database.sqlite
+        .prepare(
+          `select event_type as eventType, outcome, metadata_json as metadataJson,
+                  target_id as targetId
+           from audit_events where event_type = 'playback.progress.delivery_uncertain'`,
+        )
+        .get() as
+        { eventType: string; metadataJson: string; outcome: string; targetId: string } | undefined;
+      expect(audit).toMatchObject({
+        eventType: "playback.progress.delivery_uncertain",
+        outcome: "failure",
+        targetId: playback.sessionId,
+      });
+      expect(JSON.parse(audit!.metadataJson)).toEqual({
+        event: "progress",
+        failureCode: "upstream_outcome_uncertain",
+        locallyAccepted: true,
+        sessionRevision: 1,
+      });
+      expect(JSON.stringify(audit)).not.toMatch(/private|upstream-episode|media-source/u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("terminalizes a crash-recovered dispatched revision without calling Jellyfin", async () => {
+    const { config, database, reference, reportPlaybackEvent, service } = harness();
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      seedProgressReservation(database, config, playback.sessionId, "dispatched");
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "progress",
+          positionSeconds: 930,
+        }),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+
+      expect(reportPlaybackEvent).toHaveBeenCalledOnce();
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from playback_progress_operations where session_revision = 1`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "interrupted_after_dispatch", state: "uncertain" });
+      expect(
+        database.sqlite
+          .prepare("select revision, position_seconds as positionSeconds from playback_sessions")
+          .get(),
+      ).toEqual({ positionSeconds: 930, revision: 2 });
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reclaims only a stale pre-dispatch reservation and dispatches it once", async () => {
+    const { config, database, reference, reportPlaybackEvent, service } = harness();
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      seedProgressReservation(database, config, playback.sessionId, "reserved");
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "progress",
+          positionSeconds: 930,
+        }),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+
+      expect(reportPlaybackEvent).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, dispatch_attempt_count as dispatchAttemptCount
+             from external_mutation_dispatches where parent_operation_id = ?`,
+          )
+          .get(`playback_progress_operation_${"o".repeat(22)}`),
+      ).toEqual({ dispatchAttemptCount: 1, state: "succeeded" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("terminalizes a post-dispatch local completion failure without resending", async () => {
+    let failNextSuccess = false;
+    const { database, reference, reportPlaybackEvent, service } = harness(undefined, "movie", {
+      beforeProgressCompletion: (state) => {
+        if (state === "succeeded" && failNextSuccess) {
+          failNextSuccess = false;
+          throw new Error("private local commit failure");
+        }
+      },
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      failNextSuccess = true;
+      const request = { event: "progress" as const, positionSeconds: 930 };
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, request),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, request),
+      ).resolves.toMatchObject({ positionSeconds: 930, state: "playing" });
+
+      expect(reportPlaybackEvent).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from playback_progress_operations where session_revision = 1`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "local_completion_failed", state: "uncertain" });
+      expect(
+        database.sqlite
+          .prepare("select revision, position_seconds as positionSeconds from playback_sessions")
+          .get(),
+      ).toEqual({ positionSeconds: 930, revision: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves stopped cleanup when the stop delivery is uncertain", async () => {
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    reportPlaybackEvent.mockRejectedValueOnce(new Error("private stop disconnect"));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      database.sqlite
+        .prepare(
+          `insert into playback_asset_handles (
+             id, playback_session_id, target_digest, encrypted_target,
+             expires_at, last_used_at, created_at, updated_at
+           ) values (?, ?, ?, 'encrypted-private-target', ?, ?, ?, ?)`,
+        )
+        .run(
+          `asset_h1.${"h".repeat(22)}`,
+          playback.sessionId,
+          "g".repeat(22),
+          now.getTime() + 60_000,
+          now.getTime(),
+          now.getTime(),
+          now.getTime(),
+        );
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "stopped",
+          positionSeconds: 940,
+        }),
+      ).resolves.toMatchObject({ positionSeconds: 940, state: "stopped" });
+
+      expect(
+        database.sqlite
+          .prepare("select state, revision from playback_sessions where id = ?")
+          .get(playback.sessionId),
+      ).toEqual({ revision: 1, state: "stopped" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from playback_asset_handles").get(),
+      ).toEqual({ count: 0 });
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("atomically removes terminal playback evidence before deleting an expired session", async () => {
+    let currentTime = now.getTime();
+    const { database, reference, service } = harness(undefined, "movie", {
+      clock: () => new Date(currentTime),
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      database.sqlite
+        .prepare("update playback_sessions set expires_at = ? where id = ?")
+        .run(++currentTime, playback.sessionId);
+      currentTime += 1;
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "progress",
+          positionSeconds: 906,
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+               (select count(*) from playback_sessions) as sessions,
+               (select count(*) from playback_progress_operations) as operations,
+               (select count(*) from external_mutation_dispatches) as dispatches,
+               (select count(*) from external_mutation_target_locks) as locks`,
+          )
+          .get(),
+      ).toEqual({ dispatches: 0, locks: 0, operations: 0, sessions: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("retains uncertain playback evidence when its session expires", async () => {
+    let currentTime = now.getTime();
+    const { database, reference, reportPlaybackEvent, service } = harness(undefined, "movie", {
+      clock: () => new Date(currentTime),
+    });
+    reportPlaybackEvent.mockRejectedValueOnce(new Error("private lost playback response"));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      database.sqlite
+        .prepare("update playback_sessions set expires_at = ? where id = ?")
+        .run(++currentTime, playback.sessionId);
+      currentTime += 1;
+
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "progress",
+          positionSeconds: 906,
+        }),
+      ).rejects.toMatchObject({ reason: "not_found" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+               (select count(*) from playback_sessions) as sessions,
+               (select count(*) from playback_progress_operations where state = 'uncertain') as operations,
+               (select count(*) from external_mutation_dispatches where state = 'uncertain') as dispatches,
+               (select count(*) from external_mutation_target_locks) as locks`,
+          )
+          .get(),
+      ).toEqual({ dispatches: 1, locks: 1, operations: 1, sessions: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails a queued stale connector generation before Jellyfin dispatch", async () => {
+    const gate = deferred<void>();
+    const { database, reference, reportPlaybackEvent, service } = harness();
+    reportPlaybackEvent.mockImplementation(async ({ event, positionSeconds }) => {
+      if (event === "progress" && positionSeconds === 930) await gate.promise;
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await service.report({ principal: principal() }, playback.sessionId, {
+        event: "started",
+        positionSeconds: 905,
+      });
+      const first = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 930,
+      });
+      await vi.waitFor(() => expect(reportPlaybackEvent).toHaveBeenCalledTimes(2));
+      const stale = service.report({ principal: principal() }, playback.sessionId, {
+        event: "progress",
+        positionSeconds: 940,
+      });
+      database.sqlite
+        .prepare("update connector_configs set config_generation = config_generation + 1")
+        .run();
+
+      gate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ positionSeconds: 930 });
+      await expect(stale).rejects.toMatchObject({ reason: "unavailable" });
+      expect(reportPlaybackEvent).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from playback_progress_operations where session_revision = 2`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "connector_generation_changed", state: "failed" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, dispatch_attempt_count as dispatchAttemptCount
+             from external_mutation_dispatches
+             where parent_operation_id in (
+               select id from playback_progress_operations where session_revision = 2
+             )`,
+          )
+          .get(),
+      ).toEqual({ dispatchAttemptCount: 0, state: "failed" });
     } finally {
       database.close();
     }

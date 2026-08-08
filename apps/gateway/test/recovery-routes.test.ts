@@ -1,4 +1,7 @@
-import { sessionResponseSchema } from "@omnifin/contracts/auth";
+import {
+  administratorRecoveryPreviewResponseSchema,
+  sessionResponseSchema,
+} from "@omnifin/contracts/auth";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,6 +22,7 @@ import {
 } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
+import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { privacyHash } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -882,5 +886,135 @@ describe("recovery access route", () => {
 
     expect(output.join("\n")).not.toContain(wrongRecoverySecret);
     expect(database.sqlite.open).toBe(false);
+  });
+});
+
+describe("administrator recovery preview route", () => {
+  it("is hidden, CSRF-bound, recovery-only, and returns no upstream identifiers", async () => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      recoveryAccessDependencies: { clock: () => new Date(initialTime) },
+      sessionDependencies: sessionDependencies(),
+    });
+    try {
+      database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin.example.test",
+          createdAt: initialTime,
+          displayName: "Home Jellyfin",
+          encryptedCredentials: "v2.private-connector-secret",
+          id: "jellyfin-home",
+          type: "jellyfin",
+          updatedAt: initialTime,
+        })
+        .run();
+      database.db
+        .insert(users)
+        .values({
+          createdAt: initialTime,
+          displayName: "Current administrator",
+          id: "opaque-administrator",
+          role: "admin",
+          roleSource: "manual",
+          status: "active",
+          updatedAt: initialTime,
+        })
+        .run();
+      database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          createdAt: initialTime,
+          deviceId: "private-device-id",
+          encryptedAccessToken: "v2.private-access-token",
+          externalDisplayName: "Upstream administrator",
+          externalServerId: "private-server-id",
+          externalUserId: "private-upstream-user-id",
+          externalUsername: "upstream-admin",
+          healthState: "linked",
+          id: "administrator-link",
+          lastVerifiedAt: initialTime,
+          service: "jellyfin",
+          tokenCreatedAt: initialTime,
+          updatedAt: initialTime,
+          userId: "opaque-administrator",
+        })
+        .run();
+      const administrator = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "administrator-link",
+          userId: "opaque-administrator",
+        },
+      });
+      const recovery = app.sessionService.createSession({
+        attribution: { authMethod: "recovery" },
+      });
+      const endpoint = "/v1/auth/recovery/administrator-replacement/preview";
+      const blocked = await Promise.all([
+        app.inject({
+          body: {},
+          headers: { origin: baseUrl },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: {
+            cookie: sessionCookie(administrator.sessionToken),
+            origin: baseUrl,
+            "x-omnifin-csrf": administrator.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: { cookie: sessionCookie(recovery.sessionToken), origin: baseUrl },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: {
+            cookie: sessionCookie(recovery.sessionToken),
+            origin: "https://attacker.example",
+            "x-omnifin-csrf": recovery.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+      ]);
+      expect(blocked.map((response) => response.statusCode)).toEqual([403, 403, 403, 403]);
+
+      const response = await app.inject({
+        body: {},
+        headers: {
+          cookie: sessionCookie(recovery.sessionToken),
+          origin: baseUrl,
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: endpoint,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(administratorRecoveryPreviewResponseSchema.parse(response.json())).toEqual({
+        administrator: {
+          activeSessions: 1,
+          authenticationMethods: ["jellyfin"],
+          displayName: "Current administrator",
+          id: "opaque-administrator",
+          updatedAt: initialTime.toISOString(),
+        },
+        status: "available",
+      });
+      expect(response.body).not.toMatch(/private-|upstream-admin|administrator-link|jellyfin-home/);
+      expect(response.headers["cache-control"]).toBe("no-store");
+    } finally {
+      await app.close();
+    }
   });
 });

@@ -11,6 +11,11 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  ManualReleaseError,
+  ManualReleaseService,
+  type ManualReleaseErrorReason,
+} from "../src/acquisitions/manual-release-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -349,6 +354,7 @@ describe("manual release routes", () => {
       expect(grabManualRelease).toHaveBeenCalledWith(
         { guid: privateGuid, indexerId: 14 },
         expect.any(AbortSignal),
+        expect.stringMatching(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u),
       );
       expect(`${created.body}${replay.body}`).not.toMatch(/manual-route-private/u);
     } finally {
@@ -366,6 +372,48 @@ describe("manual release routes", () => {
       });
       expect(response.statusCode).toBe(400);
       expect(searchManualReleases).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a stable terminal uncertainty code after a lost grab response", async () => {
+    const { app, grabManualRelease, operator } = await harness();
+    try {
+      await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/releases?service=radarr&mediaId=42",
+      });
+      grabManualRelease.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "timeout",
+          message: "private lost response",
+          operation: "acquisition.release.grab",
+          retryable: true,
+          service: "radarr",
+        }),
+      );
+      const request = () =>
+        app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            "idempotency-key": "manual-route-timeout-0001",
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: { overrideRejections: false, releaseId },
+          url: "/v1/acquisitions/releases/grabs",
+        });
+      const first = await request();
+      const replay = await request();
+      expect(first.statusCode).toBe(409);
+      expect(replay.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(first.json()).error.code).toBe(
+        "manual_release_grab_outcome_uncertain",
+      );
+      expect(grabManualRelease).toHaveBeenCalledOnce();
     } finally {
       await app.close();
     }
@@ -396,6 +444,214 @@ describe("manual release routes", () => {
       expect(response.headers["retry-after"]).toBe("45");
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("manual_release_rate_limited");
       expect(response.body).not.toContain("Private Radarr response details");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: ManualReleaseErrorReason;
+    status: number;
+  }>([
+    { code: "manual_release_not_configured", reason: "connector_unconfigured", status: 503 },
+    { code: "manual_release_identity_required", reason: "identity_required", status: 403 },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "connector_ambiguous",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "connector_integrity_failure",
+      status: 503,
+    },
+    { code: "manual_release_configuration_unavailable", reason: "storage_failure", status: 503 },
+    { code: "manual_release_configuration_unavailable", reason: "candidate_expired", status: 503 },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "download_unavailable",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "idempotency_conflict",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "idempotency_in_progress",
+      status: 503,
+    },
+    { code: "manual_release_configuration_unavailable", reason: "outcome_uncertain", status: 503 },
+    { code: "manual_release_configuration_unavailable", reason: "override_required", status: 503 },
+    { code: "manual_release_configuration_unavailable", reason: "rate_limited", status: 503 },
+    { code: "manual_release_configuration_unavailable", reason: "response_invalid", status: 503 },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "temporarily_unavailable",
+      status: 503,
+    },
+  ])("maps search failure $reason safely", async ({ code, reason, status }) => {
+    const { app, operator } = await harness();
+    const search = vi
+      .spyOn(ManualReleaseService.prototype, "search")
+      .mockRejectedValue(new ManualReleaseError(reason));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/releases?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+    } finally {
+      search.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: ManualReleaseErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "manual_release_grab_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    { code: "manual_release_grab_outcome_uncertain", reason: "outcome_uncertain", status: 409 },
+    { code: "manual_release_candidate_expired", reason: "candidate_expired", status: 409 },
+    { code: "manual_release_override_required", reason: "override_required", status: 409 },
+    { code: "manual_release_download_unavailable", reason: "download_unavailable", status: 409 },
+    { code: "manual_release_identity_required", reason: "identity_required", status: 403 },
+    {
+      code: "manual_release_rate_limited",
+      reason: "rate_limited",
+      retryAfter: "30",
+      status: 429,
+    },
+    { code: "manual_release_response_invalid", reason: "response_invalid", status: 502 },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "connector_unconfigured",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "connector_ambiguous",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "connector_integrity_failure",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    {
+      code: "manual_release_configuration_unavailable",
+      reason: "storage_failure",
+      status: 503,
+    },
+    {
+      code: "manual_release_temporarily_unavailable",
+      reason: "temporarily_unavailable",
+      status: 503,
+    },
+  ])("maps grab failure $reason safely", async ({ code, reason, retryAfter, status }) => {
+    const { app, operator } = await harness();
+    const grab = vi
+      .spyOn(ManualReleaseService.prototype, "grab")
+      .mockRejectedValue(new ManualReleaseError(reason));
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "manual-grab-route-error-mapping",
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload: { overrideRejections: false, releaseId },
+        url: "/v1/acquisitions/releases/grabs",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      grab.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["response_invalid", "manual_release_response_invalid", 502],
+    ["unsupported_version", "manual_release_response_invalid", 502],
+    ["configuration_invalid", "manual_release_configuration_unavailable", 503],
+    ["destination_blocked", "manual_release_configuration_unavailable", 503],
+    ["invalid_credentials", "manual_release_configuration_unavailable", 503],
+    ["timeout", "manual_release_temporarily_unavailable", 503],
+  ] as const)("maps upstream %s search failures", async (upstreamCode, code, status) => {
+    const searchManualReleases = vi.fn(async () =>
+      Promise.reject(
+        new SafeConnectorError({
+          code: upstreamCode,
+          message: "private upstream mapping detail",
+          operation: "acquisition.release.search",
+          retryable: upstreamCode === "timeout",
+          service: "radarr",
+        }),
+      ),
+    );
+    const { app, operator } = await harness(searchManualReleases);
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/releases?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.body).not.toContain("private upstream mapping detail");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("omits retry-after when an upstream rate limit has no bounded delay", async () => {
+    const searchManualReleases = vi.fn(async () =>
+      Promise.reject(
+        new SafeConnectorError({
+          code: "rate_limited",
+          message: "private upstream mapping detail",
+          operation: "acquisition.release.search",
+          retryable: true,
+          service: "radarr",
+        }),
+      ),
+    );
+    const { app, operator } = await harness(searchManualReleases);
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/releases?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBeUndefined();
     } finally {
       await app.close();
     }

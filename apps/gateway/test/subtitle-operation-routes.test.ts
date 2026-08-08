@@ -12,6 +12,11 @@ import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-co
 import type { AppConfig } from "../src/config.js";
 import { MediaReferenceService } from "../src/media/media-reference-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
+import {
+  SubtitleOperationError,
+  SubtitleOperationService,
+  type SubtitleOperationErrorReason,
+} from "../src/subtitles/operation-service.js";
 
 const now = new Date("2026-07-28T14:00:00.000Z");
 const baseUrl = "https://omnifin.example";
@@ -314,6 +319,198 @@ describe("subtitle operation routes", () => {
       expect(response.headers["retry-after"]).toBe("17");
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("subtitle_rate_limited");
       expect(response.body).not.toContain("route-private");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a stable terminal uncertainty code after a lost Bazarr response", async () => {
+    const { app, downloadSubtitle, headers, mediaReference } = await harness();
+    try {
+      const search = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/${mediaReference}/subtitles/search`,
+      });
+      const found = subtitleSearchResponseSchema.parse(search.json());
+      downloadSubtitle.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "timeout",
+          message: "route-private lost Bazarr response",
+          operation: "subtitle.download",
+          retryable: true,
+          service: "bazarr",
+        }),
+      );
+      const request = () =>
+        app.inject({
+          headers: { ...headers, "idempotency-key": "subtitle-route-timeout-0001" },
+          method: "POST",
+          payload: {},
+          url: `/v1/subtitle-searches/${found.searchId}/results/${found.results[0]!.id}/download`,
+        });
+      const first = await request();
+      const replay = await request();
+      expect(first.statusCode).toBe(409);
+      expect(replay.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(first.json()).error.code).toBe(
+        "subtitle_download_outcome_uncertain",
+      );
+      expect(downloadSubtitle).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: SubtitleOperationErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "media_reference_not_found", reason: "media_not_found", status: 404 },
+    { code: "subtitle_media_unsupported", reason: "media_unsupported", status: 409 },
+    { code: "subtitle_media_not_indexed", reason: "target_not_found", status: 409 },
+    { code: "subtitle_media_ambiguous", reason: "target_ambiguous", status: 409 },
+    { code: "subtitle_identity_required", reason: "identity_required", status: 403 },
+    {
+      code: "subtitle_rate_limited",
+      reason: "rate_limited",
+      retryAfter: "30",
+      status: 429,
+    },
+    { code: "subtitle_response_invalid", reason: "response_invalid", status: 502 },
+    { code: "subtitle_configuration_unavailable", reason: "connector_ambiguous", status: 503 },
+    {
+      code: "subtitle_configuration_unavailable",
+      reason: "connector_integrity_failure",
+      status: 503,
+    },
+    { code: "subtitle_configuration_unavailable", reason: "connector_unconfigured", status: 503 },
+    {
+      code: "subtitle_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    { code: "subtitle_configuration_unavailable", reason: "storage_failure", status: 503 },
+    { code: "subtitle_temporarily_unavailable", reason: "temporarily_unavailable", status: 503 },
+  ])("maps subtitle search failure $reason", async ({ code, reason, retryAfter, status }) => {
+    const { app, headers, mediaReference } = await harness();
+    const search = vi
+      .spyOn(SubtitleOperationService.prototype, "search")
+      .mockRejectedValue(new SubtitleOperationError(reason));
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/${mediaReference}/subtitles/search`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      search.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: SubtitleOperationErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "subtitle_search_expired", reason: "search_expired", status: 409 },
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "subtitle_download_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    {
+      code: "subtitle_operation_limit_reached",
+      reason: "operation_limit_reached",
+      retryAfter: "60",
+      status: 429,
+    },
+    { code: "subtitle_download_outcome_uncertain", reason: "outcome_uncertain", status: 409 },
+  ])("maps subtitle download failure $reason", async ({ code, reason, retryAfter, status }) => {
+    const { app, headers } = await harness();
+    const download = vi
+      .spyOn(SubtitleOperationService.prototype, "download")
+      .mockRejectedValue(new SubtitleOperationError(reason));
+    try {
+      const response = await app.inject({
+        headers: { ...headers, "idempotency-key": "subtitle-route-error-mapping" },
+        method: "POST",
+        payload: {},
+        url: `/v1/subtitle-searches/subtitle_search_${"s".repeat(22)}/results/subtitle_result_${"r".repeat(22)}/download`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      download.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["response_invalid", "subtitle_response_invalid", 502],
+    ["unsupported_version", "subtitle_response_invalid", 502],
+    ["configuration_invalid", "subtitle_configuration_unavailable", 503],
+    ["destination_blocked", "subtitle_configuration_unavailable", 503],
+    ["invalid_credentials", "subtitle_configuration_unavailable", 503],
+    ["timeout", "subtitle_temporarily_unavailable", 503],
+  ] as const)("maps upstream subtitle %s failures", async (upstreamCode, code, status) => {
+    const { app, headers, mediaReference, searchSubtitles } = await harness();
+    searchSubtitles.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: upstreamCode,
+        message: "private subtitle upstream detail",
+        operation: "subtitle.search",
+        retryable: upstreamCode === "timeout",
+        service: "bazarr",
+      }),
+    );
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/${mediaReference}/subtitles/search`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.body).not.toContain("private subtitle upstream detail");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("omits retry-after when Bazarr supplies no bounded delay", async () => {
+    const { app, headers, mediaReference, searchSubtitles } = await harness();
+    searchSubtitles.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "rate_limited",
+        message: "private subtitle upstream detail",
+        operation: "subtitle.search",
+        retryable: true,
+        service: "bazarr",
+      }),
+    );
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/${mediaReference}/subtitles/search`,
+      });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBeUndefined();
     } finally {
       await app.close();
     }

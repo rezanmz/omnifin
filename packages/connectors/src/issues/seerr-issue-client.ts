@@ -241,6 +241,33 @@ export class SeerrIssueClient {
     );
   }
 
+  public async readIssue(rawUpstreamId: number, signal?: AbortSignal): Promise<SeerrIssueRecord> {
+    const upstreamId = assertUpstreamId(rawUpstreamId);
+    const response = await this.#client.requestText(`api/v1/issue/${upstreamId}`, {
+      acceptedStatuses: [404],
+      headers: { "X-Api-Key": this.#apiKey },
+      operation: "issue.read.exact",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    if (response.status === 404) throw new SeerrIssueError("issue_not_found");
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(response.body);
+    } catch {
+      throw this.#client.invalidResponse("issue.read.exact");
+    }
+    const parsed = upstreamIssueSchema.safeParse(decoded);
+    if (!parsed.success || parsed.data.id !== upstreamId) {
+      throw this.#client.invalidResponse("issue.read.exact");
+    }
+    const issue = parsed.data;
+    const presentations = await this.#readPresentations([issue], signal);
+    return this.#normalize(
+      issue,
+      presentations.get(`${issue.media.mediaType}:${issue.media.tmdbId}`),
+    );
+  }
+
   async #readPresentations(
     issues: readonly z.infer<typeof upstreamIssueSchema>[],
     signal?: AbortSignal,

@@ -273,14 +273,17 @@ function responseEtag(response: Response) {
   return etag;
 }
 
-function mutationHeaders(options: SavedMutationOptions, replayable: boolean) {
+function mutationHeaders(
+  options: SavedMutationOptions,
+  mutation: { body: "json" | "none"; replayable: boolean },
+) {
   const headers: Record<string, string> = {
     accept: "application/json",
-    "content-type": "application/json",
     [CSRF_HEADER]: options.csrfToken,
   };
+  if (mutation.body === "json") headers["content-type"] = "application/json";
   if (options.etag) headers["if-match"] = options.etag;
-  if (replayable) {
+  if (mutation.replayable) {
     if (!options.idempotencyKey) {
       throw new SavedListsClientError(
         "invalid_response",
@@ -403,7 +406,7 @@ export const savedListsClient: SavedListsClient = {
     assertEtag(options);
     const response = await fetchSameOrigin(`/api/saved/lists/${safeListId}/items`, {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, true),
+      headers: mutationHeaders(options, { body: "json", replayable: true }),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -419,7 +422,7 @@ export const savedListsClient: SavedListsClient = {
     const body = saved.savedListCreateRequestSchema.parse(input);
     const response = await fetchSameOrigin("/api/saved/lists", {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, true),
+      headers: mutationHeaders(options, { body: "json", replayable: true }),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -435,7 +438,7 @@ export const savedListsClient: SavedListsClient = {
     const safeListId = assertListId(listId, saved.savedListIdSchema);
     assertEtag(options);
     const response = await fetchSameOrigin(`/api/saved/lists/${safeListId}`, {
-      headers: mutationHeaders(options, false),
+      headers: mutationHeaders(options, { body: "none", replayable: false }),
       method: "DELETE",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -456,7 +459,7 @@ export const savedListsClient: SavedListsClient = {
     }
     const response = await fetchSameOrigin(`/api/saved/targets/library/${referenceId}`, {
       body: "{}",
-      headers: mutationHeaders(options, false),
+      headers: mutationHeaders(options, { body: "json", replayable: false }),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -468,7 +471,7 @@ export const savedListsClient: SavedListsClient = {
     const body = saved.savedDiscoveryTargetIssueRequestSchema.parse(input);
     const response = await fetchSameOrigin("/api/saved/targets/discovery", {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, false),
+      headers: mutationHeaders(options, { body: "json", replayable: false }),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -538,7 +541,7 @@ export const savedListsClient: SavedListsClient = {
     const response = await fetchSameOrigin(
       `/api/saved/lists/${safeListId}/items/${safeCatalogId}`,
       {
-        headers: mutationHeaders(options, false),
+        headers: mutationHeaders(options, { body: "none", replayable: false }),
         method: "DELETE",
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       },
@@ -556,7 +559,7 @@ export const savedListsClient: SavedListsClient = {
     assertEtag(options);
     const response = await fetchSameOrigin(`/api/saved/lists/${safeListId}/items/order`, {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, true),
+      headers: mutationHeaders(options, { body: "json", replayable: true }),
       method: "PATCH",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -573,7 +576,7 @@ export const savedListsClient: SavedListsClient = {
     assertEtag(options);
     const response = await fetchSameOrigin(`/api/saved/lists/${safeListId}/restore`, {
       body: "{}",
-      headers: mutationHeaders(options, true),
+      headers: mutationHeaders(options, { body: "json", replayable: true }),
       method: "POST",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -590,7 +593,7 @@ export const savedListsClient: SavedListsClient = {
     const body = saved.savedFavoriteMutationRequestSchema.parse(input);
     const response = await fetchSameOrigin(`/api/saved/favorites/${safeTarget}`, {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, true),
+      headers: mutationHeaders(options, { body: "json", replayable: true }),
       method: "PUT",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -604,7 +607,7 @@ export const savedListsClient: SavedListsClient = {
     assertEtag(options);
     const response = await fetchSameOrigin(`/api/saved/lists/${safeListId}`, {
       body: JSON.stringify(body),
-      headers: mutationHeaders(options, false),
+      headers: mutationHeaders(options, { body: "json", replayable: false }),
       method: "PATCH",
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });

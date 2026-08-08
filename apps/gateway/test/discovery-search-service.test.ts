@@ -12,6 +12,7 @@ import {
 import type {
   DiscoveryFeedRailKind,
   DiscoveryMediaDetailResponse,
+  DiscoveryMovieResult,
   DiscoveryPersonCreditsResponse,
   DiscoveryPersonDetailResponse,
   DiscoverySearchResponse,
@@ -27,6 +28,7 @@ import {
 import type { DiscoverySearchError } from "../src/discovery/search-service.js";
 import { connectorConfigs, users } from "../src/db/schema.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
+import type { VerifiedOwnershipEvidence } from "../src/media/verified-availability-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-27T06:00:00.000Z");
@@ -119,12 +121,13 @@ const normalizedResponse: DiscoverySearchResponse = {
   totalPages: 1,
   totalResults: 1,
 };
+const normalizedMovieResult = normalizedResponse.items[0] as DiscoveryMovieResult;
 
 const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: now.toISOString(),
   item: {
     artwork: { backdropPath: null, posterPath: null },
-    availability: "available",
+    availability: "unknown",
     cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
@@ -173,7 +176,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
 const normalizedPersonCreditsResponse: DiscoveryPersonCreditsResponse = {
   generatedAt: now.toISOString(),
   items: Array.from({ length: 6 }, (_, index) => ({
-    availability: "available",
+    availability: "unknown",
     kind: "movie",
     role: `Role ${index + 25}`,
     title: `Movie ${index + 25}`,
@@ -213,6 +216,11 @@ function insertSeerr(database: DatabaseHandle, config: AppConfig, id = "seerr-ma
 
 function harness(
   options: {
+    verifyOwnership?: (
+      input: { kind: "movie" | "series"; tmdbId: number },
+      principal: SessionPrincipal,
+      signal?: AbortSignal,
+    ) => Promise<VerifiedOwnershipEvidence>;
     withArtwork?: boolean;
     withBrowse?: boolean;
     withConnector?: boolean;
@@ -315,9 +323,21 @@ function harness(
     ...(options.withArtwork === false ? {} : { readDiscoveryArtwork }),
     search,
   }));
+  const verifyOwnership = vi.fn(
+    options.verifyOwnership ??
+      (async (_input, currentPrincipal) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: "not_owned" as const,
+        userId: currentPrincipal.userId!,
+        userRevision: now.getTime(),
+      })),
+  );
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
+    verifyOwnership,
   });
   return {
     config,
@@ -331,6 +351,7 @@ function harness(
     readDiscoveryArtwork,
     search,
     service,
+    verifyOwnership,
   };
 }
 
@@ -415,7 +436,7 @@ describe("discovery search service", () => {
         totalPages: 4,
         totalResults: 65,
       });
-      expect(browse).toHaveBeenCalledWith(response.criteria, undefined);
+      expect(browse).toHaveBeenCalledWith({ ...response.criteria, availability: "any" }, undefined);
       expect(response.items[0]?.artwork.backdropPath).toMatch(
         /^\/v1\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22}$/u,
       );
@@ -475,6 +496,59 @@ describe("discovery search service", () => {
     }
   });
 
+  it("filters requestable browse results only after exact ownership reconciliation", async () => {
+    const test = harness({
+      verifyOwnership: async (input) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: input.tmdbId === 603 ? "owned" : "not_owned",
+        userId: "viewer-user",
+        userRevision: now.getTime(),
+      }),
+    });
+    test.browse.mockResolvedValueOnce({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            ...normalizedMovieResult,
+            availability: "unavailable",
+          },
+        },
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            ...normalizedMovieResult,
+            availability: "partial",
+            id: "movie:604",
+            tmdbId: 604,
+          },
+        },
+      ],
+      page: 1,
+      totalPages: 1,
+      totalResults: 2,
+    });
+    try {
+      const response = await test.service.browse(
+        {
+          availability: "requestable",
+          kind: "movie",
+          locale: "en",
+          page: 1,
+          sort: "popularity",
+        },
+        { principal: principal() },
+      );
+      expect(response.items).toEqual([
+        expect.objectContaining({ availability: "partial", id: "movie:604" }),
+      ]);
+    } finally {
+      test.database.close();
+    }
+  });
+
   it("fails closed when the connector lacks browse capability", async () => {
     const test = harness({ withBrowse: false });
     try {
@@ -522,6 +596,40 @@ describe("discovery search service", () => {
       );
     } finally {
       database.close();
+    }
+  });
+
+  it("deduplicates exact ownership checks across feed rails", async () => {
+    const test = harness({
+      verifyOwnership: async () => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: "owned",
+        userId: "viewer-user",
+        userRevision: now.getTime(),
+      }),
+    });
+    test.discover.mockImplementation(async (kind) => ({
+      items: [
+        {
+          artwork: { backdropPath: null, posterPath: null },
+          media: {
+            ...normalizedMovieResult,
+            availability: kind === "upcoming" ? "requested" : "unavailable",
+          },
+        },
+      ],
+      totalResults: 1,
+    }));
+    try {
+      const response = await test.service.feed({ language: "en" }, { principal: principal() });
+      expect(test.verifyOwnership).toHaveBeenCalledTimes(1);
+      expect(
+        response.rails.flatMap(({ items }) => items).map(({ availability }) => availability),
+      ).toEqual(["available", "available", "available", "available"]);
+    } finally {
+      test.database.close();
     }
   });
 
@@ -737,6 +845,68 @@ describe("discovery search service", () => {
       expect(JSON.stringify(normalizedDetailResponse)).not.toContain(privateApiKey);
     } finally {
       database.close();
+    }
+  });
+
+  it("reconciles detail recommendations and person credits with exact ownership", async () => {
+    const test = harness({
+      verifyOwnership: async (input) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: input.tmdbId === 603 || input.tmdbId === 1_000 ? "owned" : "not_owned",
+        userId: "viewer-user",
+        userRevision: now.getTime(),
+      }),
+    });
+    test.detail.mockResolvedValueOnce({
+      artwork: { backdropPath: null, castProfilePaths: [null], posterPath: null },
+      response: {
+        ...normalizedDetailResponse,
+        item: {
+          ...normalizedDetailResponse.item,
+          availability: "unavailable",
+          intelligence: {
+            ...normalizedDetailResponse.item.intelligence,
+            recommendations: [
+              {
+                ...normalizedMovieResult,
+                availability: "available",
+                id: "movie:604",
+                tmdbId: 604,
+              },
+            ],
+            recommendationsState: "ready",
+          },
+        },
+      },
+    });
+    test.personCredits.mockResolvedValueOnce({
+      ...normalizedPersonCreditsResponse,
+      items: normalizedPersonCreditsResponse.items.map((item) => ({
+        ...item,
+        availability: "available",
+      })),
+    });
+    try {
+      const [detail, credits] = await Promise.all([
+        test.service.detail(
+          { kind: "movie", tmdbId: 603 },
+          { language: "en" },
+          { principal: principal() },
+        ),
+        test.service.personCredits(
+          { tmdbId: 6384 },
+          { language: "en", page: 2 },
+          { principal: principal() },
+        ),
+      ]);
+      expect(detail.item.availability).toBe("available");
+      expect(detail.item.intelligence.recommendations[0]?.availability).toBe("unknown");
+      expect(credits.items[0]?.availability).toBe("available");
+      expect(credits.items[1]?.availability).toBe("unknown");
+    } finally {
+      test.database.close();
     }
   });
 

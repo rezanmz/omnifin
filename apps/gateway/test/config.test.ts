@@ -14,11 +14,14 @@ afterEach(() => {
 });
 
 describe("loadConfig", () => {
+  const immutableImage = `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`;
+
   it("decodes a 32-byte key and production security defaults", () => {
     const config = loadConfig({
       NODE_ENV: "production",
       OMNIFIN_BASE_URL: "https://omnifin.example",
       OMNIFIN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+      OMNIFIN_IMAGE_REF: immutableImage,
     });
     expect(config.encryptionKey).toHaveLength(32);
     expect(config.secureCookies).toBe(true);
@@ -209,6 +212,7 @@ describe("loadConfig", () => {
       OMNIFIN_BASE_URL: "http://127.0.0.1:3000",
       OMNIFIN_ENCRYPTION_KEY: encryptionKey,
       OMNIFIN_INSECURE_LOOPBACK_PREVIEW: "true",
+      OMNIFIN_IMAGE_REF: immutableImage,
     });
     expect(preview.baseUrl.href).toBe("http://127.0.0.1:3000/");
     expect(preview.insecureLoopbackPreview).toBe(true);
@@ -218,8 +222,25 @@ describe("loadConfig", () => {
         NODE_ENV: "production",
         OMNIFIN_BASE_URL: "https://omnifin.example",
         OMNIFIN_ENCRYPTION_KEY: encryptionKey,
+        OMNIFIN_IMAGE_REF: immutableImage,
       }).baseUrl.href,
     ).toBe("https://omnifin.example/");
+  });
+
+  it("requires an immutable image reference in production", () => {
+    const environment = {
+      NODE_ENV: "production",
+      OMNIFIN_BASE_URL: "https://omnifin.example",
+      OMNIFIN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    } as const;
+    for (const imageReference of [undefined, "ghcr.io/rezanmz/omnifin:latest", "two refs"]) {
+      expect(() =>
+        loadConfig({
+          ...environment,
+          ...(imageReference ? { OMNIFIN_IMAGE_REF: imageReference } : {}),
+        }),
+      ).toThrowError(expect.objectContaining({ startupFailureCode: "image_reference_invalid" }));
+    }
   });
 
   it("limits insecure cookies to an explicit production preview or development loopback", () => {

@@ -473,7 +473,7 @@ describe("SavedTargetService", () => {
       { favorite: false, itemId: privateItemId, userId: "jellyfin-user-private" },
       undefined,
     );
-    expect(readFavoriteState).toHaveBeenCalledTimes(2);
+    expect(readFavoriteState).toHaveBeenCalledTimes(3);
     expect(
       service.resolveOwned(issued.targetReferenceId, { principal: principal() }).payload.favorite,
     ).toEqual({ state: "synced", value: false });
@@ -533,12 +533,11 @@ describe("SavedTargetService", () => {
         "favorite-failure-0002",
         { principal: principal() },
       ),
-    ).rejects.toMatchObject({ reason: "synchronization_failed" });
+    ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
   });
 
   it("reconciles a possibly applied favorite write with the same desired-state key", async () => {
-    const { database, readFavoriteState, referenceId, service, updateFavoriteState } =
-      harness(true);
+    const { database, referenceId, service, updateFavoriteState } = harness(true);
     const issued = await service.issueOwned(referenceId, { principal: principal() });
     database.sqlite.exec(`
       create trigger fail_saved_target_payload_update
@@ -563,19 +562,13 @@ describe("SavedTargetService", () => {
     ).toEqual({ failureCode: "outcome_unknown", state: "reconcile_required" });
 
     database.sqlite.exec("drop trigger fail_saved_target_payload_update");
-    let releaseRead: ((favorite: boolean) => void) | undefined;
-    readFavoriteState.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseRead = resolve;
-        }),
-    );
     const reconciliation = service.updateFavorite(
       issued.targetReferenceId,
       { favorite: false },
       "favorite-reconcile-0001",
       { principal: principal() },
     );
+    await expect(reconciliation).resolves.toMatchObject({ favorite: false });
     await expect(
       service.updateFavorite(
         issued.targetReferenceId,
@@ -583,13 +576,70 @@ describe("SavedTargetService", () => {
         "favorite-reconcile-0001",
         { principal: principal() },
       ),
-    ).rejects.toMatchObject({ reason: "idempotency_in_progress" });
-    releaseRead?.(false);
-    await expect(reconciliation).resolves.toMatchObject({ favorite: false });
+    ).resolves.toMatchObject({ favorite: false });
     expect(updateFavoriteState).toHaveBeenCalledOnce();
     expect(database.sqlite.prepare("select state from saved_list_operations").get()).toEqual({
       state: "succeeded",
     });
+  });
+
+  it("fails closed on a nonmatching favorite readback without a second setter call", async () => {
+    const { database, readFavoriteState, referenceId, service, updateFavoriteState } =
+      harness(true);
+    const issued = await service.issueOwned(referenceId, { principal: principal() });
+    readFavoriteState.mockClear();
+    updateFavoriteState.mockRejectedValueOnce(new Error("response lost after dispatch"));
+
+    const update = () =>
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        "favorite-intervening-change-0001",
+        { principal: principal() },
+      );
+    await expect(update()).rejects.toMatchObject({ reason: "outcome_unknown" });
+    await expect(update()).rejects.toMatchObject({ reason: "synchronization_failed" });
+
+    expect(updateFavoriteState).toHaveBeenCalledOnce();
+    expect(readFavoriteState).toHaveBeenCalledTimes(2);
+    expect(database.sqlite.prepare("select state from external_mutation_dispatches").get()).toEqual(
+      { state: "reconcile_required" },
+    );
+    expect(
+      database.sqlite
+        .prepare("select state, failure_code as failureCode from saved_list_operations")
+        .get(),
+    ).toEqual({ failureCode: "intervening_change", state: "reconcile_required" });
+  });
+
+  it("rejects a connector generation change before dispatching a favorite setter", async () => {
+    const { createClient, database, readFavoriteState, referenceId, service, updateFavoriteState } =
+      harness(true);
+    const issued = await service.issueOwned(referenceId, { principal: principal() });
+    readFavoriteState.mockClear();
+    updateFavoriteState.mockClear();
+    createClient.mockImplementationOnce(() => {
+      database.sqlite
+        .prepare(
+          "update connector_configs set config_generation = config_generation + 1 where id = 'jellyfin-main'",
+        )
+        .run();
+      return { readFavoriteState, updateFavoriteState };
+    });
+
+    await expect(
+      service.updateFavorite(
+        issued.targetReferenceId,
+        { favorite: false },
+        "favorite-generation-mismatch-0001",
+        { principal: principal() },
+      ),
+    ).rejects.toMatchObject({ reason: "connector_unavailable" });
+    expect(readFavoriteState).not.toHaveBeenCalled();
+    expect(updateFavoriteState).not.toHaveBeenCalled();
+    expect(database.sqlite.prepare("select state from external_mutation_dispatches").get()).toEqual(
+      { state: "failed" },
+    );
   });
 
   it("accepts legacy no-credential storage and normalizes an empty connector label", async () => {

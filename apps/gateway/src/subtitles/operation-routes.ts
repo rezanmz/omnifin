@@ -121,6 +121,14 @@ function operationError(error: SubtitleOperationError, reply: FastifyReply) {
         message: "Too many subtitle operations are retained for this account.",
         statusCode: 429,
       });
+    case "outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "subtitle_download_outcome_uncertain",
+        message:
+          "The subtitle download may have been accepted. Verify the installed subtitle before acting again.",
+        statusCode: 409,
+      });
     case "rate_limited":
       reply.header("retry-after", "30");
       return new SafeHttpError({

@@ -373,6 +373,30 @@ describe("Seerr media requests", () => {
     expect(requests[0]?.init.headers.get("x-api-user")).toBeNull();
   });
 
+  it("reads one exact request by ID for state reconciliation", async () => {
+    const current = {
+      createdAt: "2026-07-28T16:30:00.000Z",
+      id: 101,
+      is4k: false,
+      media: { mediaType: "movie", tmdbId: 550 },
+      requestedBy: { jellyfinUsername: "alex" },
+      seasons: [],
+      status: 2,
+      updatedAt: "2026-07-28T16:40:00.000Z",
+    };
+    const { adapter, requests } = adapterWithResponses([
+      jsonResponse(current),
+      jsonResponse({ releaseDate: "2026-07-01", title: "The Long Meridian" }),
+    ]);
+
+    await expect(adapter.readMediaRequest("request:101")).resolves.toMatchObject({
+      id: "request:101",
+      status: "approved",
+    });
+    expect(requests[0]?.url.pathname).toBe("/api/v1/request/101");
+    expect(requests[0]?.init.method).toBe("GET");
+  });
+
   it("fails closed on malformed review targets and contradictory upstream outcomes", async () => {
     const noRequests = adapterWithResponses([]).adapter;
     await expect(

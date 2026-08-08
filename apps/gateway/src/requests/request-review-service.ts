@@ -18,14 +18,22 @@ import {
   type RequestReviewQuery,
 } from "@omnifin/contracts/requests";
 import { randomUUID, X509Certificate } from "node:crypto";
+import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
+import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+} from "../operations/external-mutation-journal.js";
 import { EnvelopeCipher, hashToken, privacyHash } from "../security/crypto.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const REQUEST_IDENTIFIER_PATTERN = /^request:([1-9][0-9]{0,9})$/u;
+const MUTATION_LEASE_MS = 30_000;
+const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const persistedRequestReviewItemSchema = requestReviewItemSchema.or(
   requestReviewItemSchema
     .omit({ qualityProfile: true })
@@ -35,11 +43,13 @@ const persistedRequestReviewItemSchema = requestReviewItemSchema.or(
 interface SeerrConnectorRow {
   baseUrl: string;
   capabilitySnapshotJson: string;
+  configGeneration: number;
   displayName: string;
   encryptedCredentials: string;
   healthState: string;
   id: string;
   insecureHttpApproved: number;
+  instanceGeneration: number;
   tlsPolicy: string;
 }
 
@@ -57,8 +67,19 @@ interface IdempotencyRow {
   state: string;
 }
 
+type RequestReviewReservation =
+  | { kind: "conflict" }
+  | { failureCode: RequestReviewFailureCode; kind: "failure"; operationId: string }
+  | { kind: "new" }
+  | { kind: "pending"; operationId: string }
+  | { kind: "reconcile_required"; operationId: string }
+  | { kind: "replay"; operationId: string; response: RequestReviewItem }
+  | { kind: "reserved"; operationId: string }
+  | { kind: "uncertain"; operationId: string };
+
 export interface RequestReviewAdapter {
   listMediaRequests(input: RequestReviewQuery, signal?: AbortSignal): Promise<RequestReviewPage>;
+  readMediaRequest?(requestId: string, signal?: AbortSignal): Promise<RequestReviewItem>;
   reviewMediaRequest(
     requestId: string,
     input: RequestReviewDecisionInput,
@@ -106,17 +127,32 @@ export type RequestReviewServiceErrorReason =
   | "idempotency_in_progress"
   | "integrity_failure"
   | "principal_unavailable"
+  | "request_review_outcome_uncertain"
+  | "request_review_reconcile_required"
   | "storage_failure";
 
 export class RequestReviewServiceError extends Error {
+  public readonly operationId: string | undefined;
   public readonly reason: RequestReviewServiceErrorReason;
 
-  public constructor(reason: RequestReviewServiceErrorReason, options?: ErrorOptions) {
+  public constructor(
+    reason: RequestReviewServiceErrorReason,
+    options?: ErrorOptions & { operationId?: string },
+  ) {
     super("The media request review could not be completed.", options);
     this.name = "RequestReviewServiceError";
     this.reason = reason;
+    this.operationId = options?.operationId;
   }
 }
+
+const storedRequestReviewMutationSchema = z.strictObject({
+  decision: z.enum(["approve", "decline"]),
+  desiredStatus: z.enum(["approved", "declined"]),
+  operation: z.literal("review"),
+  requestId: z.string().regex(REQUEST_IDENTIFIER_PATTERN),
+  schemaVersion: z.literal(1),
+});
 
 function credentialContext(connectorId: string) {
   return `connector_credentials:seerr:${connectorId}`;
@@ -231,6 +267,7 @@ export class RequestReviewService {
   readonly #createAdapter: (config: OptionalApiKeyConnectorConfig) => RequestReviewAdapter;
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
 
   public constructor(
     database: DatabaseHandle,
@@ -243,6 +280,7 @@ export class RequestReviewService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createId = dependencies.createId ?? randomUUID;
     this.#createAdapter = dependencies.createAdapter ?? ((input) => new SeerrAdapter(input));
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
   }
 
   public async list(
@@ -274,37 +312,198 @@ export class RequestReviewService {
     }
     const requestId = `request:${upstreamId}`;
     const input = requestReviewDecisionInputSchema.parse(rawInput);
+    const desiredStatus =
+      input.decision === "approve" ? ("approved" as const) : ("declined" as const);
     const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey);
     const fingerprintHash = hashToken(JSON.stringify({ input, requestId }));
     const keyHash = hashToken(`${principal.userId}\u0000request_review\u0000${idempotencyKey}`);
-    const reservation = this.#reserve(principal.userId, keyHash, fingerprintHash);
-    if (reservation.kind === "replay") {
-      return { replayed: true, request: reservation.response };
+    const existing = this.#lookupReservation(principal.userId, keyHash, fingerprintHash);
+    const terminal = this.#terminalReservation(existing);
+    if (terminal) return terminal;
+    if (existing.kind === "uncertain") throw this.#uncertainError(existing.operationId);
+
+    let operationId =
+      existing.kind === "pending" || existing.kind === "reconcile_required"
+        ? existing.operationId
+        : undefined;
+    let dispatch = operationId ? this.#requestDispatch(operationId) : undefined;
+    if (existing.kind === "reconcile_required" && !dispatch) {
+      throw this.#reconcileError(existing.operationId);
     }
-    if (reservation.kind === "failure") {
-      throw new RequestReviewServiceError(reservation.failureCode);
-    }
-    if (reservation.kind === "conflict") {
-      throw new RequestReviewServiceError("idempotency_conflict");
-    }
-    if (reservation.kind === "pending") {
-      throw new RequestReviewServiceError("idempotency_in_progress");
+    if (dispatch?.state === "uncertain") throw this.#uncertainError(operationId!);
+    if (dispatch?.state === "succeeded") throw this.#uncertainError(operationId!);
+    if (dispatch) this.#assertStoredMutation(dispatch, requestId, input, desiredStatus);
+
+    const connection = this.#connection();
+    if (dispatch) this.#assertDispatchConnector(dispatch, connection.connector);
+    const exactReader = connection.adapter.readMediaRequest?.bind(connection.adapter);
+
+    if (dispatch && dispatch.state !== "reserved") {
+      if (!exactReader) {
+        this.#recordUncertain(operationId!, dispatch, requestId, input, context);
+        throw this.#uncertainError(operationId!);
+      }
+      let current: RequestReviewItem;
+      try {
+        current = this.#exactReviewItem(await exactReader(requestId, signal), requestId);
+      } catch (error) {
+        this.#recordReadFailure(operationId!, dispatch, requestId, input, context, error);
+        throw error instanceof SeerrRequestError && error.reason === "request_not_found"
+          ? this.#reconcileError(operationId!, error)
+          : this.#uncertainError(operationId!, error);
+      }
+      if (current.status === desiredStatus) {
+        this.#finishExternalSuccess(operationId!, dispatch, current, input, context);
+        return { replayed: false, request: current };
+      }
+      if (!this.#reviewableStatus(current.status, desiredStatus)) {
+        this.#recordReconcileRequired(operationId!, dispatch, requestId, input, context);
+        throw this.#reconcileError(operationId!);
+      }
+      this.#recordReconcileRequired(operationId!, dispatch, requestId, input, context);
+      throw this.#reconcileError(operationId!);
     }
 
-    let response: RequestReviewItem;
+    let current: RequestReviewItem | undefined;
+    if (exactReader) {
+      try {
+        current = this.#exactReviewItem(await exactReader(requestId, signal), requestId);
+      } catch (error) {
+        throw new RequestReviewServiceError(knownFailure(error), { cause: error });
+      }
+      if (current.status === desiredStatus) {
+        if (!operationId) {
+          const reservation = this.#reserve(principal.userId, keyHash, fingerprintHash);
+          const raced = this.#terminalReservation(reservation);
+          if (raced) return raced;
+          if (reservation.kind !== "reserved") {
+            throw reservation.kind === "reconcile_required" || reservation.kind === "uncertain"
+              ? this.#reconcileError(reservation.operationId)
+              : new RequestReviewServiceError("idempotency_in_progress", {
+                  ...(reservation.kind === "pending"
+                    ? { operationId: reservation.operationId }
+                    : {}),
+                });
+          }
+          operationId = reservation.operationId;
+        }
+        if (dispatch?.state === "reserved") {
+          this.#completeAlreadyDesired(operationId, dispatch, current, input, context);
+        } else {
+          this.#completeSuccess(operationId, current, input, context);
+        }
+        return { replayed: false, request: current };
+      }
+      if (!this.#reviewableStatus(current.status, desiredStatus)) {
+        throw new RequestReviewServiceError("request_conflict");
+      }
+    }
+
+    if (!operationId) {
+      const reservation = this.#reserve(principal.userId, keyHash, fingerprintHash);
+      const raced = this.#terminalReservation(reservation);
+      if (raced) return raced;
+      if (reservation.kind !== "reserved") {
+        if (reservation.kind === "reconcile_required" || reservation.kind === "uncertain") {
+          throw this.#reconcileError(reservation.operationId);
+        }
+        throw new RequestReviewServiceError("idempotency_in_progress", {
+          ...(reservation.kind === "pending" ? { operationId: reservation.operationId } : {}),
+        });
+      }
+      operationId = reservation.operationId;
+    }
+
+    if (dispatch?.state === "reserved") {
+      if ((dispatch.leaseExpiresAt ?? 0) >= this.#now()) {
+        throw new RequestReviewServiceError("idempotency_in_progress", { operationId });
+      }
+      const now = this.#now();
+      dispatch = this.#journal.claimStaleReserved({
+        expectedLeaseExpiresAt: dispatch.leaseExpiresAt!,
+        expectedLeaseOwner: dispatch.leaseOwner!,
+        id: dispatch.id,
+        leaseExpiresAt: now + MUTATION_LEASE_MS,
+        leaseOwner: this.#leaseOwner(operationId),
+        now,
+      });
+    } else {
+      const desired = storedRequestReviewMutationSchema.parse({
+        decision: input.decision,
+        desiredStatus,
+        operation: "review",
+        requestId,
+        schemaVersion: 1,
+      });
+      try {
+        const now = this.#now();
+        dispatch = this.#journal.reserve({
+          connectorConfigGeneration: connection.connector.configGeneration,
+          connectorId: connection.connector.id,
+          connectorInstanceGeneration: connection.connector.instanceGeneration,
+          id: this.#dispatchId(operationId),
+          kind: "media_request.submit",
+          leaseExpiresAt: now + MUTATION_LEASE_MS,
+          leaseOwner: this.#leaseOwner(operationId),
+          normalizedRequest: desired,
+          now,
+          parentOperationId: operationId,
+          parentOperationType: "media_request_operation",
+          targetDigest: privacyHash(
+            "media_item",
+            `${connection.connector.id}\u0000${connection.connector.instanceGeneration}\u0000request.review\u0000${requestId}`,
+            this.#config.encryptionKey,
+          ),
+          userId: principal.userId,
+        });
+      } catch (error) {
+        if (
+          error instanceof ExternalMutationJournalError &&
+          error.code === "reservation_conflict" &&
+          this.#requestDispatch(operationId)
+        ) {
+          throw new RequestReviewServiceError("idempotency_in_progress", { operationId });
+        }
+        const failureCode =
+          error instanceof ExternalMutationJournalError && error.code === "target_locked"
+            ? "request_conflict"
+            : "configuration_unavailable";
+        this.#completeFailure(operationId, requestId, input, failureCode, context);
+        throw new RequestReviewServiceError(failureCode, { cause: error, operationId });
+      }
+    }
+
     try {
-      response = requestReviewItemSchema.parse(
-        await this.#adapter().reviewMediaRequest(requestId, input, signal),
-      );
-      if (response.id !== requestId) throw new RequestReviewServiceError("integrity_failure");
+      this.#assertConnectorGeneration(dispatch);
+      dispatch = this.#journal.markDispatched({
+        id: dispatch.id,
+        leaseOwner: dispatch.leaseOwner!,
+        now: this.#now(),
+      });
     } catch (error) {
-      const failureCode = knownFailure(error);
-      this.#completeFailure(reservation.operationId, requestId, input, failureCode, context);
-      throw new RequestReviewServiceError(failureCode, { cause: error });
+      this.#completeExternalFailure(
+        operationId,
+        dispatch,
+        requestId,
+        input,
+        "configuration_unavailable",
+        context,
+      );
+      throw new RequestReviewServiceError("configuration_unavailable", {
+        cause: error,
+        operationId,
+      });
     }
-
-    this.#completeSuccess(reservation.operationId, response, input, context);
-    return { replayed: false, request: response };
+    return this.#sendReviewDecision(
+      operationId,
+      dispatch,
+      connection,
+      requestId,
+      input,
+      desiredStatus,
+      context,
+      signal,
+    );
   }
 
   #principal(principal: SessionPrincipal) {
@@ -326,6 +525,8 @@ export class RequestReviewService {
              encrypted_credentials as encryptedCredentials,
              capability_snapshot_json as capabilitySnapshotJson,
              health_state as healthState,
+             instance_generation as instanceGeneration,
+             config_generation as configGeneration,
              tls_policy as tlsPolicy,
              insecure_http_approved as insecureHttpApproved
            from connector_configs
@@ -345,29 +546,123 @@ export class RequestReviewService {
   }
 
   #adapter() {
+    return this.#connection().adapter;
+  }
+
+  #connection() {
     const connector = this.#connector();
     const secrets = connectorSecrets(connector, this.#cipher);
     try {
-      return this.#createAdapter({
-        apiKey: secrets.apiKey,
-        baseUrl: connector.baseUrl,
-        connectorId: connector.id,
-        displayName: connector.displayName,
-        insecureHttpApproved: connector.insecureHttpApproved === 1,
-        tlsPolicy: connector.tlsPolicy === "allow_self_signed" ? "allow_self_signed" : "strict",
-        ...(secrets.tlsCaCertificatePem
-          ? { tlsCaCertificatePem: secrets.tlsCaCertificatePem }
-          : {}),
-        clock: { now: this.#clock, monotonicNow: () => performance.now() },
-      });
+      return {
+        adapter: this.#createAdapter({
+          apiKey: secrets.apiKey,
+          baseUrl: connector.baseUrl,
+          connectorId: connector.id,
+          displayName: connector.displayName,
+          insecureHttpApproved: connector.insecureHttpApproved === 1,
+          tlsPolicy: connector.tlsPolicy === "allow_self_signed" ? "allow_self_signed" : "strict",
+          ...(secrets.tlsCaCertificatePem
+            ? { tlsCaCertificatePem: secrets.tlsCaCertificatePem }
+            : {}),
+          clock: { now: this.#clock, monotonicNow: () => performance.now() },
+        }),
+        connector,
+      };
     } catch (error) {
       throw new RequestReviewServiceError("integrity_failure", { cause: error });
     }
   }
 
-  #reserve(userId: string, keyHash: string, fingerprintHash: string) {
+  #lookupReservation(
+    userId: string,
+    keyHash: string,
+    fingerprintHash: string,
+  ): RequestReviewReservation {
+    try {
+      const existing = this.#database.sqlite
+        .prepare(
+          `select id, fingerprint_hash as fingerprintHash, state,
+                  response_json as responseJson, failure_code as failureCode
+           from media_request_operations
+           where user_id = ? and idempotency_key_hash = ?
+           limit 1`,
+        )
+        .get(userId, keyHash) as IdempotencyRow | undefined;
+      return existing ? this.#existingReservation(existing, fingerprintHash) : { kind: "new" };
+    } catch (error) {
+      if (error instanceof RequestReviewServiceError) throw error;
+      throw new RequestReviewServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #existingReservation(
+    existing: IdempotencyRow,
+    fingerprintHash: string,
+  ): RequestReviewReservation {
+    if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" };
+    if (existing.state === "pending") return { kind: "pending", operationId: existing.id };
+    if (existing.state === "reconcile_required") {
+      return { kind: "reconcile_required", operationId: existing.id };
+    }
+    if (existing.state === "uncertain") return { kind: "uncertain", operationId: existing.id };
+    if (existing.state === "failed") {
+      if (
+        !existing.failureCode ||
+        !REQUEST_REVIEW_FAILURE_CODES.has(existing.failureCode as RequestReviewFailureCode)
+      ) {
+        throw new RequestReviewServiceError("integrity_failure");
+      }
+      return {
+        failureCode: existing.failureCode as RequestReviewFailureCode,
+        kind: "failure",
+        operationId: existing.id,
+      };
+    }
+    if (existing.state === "succeeded" && existing.responseJson) {
+      try {
+        return {
+          kind: "replay",
+          operationId: existing.id,
+          response: persistedRequestReviewItemSchema.parse(JSON.parse(existing.responseJson)),
+        };
+      } catch (error) {
+        throw new RequestReviewServiceError("integrity_failure", { cause: error });
+      }
+    }
+    throw new RequestReviewServiceError("integrity_failure");
+  }
+
+  #terminalReservation(reservation: RequestReviewReservation): RequestReviewResult | undefined {
+    switch (reservation.kind) {
+      case "replay":
+        return { replayed: true, request: reservation.response };
+      case "failure":
+        throw new RequestReviewServiceError(reservation.failureCode, {
+          operationId: reservation.operationId,
+        });
+      case "conflict":
+        throw new RequestReviewServiceError("idempotency_conflict");
+      case "new":
+      case "pending":
+      case "reconcile_required":
+      case "reserved":
+      case "uncertain":
+        return undefined;
+    }
+  }
+
+  #reserve(userId: string, keyHash: string, fingerprintHash: string): RequestReviewReservation {
     try {
       return this.#database.sqlite.transaction(() => {
+        const cleanup = this.#journal.cleanupTerminalParents({
+          completedBefore: this.#now() - OPERATION_RETENTION_MS,
+          limit: 100,
+          parentOperationType: "media_request_operation",
+          userId,
+        });
+        if (cleanup.mismatchedParents > 0) {
+          throw new RequestReviewServiceError("storage_failure");
+        }
         const existing = this.#database.sqlite
           .prepare(
             `select
@@ -381,33 +676,7 @@ export class RequestReviewService {
              limit 1`,
           )
           .get(userId, keyHash) as IdempotencyRow | undefined;
-        if (existing) {
-          if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" as const };
-          if (existing.state === "pending") return { kind: "pending" as const };
-          if (existing.state === "failed") {
-            if (
-              !existing.failureCode ||
-              !REQUEST_REVIEW_FAILURE_CODES.has(existing.failureCode as RequestReviewFailureCode)
-            ) {
-              throw new RequestReviewServiceError("integrity_failure");
-            }
-            return {
-              failureCode: existing.failureCode as RequestReviewFailureCode,
-              kind: "failure" as const,
-            };
-          }
-          if (existing.state === "succeeded" && existing.responseJson) {
-            try {
-              return {
-                kind: "replay" as const,
-                response: persistedRequestReviewItemSchema.parse(JSON.parse(existing.responseJson)),
-              };
-            } catch (error) {
-              throw new RequestReviewServiceError("integrity_failure", { cause: error });
-            }
-          }
-          throw new RequestReviewServiceError("integrity_failure");
-        }
+        if (existing) return this.#existingReservation(existing, fingerprintHash);
         const operationId = this.#id();
         const now = this.#now();
         this.#database.sqlite
@@ -422,6 +691,318 @@ export class RequestReviewService {
     } catch (error) {
       if (error instanceof RequestReviewServiceError) throw error;
       throw new RequestReviewServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #requestDispatch(operationId: string) {
+    try {
+      return this.#journal.replay({
+        kind: "media_request.submit",
+        parentOperationId: operationId,
+        parentOperationType: "media_request_operation",
+      });
+    } catch (error) {
+      throw new RequestReviewServiceError("storage_failure", { cause: error, operationId });
+    }
+  }
+
+  #assertStoredMutation(
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    desiredStatus: "approved" | "declined",
+  ) {
+    try {
+      const desired = storedRequestReviewMutationSchema.parse(dispatch.normalizedRequest);
+      if (
+        desired.operation !== "review" ||
+        desired.requestId !== requestId ||
+        desired.decision !== input.decision ||
+        desired.desiredStatus !== desiredStatus
+      ) {
+        throw new Error("invalid");
+      }
+    } catch (error) {
+      throw new RequestReviewServiceError("integrity_failure", { cause: error });
+    }
+  }
+
+  #assertDispatchConnector(dispatch: ExternalMutationRecord, connector: SeerrConnectorRow) {
+    if (
+      dispatch.connectorId !== connector.id ||
+      dispatch.connectorInstanceGeneration !== connector.instanceGeneration ||
+      dispatch.connectorConfigGeneration !== connector.configGeneration
+    ) {
+      throw new RequestReviewServiceError("configuration_unavailable");
+    }
+  }
+
+  #assertConnectorGeneration(dispatch: ExternalMutationRecord) {
+    const current = this.#database.sqlite
+      .prepare(
+        `select instance_generation as instanceGeneration,
+                config_generation as configGeneration
+         from connector_configs
+         where id = ? and type = 'seerr' and enabled = 1
+         limit 1`,
+      )
+      .get(dispatch.connectorId) as
+      { configGeneration: number; instanceGeneration: number } | undefined;
+    if (
+      !current ||
+      current.instanceGeneration !== dispatch.connectorInstanceGeneration ||
+      current.configGeneration !== dispatch.connectorConfigGeneration
+    ) {
+      throw new RequestReviewServiceError("configuration_unavailable");
+    }
+  }
+
+  #dispatchId(operationId: string) {
+    return `mutation_dispatch_${hashToken(`request.review\u0000${operationId}`).slice(0, 22)}`;
+  }
+
+  #leaseOwner(operationId: string) {
+    return `request-review-${hashToken(`${operationId}\u0000${this.#id()}`).slice(0, 22)}`;
+  }
+
+  #uncertainError(operationId: string, cause?: unknown) {
+    return new RequestReviewServiceError("request_review_outcome_uncertain", {
+      ...(cause === undefined ? {} : { cause }),
+      operationId,
+    });
+  }
+
+  #reconcileError(operationId: string, cause?: unknown) {
+    return new RequestReviewServiceError("request_review_reconcile_required", {
+      ...(cause === undefined ? {} : { cause }),
+      operationId,
+    });
+  }
+
+  #exactReviewItem(response: RequestReviewItem, requestId: string) {
+    const parsed = requestReviewItemSchema.parse(response);
+    if (parsed.id !== requestId) throw new RequestReviewServiceError("integrity_failure");
+    return parsed;
+  }
+
+  #reviewableStatus(status: RequestReviewItem["status"], desiredStatus: "approved" | "declined") {
+    const opposite = desiredStatus === "approved" ? "declined" : "approved";
+    return status === "pending" || status === opposite;
+  }
+
+  #markReconcileRequired(dispatch: ExternalMutationRecord) {
+    const current = this.#journal.read(dispatch.id);
+    if (current?.state === "dispatched") {
+      this.#journal.markReconcileRequired({
+        failureCode: "read_after_write_required",
+        id: dispatch.id,
+        now: this.#now(),
+      });
+    }
+  }
+
+  async #sendReviewDecision(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    connection: { adapter: RequestReviewAdapter; connector: SeerrConnectorRow },
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    desiredStatus: "approved" | "declined",
+    context: RequestReviewContext,
+    signal: AbortSignal | undefined,
+  ): Promise<RequestReviewResult> {
+    try {
+      const response = this.#exactReviewItem(
+        await connection.adapter.reviewMediaRequest(requestId, input, signal),
+        requestId,
+      );
+      if (response.status !== desiredStatus) {
+        throw new RequestReviewServiceError("integrity_failure");
+      }
+      this.#finishExternalSuccess(operationId, dispatch, response, input, context);
+      return { replayed: false, request: response };
+    } catch (error) {
+      if (
+        error instanceof RequestReviewServiceError &&
+        error.reason === "request_review_outcome_uncertain"
+      ) {
+        throw error;
+      }
+      this.#markReconcileRequired(dispatch);
+      const reader = connection.adapter.readMediaRequest?.bind(connection.adapter);
+      if (!reader) {
+        this.#recordUncertain(operationId, dispatch, requestId, input, context);
+        throw this.#uncertainError(operationId, error);
+      }
+      let current: RequestReviewItem;
+      try {
+        current = this.#exactReviewItem(await reader(requestId, signal), requestId);
+      } catch (readError) {
+        this.#recordReadFailure(operationId, dispatch, requestId, input, context, readError);
+        throw readError instanceof SeerrRequestError && readError.reason === "request_not_found"
+          ? this.#reconcileError(operationId, readError)
+          : this.#uncertainError(operationId, readError);
+      }
+      if (current.status === desiredStatus) {
+        this.#finishExternalSuccess(operationId, dispatch, current, input, context);
+        return { replayed: false, request: current };
+      }
+      if (!this.#reviewableStatus(current.status, desiredStatus)) {
+        this.#recordReconcileRequired(operationId, dispatch, requestId, input, context);
+        throw this.#reconcileError(operationId, error);
+      }
+      this.#recordReconcileRequired(operationId, dispatch, requestId, input, context);
+      throw this.#reconcileError(operationId, error);
+    }
+  }
+
+  #completeAlreadyDesired(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: RequestReviewItem,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    this.#complete(operationId, response.id, "success", response, null, input, context, () => {
+      this.#journal.completeFailed({
+        failureCode: "already_in_desired_state",
+        id: dispatch.id,
+        now: this.#now(),
+      });
+    });
+  }
+
+  #completeExternalSuccess(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: RequestReviewItem,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    this.#complete(operationId, response.id, "success", response, null, input, context, () => {
+      this.#journal.completeSucceeded({ id: dispatch.id, now: this.#now() });
+    });
+  }
+
+  #finishExternalSuccess(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: RequestReviewItem,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    try {
+      this.#completeExternalSuccess(operationId, dispatch, response, input, context);
+    } catch (error) {
+      this.#recordUncertain(operationId, dispatch, response.id, input, context);
+      throw this.#uncertainError(operationId, error);
+    }
+  }
+
+  #completeExternalFailure(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    failureCode: RequestReviewFailureCode,
+    context: RequestReviewContext,
+  ) {
+    this.#complete(operationId, requestId, "failure", null, failureCode, input, context, () => {
+      this.#journal.completeFailed({ failureCode, id: dispatch.id, now: this.#now() });
+    });
+  }
+
+  #recordReadFailure(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+    error: unknown,
+  ) {
+    if (error instanceof SeerrRequestError && error.reason === "request_not_found") {
+      this.#recordReconcileRequired(operationId, dispatch, requestId, input, context);
+    } else {
+      this.#recordUncertain(operationId, dispatch, requestId, input, context);
+    }
+  }
+
+  #recordReconcileRequired(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    this.#recordUnresolved(
+      "reconcile_required",
+      "request_review_reconcile_required",
+      operationId,
+      dispatch,
+      requestId,
+      input,
+      context,
+    );
+  }
+
+  #recordUncertain(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    this.#recordUnresolved(
+      "uncertain",
+      "request_review_outcome_uncertain",
+      operationId,
+      dispatch,
+      requestId,
+      input,
+      context,
+    );
+  }
+
+  #recordUnresolved(
+    state: "reconcile_required" | "uncertain",
+    failureCode: "request_review_outcome_uncertain" | "request_review_reconcile_required",
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    requestId: string,
+    input: RequestReviewDecisionInput,
+    context: RequestReviewContext,
+  ) {
+    try {
+      this.#database.sqlite.transaction(() => {
+        const current = this.#journal.read(dispatch.id);
+        if (current?.state === "dispatched") {
+          this.#journal.markReconcileRequired({
+            failureCode: "read_after_write_required",
+            id: dispatch.id,
+            now: this.#now(),
+          });
+        }
+        if (state === "uncertain") {
+          const reconciled = this.#journal.read(dispatch.id);
+          if (reconciled?.state === "reconcile_required" || reconciled?.state === "dispatched") {
+            this.#journal.completeUncertain({ failureCode, id: dispatch.id, now: this.#now() });
+          }
+        }
+        const now = this.#now();
+        const updated = this.#database.sqlite
+          .prepare(
+            `update media_request_operations
+             set state = ?, response_json = null, failure_code = ?,
+                 completed_at = ?, updated_at = ?
+             where id = ? and state in ('pending', 'reconcile_required')`,
+          )
+          .run(state, failureCode, now, now, operationId);
+        if (updated.changes === 1) {
+          this.#audit(requestId, "failure", input, context, now, "temporarily_unavailable");
+        }
+      })();
+    } catch {
+      // The journal's post-dispatch state remains fail-closed on the next replay.
     }
   }
 
@@ -452,6 +1033,7 @@ export class RequestReviewService {
     failureCode: RequestReviewFailureCode | null,
     input: RequestReviewDecisionInput,
     context: RequestReviewContext,
+    completeDispatch?: () => void,
   ) {
     try {
       const now = this.#now();
@@ -460,7 +1042,7 @@ export class RequestReviewService {
           .prepare(
             `update media_request_operations
              set state = ?, response_json = ?, failure_code = ?, completed_at = ?, updated_at = ?
-             where id = ? and state = 'pending'`,
+             where id = ? and state in ('pending', 'reconcile_required')`,
           )
           .run(
             outcome === "success" ? "succeeded" : "failed",
@@ -472,6 +1054,7 @@ export class RequestReviewService {
           );
         if (update.changes !== 1) throw new RequestReviewServiceError("integrity_failure");
         this.#audit(targetId, outcome, input, context, now, failureCode);
+        completeDispatch?.();
       })();
     } catch (error) {
       if (error instanceof RequestReviewServiceError) throw error;

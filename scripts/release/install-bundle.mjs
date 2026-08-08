@@ -5,9 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const publicImage = "ghcr.io/rezanmz/omnifin";
 const outputNames = ["compose.yaml", "omnifin.env.example", "SHA256SUMS"];
-const sourceImage = "image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
 const releaseImage = "image: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
-const sourceImageReference = "OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
 const releaseImageReference =
   "OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
 
@@ -38,22 +36,29 @@ function runtimeCompose(source) {
   const matches = [...source.matchAll(buildBlock)];
   if (matches.length !== 1) throw new Error("compose_build_boundary_invalid");
   const withoutBuild = source.replace(buildBlock, "");
-  const withRequiredImage = replaceExactlyOnce(
-    withoutBuild,
-    sourceImage,
-    releaseImage,
-    "compose_image_boundary_invalid",
-  );
-  const withRequiredDoctorReference = replaceExactlyOnce(
-    withRequiredImage,
-    sourceImageReference,
-    releaseImageReference,
-    "compose_doctor_image_boundary_invalid",
-  );
-  if (/^\s+build:/mu.test(withRequiredDoctorReference)) {
+  if (withoutBuild.split(releaseImage).length !== 2) {
+    throw new Error("compose_image_boundary_invalid");
+  }
+  if (withoutBuild.split(releaseImageReference).length !== 3) {
+    throw new Error("compose_image_reference_boundary_invalid");
+  }
+  const maintenanceStart = withoutBuild.indexOf("\n  maintenance:");
+  const maintenanceEnd = withoutBuild.indexOf("\nsecrets:", maintenanceStart);
+  const maintenance = withoutBuild.slice(maintenanceStart, maintenanceEnd);
+  if (
+    maintenanceStart < 0 ||
+    maintenanceEnd < 0 ||
+    !maintenance.includes("OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key") ||
+    !maintenance.includes("\n    secrets:\n      - omnifin_encryption_key") ||
+    maintenance.includes("OMNIFIN_RECOVERY_SECRET_FILE") ||
+    maintenance.includes("- omnifin_recovery_secret")
+  ) {
+    throw new Error("compose_maintenance_secret_boundary_invalid");
+  }
+  if (/^\s+build:/mu.test(withoutBuild)) {
     throw new Error("compose_build_boundary_invalid");
   }
-  return withRequiredDoctorReference;
+  return withoutBuild;
 }
 
 function environmentTemplate(source, version, image) {

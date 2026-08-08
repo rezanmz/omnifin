@@ -5,6 +5,10 @@ functional, security, integration, visual, accessibility, performance, and
 documentation gates are green. Dates are intentionally omitted; quality evidence,
 not a calendar, controls release readiness.
 
+These phases organize delivery and define their own completion gates; Phases 1–5 are
+not cumulative prerequisites for stable v1. The authoritative scope and promotion gate
+is [v1 stability](v1-stability.md).
+
 ## Status legend
 
 - **In development:** implementation or verification is active.
@@ -142,8 +146,10 @@ browser behavior.
 - Verified installation, operation, troubleshooting, and contribution documentation
 - Multi-architecture images with SBOM, provenance, signatures, and attestations
 
-**Gate:** all product requirements, OIDC flows, service matrix, security controls,
-release evidence, and design-quality criteria pass.
+**Gate for completion of this roadmap phase:** all product requirements, OIDC flows,
+service matrix, security controls, release evidence, and design-quality criteria pass.
 
-Completed phase gates may receive `v0.x` releases. `v1.0.0` is reserved for the full
-verified product, not merely a stable build pipeline.
+Completed phase gates may receive `v0.x` preview releases; `v0.x` is not a stable
+support line. `v1.0.0` is reserved for the scope and exact-candidate evidence in the
+[authoritative v1 stability gate](v1-stability.md), not for completion of every product
+expansion item in Phases 1–5.

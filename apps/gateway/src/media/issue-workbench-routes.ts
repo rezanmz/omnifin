@@ -43,6 +43,7 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
 }
 
 function workbenchError(error: IssueWorkbenchServiceError, reply: FastifyReply) {
+  if (error.operationId) reply.header("operation-id", error.operationId);
   switch (error.reason) {
     case "issue_not_found":
       return new SafeHttpError({
@@ -71,6 +72,20 @@ function workbenchError(error: IssueWorkbenchServiceError, reply: FastifyReply) 
         cause: error,
         code: "media_issue_outcome_pending",
         message: "The outcome of this issue decision is still being determined.",
+        statusCode: 409,
+      });
+    case "media_issue_outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "media_issue_outcome_uncertain",
+        message: "The issue status outcome is uncertain and will not be changed automatically.",
+        statusCode: 409,
+      });
+    case "media_issue_reconcile_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "media_issue_reconcile_required",
+        message: "The issue status requires reconciliation before another change.",
         statusCode: 409,
       });
     case "response_invalid":

@@ -13,6 +13,19 @@ const target = (transport: ReturnType<typeof createMockTransport>["transport"]) 
 });
 
 describe("JellyfinAuthenticationClient", () => {
+  it("retains bounded public server identity for internal binding", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "stable-server-id", ServerName: "Home", Version: "10.11.2" }),
+    ]);
+    const client = new JellyfinAuthenticationClient(target(mock.transport));
+
+    await expect(client.getPublicSystemInfo()).resolves.toEqual({
+      Id: "stable-server-id",
+      ServerName: "Home",
+      Version: "10.11.2",
+    });
+  });
+
   it("authenticates by name with the modern device header and bounded JSON body", async () => {
     const mock = createMockTransport([
       jsonResponse({

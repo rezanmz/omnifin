@@ -1,11 +1,19 @@
 import Database from "better-sqlite3";
-import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.js";
 import { databaseMaintenanceLockPath } from "./maintenance-lock.js";
 import { asStartupError, StartupError } from "../startup-error.js";
+import { constantTimeTextEqual, databaseKeyVerifier } from "../security/crypto.js";
+import { createRetainedDatabaseBackup } from "./maintenance.js";
+import {
+  assertCurrentMigrationCatalog,
+  migrationDirectory,
+  preflightDatabase,
+} from "./migration-preflight.js";
 
 export interface DatabaseHandle {
   close: () => void;
@@ -44,17 +52,6 @@ function restrictDatabaseFiles(databaseUrl: string) {
       throw new StartupError("database_file_permissions_failed", { cause: error });
     }
   }
-}
-
-function migrationDirectory() {
-  const candidates = [
-    path.resolve(import.meta.dirname, "../drizzle"),
-    path.resolve(import.meta.dirname, "../../drizzle"),
-    path.resolve(process.cwd(), "apps/gateway/drizzle"),
-  ];
-  const directory = candidates.find((candidate) => existsSync(candidate));
-  if (!directory) throw new StartupError("database_migrations_missing");
-  return directory;
 }
 
 export function openDatabase(databaseUrl: string): DatabaseHandle {
@@ -105,5 +102,180 @@ export function openDatabase(databaseUrl: string): DatabaseHandle {
       );
     }
     throw startupError;
+  }
+}
+
+export interface InitializeDatabaseOptions {
+  backupDirectory: string;
+  backupRetentionCount: number;
+  databaseUrl: string;
+  imageReference?: string;
+  rootKey: Buffer;
+}
+
+interface InitializeDatabaseDependencies {
+  afterMigration?: (database: DatabaseHandle) => Promise<void> | void;
+  afterPreflight?: () => Promise<void> | void;
+  beforeRecoveryBackupPublish?: () => Promise<void> | void;
+  beforeMigration?: (database: DatabaseHandle) => Promise<void> | void;
+}
+
+function assertMaintenanceInactive(databaseUrl: string) {
+  if (databaseUrl !== ":memory:" && existsSync(databaseMaintenanceLockPath(databaseUrl))) {
+    throw new StartupError("database_maintenance_active");
+  }
+}
+
+export function initializeDatabaseKeyVerifier(sqlite: Database.Database, rootKey: Buffer) {
+  const expected = databaseKeyVerifier(rootKey);
+  try {
+    sqlite.transaction(() => {
+      const rows = sqlite
+        .prepare(
+          `select id, format_version as formatVersion, verifier
+           from database_key_verifiers`,
+        )
+        .all() as { formatVersion: number; id: number; verifier: string }[];
+      if (rows.length === 0) {
+        sqlite
+          .prepare(
+            `insert into database_key_verifiers (id, format_version, verifier)
+             values (1, 1, ?)`,
+          )
+          .run(expected);
+        return;
+      }
+      if (
+        rows.length !== 1 ||
+        rows[0]?.id !== 1 ||
+        rows[0].formatVersion !== 1 ||
+        !constantTimeTextEqual(rows[0].verifier, expected)
+      ) {
+        throw new StartupError("database_encryption_key_mismatch");
+      }
+    })();
+  } catch (error) {
+    throw asStartupError(error, "database_key_verifier_invalid");
+  }
+}
+
+export function assertDatabasePostMigrationChecks(sqlite: Database.Database, rootKey: Buffer) {
+  const integrityRows = sqlite.pragma("integrity_check") as Record<string, unknown>[];
+  if (
+    integrityRows.length !== 1 ||
+    Object.values(integrityRows[0] ?? {}).length !== 1 ||
+    Object.values(integrityRows[0] ?? {})[0] !== "ok"
+  ) {
+    throw new StartupError("database_integrity_check_failed");
+  }
+  if ((sqlite.pragma("foreign_key_check") as unknown[]).length > 0) {
+    throw new StartupError("database_foreign_key_check_failed");
+  }
+  assertCurrentMigrationCatalog(sqlite);
+  let expected: Database.Database | undefined;
+  try {
+    expected = new Database(":memory:");
+    migrate(drizzle(expected), { migrationsFolder: migrationDirectory() });
+    const schemaDigest = (database: Database.Database) =>
+      createHash("sha256")
+        .update(
+          JSON.stringify(
+            database
+              .prepare(
+                `select name, sql, tbl_name as tableName, type
+                 from sqlite_schema where name not like 'sqlite_%'
+                 order by type, name`,
+              )
+              .all(),
+          ),
+        )
+        .digest("hex");
+    if (schemaDigest(sqlite) !== schemaDigest(expected)) {
+      throw new StartupError("database_schema_validation_failed");
+    }
+  } catch (error) {
+    throw asStartupError(error, "database_schema_validation_failed");
+  } finally {
+    expected?.close();
+  }
+  const verifier = sqlite
+    .prepare(
+      `select verifier from database_key_verifiers
+       where id = 1 and format_version = 1`,
+    )
+    .get() as { verifier: string } | undefined;
+  if (!verifier || !constantTimeTextEqual(verifier.verifier, databaseKeyVerifier(rootKey))) {
+    throw new StartupError("database_key_verifier_invalid");
+  }
+}
+
+/**
+ * Performs the complete fail-closed startup storage sequence before returning a writable handle.
+ */
+export async function initializeDatabase(
+  options: InitializeDatabaseOptions,
+  dependencies: InitializeDatabaseDependencies = {},
+): Promise<DatabaseHandle> {
+  // Maintenance exclusion is deliberately first: no preflight staging or source/backup mutation may
+  // race an offline maintenance operation.
+  assertMaintenanceInactive(options.databaseUrl);
+  const retainedCopyPath = path.join(
+    path.resolve(options.backupDirectory),
+    `.omnifin-preflight-${randomUUID()}.sqlite`,
+  );
+  let preflight: ReturnType<typeof preflightDatabase>;
+  try {
+    preflight = preflightDatabase(options.databaseUrl, options.rootKey, {
+      retainedCopyPath,
+      stagingDirectory: options.backupDirectory,
+    });
+    await dependencies.afterPreflight?.();
+    assertMaintenanceInactive(options.databaseUrl);
+
+    if (preflight.databaseExists && (preflight.migrationsPending || preflight.hadSidecars)) {
+      await createRetainedDatabaseBackup(
+        {
+          backupDirectory: options.backupDirectory,
+          cleanupGeneratedSourceSidecars: true,
+          databasePath: retainedCopyPath,
+          retentionCount: options.backupRetentionCount,
+          ...(options.imageReference ? { imageReference: options.imageReference } : {}),
+        },
+        {
+          beforeBackupPublish: async () => {
+            await dependencies.beforeRecoveryBackupPublish?.();
+            assertMaintenanceInactive(options.databaseUrl);
+          },
+        },
+      );
+    }
+  } catch (error) {
+    throw asStartupError(error, "database_recovery_backup_failed");
+  } finally {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      rmSync(`${retainedCopyPath}${suffix}`, { force: true });
+    }
+  }
+
+  assertMaintenanceInactive(options.databaseUrl);
+  const database = openDatabase(options.databaseUrl);
+  try {
+    await dependencies.beforeMigration?.(database);
+    database.migrate();
+    await dependencies.afterMigration?.(database);
+    initializeDatabaseKeyVerifier(database.sqlite, options.rootKey);
+    assertDatabasePostMigrationChecks(database.sqlite, options.rootKey);
+    return database;
+  } catch (error) {
+    const failure = asStartupError(error, "database_initialization_failed");
+    try {
+      database.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [failure, cleanupError],
+        "Database startup failed and cleanup did not complete.",
+      );
+    }
+    throw failure;
   }
 }

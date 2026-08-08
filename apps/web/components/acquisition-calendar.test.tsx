@@ -211,39 +211,59 @@ describe("AcquisitionCalendar", () => {
     expect(screen.getByText("Offline")).toBeVisible();
   });
 
-  it("loads a signed next page through the injected live client", async () => {
+  it("aggregates every cursor page and makes the 205th event reachable", async () => {
     const user = userEvent.setup();
-    const firstPage: AcquisitionCalendarResponse = {
-      ...demoAcquisitionCalendar,
-      nextCursor: "calendar_cursor_fixture_payload.signature",
-    };
-    const nextEvent = {
+    const allEvents = Array.from({ length: 205 }, (_, index) => ({
       ...demoAcquisitionCalendar.events[0]!,
-      eventAt: "2026-08-02T19:00:00.000Z",
-      id: "calendar_IJKLMNOPQRSTUVWXYZabcd",
-      title: "Second Horizon",
-    };
-    const nextPage: AcquisitionCalendarResponse = {
+      eventAt: new Date(Date.parse("2026-07-27T18:30:00.000Z") + index * 60_000).toISOString(),
+      id: `calendar_${(index + 1).toString(36).padStart(22, "0")}`,
+      title: index === 204 ? "Final Horizon" : `Paged Horizon ${index + 1}`,
+    }));
+    const page = (
+      events: typeof allEvents,
+      nextCursor: string | null,
+    ): AcquisitionCalendarResponse => ({
       ...demoAcquisitionCalendar,
-      events: [nextEvent],
-      nextCursor: null,
+      events,
+      nextCursor,
       sources: [
-        { ...demoAcquisitionCalendar.sources[0]!, eventCount: 1 },
+        { ...demoAcquisitionCalendar.sources[0]!, eventCount: events.length },
         { ...demoAcquisitionCalendar.sources[1]!, eventCount: 0 },
       ],
-      summary: { available: 0, episodes: 0, missing: 0, movies: 1, queued: 0, total: 1 },
+      summary: {
+        available: 0,
+        episodes: 0,
+        missing: 0,
+        movies: events.length,
+        queued: 0,
+        total: events.length,
+      },
+    });
+    const firstCursor = "calendar_cursor_page_one.signature";
+    const secondCursor = "calendar_cursor_page_two.signature";
+    const firstPage: AcquisitionCalendarResponse = {
+      ...page(allEvents.slice(0, 100), firstCursor),
     };
-    const load = vi.fn(async (range) => (range.cursor ? nextPage : firstPage));
+    const secondPage = page(allEvents.slice(100, 200), secondCursor);
+    const finalPage = page(allEvents.slice(200), null);
+    const load = vi.fn(async (range) => (range.cursor === firstCursor ? secondPage : finalPage));
     renderCalendar({ calendar: firstPage, status: "ready" }, { client: { load }, live: true });
 
     await user.click(await screen.findByRole("button", { name: "Load more arrivals" }));
     await waitFor(() =>
       expect(load).toHaveBeenCalledWith(
-        expect.objectContaining({ cursor: firstPage.nextCursor }),
+        expect.objectContaining({ cursor: firstCursor }),
         expect.any(AbortSignal),
       ),
     );
-    expect(await screen.findByRole("button", { name: /Inspect Second Horizon/i })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Load more arrivals" }));
+
+    expect(await screen.findByRole("button", { name: /Inspect Final Horizon/i })).toBeVisible();
+    expect(load).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: secondCursor }),
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByLabelText("205 visible events")).toBeVisible();
   });
 
   it.each([

@@ -961,7 +961,9 @@ function matchesBrowseAvailability(
   filter: DiscoveryBrowseAvailability,
 ) {
   if (filter === "any") return true;
-  if (filter === "requestable") return availability === "unavailable";
+  if (filter === "requestable") {
+    return availability === "partial" || availability === "unavailable";
+  }
   return availability === filter;
 }
 
@@ -2072,17 +2074,36 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
     });
   }
 
+  async readMediaRequest(requestId: string, signal?: AbortSignal): Promise<RequestReviewItem> {
+    this.#requireRequestReview();
+    const upstreamId = this.#reviewRequestId(requestId);
+    const response = await this.client.requestText(`api/v1/request/${upstreamId}`, {
+      acceptedStatuses: [404],
+      headers: { "X-Api-Key": this.#apiKey! },
+      operation: "request.review.read",
+      ...(signal ? { signal } : {}),
+    });
+    if (response.status === 404) throw new SeerrRequestError("request_not_found");
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(response.body);
+    } catch {
+      throw invalidRequestResponse("request.review.read");
+    }
+    const parsed = seerrReviewRequestSchema.safeParse(decoded);
+    if (!parsed.success || parsed.data.id !== upstreamId) {
+      throw invalidRequestResponse("request.review.read");
+    }
+    return this.#reviewItem(parsed.data, new Map(), signal);
+  }
+
   async reviewMediaRequest(
     requestId: string,
     input: RequestReviewDecisionInput,
     signal?: AbortSignal,
   ): Promise<RequestReviewItem> {
     this.#requireRequestReview();
-    const match = /^request:([1-9][0-9]*)$/u.exec(requestId);
-    const upstreamId = Number(match?.[1]);
-    if (!Number.isSafeInteger(upstreamId) || upstreamId > 2_147_483_647) {
-      throw invalidRequestResponse("request.review");
-    }
+    const upstreamId = this.#reviewRequestId(requestId);
     const decision = requestReviewDecisionInputSchema.parse(input);
     const response = await this.client.requestText(
       `api/v1/request/${upstreamId}/${decision.decision}`,
@@ -2116,6 +2137,15 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       throw invalidRequestResponse("request.review");
     }
     return this.#reviewItem(reviewed, new Map(), signal);
+  }
+
+  #reviewRequestId(requestId: string) {
+    const match = /^request:([1-9][0-9]*)$/u.exec(requestId);
+    const upstreamId = Number(match?.[1]);
+    if (!Number.isSafeInteger(upstreamId) || upstreamId > 2_147_483_647) {
+      throw invalidRequestResponse("request.review");
+    }
+    return upstreamId;
   }
 
   #requireRequestReview() {

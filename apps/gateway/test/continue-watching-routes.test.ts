@@ -8,7 +8,6 @@ import type {
   JellyfinViewingHistoryResult,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { continueWatchingResponseSchema } from "@omnifin/contracts/dashboard";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import type { Role } from "@omnifin/contracts/auth";
@@ -29,6 +28,18 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  ContinueWatchingError,
+  ContinueWatchingService,
+  LibraryConnectedActionError,
+  LibraryRemovalError,
+  LibraryRemovalPreviewError,
+  MediaArtworkError,
+  MediaLibraryError,
+  MediaPlaybackContextError,
+  MediaPlaybackStateError,
+  ViewingHistoryError,
+} from "../src/media/continue-watching-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T05:30:00.000Z");
@@ -57,11 +68,11 @@ function testConfig(): AppConfig {
   };
 }
 
-function sessionDependencies() {
+function sessionDependencies(clock: () => Date = () => now) {
   let identifier = 0;
   let token = 0;
   return {
-    clock: () => now,
+    clock,
     createId: () => `continue-route-session-${++identifier}`,
     createToken: () => Buffer.alloc(32, ++token).toString("base64url"),
   };
@@ -78,6 +89,7 @@ function deferred<T>() {
 async function harness(
   options: {
     canDelete?: boolean;
+    clock?: () => Date;
     providerIds?: { imdb: string | null; tmdb: number | null };
     radarrConnectorCount?: number;
     radarrEnabled?: boolean;
@@ -243,11 +255,19 @@ async function harness(
     segments: [{ endSeconds: 86, kind: "intro", startSeconds: 4 }],
     segmentsState: "ready",
   }));
-  const updatePlaybackState = vi.fn(async () => ({
+  const initialPlaybackState = {
     durationSeconds: 7_200,
-    played: true,
-    positionSeconds: 0,
-  }));
+    played: false,
+    positionSeconds: 180,
+  };
+  const readPlaybackState = vi.fn(async () => initialPlaybackState);
+  const updatePlaybackState = vi.fn(async (input: { action: string }) => {
+    return {
+      ...initialPlaybackState,
+      played: input.action === "mark_unwatched" ? false : true,
+      positionSeconds: 0,
+    };
+  });
   const deleteLibraryItem = vi.fn(async () => undefined);
   const readViewingHistory = vi.fn(async (): Promise<JellyfinViewingHistoryResult> => ({
     boundaryFound: true,
@@ -265,7 +285,7 @@ async function harness(
   const app = await createApp({
     config,
     continueWatchingDependencies: {
-      clock: () => now,
+      clock: options.clock ?? (() => now),
       createClient: () => ({
         readContinueWatching,
         readImage,
@@ -275,6 +295,7 @@ async function harness(
         readLibrarySeasonEpisodes,
         readLibraryTitle,
         readPlaybackContext,
+        readPlaybackState,
         readViewingHistory,
         deleteLibraryItem,
         updatePlaybackState,
@@ -307,7 +328,7 @@ async function harness(
         ? {}
         : { resolveConnectedAction: options.resolveConnectedAction }),
     },
-    sessionDependencies: sessionDependencies(),
+    sessionDependencies: sessionDependencies(options.clock),
   });
   app.database.db
     .insert(connectorConfigs)
@@ -1815,57 +1836,20 @@ describe("Continue Watching routes", () => {
         "media_playback_state_response_invalid",
       );
 
-      updatePlaybackState.mockRejectedValueOnce(
-        new SafeConnectorError({
-          code: "invalid_credentials",
-          message: "private upstream denial",
-          operation: "media.playback_state",
-          retryable: false,
-          service: "jellyfin",
-          status: 403,
-        }),
-      );
-      const denied = await app.inject(request("route-denied"));
-      expect(denied.statusCode).toBe(403);
-      expect(apiErrorSchema.parse(denied.json()).error.code).toBe(
-        "media_playback_state_permission_denied",
-      );
-
-      updatePlaybackState.mockRejectedValueOnce(new Error("private upstream failure"));
-      const unavailable = await app.inject(request("route-unavailable"));
-      expect(unavailable.statusCode).toBe(503);
-      expect(apiErrorSchema.parse(unavailable.json()).error.code).toBe(
-        "media_playback_state_unavailable",
-      );
-      expect(conflict.body + invalid.body + denied.body + unavailable.body).not.toMatch(
-        /private upstream/iu,
-      );
-
-      let resolvePending!: (playback: {
-        durationSeconds: number;
-        played: boolean;
-        positionSeconds: number;
-      }) => void;
-      updatePlaybackState.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolvePending = resolve;
-          }),
-      );
-      const firstPending = app.inject(request("route-pending"));
-      await vi.waitFor(() => expect(updatePlaybackState).toHaveBeenCalledTimes(5));
-      const pending = await app.inject(request("route-pending"));
-      expect(pending.statusCode).toBe(409);
-      expect(pending.headers["retry-after"]).toBe("2");
-      expect(apiErrorSchema.parse(pending.json()).error.code).toBe(
+      const blocked = await app.inject(request("route-blocked-after-unknown"));
+      expect(blocked.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(blocked.json()).error.code).toBe(
         "media_playback_state_outcome_pending",
       );
-      resolvePending({
-        durationSeconds: 7_200,
-        played: true,
-        positionSeconds: 0,
-      });
-      expect((await firstPending).statusCode).toBe(200);
+      expect(updatePlaybackState).toHaveBeenCalledTimes(2);
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select state from external_mutation_dispatches where kind = 'user_media_state.update' and state = 'reconcile_required' limit 1",
+          )
+          .get(),
+      ).toEqual({ state: "reconcile_required" });
+      expect(conflict.body + invalid.body + blocked.body).not.toMatch(/private upstream/iu);
     } finally {
       await app.close();
     }
@@ -1990,6 +1974,296 @@ describe("Continue Watching routes", () => {
       expect(response.statusCode).toBe(401);
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("authentication_required");
       expect(readImage).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["idempotency_conflict", 409, "idempotency_key_conflict"],
+    ["idempotency_in_progress", 409, "media_playback_state_outcome_pending"],
+    ["not_found", 404, "media_library_title_not_found"],
+    ["permission_denied", 403, "media_playback_state_permission_denied"],
+    ["operation_limit_reached", 429, "media_playback_state_limit_reached"],
+    ["response_invalid", 502, "media_playback_state_response_invalid"],
+    ["storage_failure", 503, "media_playback_state_unavailable"],
+    ["unavailable", 503, "media_playback_state_unavailable"],
+  ] as const)("maps playback-state service failure %s", async (reason, status, code) => {
+    const { app, viewer } = await harness();
+    const update = vi
+      .spyOn(ContinueWatchingService.prototype, "updatePlaybackState")
+      .mockRejectedValue(new MediaPlaybackStateError(reason));
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}`,
+          "idempotency-key": `playback-error-${reason}`,
+          origin: "https://omnifin.example",
+          [SESSION_CSRF_HEADER]: viewer.csrfToken,
+        },
+        method: "POST",
+        payload: { action: "mark_watched" },
+        url: `/v1/media/library/media_${"r".repeat(22)}/playback-state`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      if (reason === "idempotency_in_progress") expect(response.headers["retry-after"]).toBe("2");
+      if (reason === "operation_limit_reached") expect(response.headers["retry-after"]).toBe("60");
+    } finally {
+      update.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["authentication_stale", 403, "recent_authentication_required"],
+    ["confirmation_mismatch", 400, "library_removal_confirmation_mismatch"],
+    ["idempotency_conflict", 409, "idempotency_key_conflict"],
+    ["idempotency_in_progress", 409, "library_removal_outcome_pending"],
+    ["identity_changed", 409, "library_removal_context_changed"],
+    ["source_changed", 409, "library_removal_context_changed"],
+    ["invalid_mode", 409, "library_removal_mode_invalid"],
+    ["not_found", 404, "library_removal_not_found"],
+    ["operation_limit_reached", 429, "library_removal_limit_reached"],
+    ["preview_expired", 410, "library_removal_preview_expired"],
+    ["storage_failure", 503, "library_removal_unavailable"],
+    ["unavailable", 503, "library_removal_unavailable"],
+  ] as const)("maps library-removal service failure %s", async (reason, status, code) => {
+    const { app, viewer } = await harness({ role: "admin" });
+    const readOperation = vi
+      .spyOn(ContinueWatchingService.prototype, "readLibraryRemovalOperation")
+      .mockImplementation(() => {
+        throw new LibraryRemovalError(reason);
+      });
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/removals/library_removal_operation_${"o".repeat(22)}`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      if (reason === "idempotency_in_progress") expect(response.headers["retry-after"]).toBe("2");
+      if (reason === "operation_limit_reached") expect(response.headers["retry-after"]).toBe("60");
+    } finally {
+      readOperation.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("fails closed across every media read route error family", async () => {
+    const referenceId = `media_${"r".repeat(22)}`;
+    const routes = [
+      {
+        errors: [
+          [new ContinueWatchingError(), 503],
+          [new Error("Private continue-watching failure"), 500],
+        ],
+        method: "read",
+        role: "viewer",
+        url: "/v1/media/continue-watching",
+      },
+      {
+        errors: [
+          [new MediaLibraryError("cursor_invalid"), 400],
+          [new MediaLibraryError("unavailable"), 503],
+          [new ContinueWatchingError(), 503],
+          [new Error("Private library failure"), 500],
+        ],
+        method: "browse",
+        role: "viewer",
+        url: "/v1/media/library",
+      },
+      {
+        errors: [
+          [new ViewingHistoryError("cursor_invalid"), 400],
+          [new ViewingHistoryError("unavailable"), 503],
+          [new ContinueWatchingError(), 503],
+          [new Error("Private history failure"), 500],
+        ],
+        method: "readViewingHistory",
+        role: "viewer",
+        url: "/v1/media/history",
+      },
+      {
+        errors: [
+          [new LibraryRemovalPreviewError("not_found"), 404],
+          [new LibraryRemovalPreviewError("paired_user_cannot_delete"), 403],
+          [new LibraryRemovalPreviewError("unavailable"), 503],
+          [new Error("Private preview failure"), 500],
+        ],
+        method: "previewLibraryRemoval",
+        role: "admin",
+        url: `/v1/media/library/${referenceId}/removal-preview`,
+      },
+      {
+        errors: [
+          [new MediaPlaybackContextError("not_found"), 404],
+          [new MediaPlaybackContextError("unavailable"), 503],
+          [new Error("Private playback-context failure"), 500],
+        ],
+        method: "readPlaybackContext",
+        role: "viewer",
+        url: `/v1/media/${referenceId}/playback-context`,
+      },
+      {
+        errors: [
+          [new MediaLibraryError("not_found"), 404],
+          [new MediaLibraryError("unavailable"), 503],
+          [new Error("Private title failure"), 500],
+        ],
+        method: "readLibraryTitle",
+        role: "viewer",
+        url: `/v1/media/library/${referenceId}`,
+      },
+      {
+        errors: [
+          [new LibraryConnectedActionError("not_found"), 404],
+          [new LibraryConnectedActionError("unavailable"), 503],
+          [new Error("Private connected-action list failure"), 500],
+        ],
+        method: "readConnectedActions",
+        role: "operator",
+        url: `/v1/media/library/${referenceId}/actions`,
+      },
+      {
+        errors: [
+          [new LibraryConnectedActionError("not_found"), 404],
+          [new LibraryConnectedActionError("unavailable"), 503],
+          [new Error("Private connected-action failure"), 500],
+        ],
+        method: "openConnectedAction",
+        role: "operator",
+        url: `/v1/media/library/${referenceId}/actions/radarr`,
+      },
+      {
+        errors: [
+          [new MediaLibraryError("not_found"), 404],
+          [new MediaLibraryError("unavailable"), 503],
+          [new Error("Private person failure"), 500],
+        ],
+        method: "readLibraryPersonProfile",
+        role: "viewer",
+        url: `/v1/media/people/${referenceId}`,
+      },
+      {
+        errors: [
+          [new MediaLibraryError("cursor_invalid"), 400],
+          [new MediaLibraryError("not_found"), 404],
+          [new MediaLibraryError("unavailable"), 503],
+          [new Error("Private extras failure"), 500],
+        ],
+        method: "readLibraryExtras",
+        role: "viewer",
+        url: `/v1/media/library/${referenceId}/extras`,
+      },
+      {
+        errors: [
+          [new MediaLibraryError("cursor_invalid"), 400],
+          [new MediaLibraryError("not_found"), 404],
+          [new MediaLibraryError("unavailable"), 503],
+          [new Error("Private season failure"), 500],
+        ],
+        method: "readLibrarySeasonEpisodes",
+        role: "viewer",
+        url: `/v1/media/library/${referenceId}/seasons/1/episodes`,
+      },
+      {
+        errors: [
+          [new MediaArtworkError("not_found"), 404],
+          [new MediaArtworkError("unavailable"), 503],
+          [new ContinueWatchingError(), 503],
+          [new Error("Private person-artwork failure"), 500],
+        ],
+        method: "readPersonArtwork",
+        role: "viewer",
+        url: `/v1/media/${referenceId}/images/people/${"a".repeat(64)}`,
+      },
+      {
+        errors: [
+          [new MediaArtworkError("not_found"), 404],
+          [new MediaArtworkError("unavailable"), 503],
+          [new ContinueWatchingError(), 503],
+          [new Error("Private artwork failure"), 500],
+        ],
+        method: "readArtwork",
+        role: "viewer",
+        url: `/v1/media/${referenceId}/images/poster`,
+      },
+    ] as const;
+
+    const servicePrototype = ContinueWatchingService.prototype as unknown as Record<
+      string,
+      (...arguments_: never[]) => unknown
+    >;
+    for (const route of routes) {
+      for (const [error, status] of route.errors) {
+        const { app, viewer } = await harness({ role: route.role });
+        const operation = vi.spyOn(servicePrototype, route.method).mockRejectedValue(error);
+        try {
+          const response = await app.inject({
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+            method: "GET",
+            url: route.url,
+          });
+          expect(response.statusCode, `${route.method}: ${response.body}`).toBe(status);
+          expect(response.body).not.toContain("Private");
+        } finally {
+          operation.mockRestore();
+          await app.close();
+        }
+      }
+    }
+  }, 30_000);
+
+  it("does not expose an unexpected library-removal status failure", async () => {
+    const { app, viewer } = await harness({ role: "admin" });
+    const readOperation = vi
+      .spyOn(ContinueWatchingService.prototype, "readLibraryRemovalOperation")
+      .mockImplementation(() => {
+        throw new Error("Private removal status failure");
+      });
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url: `/v1/media/library/removals/library_removal_operation_${"o".repeat(22)}`,
+      });
+      expect(response.statusCode, response.body).toBe(500);
+      expect(response.body).not.toContain("Private removal status failure");
+    } finally {
+      readOperation.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    "/v1/media/continue-watching",
+    "/v1/media/library",
+    "/v1/media/history",
+    `/v1/media/library/media_${"r".repeat(22)}/removal-preview`,
+    `/v1/media/library/removals/library_removal_operation_${"o".repeat(22)}`,
+    `/v1/media/media_${"r".repeat(22)}/playback-context`,
+    `/v1/media/library/media_${"r".repeat(22)}`,
+    `/v1/media/library/media_${"r".repeat(22)}/actions`,
+    `/v1/media/library/media_${"r".repeat(22)}/actions/radarr`,
+    `/v1/media/people/media_${"r".repeat(22)}`,
+    `/v1/media/library/media_${"r".repeat(22)}/extras`,
+    `/v1/media/library/media_${"r".repeat(22)}/seasons/1/episodes`,
+    `/v1/media/media_${"r".repeat(22)}/images/people/${"a".repeat(64)}`,
+    `/v1/media/media_${"r".repeat(22)}/images/poster`,
+  ])("refreshes a rotation-due session on %s", async (url) => {
+    let current = now;
+    const { app, viewer } = await harness({ clock: () => current, role: "admin" });
+    current = new Date(now.getTime() + testConfig().session.rotationIntervalMs + 1);
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+        method: "GET",
+        url,
+      });
+      expect(response.statusCode, response.body).not.toBe(401);
+      expect(response.headers["set-cookie"]).toBeTruthy();
     } finally {
       await app.close();
     }

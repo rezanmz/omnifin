@@ -6,6 +6,7 @@ import {
   type ServerMetadata,
 } from "openid-client";
 import {
+  ADMINISTRATOR_RECOVERY_CONFIRMATION,
   oidcAdministratorBootstrapStartResponseSchema,
   PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
   sessionResponseSchema,
@@ -22,7 +23,14 @@ import { OidcProviderRegistryError } from "../src/auth/oidc/provider-registry.js
 import type { OidcProtocolDependencies } from "../src/auth/oidc/protocol.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import { connectorConfigs, oidcProviders, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIdentities,
+  oidcProviders,
+  roleMappings,
+  serviceIdentityLinks,
+  users,
+} from "../src/db/schema.js";
 import { MAX_ACTIVE_SESSIONS_PER_USER } from "../src/auth/session-service.js";
 
 const providerId = "oidc-home";
@@ -284,6 +292,338 @@ describe("OIDC browser routes", () => {
       await app.close();
     }
   });
+
+  it("replaces only the sole administrator through a fresh recovery-bound admin mapping", async () => {
+    const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    const createdAt = new Date(routeTime.getTime() - 60_000);
+    try {
+      database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin.example.test",
+          createdAt,
+          displayName: "Home Jellyfin",
+          encryptedCredentials: "v2.fixture-connector-secret",
+          healthState: "healthy",
+          id: "jellyfin-home",
+          type: "jellyfin",
+          updatedAt: createdAt,
+        })
+        .run();
+      for (const account of [
+        { id: "target-administrator", role: "admin" as const },
+        { id: "replacement-account", role: "viewer" as const },
+      ]) {
+        database.db
+          .insert(users)
+          .values({
+            createdAt,
+            displayName: account.role === "admin" ? "Current administrator" : "Replacement account",
+            id: account.id,
+            role: account.role,
+            roleSource: account.role === "admin" ? "manual" : "default",
+            status: "active",
+            updatedAt: createdAt,
+          })
+          .run();
+        database.db
+          .insert(serviceIdentityLinks)
+          .values({
+            connectorId: "jellyfin-home",
+            createdAt,
+            deviceId: `${account.id}-device`,
+            encryptedAccessToken: `v2.${account.id}-token`,
+            externalDisplayName: account.id,
+            externalServerId: "server-1",
+            externalUserId: `${account.id}-upstream`,
+            externalUsername: account.id,
+            healthState: "linked",
+            id: `${account.id}-link`,
+            lastVerifiedAt: createdAt,
+            service: "jellyfin",
+            tokenCreatedAt: createdAt,
+            updatedAt: createdAt,
+            userId: account.id,
+          })
+          .run();
+      }
+      database.db
+        .insert(externalIdentities)
+        .values({
+          createdAt,
+          displayClaimsJson: JSON.stringify({ displayName: "Replacement account" }),
+          id: "replacement-oidc-identity",
+          issuer,
+          lastLoginAt: createdAt,
+          providerId,
+          subject: "immutable-viewer-subject",
+          updatedAt: createdAt,
+          userId: "replacement-account",
+        })
+        .run();
+      database.db
+        .insert(roleMappings)
+        .values({
+          claimPathJson: JSON.stringify(["email"]),
+          enabled: true,
+          id: "administrator-email",
+          operator: "equals",
+          priority: 1_000,
+          providerId,
+          role: "admin",
+          valuesJson: JSON.stringify(["viewer@example.test"]),
+        })
+        .run();
+      const targetSession = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "target-administrator-link",
+          userId: "target-administrator",
+        },
+      });
+      app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "replacement-account-link",
+          userId: "replacement-account",
+        },
+      });
+      const recovery = issueRecoverySession(app);
+
+      const ordinaryAdmin = await app.inject({
+        body: {
+          administratorId: "target-administrator",
+          confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+          expectedUpdatedAt: createdAt.toISOString(),
+        },
+        headers: {
+          cookie: `__Host-omnifin_session=${targetSession.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": targetSession.csrfToken,
+        },
+        method: "POST",
+        url: `/v1/auth/recovery/administrator-replacement/oidc/${providerId}/start`,
+      });
+      expect(ordinaryAdmin.statusCode).toBe(403);
+      expect(authorizationCodeGrant).not.toHaveBeenCalled();
+
+      const started = await app.inject({
+        body: {
+          administratorId: "target-administrator",
+          confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+          expectedUpdatedAt: createdAt.toISOString(),
+        },
+        headers: {
+          cookie: recovery.cookie,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: `/v1/auth/recovery/administrator-replacement/oidc/${providerId}/start`,
+      });
+      expect(started.statusCode, started.body).toBe(200);
+      const state = new URL(started.json().authorizationUrl as string).searchParams.get("state");
+      const callback = await app.inject({
+        headers: {
+          cookie: `${recovery.cookie}; ${transactionBindingCookie(started, state)}`,
+        },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=replacement-code&state=${state}`,
+      });
+
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/recovery?administratorReplacement=replaced");
+      expect(
+        database.db
+          .select()
+          .from(users)
+          .all()
+          .map(({ id, role, status }) => ({ id, role, status })),
+      ).toEqual([
+        { id: "target-administrator", role: "admin", status: "disabled" },
+        { id: "replacement-account", role: "admin", status: "active" },
+      ]);
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from audit_events where event_type = ?")
+          .get("auth.administrator.replaced"),
+      ).toEqual({ count: 1 });
+      expect(authorizationCodeGrant).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    { candidate: "active" as const, expected: "denied" as const, mappedAdmin: false },
+    { candidate: "new" as const, expected: "unavailable" as const, mappedAdmin: true },
+    { candidate: "pending" as const, expected: "unavailable" as const, mappedAdmin: true },
+  ])(
+    "rolls back an OIDC replacement for a $candidate candidate",
+    async ({ candidate, expected, mappedAdmin }) => {
+      const { app, database } = await openRouteHarness();
+      const createdAt = new Date(routeTime.getTime() - 60_000);
+      try {
+        database.db
+          .insert(connectorConfigs)
+          .values({
+            baseUrl: "https://jellyfin.example.test",
+            createdAt,
+            displayName: "Home Jellyfin",
+            encryptedCredentials: "v2.fixture-connector-secret",
+            id: "jellyfin-home",
+            type: "jellyfin",
+            updatedAt: createdAt,
+          })
+          .run();
+        database.db
+          .insert(users)
+          .values({
+            createdAt,
+            displayName: "Current administrator",
+            id: "target-administrator",
+            role: "admin",
+            roleSource: "manual",
+            status: "active",
+            updatedAt: createdAt,
+          })
+          .run();
+        database.db
+          .insert(serviceIdentityLinks)
+          .values({
+            connectorId: "jellyfin-home",
+            createdAt,
+            deviceId: "target-device",
+            encryptedAccessToken: "v2.target-token",
+            externalDisplayName: "Current administrator",
+            externalServerId: "server-1",
+            externalUserId: "target-upstream",
+            externalUsername: "target",
+            healthState: "linked",
+            id: "target-administrator-link",
+            lastVerifiedAt: createdAt,
+            service: "jellyfin",
+            tokenCreatedAt: createdAt,
+            updatedAt: createdAt,
+            userId: "target-administrator",
+          })
+          .run();
+        if (candidate !== "new") {
+          database.db
+            .insert(users)
+            .values({
+              createdAt,
+              displayName: "Replacement account",
+              id: "replacement-account",
+              role: "viewer",
+              roleSource: "default",
+              status: candidate === "pending" ? "pending_link" : "active",
+              updatedAt: createdAt,
+            })
+            .run();
+          database.db
+            .insert(externalIdentities)
+            .values({
+              createdAt,
+              id: "replacement-oidc-identity",
+              issuer,
+              lastLoginAt: createdAt,
+              providerId,
+              subject: "immutable-viewer-subject",
+              updatedAt: createdAt,
+              userId: "replacement-account",
+            })
+            .run();
+          if (candidate === "active") {
+            database.db
+              .insert(serviceIdentityLinks)
+              .values({
+                connectorId: "jellyfin-home",
+                createdAt,
+                deviceId: "replacement-device",
+                encryptedAccessToken: "v2.replacement-token",
+                externalDisplayName: "Replacement account",
+                externalServerId: "server-1",
+                externalUserId: "replacement-upstream",
+                externalUsername: "replacement",
+                healthState: "linked",
+                id: "replacement-account-link",
+                lastVerifiedAt: createdAt,
+                service: "jellyfin",
+                tokenCreatedAt: createdAt,
+                updatedAt: createdAt,
+                userId: "replacement-account",
+              })
+              .run();
+          }
+        }
+        if (mappedAdmin) {
+          database.db
+            .insert(roleMappings)
+            .values({
+              claimPathJson: JSON.stringify(["email"]),
+              id: "administrator-email",
+              operator: "equals",
+              priority: 1_000,
+              providerId,
+              role: "admin",
+              valuesJson: JSON.stringify(["viewer@example.test"]),
+            })
+            .run();
+        }
+        app.sessionService.createSession({
+          attribution: {
+            authMethod: "jellyfin",
+            serviceIdentityLinkId: "target-administrator-link",
+            userId: "target-administrator",
+          },
+        });
+        const recovery = issueRecoverySession(app);
+        const started = await app.inject({
+          body: {
+            administratorId: "target-administrator",
+            confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+            expectedUpdatedAt: createdAt.toISOString(),
+          },
+          headers: {
+            cookie: recovery.cookie,
+            origin: "https://omnifin.example",
+            "x-omnifin-csrf": recovery.csrfToken,
+          },
+          method: "POST",
+          url: `/v1/auth/recovery/administrator-replacement/oidc/${providerId}/start`,
+        });
+        expect(started.statusCode, started.body).toBe(200);
+        const state = new URL(started.json().authorizationUrl as string).searchParams.get("state");
+        const callback = await app.inject({
+          headers: {
+            cookie: `${recovery.cookie}; ${transactionBindingCookie(started, state)}`,
+          },
+          method: "GET",
+          url: `/v1/auth/oidc/callback/${providerId}?code=replacement-code&state=${state}`,
+        });
+        expect(callback.statusCode).toBe(303);
+        expect(callback.headers.location).toBe(`/recovery?administratorReplacement=${expected}`);
+        expect(
+          database.db
+            .select()
+            .from(users)
+            .all()
+            .find((user) => user.id === "target-administrator"),
+        ).toMatchObject({ role: "admin", status: "active", updatedAt: createdAt });
+        expect(
+          database.sqlite
+            .prepare("select count(*) as count from audit_events where event_type = ?")
+            .get("auth.administrator.replaced"),
+        ).toEqual({ count: 0 });
+        expect(
+          app.sessionService.resolveAndRefresh(recovery.cookie.split("=", 2)[1]),
+        ).not.toBeNull();
+      } finally {
+        await app.close();
+      }
+    },
+  );
 
   it("requires recovery CSRF and refuses to bind an OIDC bootstrap to another session", async () => {
     const { app } = await openRouteHarness();

@@ -24,6 +24,11 @@ import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import { DiscoverySearchService } from "../discovery/search-service.js";
 import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+} from "../operations/external-mutation-journal.js";
+import {
   MediaReferenceError,
   MediaReferenceService,
   type MediaReferenceDependencies,
@@ -36,6 +41,7 @@ const OPERATION_ID_PATTERN = /^saved_operation_[A-Za-z0-9_-]{22}$/u;
 const DIGEST_PATTERN = /^[A-Za-z0-9_-]{22}$/u;
 const TARGET_TTL_MS = 15 * 60 * 1_000;
 const FAVORITE_PENDING_RECONCILE_MS = 30_000;
+const FAVORITE_DISPATCH_LEASE_MS = 30_000;
 const MAX_TARGETS_PER_USER = 1_024;
 const MAX_TARGET_CREATION_ATTEMPTS = 8;
 
@@ -132,6 +138,8 @@ interface SavedTargetSourceRow {
   connectorDisplayName: string;
   connectorEnabled: number;
   connectorId: string;
+  connectorConfigGeneration: number;
+  connectorInstanceGeneration: number;
   connectorType: string;
   deviceId: string;
   encryptedAccessToken: string;
@@ -187,6 +195,7 @@ interface FavoriteOperation {
 
 interface FavoriteOperationRow {
   encryptedResponse: string | null;
+  failureCode: string | null;
   fingerprintHash: string;
   id: string;
   kind: string;
@@ -226,6 +235,8 @@ export interface SavedTargetServiceDependencies {
   clock?: () => Date;
   createAuditId?: () => string;
   createClient?: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
+  createDispatchToken?: () => string;
+  createLeaseToken?: () => string;
   createOperationToken?: () => string;
   createTargetToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
@@ -349,9 +360,12 @@ export class SavedTargetService {
   readonly #config: AppConfig;
   readonly #createAuditId: () => string;
   readonly #createClient: (input: SavedTargetClientFactoryInput) => SavedTargetClient;
+  readonly #createDispatchToken: () => string;
+  readonly #createLeaseToken: () => string;
   readonly #createOperationToken: () => string;
   readonly #createTargetToken: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
   readonly #references: MediaReferenceService;
   readonly #resolveDiscovery: NonNullable<SavedTargetServiceDependencies["resolveDiscovery"]>;
 
@@ -365,9 +379,12 @@ export class SavedTargetService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAuditId = dependencies.createAuditId ?? (() => `saved-audit-${randomToken(16)}`);
+    this.#createDispatchToken = dependencies.createDispatchToken ?? (() => randomToken(16));
+    this.#createLeaseToken = dependencies.createLeaseToken ?? (() => randomToken(16));
     this.#createOperationToken = dependencies.createOperationToken ?? (() => randomToken(16));
     this.#createTargetToken = dependencies.createTargetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
     this.#references = new MediaReferenceService(database, config, {
       ...dependencies.mediaReferences,
       clock: dependencies.mediaReferences?.clock ?? this.#clock,
@@ -643,36 +660,86 @@ export class SavedTargetService {
     const reservation = this.#reserveFavoriteOperation(operation, this.#now());
     if (reservation.kind === "replay") return reservation.response;
 
-    let observed: boolean;
-    try {
-      const client = this.#client(source);
-      observed =
-        reservation.kind === "reconcile"
-          ? await client.readFavoriteState(
-              { itemId: resolved.payload.itemId, userId: source.externalUserId },
-              signal,
-            )
-          : !input.favorite;
-      if (observed !== input.favorite) {
-        await client.updateFavoriteState(
-          {
-            favorite: input.favorite,
-            itemId: resolved.payload.itemId,
-            userId: source.externalUserId,
-          },
-          signal,
-        );
-        observed = await client.readFavoriteState(
-          { itemId: resolved.payload.itemId, userId: source.externalUserId },
-          signal,
-        );
+    const dispatch = this.#favoriteDispatch(operation, source, resolved, input.favorite);
+    let observed = input.favorite;
+    if (!dispatch.owned && dispatch.record.state === "reserved") {
+      throw new SavedTargetServiceError("idempotency_in_progress");
+    }
+    if (dispatch.record.state === "failed") {
+      throw new SavedTargetServiceError("connector_unavailable");
+    }
+    if (dispatch.record.state === "uncertain") {
+      throw new SavedTargetServiceError("outcome_unknown");
+    }
+    if (dispatch.record.state !== "succeeded") {
+      if (
+        !dispatch.owned &&
+        (dispatch.record.connectorId !== source.connectorId ||
+          dispatch.record.connectorInstanceGeneration !== source.connectorInstanceGeneration ||
+          dispatch.record.connectorConfigGeneration !== source.connectorConfigGeneration)
+      ) {
+        this.#markFavoriteReconcileRequired(operation, "generation_mismatch");
+        throw new SavedTargetServiceError("outcome_unknown");
       }
-    } catch (error) {
-      this.#markFavoriteReconcileRequired(operation, "outcome_unknown");
-      throw new SavedTargetServiceError("outcome_unknown", { cause: error });
+      const client = this.#client(source);
+      const target = { itemId: resolved.payload.itemId, userId: source.externalUserId };
+      if (!dispatch.owned) this.#markFavoriteDispatchReconcile(dispatch.record.id);
+      try {
+        this.#assertFavoriteGeneration(source);
+        observed = await client.readFavoriteState(target, signal);
+      } catch (error) {
+        if (dispatch.owned && this.#journal.read(dispatch.record.id)?.state === "reserved") {
+          this.#journal.completeFailed({
+            failureCode: "readback_unavailable",
+            id: dispatch.record.id,
+            now: this.#now(),
+          });
+          this.#failFavoriteOperation(operation, "readback_unavailable");
+          throw new SavedTargetServiceError("connector_unavailable", { cause: error });
+        }
+        this.#markFavoriteReconcileRequired(operation, "readback_unavailable");
+        throw new SavedTargetServiceError("outcome_unknown", { cause: error });
+      }
+
+      if (observed === input.favorite) {
+        if (dispatch.owned) {
+          this.#markFavoriteDispatchBoundary(
+            dispatch.record,
+            dispatch.leaseOwner!,
+            source,
+            operation,
+          );
+        }
+        this.#journal.completeSucceeded({ id: dispatch.record.id, now: this.#now() });
+      } else {
+        if (!dispatch.owned) {
+          this.#markFavoriteReconcileRequired(operation, "intervening_change");
+          throw new SavedTargetServiceError("synchronization_failed");
+        }
+        this.#markFavoriteDispatchBoundary(
+          dispatch.record,
+          dispatch.leaseOwner!,
+          source,
+          operation,
+        );
+        try {
+          this.#assertFavoriteGeneration(source);
+          await client.updateFavoriteState({ favorite: input.favorite, ...target }, signal);
+          observed = await client.readFavoriteState(target, signal);
+        } catch (error) {
+          this.#markFavoriteDispatchReconcile(dispatch.record.id);
+          this.#markFavoriteReconcileRequired(operation, "outcome_unknown");
+          throw new SavedTargetServiceError("outcome_unknown", { cause: error });
+        }
+        if (observed === input.favorite) {
+          this.#journal.completeSucceeded({ id: dispatch.record.id, now: this.#now() });
+        } else {
+          this.#markFavoriteDispatchReconcile(dispatch.record.id);
+          this.#markFavoriteReconcileRequired(operation, "not_confirmed");
+        }
+      }
     }
     if (observed !== input.favorite) {
-      this.#markFavoriteReconcileRequired(operation, "not_confirmed");
       throw new SavedTargetServiceError("synchronization_failed");
     }
     const now = this.#now();
@@ -729,6 +796,186 @@ export class SavedTargetService {
     }
   }
 
+  #favoriteDispatch(
+    operation: FavoriteOperation,
+    source: SavedTargetSourceRow,
+    resolved: ResolvedSavedTarget,
+    favorite: boolean,
+  ): { leaseOwner: string | null; owned: boolean; record: ExternalMutationRecord } {
+    const parentOperationType = "saved_list_operation" as const;
+    const existing = this.#journal.replay({
+      kind: "saved.favorite",
+      parentOperationId: operation.id,
+      parentOperationType,
+    });
+    if (existing) {
+      if (existing.state !== "reserved") {
+        return { leaseOwner: null, owned: false, record: existing };
+      }
+      const now = this.#now();
+      if (
+        existing.leaseOwner === null ||
+        existing.leaseExpiresAt === null ||
+        existing.leaseExpiresAt >= now
+      ) {
+        return { leaseOwner: null, owned: false, record: existing };
+      }
+      const leaseOwner = this.#favoriteLeaseOwner();
+      return {
+        leaseOwner,
+        owned: true,
+        record: this.#journal.claimStaleReserved({
+          expectedLeaseExpiresAt: existing.leaseExpiresAt,
+          expectedLeaseOwner: existing.leaseOwner,
+          id: existing.id,
+          leaseExpiresAt: now + FAVORITE_DISPATCH_LEASE_MS,
+          leaseOwner,
+          now,
+        }),
+      };
+    }
+
+    const now = this.#now();
+    const leaseOwner = this.#favoriteLeaseOwner();
+    try {
+      return {
+        leaseOwner,
+        owned: true,
+        record: this.#journal.reserve({
+          connectorConfigGeneration: source.connectorConfigGeneration,
+          connectorId: source.connectorId,
+          connectorInstanceGeneration: source.connectorInstanceGeneration,
+          id: this.#favoriteDispatchId(),
+          kind: "saved.favorite",
+          leaseExpiresAt: now + FAVORITE_DISPATCH_LEASE_MS,
+          leaseOwner,
+          normalizedRequest: {
+            favorite,
+            itemId: resolved.payload.source === "jellyfin" ? resolved.payload.itemId : "invalid",
+            userId: source.externalUserId,
+            version: 1,
+          },
+          now,
+          parentOperationId: operation.id,
+          parentOperationType,
+          targetDigest: hashToken(
+            `saved_favorite_target\0${source.connectorId}\0${source.externalUserId}\0${
+              resolved.payload.source === "jellyfin" ? resolved.payload.itemId : "invalid"
+            }`,
+          ),
+          userId: operation.userId,
+        }),
+      };
+    } catch (error) {
+      if (
+        error instanceof ExternalMutationJournalError &&
+        (error.code === "target_locked" || error.code === "reservation_conflict")
+      ) {
+        throw new SavedTargetServiceError("idempotency_in_progress", { cause: error });
+      }
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #markFavoriteDispatchBoundary(
+    dispatch: ExternalMutationRecord,
+    leaseOwner: string,
+    source: SavedTargetSourceRow,
+    operation: FavoriteOperation,
+  ) {
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          if (
+            dispatch.connectorId !== source.connectorId ||
+            dispatch.connectorInstanceGeneration !== source.connectorInstanceGeneration ||
+            dispatch.connectorConfigGeneration !== source.connectorConfigGeneration
+          ) {
+            throw new SavedTargetServiceError("connector_unavailable");
+          }
+          this.#assertFavoriteGeneration(source);
+          this.#journal.markDispatched({ id: dispatch.id, leaseOwner, now: this.#now() });
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof SavedTargetServiceError && error.reason === "connector_unavailable") {
+        const current = this.#journal.read(dispatch.id);
+        if (current?.state === "reserved") {
+          this.#journal.completeFailed({
+            failureCode: "generation_mismatch",
+            id: current.id,
+            now: this.#now(),
+          });
+          this.#failFavoriteOperation(operation, "generation_mismatch");
+        }
+      }
+      if (error instanceof SavedTargetServiceError) throw error;
+      throw new SavedTargetServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #assertFavoriteGeneration(source: SavedTargetSourceRow) {
+    const current = this.#database.sqlite
+      .prepare(
+        `select instance_generation as instanceGeneration,
+                config_generation as configGeneration, enabled, type
+           from connector_configs where id = ? limit 1`,
+      )
+      .get(source.connectorId) as
+      | { configGeneration: number; enabled: number; instanceGeneration: number; type: string }
+      | undefined;
+    if (
+      !current ||
+      current.enabled !== 1 ||
+      current.type !== "jellyfin" ||
+      current.instanceGeneration !== source.connectorInstanceGeneration ||
+      current.configGeneration !== source.connectorConfigGeneration
+    ) {
+      throw new SavedTargetServiceError("connector_unavailable");
+    }
+  }
+
+  #markFavoriteDispatchReconcile(id: string) {
+    const current = this.#journal.read(id);
+    if (current?.state === "dispatched") {
+      this.#journal.markReconcileRequired({
+        failureCode: "outcome_unknown",
+        id,
+        now: this.#now(),
+      });
+    }
+  }
+
+  #failFavoriteOperation(operation: FavoriteOperation, failureCode: string) {
+    const now = this.#now();
+    const updated = this.#database.sqlite
+      .prepare(
+        `update saved_list_operations
+            set state = 'failed', encrypted_response = null, failure_code = ?,
+                completed_at = ?, updated_at = ?
+          where id = ? and user_id = ? and kind = 'favorite'
+            and state in ('pending', 'reconcile_required')`,
+      )
+      .run(failureCode, now, now, operation.id, operation.userId);
+    if (updated.changes !== 1) throw new SavedTargetServiceError("storage_failure");
+  }
+
+  #favoriteDispatchId() {
+    const id = `mutation_dispatch_${this.#createDispatchToken()}`;
+    if (!/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u.test(id)) {
+      throw new SavedTargetServiceError("storage_failure");
+    }
+    return id;
+  }
+
+  #favoriteLeaseOwner() {
+    const owner = `saved-favorite-${this.#createLeaseToken()}`;
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(owner)) {
+      throw new SavedTargetServiceError("storage_failure");
+    }
+    return owner;
+  }
+
   #favoriteOperation(
     userId: string,
     targetReferenceId: string,
@@ -760,14 +1007,17 @@ export class SavedTargetService {
   #reserveFavoriteOperation(
     operation: FavoriteOperation,
     now: number,
-  ): { kind: "new" | "reconcile" } | { kind: "replay"; response: SavedFavoriteMutationResponse } {
+  ):
+    | { failureCode: string | null; kind: "new" | "reconcile" }
+    | { kind: "replay"; response: SavedFavoriteMutationResponse } {
     try {
       return this.#database.sqlite
         .transaction(() => {
           const existing = this.#database.sqlite
             .prepare(
               `select id, kind, fingerprint_hash as fingerprintHash, state,
-                      encrypted_response as encryptedResponse, updated_at as updatedAt
+                      encrypted_response as encryptedResponse, failure_code as failureCode,
+                      updated_at as updatedAt
                from saved_list_operations
                where user_id = ? and idempotency_key_hash = ?`,
             )
@@ -812,7 +1062,7 @@ export class SavedTargetService {
             if (claimed.changes !== 1) {
               throw new SavedTargetServiceError("idempotency_in_progress");
             }
-            return { kind: "reconcile" as const };
+            return { failureCode: existing.failureCode, kind: "reconcile" as const };
           }
           this.#database.sqlite
             .prepare(
@@ -830,7 +1080,7 @@ export class SavedTargetService {
               now,
               now,
             );
-          return { kind: "new" as const };
+          return { failureCode: null, kind: "new" as const };
         })
         .immediate();
     } catch (error) {
@@ -1238,6 +1488,8 @@ export class SavedTargetService {
            l.encrypted_access_token as encryptedAccessToken,
            l.health_state as linkHealthState, l.revision as linkRevision,
            c.id as connectorId, c.type as connectorType,
+           c.instance_generation as connectorInstanceGeneration,
+           c.config_generation as connectorConfigGeneration,
            c.display_name as connectorDisplayName, c.base_url as baseUrl,
            c.encrypted_credentials as encryptedCredentials, c.tls_policy as tlsPolicy,
            c.insecure_http_approved as insecureHttpApproved, c.enabled as connectorEnabled
@@ -1258,6 +1510,10 @@ export class SavedTargetService {
       !IDENTIFIER_PATTERN.test(row.linkId) ||
       !IDENTIFIER_PATTERN.test(row.deviceId) ||
       !IDENTIFIER_PATTERN.test(row.externalUserId) ||
+      !Number.isSafeInteger(row.connectorInstanceGeneration) ||
+      row.connectorInstanceGeneration < 0 ||
+      !Number.isSafeInteger(row.connectorConfigGeneration) ||
+      row.connectorConfigGeneration < 0 ||
       !Number.isSafeInteger(row.linkRevision) ||
       row.linkRevision < 0 ||
       (row.insecureHttpApproved !== 0 && row.insecureHttpApproved !== 1)

@@ -365,6 +365,7 @@ describe("connector administration routes", () => {
       expect(probeResponse.statusCode, probeResponse.body).toBe(200);
       const probed = connectorMutationResponseSchema.parse(probeResponse.json()).connector;
       expect(probed).toMatchObject({ healthState: "healthy", lastProbe: { status: "healthy" } });
+      expect(probed.revision).toBe(created.revision);
       expect(createAdapter).toHaveBeenCalledOnce();
 
       const enableResponse = await app.inject({

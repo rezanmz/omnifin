@@ -1,4 +1,5 @@
 import { calculatePKCECodeChallenge } from "openid-client";
+import { ADMINISTRATOR_RECOVERY_CONFIRMATION } from "@omnifin/contracts/auth";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -435,6 +436,51 @@ describe("OidcAuthorizationTransactionService", () => {
         purpose: "administrator_bootstrap",
         recoverySessionId: "recovery-session-1",
       });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("encrypts the exact target revision and confirmation for administrator replacement", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const created = await service.create({
+        administratorId: "administrator-1",
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        expectedUpdatedAt: initialTime.toISOString(),
+        providerId: "oidc-home",
+        purpose: "administrator_replacement",
+        recoverySessionId: "recovery-session-1",
+      });
+      const stored = database.db.select().from(authTransactions).get();
+      const persisted = JSON.stringify(stored);
+
+      expect(persisted).not.toContain("administrator-1");
+      expect(persisted).not.toContain("recovery-session-1");
+      expect(persisted).not.toContain(ADMINISTRATOR_RECOVERY_CONFIRMATION);
+      expect(
+        service.consume({
+          browserBindingToken: created.browserBindingToken,
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toMatchObject({
+        administratorId: "administrator-1",
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        expectedUpdatedAt: initialTime.toISOString(),
+        purpose: "administrator_replacement",
+        recoverySessionId: "recovery-session-1",
+      });
+      expect(() =>
+        service.consume({
+          browserBindingToken: created.browserBindingToken,
+          providerId: created.providerId,
+          state: created.state,
+        }),
+      ).toThrow();
     } finally {
       database.close();
     }

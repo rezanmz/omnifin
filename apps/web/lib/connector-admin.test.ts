@@ -1,4 +1,4 @@
-import { ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
+import { RECOVERY_PERMISSIONS, ROLE_PERMISSIONS } from "@omnifin/contracts/auth";
 import type { ConnectorAdmin } from "@omnifin/contracts/connectors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -99,11 +99,7 @@ describe("connector administration client", () => {
       accountState: "recovery" as const,
       authenticationMethod: { kind: "recovery" as const },
       linkedServices: [],
-      permissions: [
-        "recovery.oidc.manage",
-        "recovery.jellyfin.manage",
-        "recovery.sessions.revoke",
-      ] as const,
+      permissions: [...RECOVERY_PERMISSIONS],
       role: "admin" as const,
       userId: null,
     };

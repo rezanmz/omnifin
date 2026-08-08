@@ -39,6 +39,7 @@ import {
   discoveryBrowseClient,
   type DiscoveryBrowseClient,
 } from "../lib/discovery-browse";
+import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
 import { ApplicationShellContent } from "./application-shell";
@@ -139,10 +140,6 @@ function itemMedia(item: DiscoveryFeedItem): DetailMedia {
     voteAverage: item.voteAverage,
     year: item.year,
   };
-}
-
-function isRequestable(item: DiscoveryFeedItem) {
-  return item.availability === "unavailable" || item.availability === "partial";
 }
 
 function availabilityLabel(item: DiscoveryFeedItem) {
@@ -675,7 +672,7 @@ function BrowserContent({
                           <small>{requested ? "Requested" : availabilityLabel(item)}</small>
                         </span>
                       </button>
-                      {isRequestable(item) && !requested ? (
+                      {discoveryAvailabilityIsRequestable(item.availability) && !requested ? (
                         <button
                           aria-label={`Request ${item.title}`}
                           className={styles.requestButton}

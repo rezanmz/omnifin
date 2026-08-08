@@ -32,9 +32,15 @@ import type { DatabaseHandle } from "../db/client.js";
 import {
   constantTimeTextEqual,
   EnvelopeCipher,
+  hashToken,
   privacyHash,
   randomToken,
 } from "../security/crypto.js";
+import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+} from "../operations/external-mutation-journal.js";
 import {
   MediaReferenceService,
   type MediaReferenceDependencies,
@@ -57,6 +63,9 @@ const SUBTITLE_MAX_BYTES = 8 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
 const MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION = 20_000;
 const MAX_PLAYBACK_ASSET_HANDLES_GLOBAL = 250_000;
+const PLAYBACK_PROGRESS_LEASE_MS = 30_000;
+const PLAYBACK_LIFECYCLE_BATCH_SIZE = 100;
+const MAX_PLAYBACK_REVISION = 2_147_483_647;
 const PLAYBACK_ASSET_HANDLE_PATTERN = /^asset_h1\.[A-Za-z0-9_-]{22}$/u;
 const LEGACY_PLAYBACK_ASSET_PATTERN = /^asset_v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 type PlaybackAssetPathPrefix = "./" | "hls/";
@@ -75,6 +84,14 @@ const identifierSchema = z.string().regex(IDENTIFIER_PATTERN);
 const playbackTargetSchema = z.strictObject({
   path: z.string().refine(isJellyfinPlaybackTargetPath),
   query: z.string().max(32_768),
+});
+
+const playbackProgressEvidenceSchema = z.strictObject({
+  event: z.enum(["started", "progress", "paused", "stopped"]),
+  playbackSessionId: playbackSessionIdSchema,
+  positionSeconds: z.int().nonnegative().max(10_000_000),
+  schemaVersion: z.literal(1),
+  sessionRevision: z.int().nonnegative().max(MAX_PLAYBACK_REVISION),
 });
 
 const storedPlaybackSchema = z
@@ -116,9 +133,11 @@ type StoredPlaybackAsset = z.infer<typeof storedPlaybackAssetSchema>;
 
 interface PlaybackSourceRow {
   baseUrl: string;
+  connectorConfigGeneration: number;
   connectorDisplayName: string;
   connectorEnabled: number;
   connectorId: string;
+  connectorInstanceGeneration: number;
   connectorType: string;
   deviceId: string;
   encryptedAccessToken: string;
@@ -166,6 +185,49 @@ interface PlaybackAssetHandleAllocation {
   sessionCount: number;
 }
 
+type PlaybackProgressOperationState =
+  "pending" | "reconcile_required" | "uncertain" | "succeeded" | "failed";
+
+interface PlaybackProgressOperationRow {
+  completedAt: number | null;
+  connectorConfigGeneration: number;
+  connectorId: string;
+  connectorInstanceGeneration: number;
+  failureCode: string | null;
+  id: string;
+  playbackSessionId: string;
+  positionSeconds: number;
+  sessionRevision: number;
+  state: PlaybackProgressOperationState;
+  updatedAt: number;
+  userId: string;
+}
+
+interface PlaybackProgressEvidence {
+  event: PlaybackProgressRequest["event"];
+  playbackSessionId: string;
+  positionSeconds: number;
+  schemaVersion: 1;
+  sessionRevision: number;
+}
+
+interface PlaybackProgressReservation {
+  dispatch: ExternalMutationRecord;
+  evidence: PlaybackProgressEvidence;
+  leaseOwner: string | null;
+  operation: PlaybackProgressOperationRow;
+}
+
+const PLAYBACK_PROGRESS_OPERATION_SELECT = `
+  select id, playback_session_id as playbackSessionId,
+    session_revision as sessionRevision, user_id as userId,
+    connector_id as connectorId,
+    connector_instance_generation as connectorInstanceGeneration,
+    connector_config_generation as connectorConfigGeneration,
+    position_seconds as positionSeconds, state, failure_code as failureCode,
+    completed_at as completedAt, updated_at as updatedAt
+  from playback_progress_operations`;
+
 export interface PlaybackSessionContext {
   principal: SessionPrincipal;
 }
@@ -176,6 +238,7 @@ export interface PlaybackClientFactoryInput extends ConnectorTargetConfig {
 }
 
 export interface PlaybackSessionDependencies {
+  beforeProgressCompletion?: (state: "succeeded" | "uncertain") => void;
   clock?: () => Date;
   createAssetToken?: () => string;
   createClient?: (
@@ -224,6 +287,16 @@ export class PlaybackSessionError extends Error {
 }
 
 class PlaybackConfigurationError extends Error {}
+
+class PlaybackProgressPreDispatchError extends Error {
+  public readonly failureCode: "connector_generation_changed";
+
+  public constructor(failureCode: "connector_generation_changed") {
+    super(failureCode);
+    this.name = "PlaybackProgressPreDispatchError";
+    this.failureCode = failureCode;
+  }
+}
 
 function accessTokenContext(linkId: string) {
   return `service_identity_access_token:jellyfin:${linkId}`;
@@ -428,6 +501,8 @@ function isManifestTarget(target: JellyfinPlaybackTarget) {
 }
 
 export class PlaybackSessionService {
+  readonly #beforeProgressCompletion:
+    NonNullable<PlaybackSessionDependencies["beforeProgressCompletion"]> | undefined;
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
@@ -435,6 +510,8 @@ export class PlaybackSessionService {
   readonly #createClient: NonNullable<PlaybackSessionDependencies["createClient"]>;
   readonly #createToken: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
+  readonly #reportPipelineTails = new Map<string, Promise<void>>();
   readonly #references: MediaReferenceService;
 
   public constructor(
@@ -444,11 +521,13 @@ export class PlaybackSessionService {
   ) {
     this.#database = database;
     this.#config = config;
+    this.#beforeProgressCompletion = dependencies.beforeProgressCompletion;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAssetToken = dependencies.createAssetToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#createToken = dependencies.createToken ?? (() => randomToken(16));
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
     this.#references = new MediaReferenceService(database, config, {
       ...dependencies.mediaReferences,
       clock: dependencies.mediaReferences?.clock ?? this.#clock,
@@ -555,77 +634,147 @@ export class PlaybackSessionService {
     playbackSessionIdSchema.parse(sessionId);
     const request = playbackProgressRequestSchema.parse(rawRequest);
     const source = this.#source(principal);
-    const now = validTime(this.#clock());
-    const session = this.#session(source, sessionId, now);
-    const state = nextState(session.state, request.event);
-    const payload = this.#payload(session);
-    const positionSeconds = Math.min(request.positionSeconds, payload.durationSeconds);
-    try {
-      await this.#client(source).reportPlaybackEvent(
-        {
-          event: request.event,
-          positionSeconds,
-          session: {
-            audioStreamIndex: payload.audioStreamIndex,
-            itemId: payload.itemId,
-            mediaSourceId: payload.mediaSourceId,
-            playMethod: payload.playMethod,
-            playSessionId: payload.playSessionId,
-            subtitleStreamIndex: payload.subtitleStreamIndex,
-          } satisfies JellyfinPlaybackReportingSession,
-        },
-        signal,
-      );
-    } catch (error) {
-      if (error instanceof PlaybackSessionError) throw error;
-      throw new PlaybackSessionError("unavailable", { cause: error });
-    }
-
-    const expiresAt =
-      state === "stopped"
-        ? Math.min(session.expiresAt, now + STOPPED_SESSION_TTL_MS)
-        : session.expiresAt;
-    try {
-      const updated = this.#database.sqlite
-        .transaction(() => {
-          const result = this.#database.sqlite
-            .prepare(
-              `update playback_sessions
-               set state = ?, position_seconds = ?, revision = revision + 1,
-                   last_reported_at = ?, expires_at = ?, updated_at = ?
-               where id = ? and user_id = ? and revision = ? and state = ? and expires_at > ?`,
-            )
-            .run(
-              state,
-              positionSeconds,
-              now,
-              expiresAt,
-              now,
-              session.id,
-              source.linkUserId,
-              session.revision,
-              session.state,
-              now,
-            );
-          if (result.changes === 1 && state === "stopped") {
-            this.#database.sqlite
-              .prepare("delete from playback_asset_handles where playback_session_id = ?")
-              .run(session.id);
-          }
-          return result;
-        })
-        .immediate();
-      if (updated.changes !== 1) throw new PlaybackSessionError("transition_invalid");
-      return playbackProgressResponseSchema.parse({
-        acceptedAt: new Date(now).toISOString(),
+    return this.#enqueueReport(sessionId, async () => {
+      const now = validTime(this.#clock());
+      this.#cleanupPlaybackLifecycle(now);
+      const session = this.#session(source, sessionId, now);
+      const payload = this.#payload(session);
+      const positionSeconds = Math.min(request.positionSeconds, payload.durationSeconds);
+      const priorReplay = this.#priorProgressReplay(
+        session,
+        source,
+        request.event,
         positionSeconds,
-        sessionId: session.id,
-        state: publicState(state),
-      });
-    } catch (error) {
-      if (error instanceof PlaybackSessionError) throw error;
-      throw new PlaybackSessionError("unavailable", { cause: error });
-    }
+      );
+      if (priorReplay) return priorReplay;
+      const state = nextState(session.state, request.event);
+
+      let reservation = this.#progressReservation(session, source, request.event, positionSeconds);
+      if (!reservation) {
+        reservation = this.#reserveProgress(session, source, request.event, positionSeconds, now);
+      }
+
+      if (reservation.dispatch.state === "succeeded") {
+        return this.#completeProgress(context, session, state, reservation, "succeeded", null);
+      }
+      if (
+        reservation.dispatch.state === "dispatched" ||
+        reservation.dispatch.state === "reconcile_required" ||
+        reservation.dispatch.state === "uncertain"
+      ) {
+        return this.#completeUncertainProgress(
+          context,
+          session,
+          state,
+          reservation,
+          reservation.dispatch.failureCode ?? "interrupted_after_dispatch",
+        );
+      }
+      if (reservation.dispatch.state === "failed") {
+        throw new PlaybackSessionError("unavailable");
+      }
+
+      if (reservation.dispatch.leaseExpiresAt === null) {
+        throw new PlaybackSessionError("unavailable");
+      }
+      if (reservation.dispatch.leaseExpiresAt < now) {
+        reservation = this.#claimProgressReservation(reservation, now);
+      } else if (reservation.leaseOwner === null) {
+        throw new PlaybackSessionError("unavailable");
+      }
+
+      let client: ReturnType<NonNullable<PlaybackSessionDependencies["createClient"]>>;
+      try {
+        client = this.#client(source);
+      } catch (error) {
+        this.#failProgressBeforeDispatch(reservation, "connector_unavailable");
+        throw new PlaybackSessionError("unavailable", { cause: error });
+      }
+
+      try {
+        this.#markProgressDispatched(reservation, validTime(this.#clock()));
+      } catch (error) {
+        const dispatch = this.#journal.read(reservation.dispatch.id);
+        if (
+          dispatch?.state === "dispatched" ||
+          dispatch?.state === "reconcile_required" ||
+          dispatch?.state === "uncertain"
+        ) {
+          return this.#completeUncertainProgress(
+            context,
+            session,
+            state,
+            { ...reservation, dispatch },
+            dispatch.failureCode ?? "dispatch_boundary_uncertain",
+          );
+        }
+        this.#failProgressBeforeDispatch(
+          reservation,
+          error instanceof PlaybackProgressPreDispatchError
+            ? error.failureCode
+            : "dispatch_precondition_failed",
+        );
+        throw new PlaybackSessionError("unavailable", { cause: error });
+      }
+
+      try {
+        await client.reportPlaybackEvent(
+          {
+            event: request.event,
+            positionSeconds,
+            session: {
+              audioStreamIndex: payload.audioStreamIndex,
+              itemId: payload.itemId,
+              mediaSourceId: payload.mediaSourceId,
+              playMethod: payload.playMethod,
+              playSessionId: payload.playSessionId,
+              subtitleStreamIndex: payload.subtitleStreamIndex,
+            } satisfies JellyfinPlaybackReportingSession,
+          },
+          signal,
+        );
+      } catch (error) {
+        try {
+          return this.#completeUncertainProgress(
+            context,
+            session,
+            state,
+            { ...reservation, dispatch: this.#journal.read(reservation.dispatch.id)! },
+            "upstream_outcome_uncertain",
+          );
+        } catch (completionError) {
+          throw new PlaybackSessionError("unavailable", {
+            cause: new AggregateError([error, completionError]),
+          });
+        }
+      }
+
+      try {
+        return this.#completeProgress(
+          context,
+          session,
+          state,
+          { ...reservation, dispatch: this.#journal.read(reservation.dispatch.id)! },
+          "succeeded",
+          null,
+        );
+      } catch (error) {
+        try {
+          return this.#completeUncertainProgress(
+            context,
+            session,
+            state,
+            { ...reservation, dispatch: this.#journal.read(reservation.dispatch.id)! },
+            "local_completion_failed",
+          );
+        } catch (completionError) {
+          this.#terminalizeProgressUncertainty(reservation, "local_completion_failed");
+          throw new PlaybackSessionError("unavailable", {
+            cause: new AggregateError([error, completionError]),
+          });
+        }
+      }
+    });
   }
 
   public async readDirect(
@@ -796,6 +945,473 @@ export class PlaybackSessionService {
     }
   }
 
+  #priorProgressReplay(
+    session: PlaybackSessionRow,
+    source: PlaybackSourceRow,
+    event: PlaybackProgressRequest["event"],
+    positionSeconds: number,
+  ) {
+    if (session.revision === 0) return null;
+    const operation = this.#progressOperation(session.id, session.revision - 1);
+    if (!operation) return null;
+    const reservation = this.#progressReservationFromOperation(operation, source);
+    if (
+      reservation.evidence.event !== event ||
+      reservation.evidence.positionSeconds !== positionSeconds
+    ) {
+      return null;
+    }
+    if (
+      (reservation.dispatch.state !== "succeeded" || operation.state !== "succeeded") &&
+      (reservation.dispatch.state !== "uncertain" || operation.state !== "uncertain")
+    ) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    if (operation.completedAt === null) throw new PlaybackSessionError("unavailable");
+    return playbackProgressResponseSchema.parse({
+      acceptedAt: new Date(operation.completedAt).toISOString(),
+      positionSeconds: operation.positionSeconds,
+      sessionId: operation.playbackSessionId,
+      state: publicState(
+        event === "paused" ? "paused" : event === "stopped" ? "stopped" : "playing",
+      ),
+    });
+  }
+
+  #progressReservation(
+    session: PlaybackSessionRow,
+    source: PlaybackSourceRow,
+    event: PlaybackProgressRequest["event"],
+    positionSeconds: number,
+  ) {
+    const operation = this.#progressOperation(session.id, session.revision);
+    if (!operation) return null;
+    const reservation = this.#progressReservationFromOperation(operation, source);
+    if (
+      reservation.evidence.event !== event ||
+      reservation.evidence.positionSeconds !== positionSeconds
+    ) {
+      throw new PlaybackSessionError("transition_invalid");
+    }
+    return reservation;
+  }
+
+  #progressReservationFromOperation(
+    operation: PlaybackProgressOperationRow,
+    source: PlaybackSourceRow,
+  ): PlaybackProgressReservation {
+    try {
+      const dispatch = this.#journal.replay({
+        kind: "playback.progress",
+        parentOperationId: operation.id,
+        parentOperationType: "playback_progress_operation",
+      });
+      if (!dispatch) throw new Error("missing playback dispatch");
+      const evidence = playbackProgressEvidenceSchema.parse(dispatch.normalizedRequest);
+      if (
+        operation.userId !== source.linkUserId ||
+        operation.connectorId !== source.connectorId ||
+        operation.connectorId !== dispatch.connectorId ||
+        operation.connectorInstanceGeneration !== dispatch.connectorInstanceGeneration ||
+        operation.connectorConfigGeneration !== dispatch.connectorConfigGeneration ||
+        operation.playbackSessionId !== evidence.playbackSessionId ||
+        operation.sessionRevision !== evidence.sessionRevision ||
+        operation.positionSeconds !== evidence.positionSeconds ||
+        operation.userId !== dispatch.userId ||
+        dispatch.parentOperationId !== operation.id ||
+        dispatch.parentOperationType !== "playback_progress_operation" ||
+        dispatch.kind !== "playback.progress"
+      ) {
+        throw new Error("inconsistent playback dispatch");
+      }
+      return { dispatch, evidence, leaseOwner: null, operation };
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+  }
+
+  #reserveProgress(
+    session: PlaybackSessionRow,
+    source: PlaybackSourceRow,
+    event: PlaybackProgressRequest["event"],
+    positionSeconds: number,
+    now: number,
+  ): PlaybackProgressReservation {
+    if (session.revision >= MAX_PLAYBACK_REVISION) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    const leaseExpiresAt = now + PLAYBACK_PROGRESS_LEASE_MS;
+    if (leaseExpiresAt > 8_640_000_000_000_000) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    const operationId = this.#progressOperationId(session.id, session.revision);
+    const dispatchId = this.#progressDispatchId(operationId);
+    const leaseOwner = `playback-progress-${randomToken(16)}`;
+    const evidence = playbackProgressEvidenceSchema.parse({
+      event,
+      playbackSessionId: session.id,
+      positionSeconds,
+      schemaVersion: 1,
+      sessionRevision: session.revision,
+    });
+    try {
+      const dispatch = this.#database.sqlite
+        .transaction(() => {
+          const targetDigest = this.#progressTargetDigest(session.id, session.revision);
+          this.#database.sqlite
+            .prepare(
+              `insert into playback_progress_operations (
+                 id, playback_session_id, session_revision, user_id, connector_id,
+                 connector_instance_generation, connector_config_generation,
+                 position_seconds, state, created_at, updated_at
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(
+              operationId,
+              session.id,
+              session.revision,
+              source.linkUserId,
+              source.connectorId,
+              source.connectorInstanceGeneration,
+              source.connectorConfigGeneration,
+              positionSeconds,
+              now,
+              now,
+            );
+          return this.#journal.reserve({
+            connectorConfigGeneration: source.connectorConfigGeneration,
+            connectorId: source.connectorId,
+            connectorInstanceGeneration: source.connectorInstanceGeneration,
+            id: dispatchId,
+            kind: "playback.progress",
+            leaseExpiresAt,
+            leaseOwner,
+            normalizedRequest: evidence,
+            now,
+            parentOperationId: operationId,
+            parentOperationType: "playback_progress_operation",
+            targetDigest,
+            userId: source.linkUserId,
+          });
+        })
+        .immediate();
+      const operation = this.#progressOperation(session.id, session.revision);
+      if (!operation) throw new Error("missing playback progress operation");
+      return { dispatch, evidence, leaseOwner, operation };
+    } catch (error) {
+      if (
+        error instanceof ExternalMutationJournalError &&
+        (error.code === "reservation_conflict" || error.code === "target_locked")
+      ) {
+        const existing = this.#progressReservation(session, source, event, positionSeconds);
+        if (existing) return existing;
+      }
+      if (error instanceof PlaybackSessionError) throw error;
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+  }
+
+  #claimProgressReservation(
+    reservation: PlaybackProgressReservation,
+    now: number,
+  ): PlaybackProgressReservation {
+    const expectedLeaseOwner = reservation.dispatch.leaseOwner;
+    const expectedLeaseExpiresAt = reservation.dispatch.leaseExpiresAt;
+    if (expectedLeaseOwner === null || expectedLeaseExpiresAt === null) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    const leaseExpiresAt = now + PLAYBACK_PROGRESS_LEASE_MS;
+    if (leaseExpiresAt > 8_640_000_000_000_000) {
+      throw new PlaybackSessionError("unavailable");
+    }
+    const leaseOwner = `playback-progress-${randomToken(16)}`;
+    try {
+      const dispatch = this.#journal.claimStaleReserved({
+        expectedLeaseExpiresAt,
+        expectedLeaseOwner,
+        id: reservation.dispatch.id,
+        leaseExpiresAt,
+        leaseOwner,
+        now,
+      });
+      return { ...reservation, dispatch, leaseOwner };
+    } catch (error) {
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+  }
+
+  #markProgressDispatched(reservation: PlaybackProgressReservation, now: number) {
+    if (reservation.leaseOwner === null) throw new PlaybackSessionError("unavailable");
+    const leaseOwner = reservation.leaseOwner;
+    this.#database.sqlite
+      .transaction(() => {
+        const generation = this.#database.sqlite
+          .prepare(
+            `select instance_generation as instanceGeneration,
+                    config_generation as configGeneration
+             from connector_configs
+             where id = ? and type = 'jellyfin' and enabled = 1`,
+          )
+          .get(reservation.operation.connectorId) as
+          { configGeneration: number; instanceGeneration: number } | undefined;
+        if (
+          !generation ||
+          generation.instanceGeneration !== reservation.operation.connectorInstanceGeneration ||
+          generation.configGeneration !== reservation.operation.connectorConfigGeneration
+        ) {
+          throw new PlaybackProgressPreDispatchError("connector_generation_changed");
+        }
+        this.#journal.markDispatched({
+          id: reservation.dispatch.id,
+          leaseOwner,
+          now,
+        });
+      })
+      .immediate();
+  }
+
+  #failProgressBeforeDispatch(
+    reservation: PlaybackProgressReservation,
+    failureCode:
+      "connector_generation_changed" | "connector_unavailable" | "dispatch_precondition_failed",
+  ) {
+    try {
+      const now = validTime(this.#clock());
+      this.#database.sqlite
+        .transaction(() => {
+          const dispatch = this.#journal.read(reservation.dispatch.id);
+          if (dispatch?.state === "reserved") {
+            this.#journal.completeFailed({ failureCode, id: dispatch.id, now });
+          }
+          this.#database.sqlite
+            .prepare(
+              `update playback_progress_operations
+               set state = 'failed', failure_code = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(failureCode, now, now, reservation.operation.id);
+        })
+        .immediate();
+    } catch {
+      // A durable reservation still prevents an unsafe duplicate dispatch.
+    }
+  }
+
+  #completeProgress(
+    context: PlaybackSessionContext,
+    session: PlaybackSessionRow,
+    state: "playing" | "paused" | "stopped",
+    reservation: PlaybackProgressReservation,
+    outcome: "succeeded" | "uncertain",
+    failureCode: string | null,
+  ) {
+    const now = validTime(this.#clock());
+    const expiresAt =
+      state === "stopped"
+        ? Math.min(session.expiresAt, now + STOPPED_SESSION_TTL_MS)
+        : session.expiresAt;
+    this.#database.sqlite
+      .transaction(() => {
+        this.#beforeProgressCompletion?.(outcome);
+        const dispatch = this.#journal.read(reservation.dispatch.id);
+        if (!dispatch) throw new PlaybackSessionError("unavailable");
+        if (outcome === "succeeded") {
+          if (dispatch.state === "dispatched" || dispatch.state === "reconcile_required") {
+            this.#journal.completeSucceeded({ id: dispatch.id, now });
+          } else if (dispatch.state !== "succeeded") {
+            throw new PlaybackSessionError("unavailable");
+          }
+        } else {
+          if (!failureCode) throw new PlaybackSessionError("unavailable");
+          if (dispatch.state === "dispatched" || dispatch.state === "reconcile_required") {
+            this.#journal.completeUncertain({ failureCode, id: dispatch.id, now });
+          } else if (dispatch.state !== "uncertain") {
+            throw new PlaybackSessionError("unavailable");
+          }
+        }
+
+        const operationUpdate = this.#database.sqlite
+          .prepare(
+            `update playback_progress_operations
+             set state = ?, failure_code = ?, completed_at = ?, updated_at = ?
+             where id = ? and state = 'pending'`,
+          )
+          .run(outcome, failureCode, now, now, reservation.operation.id);
+        if (operationUpdate.changes !== 1) {
+          const operation = this.#progressOperation(
+            reservation.operation.playbackSessionId,
+            reservation.operation.sessionRevision,
+          );
+          if (!operation || operation.state !== outcome || operation.failureCode !== failureCode) {
+            throw new PlaybackSessionError("unavailable");
+          }
+        }
+
+        const current = this.#database.sqlite
+          .prepare(
+            `select state, position_seconds as positionSeconds, revision
+             from playback_sessions where id = ? and user_id = ?`,
+          )
+          .get(session.id, reservation.operation.userId) as
+          { positionSeconds: number; revision: number; state: string } | undefined;
+        if (!current) throw new PlaybackSessionError("not_found");
+        if (current.revision === session.revision) {
+          const updated = this.#database.sqlite
+            .prepare(
+              `update playback_sessions
+               set state = ?, position_seconds = ?, revision = revision + 1,
+                   last_reported_at = ?, expires_at = ?, updated_at = ?
+               where id = ? and user_id = ? and revision = ? and state = ?`,
+            )
+            .run(
+              state,
+              reservation.operation.positionSeconds,
+              now,
+              expiresAt,
+              now,
+              session.id,
+              reservation.operation.userId,
+              session.revision,
+              session.state,
+            );
+          if (updated.changes !== 1) throw new PlaybackSessionError("transition_invalid");
+        } else if (
+          current.revision !== session.revision + 1 ||
+          current.state !== state ||
+          current.positionSeconds !== reservation.operation.positionSeconds
+        ) {
+          throw new PlaybackSessionError("transition_invalid");
+        }
+        if (state === "stopped") {
+          this.#database.sqlite
+            .prepare("delete from playback_asset_handles where playback_session_id = ?")
+            .run(session.id);
+        }
+        if (outcome === "uncertain") {
+          this.#auditProgressUncertainty(context, reservation, failureCode!, now);
+        }
+      })
+      .immediate();
+    return playbackProgressResponseSchema.parse({
+      acceptedAt: new Date(now).toISOString(),
+      positionSeconds: reservation.operation.positionSeconds,
+      sessionId: session.id,
+      state: publicState(state),
+    });
+  }
+
+  #completeUncertainProgress(
+    context: PlaybackSessionContext,
+    session: PlaybackSessionRow,
+    state: "playing" | "paused" | "stopped",
+    reservation: PlaybackProgressReservation,
+    failureCode: string,
+  ) {
+    try {
+      return this.#completeProgress(context, session, state, reservation, "uncertain", failureCode);
+    } catch (error) {
+      this.#terminalizeProgressUncertainty(reservation, failureCode);
+      throw error;
+    }
+  }
+
+  #terminalizeProgressUncertainty(reservation: PlaybackProgressReservation, failureCode: string) {
+    try {
+      const now = validTime(this.#clock());
+      this.#database.sqlite
+        .transaction(() => {
+          const dispatch = this.#journal.read(reservation.dispatch.id);
+          if (dispatch?.state === "dispatched" || dispatch?.state === "reconcile_required") {
+            this.#journal.completeUncertain({ failureCode, id: dispatch.id, now });
+          }
+          this.#database.sqlite
+            .prepare(
+              `update playback_progress_operations
+               set state = 'uncertain', failure_code = ?, completed_at = ?, updated_at = ?
+               where id = ? and state = 'pending'`,
+            )
+            .run(failureCode, now, now, reservation.operation.id);
+        })
+        .immediate();
+    } catch {
+      // The dispatched journal row remains nonredispatchable even if completion storage is impaired.
+    }
+  }
+
+  #auditProgressUncertainty(
+    context: PlaybackSessionContext,
+    reservation: PlaybackProgressReservation,
+    failureCode: string,
+    now: number,
+  ) {
+    const auditId = `audit_${hashToken(
+      `playback-progress-uncertain\0${reservation.operation.id}`,
+    ).slice(0, 22)}`;
+    this.#database.sqlite
+      .prepare(
+        `insert or ignore into audit_events (
+           id, actor_user_id, actor_session_id, actor_auth_method,
+           event_type, outcome, target_type, target_id, request_id,
+           metadata_json, ip_hash, created_at
+         ) values (?, ?, ?, ?, 'playback.progress.delivery_uncertain', 'failure',
+           'playback_session', ?, null, ?, null, ?)`,
+      )
+      .run(
+        auditId,
+        reservation.operation.userId,
+        context.principal.sessionId,
+        context.principal.authenticationMethod.kind,
+        reservation.operation.playbackSessionId,
+        JSON.stringify({
+          event: reservation.evidence.event,
+          failureCode,
+          locallyAccepted: true,
+          sessionRevision: reservation.operation.sessionRevision,
+        }),
+        now,
+      );
+  }
+
+  #progressOperation(sessionId: string, revision: number) {
+    return this.#database.sqlite
+      .prepare(
+        `${PLAYBACK_PROGRESS_OPERATION_SELECT}
+         where playback_session_id = ? and session_revision = ?`,
+      )
+      .get(sessionId, revision) as PlaybackProgressOperationRow | undefined;
+  }
+
+  #progressOperationId(sessionId: string, revision: number) {
+    return `playback_progress_operation_${hashToken(
+      `playback-progress-operation\0${sessionId}\0${revision}`,
+    ).slice(0, 22)}`;
+  }
+
+  #progressDispatchId(operationId: string) {
+    return `mutation_dispatch_${hashToken(`playback-progress-dispatch\0${operationId}`).slice(0, 22)}`;
+  }
+
+  #progressTargetDigest(sessionId: string, revision: number) {
+    return hashToken(`playback-progress-target\0${sessionId}\0${revision}`).slice(0, 22);
+  }
+
+  async #enqueueReport<T>(sessionId: string, report: () => Promise<T>) {
+    const predecessor = this.#reportPipelineTails.get(sessionId) ?? Promise.resolve();
+    const operation = predecessor.then(report);
+    const tail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#reportPipelineTails.set(sessionId, tail);
+    try {
+      return await operation;
+    } finally {
+      if (this.#reportPipelineTails.get(sessionId) === tail) {
+        this.#reportPipelineTails.delete(sessionId);
+      }
+    }
+  }
+
   #stream(context: PlaybackSessionContext, sessionId: string, maxResponseBytes: number) {
     const principal = requirePermission(context.principal, "media.view");
     playbackSessionIdSchema.parse(sessionId);
@@ -900,7 +1516,7 @@ export class PlaybackSessionService {
     if (session.expiresAt <= now || session.state === "stopped") {
       throw new PlaybackSessionError("not_found");
     }
-    this.#database.sqlite.prepare("delete from playback_sessions where expires_at <= ?").run(now);
+    this.#cleanupPlaybackLifecycle(now);
     const sessionCount = this.#database.sqlite
       .prepare("select count(*) as count from playback_asset_handles where playback_session_id = ?")
       .get(session.id) as { count: number };
@@ -1084,11 +1700,13 @@ export class PlaybackSessionService {
         .transaction(() => {
           this.#database.sqlite
             .prepare(
-              `delete from playback_sessions
+              `update playback_sessions
+               set expires_at = min(expires_at, ?), updated_at = max(updated_at, ?)
                where user_id = ?
-                 and (expires_at <= ? or service_identity_link_id <> ? or link_revision <> ?)`,
+                 and (service_identity_link_id <> ? or link_revision <> ?)`,
             )
-            .run(source.linkUserId, now, source.linkId, source.linkRevision);
+            .run(now, now, source.linkUserId, source.linkId, source.linkRevision);
+          this.#cleanupPlaybackLifecycle(now);
           let id: string | null = null;
           for (let attempt = 0; attempt < MAX_CREATION_ATTEMPTS; attempt += 1) {
             const candidate = `playback_${this.#createToken()}`;
@@ -1140,21 +1758,74 @@ export class PlaybackSessionService {
   }
 
   #enforceUserLimit(userId: string, protectedId: string) {
+    const now = validTime(this.#clock());
     const row = this.#database.sqlite
-      .prepare("select count(*) as count from playback_sessions where user_id = ?")
-      .get(userId) as { count: number };
+      .prepare(
+        "select count(*) as count from playback_sessions where user_id = ? and expires_at > ?",
+      )
+      .get(userId, now) as { count: number };
     if (row.count <= MAX_PLAYBACK_SESSIONS_PER_USER) return;
     this.#database.sqlite
       .prepare(
-        `delete from playback_sessions
+        `update playback_sessions set expires_at = min(expires_at, ?), updated_at = max(updated_at, ?)
          where id in (
            select id from playback_sessions
-           where user_id = ? and id <> ?
+           where user_id = ? and id <> ? and expires_at > ?
            order by case when state = 'stopped' then 0 else 1 end, updated_at asc, id asc
            limit ?
          )`,
       )
-      .run(userId, protectedId, row.count - MAX_PLAYBACK_SESSIONS_PER_USER);
+      .run(now, now, userId, protectedId, now, row.count - MAX_PLAYBACK_SESSIONS_PER_USER);
+    this.#cleanupPlaybackLifecycle(now);
+    const remaining = this.#database.sqlite
+      .prepare(
+        "select count(*) as count from playback_sessions where user_id = ? and expires_at > ?",
+      )
+      .get(userId, now) as { count: number };
+    if (remaining.count > MAX_PLAYBACK_SESSIONS_PER_USER) {
+      throw new PlaybackSessionError("unavailable");
+    }
+  }
+
+  #cleanupPlaybackLifecycle(now: number) {
+    const terminalIds = this.#database.sqlite
+      .prepare(
+        `select operation.id
+         from playback_progress_operations operation
+         left join playback_sessions session on session.id = operation.playback_session_id
+         where operation.state in ('succeeded', 'failed')
+           and (
+             session.id is null
+             or session.expires_at <= ?
+             or operation.session_revision < max(0, session.revision - 1)
+           )
+         order by operation.completed_at asc, operation.id asc
+         limit ?`,
+      )
+      .all(now, PLAYBACK_LIFECYCLE_BATCH_SIZE) as Array<{ id: string }>;
+    if (terminalIds.length > 0) {
+      const cleanup = this.#journal.cleanupTerminalParents({
+        completedBefore: now,
+        limit: PLAYBACK_LIFECYCLE_BATCH_SIZE,
+        parentIds: terminalIds.map(({ id }) => id),
+        parentOperationType: "playback_progress_operation",
+      });
+      if (cleanup.mismatchedParents > 0) throw new PlaybackSessionError("unavailable");
+    }
+    this.#database.sqlite
+      .prepare(
+        `delete from playback_sessions where id in (
+           select session.id from playback_sessions session
+           where session.expires_at <= ?
+             and not exists (
+               select 1 from playback_progress_operations operation
+               where operation.playback_session_id = session.id
+             )
+           order by session.expires_at asc, session.id asc
+           limit ?
+         )`,
+      )
+      .run(now, PLAYBACK_LIFECYCLE_BATCH_SIZE);
   }
 
   #session(source: PlaybackSourceRow, sessionId: string, now: number) {
@@ -1214,6 +1885,8 @@ export class PlaybackSessionService {
           c.type as connectorType,
           c.display_name as connectorDisplayName,
           c.base_url as baseUrl,
+          c.instance_generation as connectorInstanceGeneration,
+          c.config_generation as connectorConfigGeneration,
           c.encrypted_credentials as encryptedCredentials,
           c.tls_policy as tlsPolicy,
           c.insecure_http_approved as insecureHttpApproved,
@@ -1236,6 +1909,10 @@ export class PlaybackSessionService {
       !IDENTIFIER_PATTERN.test(row.deviceId) ||
       !Number.isSafeInteger(row.linkRevision) ||
       row.linkRevision < 0 ||
+      !Number.isSafeInteger(row.connectorInstanceGeneration) ||
+      row.connectorInstanceGeneration < 0 ||
+      !Number.isSafeInteger(row.connectorConfigGeneration) ||
+      row.connectorConfigGeneration < 0 ||
       (row.insecureHttpApproved !== 0 && row.insecureHttpApproved !== 1)
     ) {
       throw new PlaybackSessionError("not_found");

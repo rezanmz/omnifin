@@ -46,7 +46,7 @@ const routes = [
   { label: "Jellyfin Quick Connect pairing", path: "/link/jellyfin?test-view=quick-connect" },
   { label: "recovery secret entry", path: "/recovery?test-view=entry" },
   { label: "recovery secret denial", path: "/recovery?test-view=denied" },
-  { label: "first administrator proof", path: "/recovery?test-view=bootstrap" },
+  { label: "sole administrator recovery preview", path: "/recovery?test-view=bootstrap" },
   { label: "account security", path: "/settings" },
   {
     label: "identity provider administration",

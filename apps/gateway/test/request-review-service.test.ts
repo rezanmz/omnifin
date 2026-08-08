@@ -160,14 +160,26 @@ function harness(overrides: Partial<RequestReviewAdapter> = {}) {
       status: input.decision === "approve" ? "approved" : "declined",
       updatedAt: now.toISOString(),
     }));
+  const readMediaRequest = overrides.readMediaRequest;
   let identifier = 0;
-  const createAdapter = vi.fn(() => ({ listMediaRequests, reviewMediaRequest }));
+  const createAdapter = vi.fn(() => ({
+    listMediaRequests,
+    ...(readMediaRequest ? { readMediaRequest } : {}),
+    reviewMediaRequest,
+  }));
   const service = new RequestReviewService(database, config, {
     clock: () => now,
     createAdapter,
     createId: () => `request-review-record-${++identifier}`,
   });
-  return { createAdapter, database, listMediaRequests, reviewMediaRequest, service };
+  return {
+    createAdapter,
+    database,
+    listMediaRequests,
+    readMediaRequest,
+    reviewMediaRequest,
+    service,
+  };
 }
 
 const context = (role: "operator" | "viewer" = "operator") => ({
@@ -244,6 +256,75 @@ describe("request review service", () => {
       });
       expect(JSON.parse(audit.metadataJson!)).toEqual({ decision: "approve" });
       expect(JSON.stringify({ audit, operation })).not.toContain(privateApiKey);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("reconciles a lost mutation response with an exact read and never redispatches", async () => {
+    const readMediaRequest = vi
+      .fn<NonNullable<RequestReviewAdapter["readMediaRequest"]>>()
+      .mockResolvedValueOnce(pendingRequest)
+      .mockResolvedValueOnce({ ...pendingRequest, status: "approved" });
+    const reviewMediaRequest = vi.fn<RequestReviewAdapter["reviewMediaRequest"]>(async () => {
+      throw new Error("response lost after commit");
+    });
+    const { database, service } = harness({ readMediaRequest, reviewMediaRequest });
+    try {
+      const first = await service.review(
+        "request:101",
+        { decision: "approve" },
+        "review-key-lost-response",
+        context(),
+      );
+      const replay = await service.review(
+        "request:101",
+        { decision: "approve" },
+        "review-key-lost-response",
+        context(),
+      );
+
+      expect(first).toMatchObject({ replayed: false, request: { status: "approved" } });
+      expect(replay).toEqual({ replayed: true, request: first.request });
+      expect(reviewMediaRequest).toHaveBeenCalledOnce();
+      expect(readMediaRequest).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "succeeded" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails closed on a nonmatching review readback without a second setter call", async () => {
+    const readMediaRequest = vi.fn<NonNullable<RequestReviewAdapter["readMediaRequest"]>>(
+      async () => pendingRequest,
+    );
+    const reviewMediaRequest = vi.fn<RequestReviewAdapter["reviewMediaRequest"]>(async () => {
+      throw new Error("response lost while another operator changed the request");
+    });
+    const { database, service } = harness({ readMediaRequest, reviewMediaRequest });
+    try {
+      const update = () =>
+        service.review(
+          "request:101",
+          { decision: "approve" },
+          "review-key-intervening-change",
+          context(),
+        );
+
+      await expect(update()).rejects.toMatchObject({
+        reason: "request_review_reconcile_required",
+      });
+      await expect(update()).rejects.toMatchObject({
+        reason: "request_review_reconcile_required",
+      });
+
+      expect(reviewMediaRequest).toHaveBeenCalledOnce();
+      expect(readMediaRequest).toHaveBeenCalledTimes(3);
+      expect(
+        database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "reconcile_required" });
     } finally {
       database.close();
     }

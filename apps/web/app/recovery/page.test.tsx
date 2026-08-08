@@ -12,9 +12,10 @@ describe("RecoveryPage", () => {
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
     render(await RecoveryPage({ searchParams: Promise.resolve({ "test-view": "bootstrap" }) }));
 
-    expect(screen.getByRole("heading", { name: "Establish trusted control." })).toBeVisible();
-    expect(screen.getByText(/Use a configured OIDC provider/u)).toBeVisible();
-    expect(screen.getByText("Passwords are never stored")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Recover administrator access." })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Review the authority change" })).toBeVisible();
+    expect(screen.getByText("Only OmniFin authority is replaced")).toBeVisible();
+    expect(screen.getByText("Primary administrator")).toBeVisible();
     expect(screen.queryByLabelText("Recovery secret")).not.toBeInTheDocument();
   });
 

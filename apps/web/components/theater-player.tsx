@@ -94,6 +94,11 @@ type IssueCategory = "audio" | "buffering" | "other" | "subtitles" | "sync" | "v
 type IssueStatus = "error" | "idle" | "submitting" | "success";
 type MediaFailureRecovery = "media_recovery" | "network_retry" | "stopped";
 
+interface PlaybackReportState {
+  reportedState: ReportedState;
+  terminalRequested: boolean;
+}
+
 interface MediaFailureData {
   code?: unknown;
   details?: unknown;
@@ -236,8 +241,9 @@ export function TheaterPlayer({
   const stageReference = useRef<HTMLDivElement>(null);
   const videoReference = useRef<HTMLVideoElement>(null);
   const playerReference = useRef<PlayerHandle | null>(null);
-  const reportQueueReference = useRef(Promise.resolve());
-  const reportedStateReference = useRef<ReportedState>("negotiated");
+  const reportPipelineTailsReference = useRef(new Map<string, Promise<void>>());
+  const reportStatesReference = useRef(new Map<string, PlaybackReportState>());
+  const mountedReference = useRef(true);
   const preparedReference = useRef<PreparedPlayback | null>(null);
   const preferencesReference = useRef<PlaybackPreferences>({
     audioStreamIndex: null,
@@ -321,18 +327,68 @@ export function TheaterPlayer({
     preferencesReference.current = preferences;
   }, [preferences]);
 
-  const stopSession = useCallback(
-    (target: PreparedPlayback, positionSeconds: number, keepalive = false) => {
-      void client
-        .report(
-          target.session.sessionId,
-          { event: "stopped", positionSeconds: Math.max(0, Math.floor(positionSeconds)) },
+  const queueSessionReport = useCallback(
+    (
+      target: PreparedPlayback,
+      event: "paused" | "progress" | "started" | "stopped",
+      positionSeconds: number,
+      keepalive = false,
+    ) => {
+      const id = target.session.sessionId;
+      let reportState = reportStatesReference.current.get(id);
+      if (!reportState) {
+        reportState = { reportedState: "negotiated", terminalRequested: false };
+        reportStatesReference.current.set(id, reportState);
+      }
+      if (event === "stopped") {
+        if (reportState.terminalRequested) return;
+        reportState.terminalRequested = true;
+      } else if (reportState.terminalRequested) {
+        return;
+      }
+
+      const predecessor = reportPipelineTailsReference.current.get(id) ?? Promise.resolve();
+      const operation = predecessor.then(async () => {
+        const state = reportState.reportedState;
+        if (state === "stopped") return false;
+        if (event === "progress" && state !== "playing") return false;
+        if (event === "paused" && state !== "playing") return false;
+        if (event === "started" && !["negotiated", "paused", "playing"].includes(state)) {
+          return false;
+        }
+        await client.report(
+          id,
+          { event, positionSeconds: Math.max(0, Math.floor(positionSeconds)) },
           target.csrfToken,
           { keepalive },
-        )
-        .catch(() => setSyncInterrupted(true));
+        );
+        reportState.reportedState =
+          event === "stopped" ? "stopped" : event === "paused" ? "paused" : "playing";
+        return true;
+      });
+      const settled = operation.then(
+        (reported) => {
+          if (reported && mountedReference.current) setSyncInterrupted(false);
+        },
+        () => {
+          if (mountedReference.current) setSyncInterrupted(true);
+        },
+      );
+      const tail: Promise<void> = settled.finally(() => {
+        if (reportPipelineTailsReference.current.get(id) === tail) {
+          reportPipelineTailsReference.current.delete(id);
+        }
+      });
+      reportPipelineTailsReference.current.set(id, tail);
     },
     [client],
+  );
+
+  const stopSession = useCallback(
+    (target: PreparedPlayback, positionSeconds: number, keepalive = !mountedReference.current) => {
+      queueSessionReport(target, "stopped", positionSeconds, keepalive);
+    },
+    [queueSessionReport],
   );
 
   const rollbackReplacement = useCallback(
@@ -350,7 +406,6 @@ export function TheaterPlayer({
       setPreferences(replacement.previousPreferences);
       setSourceReferenceId(replacement.previousSourceReferenceId);
       setPrepared(replacement.previous);
-      reportedStateReference.current = replacement.resume ? "paused" : "negotiated";
       startWhenReadyReference.current = replacement.resume;
       setSwitching(false);
       setBuffering(false);
@@ -369,27 +424,9 @@ export function TheaterPlayer({
       keepalive = false,
     ) => {
       if (!prepared) return;
-      reportQueueReference.current = reportQueueReference.current
-        .catch(() => undefined)
-        .then(async () => {
-          const state = reportedStateReference.current;
-          if (state === "stopped") return;
-          if (event === "progress" && state !== "playing") return;
-          if (event === "paused" && state !== "playing") return;
-          if (event === "started" && !["negotiated", "paused", "playing"].includes(state)) return;
-          await client.report(
-            prepared.session.sessionId,
-            { event, positionSeconds: Math.max(0, Math.floor(positionSeconds)) },
-            prepared.csrfToken,
-            { keepalive },
-          );
-          reportedStateReference.current =
-            event === "stopped" ? "stopped" : event === "paused" ? "paused" : "playing";
-          setSyncInterrupted(false);
-        })
-        .catch(() => setSyncInterrupted(true));
+      queueSessionReport(prepared, event, positionSeconds, keepalive);
     },
-    [client, prepared],
+    [prepared, queueSessionReport],
   );
 
   const absolutePosition = useCallback(() => {
@@ -446,7 +483,6 @@ export function TheaterPlayer({
         };
         preferencesReference.current = nextPreferences;
         preparedReference.current = result;
-        reportedStateReference.current = "negotiated";
         startWhenReadyReference.current = playing;
         setPreferences(nextPreferences);
         setSourceReferenceId(nextSourceReferenceId);
@@ -571,7 +607,6 @@ export function TheaterPlayer({
 
   useEffect(() => {
     const controller = new AbortController();
-    reportedStateReference.current = "negotiated";
     void client
       .prepare(
         media.id,
@@ -584,7 +619,10 @@ export function TheaterPlayer({
         ),
       )
       .then((result) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) {
+          stopSession(result, result.session.positionSeconds);
+          return;
+        }
         preparedReference.current = result;
         setPrepared(result);
         setDuration(result.session.media.durationSeconds);
@@ -592,12 +630,18 @@ export function TheaterPlayer({
         setSeekPreview(null);
       })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (
+          controller.signal.aborted ||
+          !mountedReference.current ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
         setStatus("error");
         setMessage(error instanceof Error ? error.message : "Playback could not be prepared.");
       });
     return () => controller.abort();
-  }, [attempt, client, media.id, media.sourceReferenceId]);
+  }, [attempt, client, media.id, media.sourceReferenceId, stopSession]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -611,7 +655,13 @@ export function TheaterPlayer({
         });
       })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (
+          controller.signal.aborted ||
+          !mountedReference.current ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
         setAccountPreferences({
           networkClass: "remote",
           preferences: DEFAULT_PLAYBACK_PREFERENCES,
@@ -836,8 +886,10 @@ export function TheaterPlayer({
     };
   }, [issuePanelOpen, playing, settingsOpen]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedReference.current = true;
+    return () => {
+      mountedReference.current = false;
       replacementControllerReference.current?.abort();
       if (clickTimerReference.current) clearTimeout(clickTimerReference.current);
       if (qualityMessageTimeoutReference.current)
@@ -852,9 +904,8 @@ export function TheaterPlayer({
       if (replacement && replacement.previous.session.sessionId !== active?.session.sessionId) {
         stopSession(replacement.previous, absolutePositionReference.current(), true);
       }
-    },
-    [stopSession],
-  );
+    };
+  }, [stopSession]);
 
   async function togglePlayback() {
     const video = videoReference.current;
@@ -931,9 +982,11 @@ export function TheaterPlayer({
         },
         prepared.csrfToken,
       );
+      if (!mountedReference.current) return;
       setIssueStatus("success");
       setIssueMessage("Thanks — the issue and playback context were captured privately.");
     } catch (error) {
+      if (!mountedReference.current) return;
       setIssueStatus("error");
       setIssueMessage(
         error instanceof Error ? error.message : "The issue could not be sent. Try again.",
@@ -1102,9 +1155,7 @@ export function TheaterPlayer({
           }}
           onPause={() => {
             setPlaying(false);
-            if (reportedStateReference.current === "playing") {
-              queueReport("paused", absolutePosition());
-            }
+            queueReport("paused", absolutePosition());
           }}
           onPlay={() => {
             setPlaying(true);
@@ -1190,7 +1241,6 @@ export function TheaterPlayer({
                   if (active) stopSession(active, position);
                   requestedPositionReference.current = position;
                   preparedReference.current = null;
-                  reportedStateReference.current = "negotiated";
                   startWhenReadyReference.current = playing;
                   setPrepared(null);
                   setPlaying(false);

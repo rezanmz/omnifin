@@ -9,12 +9,25 @@ The maintenance command creates an online SQLite backup through SQLite's backup 
 then runs database and foreign-key integrity checks and writes a private manifest containing
 the database size, SHA-256 digest, schema digest, migration count, SQLite version, image
 reference, and creation time. Neither the source path nor other host paths are recorded.
+Production rejects startup unless `OMNIFIN_IMAGE_REF` is the same single immutable `sha256`
+reference selected by `OMNIFIN_IMAGE`, so automatic recovery manifests never record a moving tag.
+
+Backup publication is fail-closed. The database and manifest are first written under separate
+hidden, collision-resistant names and both are synced. Omnifin renames and directory-syncs the
+database first, then renames the manifest and directory-syncs it last. The visible manifest is the
+pair's commit marker; a database without its matching manifest is never a usable recovery point.
 
 ## Prepare private backup storage
 
 The maintenance container runs as numeric user and group `65532` and refuses to write to a
 directory accessible by group or other users. Prepare the bind-mounted directory before the
 first operation:
+
+Compose mounts only the existing `omnifin_encryption_key` secret into maintenance and sets
+`OMNIFIN_ENCRYPTION_KEY_FILE=/run/secrets/omnifin_encryption_key`. This is required when a selected
+supported migration prefix must initialize or verify the database-key verifier before sanitation.
+The recovery secret is not mounted into maintenance because backup, verify, restore, and doctor do
+not require it.
 
 ```sh
 install -d -m 0700 backups
@@ -228,10 +241,35 @@ docker compose up -d web
 
 The pre-restore rollback database and its manifest are created and fully synced before the
 selected backup is staged, checked against its previously verified digest and schema, and
-atomically replaces the active database. Keep that pair until the restored
+upgraded to the current supported migration count before any current-only sanitation state is written.
+The staged copy initializes and validates the database-key verifier with the separately supplied
+encryption key, then is merged with the verified pre-restore timeline and sanitized in one transaction
+before it atomically replaces the active database. The merge carries forward `pending_link` and
+disabled users, lower roles and their role source, disabled JIT provisioning, the current provider
+role-mapping set (including deletions, disabled mappings, and role downgrades), external-identity
+deletions, provider and connector disablement/deletion, link revocation and access revisions, logout
+and session-secret anti-replay facts, and idempotency receipts. It never imports current session or
+service-access tokens. Sanitation removes
+sessions, aliases, authentication and Quick Connect transactions, playback sessions/assets, and
+download grants. It forces service relinking, resets cached connector/provider health, expires opaque
+references, detaches saved catalog items from stale library references, and terminalizes pending
+operations while preserving terminal idempotency receipts. Pending download bulk work becomes a
+non-retryable `quarantined` receipt with its key and completed per-target results intact; the gateway
+will not redispatch it. Permanent session-secret reservations,
+OIDC anti-replay receipts, users, preferences, audit history, durable lists, and media issues. A
+`database.restore_sanitized` audit event records the boundary without secret material. Command output
+reports both the selected source digest and the final sanitized digest; verify and retain the latter as
+the actual published database identity.
+
+Keep the rollback pair until the restored
 deployment passes readiness, authentication, connector decryption, a representative read,
 and a permission-checked mutation. A running container is not sufficient proof that the
 matching encryption key was supplied.
+
+Replacement restore is monotonic across the two verified timelines: restrictive current facts win
+over older selected authority, current idempotency rows replace matching older receipts, and any merge
+that cannot satisfy the restored schema fails the restore rather than dropping a security fact. Keep
+the rollback pair for operational rollback evidence even after this merge succeeds.
 
 If the maintenance command reports `database_not_quiescent`, do not delete SQLite sidecar
 files. Confirm that every process using the volume is stopped and investigate an unclean
@@ -250,6 +288,33 @@ docker compose run --rm --no-deps maintenance \
   unlock --confirm-gateway-stopped
 ```
 
+A controlled check failure after publication automatically reinstates the verified rollback. A
+directory-sync durability ambiguity or any rollback failure retains the maintenance lock even when
+the command exits, requiring the explicit unlock procedure above after storage is inspected.
+
+### Restore into a new empty data directory
+
+Disaster recovery onto a new volume uses a separate fail-closed command. The target data directory
+must already exist, be private and owned by the maintenance runtime user, and contain no entries. The
+command refuses an existing database, WAL, SHM, or maintenance lock and requires both confirmations:
+
+```sh
+docker compose stop web gateway
+docker compose run --rm --no-deps maintenance \
+  restore-empty \
+  --input /backups/omnifin-2026-07-28.sqlite \
+  --confirm-gateway-stopped \
+  --confirm-empty-target
+```
+
+The source pair is fully verified and any supported v0.12-or-later prefix is migrated and key-checked
+in staging before the staged database receives sanitation and publication.
+Because an empty host has no verified newer timeline, every restored user, provider, connector, and
+service link is authority-quarantined; sessions and grants are removed and pending bulk work is made
+non-retryable. Re-enable and relink only after the recovered deployment is verified. The existing
+replacement `restore` command remains the correct operation when an active database must first be
+captured as a rollback pair.
+
 ## Upgrade and rollback rehearsal
 
 Before an upgrade:
@@ -266,6 +331,36 @@ Never start older application code against a newer database unless the release n
 that the schema is backward compatible. Otherwise restore the matching pre-upgrade backup
 while selecting the previously verified image digest. Published tags remain immutable;
 rollback selects an earlier version or digest rather than moving a tag.
+
+Gateway startup checks the maintenance marker before even creating preflight staging, again before a
+recovery backup can be published, and immediately before writable open. A marker at any of those
+boundaries discards staging and leaves source bytes, sidecars, and backup storage unchanged. It then
+performs the storage gate before opening SQLite writable. It reconstructs and
+accepts every exact ordered migration prefix from the released v0.12 count through the current count,
+samples every encrypted schema class when the singleton verifier is not yet available, and rejects a
+newer, reordered, hash-mismatched, unsupported, or wrong-key database. Inspection is file-backed, not
+a whole-database memory load. A clean database is inspected from a bounded private copy; an unclean
+WAL/SHM timeline is copied with its sidecars, recovered only in private staging, and left byte-for-byte
+untouched. The validated staging copy is the source for a verified retained recovery pair before the
+original timeline is opened or migrated. Migration, key-verifier initialization, integrity, foreign-key,
+schema, and semantic checks follow. The gateway therefore needs the same narrow writable `/backups`
+mount as maintenance. Keep at least two automatic recovery points;
+`OMNIFIN_BACKUP_RETENTION_COUNT` defaults to `14`.
+
+The checked-in v0.12 fixture is source-generated from commit
+`b85488b9517680d59ef87dfdb90ad6ec04da5251` and carries provenance and a
+checksum. It is provisional input, not immutable-image evidence. Source mode cannot overwrite a
+non-provisional record. With `--image`, the generator creates a networkless, read-only, resource-bounded
+container from the exact v0.12 image index, imports that image's shipped gateway and `EnvelopeCipher`,
+creates/migrates/seeds the database inside container-private tmpfs, emits a unique readiness marker,
+and remains running. The host starts it detached, polls Docker logs and container state with a bounded
+timeout, and extracts the database and metadata with `docker cp` while tmpfs is still mounted; no shell
+or writable host bind is used. The container is force-removed on success, failure, or timeout. Only
+after candidate migration/decryption succeeds does
+it publish the artifact, checksum, and provenance-last commit marker. Non-provisional provenance records
+the image index, selected platform image identity/digests, build revision, SQLite version/source ID,
+artifact digest, and generator version. Docker is unavailable for this remediation, so the harness is
+code-complete but unexecuted and no immutable-image fixture result is claimed.
 
 ### Automated release rehearsal
 

@@ -32,12 +32,19 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
+import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+} from "../operations/external-mutation-journal.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 
 const EXTERNAL_REFERENCE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_EXTERNAL_REFERENCES = 4_096;
 const MAX_ID_ATTEMPTS = 8;
 const OPERATION_ID_PATTERN = /^issue_operation_[A-Za-z0-9_-]{22}$/u;
+const MUTATION_LEASE_MS = 30_000;
+const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const storedMediaReferenceSchema = z.union([
   z.strictObject({
@@ -64,11 +71,13 @@ const storedExternalReferenceSchema = z.strictObject({
 interface SeerrConnectorRow {
   baseUrl: string;
   capabilitySnapshotJson: string;
+  configGeneration: number;
   displayName: string;
   encryptedCredentials: string;
   healthState: string;
   id: string;
   insecureHttpApproved: number;
+  instanceGeneration: number;
   tlsPolicy: string;
 }
 
@@ -93,6 +102,7 @@ interface LocalIssueRow {
 
 interface ExternalReferenceRow {
   connectorId: string;
+  connectorInstanceGeneration: number;
   encryptedUpstreamId: string;
   id: string;
 }
@@ -105,8 +115,18 @@ interface IdempotencyRow {
   state: string;
 }
 
+type IssueWorkbenchReservation =
+  | { kind: "conflict" }
+  | { failureCode: IssueWorkbenchFailureCode; kind: "failure"; operationId: string }
+  | { kind: "pending"; operationId: string }
+  | { kind: "reconcile_required"; operationId: string }
+  | { kind: "replay"; operationId: string; response: MediaIssueWorkbenchItem }
+  | { kind: "reserved"; operationId: string }
+  | { kind: "uncertain"; operationId: string };
+
 export interface IssueWorkbenchConnector {
   listIssues(input: SeerrIssueListInput, signal?: AbortSignal): Promise<SeerrIssuePage>;
+  readIssue?(upstreamId: number, signal?: AbortSignal): Promise<SeerrIssueRecord>;
   updateIssueStatus(
     upstreamId: number,
     input: MediaIssueStatusUpdate,
@@ -151,18 +171,33 @@ export type IssueWorkbenchServiceErrorReason =
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "integrity_failure"
+  | "media_issue_outcome_uncertain"
+  | "media_issue_reconcile_required"
   | "principal_unavailable"
   | "storage_failure";
 
 export class IssueWorkbenchServiceError extends Error {
+  public readonly operationId: string | undefined;
   public readonly reason: IssueWorkbenchServiceErrorReason;
 
-  public constructor(reason: IssueWorkbenchServiceErrorReason, options?: ErrorOptions) {
+  public constructor(
+    reason: IssueWorkbenchServiceErrorReason,
+    options?: ErrorOptions & { operationId?: string },
+  ) {
     super("The issue workbench operation could not be completed.", options);
     this.name = "IssueWorkbenchServiceError";
     this.reason = reason;
+    this.operationId = options?.operationId;
   }
 }
+
+const storedIssueMutationSchema = z.strictObject({
+  desiredStatus: z.enum(["open", "resolved"]),
+  issueId: playbackIssueIdSchema,
+  operation: z.literal("status_update"),
+  schemaVersion: z.literal(1),
+  upstreamId: z.int().positive().max(2_147_483_647),
+});
 
 function connectorCredentialContext(connectorId: string) {
   return `connector_credentials:seerr:${connectorId}`;
@@ -290,6 +325,7 @@ export class IssueWorkbenchService {
   readonly #createClient: (config: OptionalApiKeyConnectorConfig) => IssueWorkbenchConnector;
   readonly #createToken: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
 
   public constructor(
     database: DatabaseHandle,
@@ -302,6 +338,7 @@ export class IssueWorkbenchService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createToken = dependencies.createToken ?? (() => randomToken(16));
     this.#createClient = dependencies.createClient ?? ((input) => new SeerrIssueClient(input));
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
   }
 
   public async list(
@@ -334,7 +371,7 @@ export class IssueWorkbenchService {
           { limit: query.limit, status: query.status },
           signal,
         );
-        seerrItems = this.#referenceExternalIssues(seerrSource.row.id, response.items);
+        seerrItems = this.#referenceExternalIssues(seerrSource.row, response.items);
         seerrTruncated = response.truncated;
       } catch {
         seerrState = "unavailable";
@@ -379,32 +416,43 @@ export class IssueWorkbenchService {
       keyHash,
       fingerprintHash,
     );
-    if (reservation.kind === "replay") return { issue: reservation.response, replayed: true };
-    if (reservation.kind === "failure") {
-      throw new IssueWorkbenchServiceError(reservation.failureCode);
+    const terminal = this.#terminalReservation(reservation);
+    if (terminal) return terminal;
+    if (reservation.kind === "uncertain") throw this.#uncertainError(reservation.operationId);
+    if (reservation.kind === "reconcile_required" && source === "omnifin") {
+      throw new IssueWorkbenchServiceError("integrity_failure");
     }
-    if (reservation.kind === "conflict") {
-      throw new IssueWorkbenchServiceError("idempotency_conflict");
+    if (
+      reservation.kind !== "reserved" &&
+      reservation.kind !== "pending" &&
+      reservation.kind !== "reconcile_required"
+    ) {
+      throw new IssueWorkbenchServiceError("integrity_failure");
     }
-    if (reservation.kind === "pending") {
-      throw new IssueWorkbenchServiceError("idempotency_in_progress");
+    const operationId = reservation.operationId;
+
+    if (source === "seerr") {
+      if (reservation.kind === "reconcile_required" && !this.#issueDispatch(operationId)) {
+        throw this.#reconcileError(operationId);
+      }
+      return this.#updateExternalSafely(operationId, issueId, input, context, signal);
+    }
+    if (reservation.kind !== "reserved") {
+      throw new IssueWorkbenchServiceError("idempotency_in_progress", { operationId });
     }
 
     let response: MediaIssueWorkbenchItem;
     try {
-      response =
-        source === "omnifin"
-          ? this.#updateLocal(issueId, input.status, principal.userId)
-          : await this.#updateExternal(issueId, input, signal);
+      response = this.#updateLocal(issueId, input.status, principal.userId);
       if (response.id !== issueId || response.status !== input.status) {
         throw new IssueWorkbenchServiceError("integrity_failure");
       }
     } catch (error) {
       const failureCode = knownFailure(error);
-      this.#completeFailure(reservation.operationId, issueId, source, input, failureCode, context);
+      this.#completeFailure(operationId, issueId, source, input, failureCode, context);
       throw new IssueWorkbenchServiceError(failureCode, { cause: error });
     }
-    this.#completeSuccess(reservation.operationId, response, input, context);
+    this.#completeSuccess(operationId, response, input, context);
     return { issue: response, replayed: false };
   }
 
@@ -503,6 +551,8 @@ export class IssueWorkbenchService {
              encrypted_credentials as encryptedCredentials,
              capability_snapshot_json as capabilitySnapshotJson,
              health_state as healthState,
+             instance_generation as instanceGeneration,
+             config_generation as configGeneration,
              tls_policy as tlsPolicy,
              insecure_http_approved as insecureHttpApproved
            from connector_configs
@@ -547,7 +597,7 @@ export class IssueWorkbenchService {
     }
   }
 
-  #referenceExternalIssues(connectorId: string, issues: readonly SeerrIssueRecord[]) {
+  #referenceExternalIssues(connector: SeerrConnectorRow, issues: readonly SeerrIssueRecord[]) {
     try {
       return this.#database.sqlite.transaction(() => {
         const now = this.#now();
@@ -556,14 +606,21 @@ export class IssueWorkbenchService {
           throw new IssueWorkbenchServiceError("integrity_failure");
         }
         this.#database.sqlite
-          .prepare("delete from external_issue_references where expires_at <= ?")
+          .prepare(
+            `delete from external_issue_references
+             where expires_at <= ? and not exists (
+               select 1 from media_issue_operations operation
+               where operation.issue_id = external_issue_references.id
+                 and operation.state not in ('succeeded', 'failed')
+             )`,
+          )
           .run(now);
         const referenced = issues.map((issue) => {
-          const id = this.#upsertExternalReference(connectorId, issue.upstreamId, now, expiresAt);
+          const id = this.#upsertExternalReference(connector, issue.upstreamId, now, expiresAt);
           return this.#externalItem(id, issue);
         });
         this.#enforceExternalReferenceLimit(
-          connectorId,
+          connector.id,
           referenced.map(({ id }) => id),
         );
         return referenced;
@@ -575,26 +632,31 @@ export class IssueWorkbenchService {
   }
 
   #upsertExternalReference(
-    connectorId: string,
+    connector: SeerrConnectorRow,
     upstreamId: number,
     now: number,
     expiresAt: number,
   ) {
     const digest = privacyHash(
       "external_issue_reference",
-      `${connectorId}\u0000${upstreamId}`,
+      `${connector.id}\u0000${connector.instanceGeneration}\u0000${upstreamId}`,
       this.#config.encryptionKey,
     );
     const existing = this.#database.sqlite
       .prepare(
-        `select id, connector_id as connectorId, encrypted_upstream_id as encryptedUpstreamId
+        `select id, connector_id as connectorId,
+                connector_instance_generation as connectorInstanceGeneration,
+                encrypted_upstream_id as encryptedUpstreamId
          from external_issue_references
          where connector_id = ? and upstream_id_digest = ?
          limit 1`,
       )
-      .get(connectorId, digest) as ExternalReferenceRow | undefined;
+      .get(connector.id, digest) as ExternalReferenceRow | undefined;
     if (existing) {
-      if (this.#decodeExternalReference(existing) !== upstreamId) {
+      if (
+        existing.connectorInstanceGeneration !== connector.instanceGeneration ||
+        this.#decodeExternalReference(existing) !== upstreamId
+      ) {
         throw new IssueWorkbenchServiceError("integrity_failure");
       }
       const updated = this.#database.sqlite
@@ -603,7 +665,7 @@ export class IssueWorkbenchService {
            set last_used_at = ?, expires_at = ?, updated_at = ?
            where id = ? and connector_id = ?`,
         )
-        .run(now, expiresAt, now, existing.id, connectorId);
+        .run(now, expiresAt, now, existing.id, connector.id);
       if (updated.changes !== 1) throw new IssueWorkbenchServiceError("integrity_failure");
       return playbackIssueIdSchema.parse(existing.id);
     }
@@ -623,11 +685,22 @@ export class IssueWorkbenchService {
       this.#database.sqlite
         .prepare(
           `insert into external_issue_references (
-             id, connector_id, upstream_id_digest, encrypted_upstream_id,
-             last_used_at, expires_at, created_at, updated_at
-           ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+              id, connector_id, connector_instance_generation,
+              upstream_id_digest, encrypted_upstream_id,
+              last_used_at, expires_at, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, connectorId, digest, encrypted, now, expiresAt, now, now);
+        .run(
+          id,
+          connector.id,
+          connector.instanceGeneration,
+          digest,
+          encrypted,
+          now,
+          expiresAt,
+          now,
+          now,
+        );
       return id;
     }
     throw new IssueWorkbenchServiceError("integrity_failure");
@@ -645,6 +718,11 @@ export class IssueWorkbenchService {
          where id in (
            select id from external_issue_references
            where connector_id = ? and id not in (${placeholders})
+             and not exists (
+               select 1 from media_issue_operations operation
+               where operation.issue_id = external_issue_references.id
+                 and operation.state not in ('succeeded', 'failed')
+             )
            order by last_used_at asc, id asc
            limit ?
          )`,
@@ -766,25 +844,173 @@ export class IssueWorkbenchService {
       .get(issueId) as LocalIssueRow | undefined;
   }
 
-  async #updateExternal(issueId: string, input: MediaIssueStatusUpdate, signal?: AbortSignal) {
+  async #updateExternalSafely(
+    operationId: string,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+    signal?: AbortSignal,
+  ): Promise<IssueWorkbenchUpdateResult> {
     const reference = this.#externalReference(issueId);
     const rows = this.#seerrRows(reference.connectorId);
-    if (rows.length !== 1 || !hasCapability(rows[0]!, "issue.manage")) {
+    if (
+      rows.length !== 1 ||
+      rows[0]!.instanceGeneration !== reference.connectorInstanceGeneration ||
+      !hasCapability(rows[0]!, "issue.manage")
+    ) {
       throw new IssueWorkbenchServiceError("configuration_unavailable");
     }
-    const response = await this.#client(rows[0]!).updateIssueStatus(
-      this.#decodeExternalReference(reference),
+    const connector = rows[0]!;
+    const client = this.#client(connector);
+    const upstreamId = this.#decodeExternalReference(reference);
+    let dispatch = this.#issueDispatch(operationId);
+    if (dispatch) {
+      this.#assertIssueMutation(dispatch, issueId, upstreamId, input.status);
+      this.#assertDispatchConnector(dispatch, connector);
+    }
+    if (dispatch?.state === "uncertain" || dispatch?.state === "succeeded") {
+      throw this.#uncertainError(operationId);
+    }
+
+    const exactReader = client.readIssue?.bind(client);
+    if (dispatch && dispatch.state !== "reserved") {
+      if (!exactReader) {
+        this.#recordIssueUncertain(operationId, dispatch, issueId, input, context);
+        throw this.#uncertainError(operationId);
+      }
+      let current: MediaIssueWorkbenchItem;
+      try {
+        current = this.#externalItem(issueId, await exactReader(upstreamId, signal));
+      } catch (error) {
+        this.#recordIssueReadFailure(operationId, dispatch, issueId, input, context, error);
+        throw error instanceof SeerrIssueError && error.reason === "issue_not_found"
+          ? this.#reconcileError(operationId, error)
+          : this.#uncertainError(operationId, error);
+      }
+      if (current.status === input.status) {
+        this.#finishExternalSuccess(operationId, dispatch, current, input, context);
+        return { issue: current, replayed: false };
+      }
+      this.#recordIssueReconcileRequired(operationId, dispatch, issueId, input, context);
+      throw this.#reconcileError(operationId);
+    }
+
+    if (exactReader) {
+      let current: MediaIssueWorkbenchItem;
+      try {
+        current = this.#externalItem(issueId, await exactReader(upstreamId, signal));
+      } catch (error) {
+        const failureCode = knownFailure(error);
+        this.#completeFailure(operationId, issueId, "seerr", input, failureCode, context);
+        throw new IssueWorkbenchServiceError(failureCode, { cause: error, operationId });
+      }
+      if (current.status === input.status) {
+        if (dispatch?.state === "reserved") {
+          this.#completeAlreadyDesired(operationId, dispatch, current, input, context);
+        } else {
+          this.#completeSuccess(operationId, current, input, context);
+        }
+        return { issue: current, replayed: false };
+      }
+    }
+
+    if (dispatch?.state === "reserved") {
+      if ((dispatch.leaseExpiresAt ?? 0) >= this.#now()) {
+        throw new IssueWorkbenchServiceError("idempotency_in_progress", { operationId });
+      }
+      const now = this.#now();
+      dispatch = this.#journal.claimStaleReserved({
+        expectedLeaseExpiresAt: dispatch.leaseExpiresAt!,
+        expectedLeaseOwner: dispatch.leaseOwner!,
+        id: dispatch.id,
+        leaseExpiresAt: now + MUTATION_LEASE_MS,
+        leaseOwner: this.#leaseOwner(operationId),
+        now,
+      });
+    } else {
+      try {
+        const now = this.#now();
+        dispatch = this.#journal.reserve({
+          connectorConfigGeneration: connector.configGeneration,
+          connectorId: connector.id,
+          connectorInstanceGeneration: connector.instanceGeneration,
+          id: this.#dispatchId(operationId),
+          kind: "media_issue.update",
+          leaseExpiresAt: now + MUTATION_LEASE_MS,
+          leaseOwner: this.#leaseOwner(operationId),
+          normalizedRequest: {
+            desiredStatus: input.status,
+            issueId,
+            operation: "status_update",
+            schemaVersion: 1,
+            upstreamId,
+          },
+          now,
+          parentOperationId: operationId,
+          parentOperationType: "media_issue_operation",
+          targetDigest: privacyHash(
+            "external_issue_reference",
+            `${connector.id}\u0000${connector.instanceGeneration}\u0000issue.status\u0000${upstreamId}`,
+            this.#config.encryptionKey,
+          ),
+          userId: context.principal.userId!,
+        });
+      } catch (error) {
+        if (
+          error instanceof ExternalMutationJournalError &&
+          error.code === "reservation_conflict" &&
+          this.#issueDispatch(operationId)
+        ) {
+          throw new IssueWorkbenchServiceError("idempotency_in_progress", { operationId });
+        }
+        const failureCode =
+          error instanceof ExternalMutationJournalError && error.code === "target_locked"
+            ? "issue_conflict"
+            : "configuration_unavailable";
+        this.#completeFailure(operationId, issueId, "seerr", input, failureCode, context);
+        throw new IssueWorkbenchServiceError(failureCode, { cause: error, operationId });
+      }
+    }
+    try {
+      this.#assertConnectorGeneration(dispatch);
+      dispatch = this.#journal.markDispatched({
+        id: dispatch.id,
+        leaseOwner: dispatch.leaseOwner!,
+        now: this.#now(),
+      });
+    } catch (error) {
+      this.#completeExternalFailure(
+        operationId,
+        dispatch,
+        issueId,
+        input,
+        "configuration_unavailable",
+        context,
+      );
+      throw new IssueWorkbenchServiceError("configuration_unavailable", {
+        cause: error,
+        operationId,
+      });
+    }
+    return this.#sendIssueStatus(
+      operationId,
+      dispatch,
+      client,
+      upstreamId,
+      issueId,
       input,
+      context,
       signal,
     );
-    return this.#externalItem(issueId, response);
   }
 
   #externalReference(issueId: string) {
     try {
       const row = this.#database.sqlite
         .prepare(
-          `select id, connector_id as connectorId, encrypted_upstream_id as encryptedUpstreamId
+          `select id, connector_id as connectorId,
+                  connector_instance_generation as connectorInstanceGeneration,
+                  encrypted_upstream_id as encryptedUpstreamId
            from external_issue_references
            where id = ? and expires_at > ?
            limit 1`,
@@ -809,6 +1035,63 @@ export class IssueWorkbenchService {
     }
   }
 
+  #existingReservation(
+    existing: IdempotencyRow,
+    fingerprintHash: string,
+  ): IssueWorkbenchReservation {
+    if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" };
+    if (existing.state === "pending") return { kind: "pending", operationId: existing.id };
+    if (existing.state === "reconcile_required") {
+      return { kind: "reconcile_required", operationId: existing.id };
+    }
+    if (existing.state === "uncertain") return { kind: "uncertain", operationId: existing.id };
+    if (existing.state === "failed") {
+      if (
+        !existing.failureCode ||
+        !PERSISTED_FAILURE_CODES.has(existing.failureCode as IssueWorkbenchFailureCode)
+      ) {
+        throw new IssueWorkbenchServiceError("integrity_failure");
+      }
+      return {
+        failureCode: existing.failureCode as IssueWorkbenchFailureCode,
+        kind: "failure",
+        operationId: existing.id,
+      };
+    }
+    if (existing.state === "succeeded" && existing.responseJson) {
+      try {
+        return {
+          kind: "replay",
+          operationId: existing.id,
+          response: mediaIssueWorkbenchItemSchema.parse(JSON.parse(existing.responseJson)),
+        };
+      } catch (error) {
+        throw new IssueWorkbenchServiceError("integrity_failure", { cause: error });
+      }
+    }
+    throw new IssueWorkbenchServiceError("integrity_failure");
+  }
+
+  #terminalReservation(
+    reservation: IssueWorkbenchReservation,
+  ): IssueWorkbenchUpdateResult | undefined {
+    switch (reservation.kind) {
+      case "replay":
+        return { issue: reservation.response, replayed: true };
+      case "failure":
+        throw new IssueWorkbenchServiceError(reservation.failureCode, {
+          operationId: reservation.operationId,
+        });
+      case "conflict":
+        throw new IssueWorkbenchServiceError("idempotency_conflict");
+      case "pending":
+      case "reconcile_required":
+      case "reserved":
+      case "uncertain":
+        return undefined;
+    }
+  }
+
   #reserve(
     userId: string,
     issueId: string,
@@ -816,9 +1099,18 @@ export class IssueWorkbenchService {
     desiredStatus: "open" | "resolved",
     keyHash: string,
     fingerprintHash: string,
-  ) {
+  ): IssueWorkbenchReservation {
     try {
       return this.#database.sqlite.transaction(() => {
+        const cleanup = this.#journal.cleanupTerminalParents({
+          completedBefore: this.#now() - OPERATION_RETENTION_MS,
+          limit: 100,
+          parentOperationType: "media_issue_operation",
+          userId,
+        });
+        if (cleanup.mismatchedParents > 0) {
+          throw new IssueWorkbenchServiceError("storage_failure");
+        }
         const existing = this.#database.sqlite
           .prepare(
             `select id, fingerprint_hash as fingerprintHash, state,
@@ -828,33 +1120,7 @@ export class IssueWorkbenchService {
              limit 1`,
           )
           .get(userId, keyHash) as IdempotencyRow | undefined;
-        if (existing) {
-          if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" as const };
-          if (existing.state === "pending") return { kind: "pending" as const };
-          if (existing.state === "failed") {
-            if (
-              !existing.failureCode ||
-              !PERSISTED_FAILURE_CODES.has(existing.failureCode as IssueWorkbenchFailureCode)
-            ) {
-              throw new IssueWorkbenchServiceError("integrity_failure");
-            }
-            return {
-              failureCode: existing.failureCode as IssueWorkbenchFailureCode,
-              kind: "failure" as const,
-            };
-          }
-          if (existing.state === "succeeded" && existing.responseJson) {
-            try {
-              return {
-                kind: "replay" as const,
-                response: mediaIssueWorkbenchItemSchema.parse(JSON.parse(existing.responseJson)),
-              };
-            } catch (error) {
-              throw new IssueWorkbenchServiceError("integrity_failure", { cause: error });
-            }
-          }
-          throw new IssueWorkbenchServiceError("integrity_failure");
-        }
+        if (existing) return this.#existingReservation(existing, fingerprintHash);
         const operationId = `issue_operation_${this.#token()}`;
         if (!OPERATION_ID_PATTERN.test(operationId)) {
           throw new IssueWorkbenchServiceError("integrity_failure");
@@ -883,6 +1149,341 @@ export class IssueWorkbenchService {
     } catch (error) {
       if (error instanceof IssueWorkbenchServiceError) throw error;
       throw new IssueWorkbenchServiceError("storage_failure", { cause: error });
+    }
+  }
+
+  #issueDispatch(operationId: string) {
+    try {
+      return this.#journal.replay({
+        kind: "media_issue.update",
+        parentOperationId: operationId,
+        parentOperationType: "media_issue_operation",
+      });
+    } catch (error) {
+      throw new IssueWorkbenchServiceError("storage_failure", { cause: error, operationId });
+    }
+  }
+
+  #assertIssueMutation(
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    upstreamId: number,
+    desiredStatus: "open" | "resolved",
+  ) {
+    try {
+      const desired = storedIssueMutationSchema.parse(dispatch.normalizedRequest);
+      if (
+        desired.issueId !== issueId ||
+        desired.upstreamId !== upstreamId ||
+        desired.desiredStatus !== desiredStatus
+      ) {
+        throw new Error("invalid");
+      }
+    } catch (error) {
+      throw new IssueWorkbenchServiceError("integrity_failure", { cause: error });
+    }
+  }
+
+  #assertDispatchConnector(dispatch: ExternalMutationRecord, connector: SeerrConnectorRow) {
+    if (
+      dispatch.connectorId !== connector.id ||
+      dispatch.connectorInstanceGeneration !== connector.instanceGeneration ||
+      dispatch.connectorConfigGeneration !== connector.configGeneration
+    ) {
+      throw new IssueWorkbenchServiceError("configuration_unavailable");
+    }
+  }
+
+  #assertConnectorGeneration(dispatch: ExternalMutationRecord) {
+    const current = this.#database.sqlite
+      .prepare(
+        `select instance_generation as instanceGeneration,
+                config_generation as configGeneration
+         from connector_configs
+         where id = ? and type = 'seerr' and enabled = 1
+         limit 1`,
+      )
+      .get(dispatch.connectorId) as
+      { configGeneration: number; instanceGeneration: number } | undefined;
+    if (
+      !current ||
+      current.instanceGeneration !== dispatch.connectorInstanceGeneration ||
+      current.configGeneration !== dispatch.connectorConfigGeneration
+    ) {
+      throw new IssueWorkbenchServiceError("configuration_unavailable");
+    }
+  }
+
+  #dispatchId(operationId: string) {
+    return `mutation_dispatch_${hashToken(`media_issue.update\u0000${operationId}`).slice(0, 22)}`;
+  }
+
+  #leaseOwner(operationId: string) {
+    return `issue-update-${hashToken(`${operationId}\u0000${this.#auditId()}`).slice(0, 22)}`;
+  }
+
+  #uncertainError(operationId: string, cause?: unknown) {
+    return new IssueWorkbenchServiceError("media_issue_outcome_uncertain", {
+      ...(cause === undefined ? {} : { cause }),
+      operationId,
+    });
+  }
+
+  #reconcileError(operationId: string, cause?: unknown) {
+    return new IssueWorkbenchServiceError("media_issue_reconcile_required", {
+      ...(cause === undefined ? {} : { cause }),
+      operationId,
+    });
+  }
+
+  #markIssueReconcileRequired(dispatch: ExternalMutationRecord) {
+    const current = this.#journal.read(dispatch.id);
+    if (current?.state === "dispatched") {
+      this.#journal.markReconcileRequired({
+        failureCode: "read_after_write_required",
+        id: dispatch.id,
+        now: this.#now(),
+      });
+    }
+  }
+
+  async #sendIssueStatus(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    client: IssueWorkbenchConnector,
+    upstreamId: number,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+    signal: AbortSignal | undefined,
+  ): Promise<IssueWorkbenchUpdateResult> {
+    try {
+      const response = this.#externalItem(
+        issueId,
+        await client.updateIssueStatus(upstreamId, input, signal),
+      );
+      if (response.status !== input.status)
+        throw new IssueWorkbenchServiceError("integrity_failure");
+      this.#finishExternalSuccess(operationId, dispatch, response, input, context);
+      return { issue: response, replayed: false };
+    } catch (error) {
+      if (
+        error instanceof IssueWorkbenchServiceError &&
+        error.reason === "media_issue_outcome_uncertain"
+      ) {
+        throw error;
+      }
+      this.#markIssueReconcileRequired(dispatch);
+      const reader = client.readIssue?.bind(client);
+      if (!reader) {
+        this.#recordIssueUncertain(operationId, dispatch, issueId, input, context);
+        throw this.#uncertainError(operationId, error);
+      }
+      let current: MediaIssueWorkbenchItem;
+      try {
+        current = this.#externalItem(issueId, await reader(upstreamId, signal));
+      } catch (readError) {
+        this.#recordIssueReadFailure(operationId, dispatch, issueId, input, context, readError);
+        throw readError instanceof SeerrIssueError && readError.reason === "issue_not_found"
+          ? this.#reconcileError(operationId, readError)
+          : this.#uncertainError(operationId, readError);
+      }
+      if (current.status === input.status) {
+        this.#finishExternalSuccess(operationId, dispatch, current, input, context);
+        return { issue: current, replayed: false };
+      }
+      this.#recordIssueReconcileRequired(operationId, dispatch, issueId, input, context);
+      throw this.#reconcileError(operationId, error);
+    }
+  }
+
+  #completeAlreadyDesired(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: MediaIssueWorkbenchItem,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    this.#complete(
+      operationId,
+      response.id,
+      response.source,
+      "success",
+      response,
+      null,
+      input,
+      context,
+      () => {
+        this.#journal.completeFailed({
+          failureCode: "already_in_desired_state",
+          id: dispatch.id,
+          now: this.#now(),
+        });
+      },
+    );
+  }
+
+  #completeExternalSuccess(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: MediaIssueWorkbenchItem,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    this.#complete(
+      operationId,
+      response.id,
+      response.source,
+      "success",
+      response,
+      null,
+      input,
+      context,
+      () => this.#journal.completeSucceeded({ id: dispatch.id, now: this.#now() }),
+    );
+  }
+
+  #finishExternalSuccess(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    response: MediaIssueWorkbenchItem,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    try {
+      this.#completeExternalSuccess(operationId, dispatch, response, input, context);
+    } catch (error) {
+      this.#recordIssueUncertain(operationId, dispatch, response.id, input, context);
+      throw this.#uncertainError(operationId, error);
+    }
+  }
+
+  #completeExternalFailure(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    failureCode: IssueWorkbenchFailureCode,
+    context: IssueWorkbenchContext,
+  ) {
+    this.#complete(
+      operationId,
+      issueId,
+      "seerr",
+      "failure",
+      null,
+      failureCode,
+      input,
+      context,
+      () => this.#journal.completeFailed({ failureCode, id: dispatch.id, now: this.#now() }),
+    );
+  }
+
+  #recordIssueReadFailure(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+    error: unknown,
+  ) {
+    if (error instanceof SeerrIssueError && error.reason === "issue_not_found") {
+      this.#recordIssueReconcileRequired(operationId, dispatch, issueId, input, context);
+    } else {
+      this.#recordIssueUncertain(operationId, dispatch, issueId, input, context);
+    }
+  }
+
+  #recordIssueReconcileRequired(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    this.#recordIssueUnresolved(
+      "reconcile_required",
+      "media_issue_reconcile_required",
+      operationId,
+      dispatch,
+      issueId,
+      input,
+      context,
+    );
+  }
+
+  #recordIssueUncertain(
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    this.#recordIssueUnresolved(
+      "uncertain",
+      "media_issue_outcome_uncertain",
+      operationId,
+      dispatch,
+      issueId,
+      input,
+      context,
+    );
+  }
+
+  #recordIssueUnresolved(
+    state: "reconcile_required" | "uncertain",
+    failureCode: "media_issue_outcome_uncertain" | "media_issue_reconcile_required",
+    operationId: string,
+    dispatch: ExternalMutationRecord,
+    issueId: string,
+    input: MediaIssueStatusUpdate,
+    context: IssueWorkbenchContext,
+  ) {
+    try {
+      this.#database.sqlite.transaction(() => {
+        this.#markIssueReconcileRequired(dispatch);
+        if (state === "uncertain") {
+          const current = this.#journal.read(dispatch.id);
+          if (current?.state === "dispatched" || current?.state === "reconcile_required") {
+            this.#journal.completeUncertain({ failureCode, id: dispatch.id, now: this.#now() });
+          }
+        }
+        const now = this.#now();
+        const update = this.#database.sqlite
+          .prepare(
+            `update media_issue_operations
+             set state = ?, response_json = null, failure_code = ?,
+                 completed_at = ?, updated_at = ?
+             where id = ? and state in ('pending', 'reconcile_required')`,
+          )
+          .run(state, failureCode, now, now, operationId);
+        if (update.changes === 1) {
+          this.#database.sqlite
+            .prepare(
+              `insert into audit_events (
+                 id, actor_user_id, actor_session_id, actor_auth_method,
+                 event_type, outcome, target_type, target_id, request_id,
+                 metadata_json, ip_hash, created_at
+               ) values (?, ?, ?, ?, 'media.issue.update_failed', 'failure',
+                         'media_issue', ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              this.#auditId(),
+              context.principal.userId,
+              context.principal.sessionId,
+              context.principal.authenticationMethod.kind,
+              issueId,
+              context.requestId ?? null,
+              JSON.stringify({ failureCode, source: "seerr", status: input.status }),
+              context.ipAddress
+                ? privacyHash("ip_address", context.ipAddress, this.#config.encryptionKey)
+                : null,
+              now,
+            );
+        }
+      })();
+    } catch {
+      // A post-dispatch row remains fail-closed even if outcome persistence fails.
     }
   }
 
@@ -924,6 +1525,7 @@ export class IssueWorkbenchService {
     failureCode: IssueWorkbenchFailureCode | null,
     input: MediaIssueStatusUpdate,
     context: IssueWorkbenchContext,
+    completeDispatch?: () => void,
   ) {
     try {
       const now = this.#now();
@@ -932,7 +1534,7 @@ export class IssueWorkbenchService {
           .prepare(
             `update media_issue_operations
              set state = ?, response_json = ?, failure_code = ?, completed_at = ?, updated_at = ?
-             where id = ? and state = 'pending'`,
+             where id = ? and state in ('pending', 'reconcile_required')`,
           )
           .run(
             outcome === "success" ? "succeeded" : "failed",
@@ -970,6 +1572,7 @@ export class IssueWorkbenchService {
               : null,
             now,
           );
+        completeDispatch?.();
       })();
     } catch (error) {
       if (error instanceof IssueWorkbenchServiceError) throw error;

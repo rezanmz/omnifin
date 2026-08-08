@@ -168,12 +168,19 @@ describe("Servarr manual releases", () => {
     ]);
 
     await expect(
-      adapter.grabManualRelease({ guid: "private-indexer-guid", indexerId: 14 }),
+      adapter.grabManualRelease(
+        { guid: "private-indexer-guid", indexerId: 14 },
+        undefined,
+        `mutation_dispatch_${"g".repeat(22)}`,
+      ),
     ).resolves.toBeUndefined();
     expect(requests[0]?.url.pathname).toBe("/api/v3/release");
     expect(requests[0]?.init.method).toBe("POST");
     expect(requests[0]?.init.headers.get("content-type")).toBe("application/json");
     expect(requests[0]?.init.headers.get("x-api-key")).toBe("radarr-manual-fixture-key");
+    expect(requests[0]?.init.headers.get("x-omnifin-operation-id")).toBe(
+      `mutation_dispatch_${"g".repeat(22)}`,
+    );
     expect(JSON.parse(new TextDecoder().decode(requests[0]?.init.body))).toEqual({
       guid: "private-indexer-guid",
       indexerId: 14,

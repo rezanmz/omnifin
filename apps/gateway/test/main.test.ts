@@ -16,6 +16,7 @@ function spawnGateway(overrides: Record<string, string | undefined>) {
     OMNIFIN_DATABASE_URL: ":memory:",
     OMNIFIN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     OMNIFIN_LOG_LEVEL: "info",
+    OMNIFIN_IMAGE_REF: `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`,
     ...overrides,
   };
   for (const [name, value] of Object.entries(environment)) {

@@ -353,7 +353,11 @@ describe("acquisition provenance service", () => {
         ),
       ).rejects.toMatchObject({ reason: "idempotency_conflict" });
       expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
-      expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledWith(91, undefined);
+      expect(removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledWith(
+        91,
+        undefined,
+        expect.stringMatching(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u),
+      );
       expect(readAcquisitionQueue).toHaveBeenCalledTimes(2);
 
       const stored = database.sqlite
@@ -575,12 +579,12 @@ describe("acquisition provenance service", () => {
           "queue-recovery-abort-after-00001",
           { principal: principal() },
         ),
-      ).rejects.toMatchObject({ name: "AbortError" });
+      ).resolves.toMatchObject({ recovery: { state: "removed_and_blocklisted" } });
       expect(
         afterMutation.database.sqlite
           .prepare("select failure_code as failureCode from acquisition_queue_recovery_operations")
           .get(),
-      ).toEqual({ failureCode: "outcome_unconfirmed" });
+      ).toEqual({ failureCode: null });
     } finally {
       afterMutation.database.close();
     }
@@ -601,23 +605,62 @@ describe("acquisition provenance service", () => {
         snapshot.service.recoverQueueItem({ reference }, "queue-recovery-unconfirmed-0001", {
           principal: principal(),
         }),
-      ).rejects.toMatchObject({ reason: "outcome_unconfirmed" });
-      expect(snapshot.readAcquisitionQueue).toHaveBeenCalledTimes(4);
-      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
+      expect(snapshot.readAcquisitionQueue).toHaveBeenCalledTimes(3);
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledTimes(2);
       expect(
         snapshot.database.sqlite
           .prepare(
             "select state, failure_code as failureCode from acquisition_queue_recovery_operations",
           )
           .get(),
-      ).toEqual({ failureCode: "outcome_unconfirmed", state: "failed" });
+      ).toEqual({ failureCode: "outcome_uncertain", state: "uncertain" });
 
       await expect(
         snapshot.service.recoverQueueItem({ reference }, "queue-recovery-new-key-0000001", {
           principal: principal(),
         }),
-      ).rejects.toMatchObject({ reason: "operation_failed" });
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
+      expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledTimes(2);
+    } finally {
+      snapshot.database.close();
+    }
+  });
+
+  it("quarantines a changed or recreated exact queue identifier without a proof retry", async () => {
+    const snapshot = harness();
+    try {
+      snapshot.readAcquisitionProvenance.mockResolvedValueOnce(stalledResponse);
+      const response = await snapshot.service.read(
+        { mediaId: 42, service: "radarr" },
+        { principal: principal() },
+      );
+      const original = { event: stalledResponse.events[0]!, externalId: 91 };
+      const recreated = {
+        event: {
+          ...stalledResponse.events[0]!,
+          occurredAt: "2026-07-27T18:29:00.000Z",
+          state: "failure" as const,
+        },
+        externalId: 91,
+      };
+      snapshot.readAcquisitionQueue
+        .mockResolvedValueOnce([original])
+        .mockResolvedValueOnce([recreated]);
+
+      await expect(
+        snapshot.service.recoverQueueItem(
+          { reference: response.events[0]!.recovery!.reference },
+          "queue-recovery-recreated-0001",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
       expect(snapshot.removeAndBlocklistAcquisitionQueueItem).toHaveBeenCalledOnce();
+      expect(
+        snapshot.database.sqlite
+          .prepare("select state, failure_code as failureCode from external_mutation_dispatches")
+          .get(),
+      ).toEqual({ failureCode: "outcome_uncertain", state: "uncertain" });
     } finally {
       snapshot.database.close();
     }
@@ -686,7 +729,7 @@ describe("acquisition provenance service", () => {
           "queue-recovery-missing-0000001",
           { principal: principal() },
         ),
-      ).rejects.toMatchObject({ reason: "stale_state" });
+      ).resolves.toMatchObject({ recovery: { state: "removed_and_blocklisted" } });
       expect(missing.removeAndBlocklistAcquisitionQueueItem).not.toHaveBeenCalled();
     } finally {
       missing.database.close();
@@ -763,6 +806,24 @@ describe("acquisition provenance service", () => {
       expect(operation.keyHash).toHaveLength(43);
       expect(operation.fingerprintHash).toHaveLength(43);
       expect(operation.responseJson).not.toContain("acquisition-01234567");
+      expect(
+        database.sqlite
+          .prepare(
+            `select kind, parent_operation_type as parentOperationType, state,
+                    connector_instance_generation as instanceGeneration,
+                    connector_config_generation as configGeneration,
+                    dispatch_attempt_count as dispatchAttemptCount
+             from external_mutation_dispatches`,
+          )
+          .get(),
+      ).toEqual({
+        configGeneration: 0,
+        dispatchAttemptCount: 1,
+        instanceGeneration: 0,
+        kind: "acquisition.search",
+        parentOperationType: "acquisition_search_operation",
+        state: "succeeded",
+      });
       const audits = database.sqlite
         .prepare(
           `select event_type as eventType, outcome, target_id as targetId, metadata_json as metadataJson,
@@ -783,6 +844,119 @@ describe("acquisition provenance service", () => {
       });
       expect(audits[0]?.ipHash).toHaveLength(22);
       expect(audits[0]?.metadataJson).not.toContain("acquisition-01234567");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("atomically prunes an aged terminal automatic search before reserving another", async () => {
+    let current = now;
+    const { database, queueAcquisitionSearch, service } = harness({ clock: () => current });
+    try {
+      await service.queueSearch(
+        { mediaId: 42, service: "radarr" },
+        "acquisition-terminal-retention-0001",
+        { principal: principal() },
+      );
+      const expiredParentId = database.sqlite
+        .prepare("select id from acquisition_search_operations")
+        .pluck()
+        .get() as string;
+      current = new Date(now.getTime() + 31 * 24 * 60 * 60 * 1_000);
+
+      await service.queueSearch(
+        { mediaId: 43, service: "radarr" },
+        "acquisition-terminal-retention-0002",
+        { principal: principal() },
+      );
+
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from acquisition_search_operations where id = ?")
+          .get(expiredParentId),
+      ).toEqual({ count: 0 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select count(*) as count from external_mutation_dispatches
+             where parent_operation_type = 'acquisition_search_operation'
+               and parent_operation_id = ?`,
+          )
+          .get(expiredParentId),
+      ).toEqual({ count: 0 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select kind, parent_operation_type as parentOperationType
+             from external_mutation_dispatches`,
+          )
+          .all(),
+      ).toEqual([
+        { kind: "acquisition.search", parentOperationType: "acquisition_search_operation" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("retains aged unresolved automatic-search parent, dispatch, and target-lock evidence", async () => {
+    let current = now;
+    const { database, queueAcquisitionSearch, service } = harness({ clock: () => current });
+    queueAcquisitionSearch.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "timeout",
+        message: "Private lost automatic-search response",
+        operation: "acquisition.search",
+        retryable: true,
+        service: "radarr",
+      }),
+    );
+    try {
+      await expect(
+        service.queueSearch(
+          { mediaId: 42, service: "radarr" },
+          "acquisition-unresolved-retention-1",
+          { principal: principal() },
+        ),
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
+      current = new Date(now.getTime() + 31 * 24 * 60 * 60 * 1_000);
+
+      await expect(
+        service.queueSearch(
+          { mediaId: 43, service: "radarr" },
+          "acquisition-unresolved-retention-2",
+          { principal: principal() },
+        ),
+      ).resolves.toMatchObject({ replayed: false, search: normalizedSearch });
+      expect(queueAcquisitionSearch).toHaveBeenCalledTimes(2);
+      expect(
+        database.sqlite
+          .prepare(
+            `select
+               (select count(*) from acquisition_search_operations) as parents,
+               (select count(*) from external_mutation_dispatches
+                where parent_operation_type = 'acquisition_search_operation') as dispatches,
+               (select count(*) from external_mutation_target_locks) as locks`,
+          )
+          .get(),
+      ).toEqual({ dispatches: 2, locks: 1, parents: 2 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select parent.state as parentState, dispatch.state as dispatchState,
+                    dispatch.kind, dispatch.parent_operation_type as parentOperationType
+             from acquisition_search_operations parent
+             join external_mutation_dispatches dispatch on dispatch.parent_operation_id = parent.id
+             where parent.state = 'uncertain'`,
+          )
+          .get(),
+      ).toEqual({
+        dispatchState: "uncertain",
+        kind: "acquisition.search",
+        parentOperationType: "acquisition_search_operation",
+        parentState: "uncertain",
+      });
     } finally {
       database.close();
     }
@@ -933,7 +1107,7 @@ describe("acquisition provenance service", () => {
     }
   });
 
-  it("persists and audits a sanitized failed outcome without automatic resubmission", async () => {
+  it("persists and audits sanitized uncertainty without automatic resubmission", async () => {
     const { database, queueAcquisitionSearch, service } = harness();
     queueAcquisitionSearch.mockRejectedValueOnce(
       new SafeConnectorError({
@@ -951,13 +1125,20 @@ describe("acquisition provenance service", () => {
           principal: principal(),
           requestId: "failure-request",
         }),
-      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
       await expect(
         service.queueSearch({ mediaId: 42, service: "radarr" }, key, {
           principal: principal(),
           requestId: "failure-request",
         }),
-      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
+      await expect(
+        service.queueSearch(
+          { mediaId: 42, service: "radarr" },
+          "acquisition-failure-new-key-0001",
+          { principal: principal(), requestId: "failure-request" },
+        ),
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
       expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
       const stored = database.sqlite
         .prepare(
@@ -966,10 +1147,15 @@ describe("acquisition provenance service", () => {
         )
         .get() as { failureCode: string; responseJson: null; state: string };
       expect(stored).toEqual({
-        failureCode: "temporarily_unavailable",
+        failureCode: "outcome_uncertain",
         responseJson: null,
-        state: "failed",
+        state: "uncertain",
       });
+      expect(
+        database.sqlite
+          .prepare("select state, failure_code as failureCode from external_mutation_dispatches")
+          .get(),
+      ).toEqual({ failureCode: "outcome_uncertain", state: "uncertain" });
       const audit = database.sqlite
         .prepare(
           `select event_type as eventType, metadata_json as metadataJson, outcome

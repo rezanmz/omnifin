@@ -4,17 +4,20 @@ import {
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type { ConnectorHealth } from "@omnifin/contracts/connectors";
-import { X509Certificate } from "node:crypto";
+import type { ConnectorAdapter } from "@omnifin/connectors/types";
+import { createHash, X509Certificate } from "node:crypto";
 import { rootCertificates } from "node:tls";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConnectorAdminService } from "../src/connectors/admin-service.js";
+import { SessionService } from "../src/auth/session-service.js";
 import type {
   ConnectorAdapterFactoryInput,
   ConnectorAdminError,
 } from "../src/connectors/admin-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
+import { ExternalMutationJournal } from "../src/operations/external-mutation-journal.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseTime = Date.parse("2026-07-26T17:00:00.000Z");
@@ -103,11 +106,7 @@ function insertUser(database: DatabaseHandle, actor = principal()) {
 function createHarness(
   options: {
     clock?: () => Date;
-    createAdapter?: (input: ConnectorAdapterFactoryInput) => {
-      service: "radarr";
-      capabilities: readonly ["connector.health", "connector.version"];
-      probe: () => Promise<ConnectorHealth>;
-    };
+    createAdapter?: (input: ConnectorAdapterFactoryInput) => ConnectorAdapter;
   } = {},
 ) {
   const config = testConfig();
@@ -222,6 +221,15 @@ describe("connector administration service", () => {
         context(),
       );
       expect(cleared.publicUiUrl).toBeNull();
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 3, instanceGeneration: 0 });
       const audit = database.sqlite
         .prepare(
           "select metadata_json as metadataJson from audit_events where event_type = 'connector.configuration.updated' order by created_at desc limit 1",
@@ -298,6 +306,7 @@ describe("connector administration service", () => {
       );
 
       const probed = await service.probe("radarr-main", context());
+      expect(probed.revision).toBe(created.revision);
       expect(probed).toMatchObject({ healthState: "healthy", lastProbe: { status: "healthy" } });
       expect(createAdapter).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -316,6 +325,7 @@ describe("connector administration service", () => {
         .prepare("select capability_snapshot_json as snapshot from connector_configs where id = ?")
         .get("radarr-main") as { snapshot: string };
       expect(JSON.parse(snapshot.snapshot)).toMatchObject({
+        configGeneration: 1,
         health: { capabilities: ["connector.health", "connector.version"], status: "healthy" },
         schemaVersion: 1,
       });
@@ -465,6 +475,15 @@ describe("connector administration service", () => {
         tlsCaCertificateConfigured: false,
         tlsPolicy: "strict",
       });
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 1, instanceGeneration: 0 });
     } finally {
       database.close();
     }
@@ -587,6 +606,382 @@ describe("connector administration service", () => {
           context(),
         ),
       ).toMatchObject({ insecureHttpApproved: true, tlsPolicy: "strict" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps semantic no-ops and health probes revision-stable while advancing real config once", async () => {
+    const { database, service } = createHarness({
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"],
+        probe: async () => healthyRadarr(),
+        service: "radarr",
+      }),
+    });
+    try {
+      const created = service.create(radarrRequest, context());
+      const initial = database.sqlite
+        .prepare(
+          `select config_generation as configGeneration,
+                  instance_generation as instanceGeneration, updated_at as updatedAt
+           from connector_configs where id = ?`,
+        )
+        .get(created.id) as {
+        configGeneration: number;
+        instanceGeneration: number;
+        updatedAt: number;
+      };
+      const noOp = service.update(
+        created.id,
+        {
+          baseUrl: "https://radarr.example.test/api/",
+          credentials: radarrRequest.credentials,
+          displayName: radarrRequest.displayName,
+          revision: created.revision,
+        },
+        context(),
+      );
+      expect(noOp).toEqual(created);
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration, updated_at as updatedAt
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual(initial);
+
+      const probed = await service.probe(created.id, context());
+      expect(probed.revision).toBe(created.revision);
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 0, instanceGeneration: 0 });
+
+      const renamed = service.update(
+        created.id,
+        { displayName: "Cinema Radarr", revision: probed.revision },
+        context(),
+      );
+      expect(renamed.revision).not.toBe(created.revision);
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 1, instanceGeneration: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("advances instance generation only for a canonical endpoint replacement", async () => {
+    const { config, database, service } = createHarness({
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"],
+        probe: async () => healthyRadarr(),
+        service: "radarr",
+      }),
+    });
+    try {
+      const created = service.create(radarrRequest, context());
+      const probed = await service.probe(created.id, context());
+      const enabled = service.update(
+        created.id,
+        { enabled: true, revision: probed.revision },
+        context(),
+      );
+      const disabled = service.update(
+        created.id,
+        { enabled: false, revision: enabled.revision },
+        context(),
+      );
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 2, instanceGeneration: 0 });
+
+      const credentials = service.update(
+        created.id,
+        {
+          credentials: { apiKey: "replacement-api-key", kind: "api_key" },
+          revision: disabled.revision,
+        },
+        context(),
+      );
+      database.sqlite.exec(`
+        insert into users (id, display_name, role, role_source, status, created_at, updated_at)
+        values ('search-user', 'Search user', 'operator', 'manual', 'active', ${baseTime}, ${baseTime});
+        insert into acquisition_search_operations (
+          id, user_id, idempotency_key_hash, fingerprint_hash, state, created_at, updated_at
+        ) values (
+          'automatic-search-replacement', 'search-user', '${"a".repeat(43)}',
+          '${"b".repeat(43)}', 'pending', ${baseTime}, ${baseTime}
+        );
+      `);
+      const generations = database.sqlite
+        .prepare(
+          `select config_generation as configGeneration,
+                  instance_generation as instanceGeneration
+           from connector_configs where id = ?`,
+        )
+        .get(created.id) as { configGeneration: number; instanceGeneration: number };
+      new ExternalMutationJournal(database.sqlite, config.encryptionKey).reserve({
+        connectorConfigGeneration: generations.configGeneration,
+        connectorId: created.id,
+        connectorInstanceGeneration: generations.instanceGeneration,
+        id: `mutation_dispatch_${"x".repeat(22)}`,
+        kind: "acquisition.search",
+        leaseExpiresAt: baseTime + 60_000,
+        leaseOwner: "automatic-search-worker",
+        normalizedRequest: { action: "automatic_search", mediaId: 42 },
+        now: baseTime,
+        parentOperationId: "automatic-search-replacement",
+        parentOperationType: "acquisition_search_operation",
+        targetDigest: "y".repeat(22),
+        userId: "search-user",
+      });
+      const replacement = service.update(
+        created.id,
+        { baseUrl: "https://replacement.example.test/api", revision: credentials.revision },
+        context(),
+      );
+      expect(replacement).toMatchObject({ enabled: false, healthState: "unknown" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select config_generation as configGeneration,
+                    instance_generation as instanceGeneration
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toEqual({ configGeneration: 4, instanceGeneration: 1 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from acquisition_search_operations where id = 'automatic-search-replacement'`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "connector_instance_replaced", state: "failed" });
+      expect(
+        database.sqlite
+          .prepare(
+            `select state, failure_code as failureCode
+             from external_mutation_dispatches where parent_operation_id = 'automatic-search-replacement'`,
+          )
+          .get(),
+      ).toEqual({ failureCode: "connector_instance_replaced", state: "failed" });
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("hashes Jellyfin stable identity and atomically revokes old authority on replacement", async () => {
+    let serverId = "server-before";
+    const jellyfinHealth = (): ConnectorHealth => ({
+      capabilities: ["connector.health", "connector.version"],
+      checkedAt: new Date(baseTime).toISOString(),
+      connectorId: "jellyfin-main",
+      displayName: "Jellyfin",
+      failure: null,
+      latencyMs: 2,
+      service: "jellyfin",
+      status: "healthy",
+      version: "10.10.7",
+    });
+    const { config, database, service } = createHarness({
+      clock: () => new Date(baseTime),
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"],
+        probe: async () => jellyfinHealth(),
+        probeWithIdentity: async () => ({
+          health: jellyfinHealth(),
+          stableInstanceIdentity: serverId,
+        }),
+        service: "jellyfin",
+      }),
+    });
+    try {
+      const created = service.create(
+        {
+          baseUrl: "https://jellyfin.example.test",
+          credentials: { kind: "none" },
+          displayName: "Jellyfin",
+          id: "jellyfin-main",
+          insecureHttpApproved: false,
+          service: "jellyfin",
+          tlsPolicy: "strict",
+        },
+        context(),
+      );
+      const firstProbe = await service.probe(created.id, context());
+      const storedIdentity = database.sqlite
+        .prepare("select instance_identity_hash as hash from connector_configs where id = ?")
+        .get(created.id) as { hash: string };
+      expect(storedIdentity.hash).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      expect(storedIdentity.hash).not.toContain(serverId);
+      const enabled = service.update(
+        created.id,
+        { enabled: true, revision: firstProbe.revision },
+        context(),
+      );
+      database.sqlite
+        .prepare(
+          `insert into users (id, display_name, role, role_source, status, created_at, updated_at)
+           values ('linked-user', 'Linked user', 'viewer', 'default', 'active', ?, ?)`,
+        )
+        .run(baseTime, baseTime);
+      database.sqlite
+        .prepare(
+          `insert into service_identity_links (
+             id, user_id, service, connector_id, connector_instance_generation,
+             external_server_id, external_user_id, external_username, external_display_name,
+             encrypted_access_token, device_id, token_created_at, health_state,
+             last_verified_at, revision, created_at, updated_at
+           ) values (
+             'linked-user-link', 'linked-user', 'jellyfin', 'jellyfin-main', 0,
+             'server-before', 'upstream-user', 'linked', 'Linked user',
+             'v2.fixture-token', 'device-before', ?, 'linked', ?, 0, ?, ?
+           )`,
+        )
+        .run(baseTime, baseTime, baseTime, baseTime);
+      const sessions = new SessionService(database, config, { clock: () => new Date(baseTime) });
+      const session = sessions.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "linked-user-link",
+          userId: "linked-user",
+        },
+      });
+      database.sqlite
+        .prepare(
+          `insert into jellyfin_quick_connect_transactions (
+             id, connector_id, connector_instance_generation, connector_type, purpose,
+             browser_binding_hash, encrypted_payload, expires_at, next_poll_at, poll_count,
+             created_at
+           ) values (
+             'quick-before', 'jellyfin-main', 0, 'jellyfin', 'sign_in',
+             ?, 'v2.fixture-payload', ?, ?, 0, ?
+           )`,
+        )
+        .run("A".repeat(43), baseTime + 60_000, baseTime + 2_000, baseTime);
+
+      serverId = "server-after";
+      const replaced = await service.probe(created.id, context());
+      expect(replaced).toMatchObject({
+        enabled: false,
+        healthState: "unknown",
+        lastProbe: null,
+        revision: enabled.revision,
+      });
+      expect(
+        database.sqlite
+          .prepare(
+            `select instance_generation as instanceGeneration,
+                    config_generation as configGeneration, instance_identity_hash as identityHash
+             from connector_configs where id = ?`,
+          )
+          .get(created.id),
+      ).toMatchObject({ configGeneration: 1, instanceGeneration: 1 });
+      expect(
+        database.sqlite
+          .prepare(
+            `select encrypted_access_token as token, health_state as healthState,
+                    connector_instance_generation as connectorInstanceGeneration, revision
+             from service_identity_links where id = 'linked-user-link'`,
+          )
+          .get(),
+      ).toEqual({
+        connectorInstanceGeneration: 0,
+        healthState: "relink_required",
+        revision: 1,
+        token: null,
+      });
+      expect(
+        database.sqlite.prepare("select status from users where id = 'linked-user'").get(),
+      ).toEqual({
+        status: "pending_link",
+      });
+      expect(sessions.resolveAndRefresh(session.sessionToken)).toBeNull();
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from jellyfin_quick_connect_transactions")
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(JSON.stringify(replaced)).not.toMatch(/server-before|server-after/u);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a stale probe and accepts one pre-generation revision exactly once", async () => {
+    let finishProbe: ((health: ConnectorHealth) => void) | undefined;
+    const { database, service } = createHarness({
+      createAdapter: () => ({
+        capabilities: ["connector.health", "connector.version"],
+        probe: () =>
+          new Promise<ConnectorHealth>((resolve) => {
+            finishProbe = resolve;
+          }),
+        service: "radarr",
+      }),
+    });
+    try {
+      const created = service.create(radarrRequest, context());
+      const pendingProbe = service.probe(created.id, context());
+      await vi.waitFor(() => expect(finishProbe).toBeTypeOf("function"));
+      service.update(
+        created.id,
+        { displayName: "Changed while probing", revision: created.revision },
+        context(),
+      );
+      finishProbe!(healthyRadarr());
+      await expect(pendingProbe).rejects.toMatchObject({ reason: "revision_conflict" });
+
+      database.sqlite
+        .prepare(
+          `update connector_configs
+           set config_generation = 0, instance_generation = 0, updated_at = ?
+           where id = ?`,
+        )
+        .run(baseTime + 500, created.id);
+      const legacyRevision = createHash("sha256")
+        .update(`radarr\0${created.id}\0${baseTime + 500}`, "utf8")
+        .digest("base64url");
+      const compatible = service.update(
+        created.id,
+        { displayName: "Legacy compatible", revision: legacyRevision },
+        context(),
+      );
+      expect(compatible.displayName).toBe("Legacy compatible");
+      expect(() =>
+        service.update(
+          created.id,
+          { displayName: "Legacy replay", revision: legacyRevision },
+          context(),
+        ),
+      ).toThrow(expect.objectContaining({ reason: "revision_conflict" }));
     } finally {
       database.close();
     }

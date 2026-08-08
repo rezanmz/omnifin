@@ -111,6 +111,13 @@ resolve to a current owned Jellyfin item belonging to the paired user. The gatew
 state through the paired user's encrypted Jellyfin token, reads it back, and reports success only
 after Jellyfin returns the requested value. Setting the already-current value is a successful no-op.
 
+The favorite intent, opaque target lock, encrypted normalized request, and exact connector-generation
+snapshot are committed before the setter dispatch boundary. Recovery reads the paired user's exact
+favorite state first. A matching desired state completes without another write; a proven opposite
+state permits one safe state-set retry. Ambiguous or unconfirmed outcomes remain
+reconciliation-required, retain their journal row and lock, and block a different key from blindly
+writing the same favorite target.
+
 List membership may retain the last observed favorite value for degraded rendering, but it is never
 authoritative. Each normal refresh reconciles from Jellyfin. An unavailable connector returns a safe
 retryable error and leaves the displayed favorite in the explicit `unavailable` state; it does not

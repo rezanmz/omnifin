@@ -33,6 +33,7 @@ import { constantTimeTextEqual, EnvelopeCipher, privacyHash } from "../security/
 
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const CURSOR_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{22}$/u;
+const CALENDAR_SOURCE_MAX_RECORDS = 5_000;
 
 interface CalendarConnectorRow {
   baseUrl: string;
@@ -60,7 +61,6 @@ interface ConnectorSelection {
 interface CalendarSourceResult {
   events: AcquisitionCalendarEvent[];
   source: Omit<AcquisitionCalendarSource, "eventCount">;
-  sourceTruncated: boolean;
 }
 
 const cursorPayloadSchema = z.strictObject({
@@ -299,7 +299,7 @@ export class AcquisitionCalendarService {
       failures,
       generatedAt: this.#clock().toISOString(),
       nextCursor,
-      sourceTruncated: selection.truncated || results.some((result) => result.sourceTruncated),
+      sourceTruncated: selection.truncated,
       sources,
       startAt: query.start,
       state:
@@ -353,6 +353,9 @@ export class AcquisitionCalendarService {
         { endAt: query.end, startAt: query.start },
         signal,
       );
+      if (calendar.events.length > CALENDAR_SOURCE_MAX_RECORDS) {
+        throw new CalendarSourceResponseError("calendar source record limit exceeded");
+      }
       const eventIds = new Set<string>();
       const events = calendar.events.map((event) => {
         const normalized = this.#publicEvent(row, displayName, sourceId, event);
@@ -371,7 +374,6 @@ export class AcquisitionCalendarService {
           service,
           status: "healthy",
         },
-        sourceTruncated: calendar.truncated,
       };
     } catch (error) {
       const failure = safeFailure(service, displayName, error, occurredAt);
@@ -384,7 +386,6 @@ export class AcquisitionCalendarService {
           service,
           status: "unavailable",
         },
-        sourceTruncated: false,
       };
     }
   }

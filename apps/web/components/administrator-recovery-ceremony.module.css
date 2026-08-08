@@ -1,0 +1,777 @@
+.layout {
+  --ceremony-warning-bg: color-mix(in srgb, var(--warning) 9%, transparent);
+  --ceremony-warning-line: color-mix(in srgb, var(--warning) 30%, transparent);
+  padding-block: clamp(22px, 4vw, 54px);
+}
+
+.card {
+  animation: ceremony-arrive 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  grid-template-columns: minmax(330px, 0.78fr) minmax(500px, 1.12fr);
+  max-width: 1180px;
+  min-height: 760px;
+  overflow: visible;
+}
+
+.intro {
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  min-height: 760px;
+  overflow: hidden;
+  padding: clamp(38px, 4.4vw, 62px);
+}
+
+.headline {
+  margin: 0;
+  padding: clamp(54px, 8vh, 84px) 0 36px;
+}
+
+.headline h1 {
+  font-size: clamp(3rem, 4.8vw, 4.9rem);
+  max-width: 7.5ch;
+}
+
+.progress {
+  display: grid;
+  gap: 0;
+  margin: auto 0 34px;
+  position: relative;
+}
+
+.progress li {
+  align-items: center;
+  color: var(--paper-2);
+  display: grid;
+  font-size: 0.68rem;
+  font-weight: 620;
+  gap: 11px;
+  grid-template-columns: 28px 1fr;
+  min-height: 46px;
+  position: relative;
+}
+
+.progress li:not(:last-child)::after {
+  background: var(--line-strong);
+  content: "";
+  height: 18px;
+  left: 13px;
+  position: absolute;
+  top: 37px;
+  width: 1px;
+}
+
+.progress li > span {
+  align-items: center;
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--paper-2);
+  display: flex;
+  font-size: 0.62rem;
+  height: 28px;
+  justify-content: center;
+  position: relative;
+  width: 28px;
+  z-index: 1;
+}
+
+.progress li[data-current="true"] {
+  color: var(--paper-0);
+}
+
+.progress li[data-current="true"] > span,
+.progress li[data-complete="true"] > span {
+  background: var(--acid);
+  border-color: var(--acid);
+  color: var(--acid-ink);
+}
+
+.progress li[data-complete="true"]::after {
+  background: color-mix(in srgb, var(--acid) 55%, var(--line-strong));
+}
+
+.assurances {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 24px;
+}
+
+.assurances li {
+  line-height: 1.4;
+}
+
+.panel {
+  align-content: start;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  min-height: 760px;
+  padding: clamp(42px, 5vw, 68px);
+}
+
+.stepPanel,
+.statePanel {
+  animation: ceremony-step 260ms ease-out both;
+  margin: auto 0;
+  width: 100%;
+}
+
+.stepPanel {
+  align-self: center;
+}
+
+.stepPanel > :global(.jellyfin-login-form__submit) {
+  margin-top: 22px;
+  width: 100%;
+}
+
+.statePanel {
+  align-content: center;
+  display: grid;
+  gap: 24px;
+  min-height: 570px;
+}
+
+.stateIcon {
+  align-items: center;
+  background: var(--ceremony-warning-bg);
+  border: 1px solid var(--ceremony-warning-line);
+  border-radius: var(--radius-md);
+  color: var(--warning);
+  display: flex;
+  height: 58px;
+  justify-content: center;
+  width: 58px;
+}
+
+.statePanel[data-state="loading"] .stateIcon,
+.statePanel[data-state="success"] .stateIcon {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--acid);
+}
+
+.statePanel h2 {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 3.4vw, 2.85rem);
+  font-weight: 470;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  margin: 8px 0 14px;
+  max-width: 14ch;
+}
+
+.statePanel p:not(:global(.section-kicker), :global(.sr-only)) {
+  color: var(--paper-2);
+  font-size: 0.76rem;
+  line-height: 1.65;
+  max-width: 48ch;
+}
+
+.retryNote {
+  border-left: 2px solid var(--warning);
+  margin-top: 14px;
+  padding-left: 12px;
+}
+
+.stateActions {
+  display: grid;
+  gap: 11px;
+  max-width: 420px;
+}
+
+.stateActions :global(.jellyfin-login-form__submit) {
+  width: 100%;
+}
+
+.secondaryAction,
+.inlineBack {
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--paper-1);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.7rem;
+  font-weight: 650;
+  gap: 8px;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 16px;
+  text-align: center;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out,
+    scale 120ms ease-out;
+}
+
+.secondaryAction:hover,
+.inlineBack:hover {
+  background: var(--fill-hover);
+  border-color: var(--accent-line);
+  color: var(--paper-0);
+}
+
+.secondaryAction:active,
+.inlineBack:active {
+  scale: 0.98;
+}
+
+.secondaryAction:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.inlineBack {
+  border: 0;
+  justify-content: flex-start;
+  margin: -18px 0 20px -12px;
+  min-height: 44px;
+  padding-inline: 12px;
+}
+
+.targetCard {
+  background:
+    radial-gradient(circle at 100% 0%, var(--accent-soft), transparent 48%),
+    var(--surface-card-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px var(--glass-highlight);
+  margin-top: 26px;
+  overflow: hidden;
+}
+
+.targetCard > div:first-child {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 22px 24px 20px;
+}
+
+.targetCard > div:first-child p,
+.confirmationPhrase span,
+.quickCode span {
+  color: var(--paper-2);
+  font-size: 0.61rem;
+  font-weight: 680;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.targetCard h3 {
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.targetCard dl {
+  display: grid;
+  grid-template-columns: 0.8fr 1.15fr 1.25fr;
+}
+
+.targetCard dl > div {
+  min-width: 0;
+  padding: 16px 18px 18px;
+}
+
+.targetCard dl > div + div {
+  border-left: 1px solid var(--line-soft);
+}
+
+.targetCard dt {
+  color: var(--paper-2);
+  font-size: 0.59rem;
+  line-height: 1.35;
+}
+
+.targetCard dd {
+  color: var(--paper-1);
+  font-size: 0.69rem;
+  font-weight: 650;
+  line-height: 1.4;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.localWarning {
+  align-items: start;
+  background: var(--ceremony-warning-bg);
+  border: 1px solid var(--ceremony-warning-line);
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  display: grid;
+  gap: 13px;
+  grid-template-columns: auto 1fr;
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.localWarning svg {
+  margin-top: 1px;
+}
+
+.localWarning h3 {
+  color: var(--paper-0);
+  font-size: 0.71rem;
+  font-weight: 720;
+  margin-bottom: 5px;
+}
+
+.localWarning p {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  line-height: 1.55;
+}
+
+.notice {
+  align-items: start;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  display: grid;
+  font-size: 0.68rem;
+  gap: 10px;
+  grid-template-columns: auto 1fr;
+  line-height: 1.5;
+  margin-top: 18px;
+  padding: 13px 14px;
+}
+
+.notice[data-kind="rate_limited"],
+.notice[data-kind="unavailable"] {
+  background: var(--ceremony-warning-bg);
+  border-color: var(--ceremony-warning-line);
+  color: var(--warning);
+}
+
+.notice p + p {
+  margin-top: 5px;
+}
+
+.confirmationPhrase {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  margin-top: 28px;
+  padding: 20px;
+}
+
+.confirmationPhrase code {
+  color: var(--paper-0);
+  font-family: var(--font-body);
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  font-weight: 760;
+  letter-spacing: 0.055em;
+  overflow-wrap: anywhere;
+}
+
+.fieldHelp {
+  color: var(--paper-2);
+  font-size: 0.66rem;
+  line-height: 1.5;
+  margin: -8px 0 0;
+}
+
+.methods {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  display: grid;
+  grid-auto-columns: minmax(138px, 1fr);
+  grid-auto-flow: column;
+  margin-top: 24px;
+  overflow-x: auto;
+  padding: 3px;
+  scrollbar-width: thin;
+}
+
+.methods button {
+  align-items: center;
+  border-radius: calc(var(--radius-sm) - 4px);
+  color: var(--paper-2);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.65rem;
+  font-weight: 680;
+  gap: 7px;
+  justify-content: center;
+  min-height: 48px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.methods button[aria-selected="true"] {
+  background: var(--surface-card-solid);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  color: var(--paper-0);
+}
+
+.methodGate {
+  align-items: start;
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  color: var(--paper-2);
+  display: grid;
+  font-size: 0.72rem;
+  gap: 14px;
+  grid-template-columns: auto 1fr;
+  line-height: 1.55;
+  margin-top: 24px;
+  padding: 20px;
+}
+
+.methodGate strong {
+  color: var(--paper-0);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.methodGate .secondaryAction {
+  grid-column: 1 / -1;
+}
+
+.proofPanel {
+  margin-top: 20px;
+}
+
+.quickConnectStart {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+  text-align: center;
+}
+
+.quickConnectStart > span {
+  align-items: center;
+  background: radial-gradient(circle, var(--accent-soft), transparent 74%);
+  border: 1px solid var(--accent-line);
+  border-radius: 50%;
+  color: var(--acid);
+  display: flex;
+  height: 82px;
+  justify-content: center;
+  margin: 18px 0 22px;
+  width: 82px;
+}
+
+.quickConnectStart > p {
+  color: var(--paper-2);
+  font-size: 0.71rem;
+  line-height: 1.6;
+  max-width: 43ch;
+}
+
+.quickConnectStart :global(.jellyfin-login-form__submit) {
+  margin-top: auto;
+  width: 100%;
+}
+
+.quickConnectPending {
+  display: grid;
+  gap: 18px;
+}
+
+.quickCode {
+  background:
+    radial-gradient(circle at 100% 0%, var(--accent-soft), transparent 52%),
+    var(--surface-card-solid);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 8px;
+  padding: 22px;
+}
+
+.quickCode output {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+  letter-spacing: 0.1em;
+  line-height: 1;
+}
+
+.quickConnectPending ol {
+  counter-reset: recovery-quick-step;
+  display: grid;
+  gap: 9px;
+}
+
+.quickConnectPending li {
+  align-items: center;
+  color: var(--paper-2);
+  counter-increment: recovery-quick-step;
+  display: grid;
+  font-size: 0.68rem;
+  gap: 10px;
+  grid-template-columns: 25px 1fr;
+  line-height: 1.4;
+}
+
+.quickConnectPending li::before {
+  align-items: center;
+  background: var(--fill-hover);
+  border: 1px solid var(--line-soft);
+  border-radius: 50%;
+  color: var(--paper-1);
+  content: counter(recovery-quick-step);
+  display: flex;
+  font-size: 0.6rem;
+  height: 25px;
+  justify-content: center;
+  width: 25px;
+}
+
+.pendingStatus {
+  align-items: center;
+  border-top: 1px solid var(--line-soft);
+  color: var(--paper-2);
+  display: grid;
+  font-size: 0.65rem;
+  gap: 9px;
+  grid-template-columns: auto 1fr;
+  padding-top: 15px;
+}
+
+.pendingStatus > span:first-child {
+  background: var(--acid);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px var(--accent-soft);
+  height: 7px;
+  width: 7px;
+}
+
+.pendingStatus time {
+  color: var(--paper-2);
+  grid-column: 2;
+}
+
+.oidcIntro {
+  align-items: start;
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--acid);
+  display: grid;
+  gap: 13px;
+  grid-template-columns: auto 1fr;
+  padding: 16px;
+}
+
+.oidcIntro p {
+  color: var(--paper-2);
+  font-size: 0.68rem;
+  line-height: 1.55;
+}
+
+.oidcProviders {
+  display: grid;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.oidcProviders button {
+  align-items: center;
+  background: var(--surface-card-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--paper-1);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 0 17px;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out,
+    translate 150ms ease-out;
+  width: 100%;
+}
+
+.oidcProviders button > span {
+  align-items: center;
+  display: flex;
+  gap: 11px;
+  min-width: 0;
+}
+
+.oidcProviders strong {
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oidcProviders button:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--paper-0);
+  translate: 3px 0;
+}
+
+.oidcProviders button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+@keyframes ceremony-arrive {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+
+@keyframes ceremony-step {
+  from {
+    opacity: 0;
+    translate: 0 7px;
+  }
+}
+
+@media (max-width: 960px) {
+  .layout {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .card {
+    border: 0;
+    border-radius: 0;
+    grid-template-columns: 1fr;
+    min-height: 100dvh;
+  }
+
+  .intro,
+  .panel {
+    border-radius: 0;
+    min-height: auto;
+  }
+
+  .intro {
+    padding: max(28px, env(safe-area-inset-top)) clamp(22px, 6vw, 48px) 34px;
+  }
+
+  .headline {
+    padding: 54px 0 32px;
+  }
+
+  .progress {
+    margin: 0;
+    max-width: 440px;
+  }
+
+  .assurances {
+    display: none;
+  }
+
+  .panel {
+    border-top: 1px solid var(--line-soft);
+    padding: 44px clamp(22px, 6vw, 48px) max(54px, env(safe-area-inset-bottom));
+  }
+
+  .statePanel {
+    min-height: 470px;
+  }
+}
+
+@media (max-width: 560px) {
+  .layout .headline h1 {
+    font-size: clamp(2.55rem, 11.25vw, 3rem);
+  }
+
+  .progress li {
+    font-size: 0.66rem;
+  }
+
+  .panel {
+    padding-inline: 20px;
+  }
+
+  .targetCard dl {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .targetCard dl > div + div {
+    border-left: 0;
+  }
+
+  .targetCard dl > div:nth-child(2) {
+    border-left: 1px solid var(--line-soft);
+  }
+
+  .targetCard dl > div:last-child {
+    border-top: 1px solid var(--line-soft);
+    grid-column: 1 / -1;
+  }
+
+  .methods {
+    margin-inline: -4px;
+  }
+
+  .pendingStatus {
+    grid-template-columns: auto 1fr;
+  }
+
+  .secondaryAction {
+    width: 100%;
+  }
+}
+
+.layout[data-display-profile="ten-foot"] .card {
+  grid-template-columns: minmax(420px, 0.82fr) minmax(620px, 1.18fr);
+  max-width: 1480px;
+  min-height: 880px;
+}
+
+.layout[data-display-profile="ten-foot"] .intro,
+.layout[data-display-profile="ten-foot"] .panel {
+  min-height: 880px;
+  padding: 76px;
+}
+
+.layout[data-display-profile="ten-foot"] .headline h1 {
+  font-size: 4rem;
+}
+
+.layout[data-display-profile="ten-foot"] .progress li,
+.layout[data-display-profile="ten-foot"] .assurances li,
+.layout[data-display-profile="ten-foot"] .fieldHelp,
+.layout[data-display-profile="ten-foot"] .localWarning p,
+.layout[data-display-profile="ten-foot"] .notice,
+.layout[data-display-profile="ten-foot"] .quickConnectStart > p,
+.layout[data-display-profile="ten-foot"] .oidcIntro p {
+  font-size: 0.82rem;
+}
+
+.layout[data-display-profile="ten-foot"] .secondaryAction,
+.layout[data-display-profile="ten-foot"] .methods button,
+.layout[data-display-profile="ten-foot"] .oidcProviders button {
+  min-height: 64px;
+}
+
+@media (forced-colors: active) {
+  .targetCard,
+  .localWarning,
+  .notice,
+  .confirmationPhrase,
+  .methods,
+  .methodGate,
+  .quickCode,
+  .oidcIntro,
+  .oidcProviders button {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    color: CanvasText;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .stepPanel,
+  .statePanel {
+    animation: none;
+  }
+}

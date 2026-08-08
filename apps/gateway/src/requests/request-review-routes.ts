@@ -44,6 +44,7 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
 }
 
 function reviewError(error: RequestReviewServiceError, reply: FastifyReply) {
+  if (error.operationId) reply.header("operation-id", error.operationId);
   switch (error.reason) {
     case "request_not_found":
       return new SafeHttpError({
@@ -79,6 +80,20 @@ function reviewError(error: RequestReviewServiceError, reply: FastifyReply) {
         cause: error,
         code: "request_review_outcome_pending",
         message: "The outcome of this review decision is still being determined.",
+        statusCode: 409,
+      });
+    case "request_review_outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_review_outcome_uncertain",
+        message: "The review outcome is uncertain and will not be changed automatically.",
+        statusCode: 409,
+      });
+    case "request_review_reconcile_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "request_review_reconcile_required",
+        message: "The review decision requires reconciliation before another change.",
         statusCode: 409,
       });
     case "response_invalid":

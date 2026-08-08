@@ -39,7 +39,9 @@ typed internal data.
 
 The gateway then:
 
-- derives a deployment-local opaque item identifier from the connector and upstream identifier;
+- derives a deployment-local opaque item identifier from the connector generation and upstream
+  identifier, while preserving the established identifier derivation for generation-zero
+  connectors;
 - removes the upstream identifier before public validation;
 - normalizes torrent and Usenet states into one bounded state vocabulary;
 - bounds client names, titles, categories, dates, progress, rates, sizes, peer counts, clients, and
@@ -132,13 +134,28 @@ CSRF validation, a 1 KiB body limit, mutation rate limiting, and an abort-aware 
 contract cannot express deletion, paths, categories, priorities, URLs, or multiple targets.
 
 The gateway selects the named healthy connector only when it advertises both queue read and mutate
-capabilities. It reads the queue, derives every deployment-local opaque identifier, and requires
-exactly one match. An already-achieved action returns as a verified replay; otherwise the observed
-state must match the submitted state before a write is allowed. A durable `requested` audit event
-is stored before the upstream call, so audit storage failure prevents mutation. The gateway then
-re-reads the exact item with bounded retries and returns only a schema-valid desired state. Updated,
-replayed, failed, stale, and missing-target outcomes retain only bounded public identifiers and
-metadata.
+capabilities. Before reading or writing the target, it reserves a `download_queue_item_operations`
+row and an encrypted external-mutation dispatch, snapshots the connector instance/config
+generations, and takes the deployment-local exact-target lock. It then reads the queue, derives
+every opaque identifier, and requires exactly one match. An already-achieved action returns as a
+verified no-op; otherwise the observed state must match the submitted state before a write is
+allowed. A durable `requested` audit event is stored before dispatch, and the journal is changed to
+`dispatched` immediately before the adapter call. Audit or generation-check failure therefore
+prevents mutation.
+
+The first exact postcondition read decides the result. The desired state succeeds even when the
+adapter response was lost. The identical target still in its exact pre-dispatch state permits at
+most one proof-based state-set retry; the retry boundary is durable before the second adapter call.
+Absence, identity change, generation change after dispatch, or a different observed state becomes
+uncertain. A failed post-dispatch read becomes `reconcile_required`; neither condition is reported
+as an ordinary retryable upstream failure. Unresolved rows retain the target lock.
+
+Callers may provide `Idempotency-Key`; browser calls without one receive a request-scoped key. The
+same key replays a completed result, reconciliation requirement, or uncertain result without
+reconstructing an adapter. A different key conflicts while an unresolved operation owns the exact
+target. Every write response includes `X-Omnifin-Operation-Id`, and idempotent routes also expose
+`Idempotency-Replayed`. Safe conflict codes distinguish locked targets, changed connector
+generations, reconciliation requirements, and uncertain outcomes without exposing native IDs.
 
 qBittorrent uses a validated single torrent hash and selects `stop`/`start` for version 5 or newer
 and `pause`/`resume` for version 4. SABnzbd binds `pause` or `resume` to exactly one validated
@@ -153,19 +170,21 @@ arbitrary command. The operator workspace captures only eligible transfers in th
 and filter, displays the exact count and client scope, and requires confirmation before submitting.
 
 The route requires an active `downloads.manage` session, same-origin CSRF proof, a per-user
-`Idempotency-Key`, a 64 KiB body limit, a six-per-minute operation limit, and no-store responses. The gateway
-durably reserves a canonical request, revalidates every target through the existing exact-item
-action path, and limits concurrent mutations to four. It never forwards a client-native bulk
-command. Each qBittorrent hash or SABnzbd `nzo_id` is resolved and mutated independently inside the
-secret boundary.
+`Idempotency-Key`, a 64 KiB body limit, a six-per-minute operation limit, and no-store responses. The
+gateway durably reserves only the parent aggregate, then creates one journaled
+`download_queue_item_operations` child for every exact target and limits concurrent mutations to
+four. It never forwards a client-native bulk command. Each qBittorrent hash or SABnzbd `nzo_id` is
+resolved, locked, generation-checked, dispatched, and reconciled independently inside the secret
+boundary.
 
 Results preserve input order and report a normalized success or bounded failure for every target,
-so partial completion is explicit. Progress is stored after each bounded batch. A recent pending
-operation is rejected; after a 30-second lease expires, the same idempotency proof resumes only
-missing targets from durable progress. Exact-item replay makes the narrow crash interval between an
-upstream write and progress storage safe. Up to 200 records are retained per user. Completed and
-abandoned-pending records expire after 30 days and are pruned transactionally before new
-reservations, preventing a crashed client from exhausting the ledger indefinitely.
+so partial completion is explicit. Progress is stored after each bounded batch, while each child
+boundary is independently durable. A recent pending parent is rejected; after a 30-second lease
+expires, the same idempotency proof resumes only children that are still provably pre-dispatch or
+can be reconciled by an exact read. Dispatched children are never reclaimed for blind redispatch.
+Existing Phase 0 `quarantined` parents always fail closed with their stored progress unchanged and
+make zero adapter calls. Up to 200 parent records are retained per user. Retention removes only old
+definitive parents/children and never prunes unresolved or quarantined evidence.
 
 Bulk requested/completed audit events contain the operation ID, action, target count, client count,
 and normalized outcome counts. Existing per-item audit records retain exact public target evidence.
@@ -180,12 +199,14 @@ resume. Its closed contract contains exactly one connector, one deployment-local
 the freshly observed state. It cannot express a numeric priority, arbitrary position, bulk target,
 path, category, URL, or client-native command.
 
-The gateway resolves the opaque target against a fresh exact queue read and retains its native
-position only inside the secret boundary. An item already at position zero returns as a verified
-replay without contacting the client. Missing or unobservable queue order fails closed; otherwise
-the observed state must match before mutation. A durable `download.queue.promotion.requested` audit
-event is committed before the upstream call, and completion, replay, and failure records contain
-only bounded public identifiers and normalized metadata.
+Promotion uses the same operation row, encrypted dispatch, generation snapshot, exact-target lock,
+idempotency replay, and dispatched-before-adapter boundary as pause/resume. The gateway resolves the
+opaque target against a fresh exact queue read and retains its native position only inside the
+secret boundary. An item already at position zero returns as a verified no-op without contacting
+the client. Missing or unobservable queue order fails closed; otherwise the observed state must
+match before mutation. The exact postcondition must show the identical item at position zero. Only
+an unchanged item at its prior position permits one proof-based promotion retry; changed,
+recreated, absent, or unreadable postconditions retain uncertainty or a reconciliation requirement.
 
 qBittorrent receives one validated torrent hash through its `topPrio` endpoint. SABnzbd receives
 one validated `nzo_id` through `mode=switch` with position zero. The gateway performs bounded exact-
@@ -202,20 +223,22 @@ local opaque item, and the freshly observed state; it cannot express a filesyste
 client-native command, or deletion of downloaded content.
 
 The gateway hashes the per-user idempotency key and a canonical target fingerprint before storing
-them. It durably reserves the operation, snapshots the exact public queue item, and commits the
-`download.queue.removal.requested` audit record before contacting the client. qBittorrent receives
-one validated torrent hash with `deleteFiles=false`. SABnzbd receives one validated `nzo_id` without
-`del_files=1`, so already-downloaded files are preserved. The gateway then performs bounded exact-
-item reads and reports success only after that opaque item is absent.
+them. It durably reserves the removal plus its encrypted external-mutation dispatch, snapshots the
+connector generations and a richer target identity beside the exact public item, takes the shared
+download-target lock, and commits the `download.queue.removal.requested` audit record before
+contacting the client. qBittorrent receives one validated torrent hash with `deleteFiles=false`.
+SABnzbd receives one validated `nzo_id` without `del_files=1`, so already-downloaded files are
+preserved. The journal is marked dispatched immediately before that exact adapter call.
 
-Completed and failed outcomes replay without another upstream mutation. A recent pending operation
-is rejected instead of joined. After the short recovery lease, the gateway can complete an operation
-whose exact item is already absent, or retry only when the current item still matches the durable
-snapshot; identifier reuse or changed item metadata fails closed. Completed operation records are
-retained for 30 days and pruned transactionally before new reservations. Responses and audit events
-contain only bounded public identifiers, the normalized snapshot, an operation identifier, and the
-fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency keys,
-credentials, cookies, paths, and upstream bodies remain inside the gateway.
+Exact absence is definitive success, including after a lost adapter response. The identical target
+still present permits one proof-based retry whose dispatch count is persisted first. A changed or
+recreated target is uncertain, and an unreadable postcondition requires reconciliation; neither is
+downgraded to an ordinary failed/retryable response. Same-key success and unresolved outcomes replay
+without an adapter call, while new keys conflict on the retained target lock. Only definitive
+succeeded/failed operation and dispatch rows expire after 30 days. Responses, headers, and audit
+events contain only bounded public identifiers, the normalized snapshot, an operation identifier,
+and the fixed `contentDisposition: "preserved"` guarantee. Raw hashes, `nzo_id` values, idempotency
+keys, credentials, cookies, paths, and upstream bodies remain inside the gateway.
 
 Arbitrary numeric priorities or positions, relocation, category changes, blocklisting, and deletion
 of downloaded content remain intentionally absent. Bulk pause/resume is deliberately limited to

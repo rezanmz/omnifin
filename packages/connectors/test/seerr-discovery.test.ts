@@ -80,10 +80,17 @@ describe("Seerr discovery", () => {
       title: "Requestable signal",
       voteAverage: 8.8,
     };
+    const partiallyAvailableMovie = {
+      ...searchResponse.results[0],
+      id: 552,
+      mediaInfo: { status: 4 },
+      title: "Partial signal",
+      voteAverage: 8.7,
+    };
     const { adapter, requests } = adapterWithResponses([
       jsonResponse({
         page: 2,
-        results: [searchResponse.results[0], requestableMovie],
+        results: [searchResponse.results[0], requestableMovie, partiallyAvailableMovie],
         totalPages: 12,
         totalResults: 231,
       }),
@@ -105,7 +112,10 @@ describe("Seerr discovery", () => {
     });
 
     expect(result).toMatchObject({
-      items: [{ media: { availability: "unavailable", id: "movie:551" } }],
+      items: [
+        { media: { availability: "unavailable", id: "movie:551" } },
+        { media: { availability: "partial", id: "movie:552" } },
+      ],
       page: 2,
       totalPages: 12,
       totalResults: 231,

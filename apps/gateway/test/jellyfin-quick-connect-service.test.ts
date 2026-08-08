@@ -2,6 +2,7 @@ import type {
   JellyfinAuthenticationResult,
   JellyfinQuickConnectResult,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
+import { ADMINISTRATOR_RECOVERY_CONFIRMATION } from "@omnifin/contracts/auth";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -107,6 +108,7 @@ function fixture(
     enabled?: boolean;
     isAdministrator?: boolean;
     onPoll?: () => void;
+    pollServerId?: string;
     serverId?: string;
   } = {},
 ) {
@@ -144,7 +146,11 @@ function fixture(
       },
       getPublicSystemInfo: async () => {
         calls.publicInfo += 1;
-        return { Id: "server-1", ServerName: "Home Jellyfin", Version: "10.10.7" };
+        return {
+          Id: calls.publicInfo > 1 ? (options.pollServerId ?? "server-1") : "server-1",
+          ServerName: "Home Jellyfin",
+          Version: "10.10.7",
+        };
       },
       initiateQuickConnect: async () => {
         calls.initiate += 1;
@@ -273,6 +279,118 @@ describe("JellyfinQuickConnectService", () => {
     }
   });
 
+  it("binds sole-administrator replacement target and confirmation into one-use proof", async () => {
+    const handle = database();
+    const test = fixture(handle, { authenticated: true });
+    try {
+      for (const account of [
+        {
+          externalUserId: "upstream-target",
+          id: "target-administrator",
+          role: "admin" as const,
+        },
+        {
+          externalUserId: "jellyfin-user-1",
+          id: "replacement-account",
+          role: "viewer" as const,
+        },
+      ]) {
+        handle.db
+          .insert(users)
+          .values({
+            createdAt: START,
+            displayName: account.id,
+            id: account.id,
+            role: account.role,
+            roleSource: account.role === "admin" ? "manual" : "default",
+            status: "active",
+            updatedAt: START,
+          })
+          .run();
+        handle.db
+          .insert(serviceIdentityLinks)
+          .values({
+            connectorId: "jellyfin-home",
+            createdAt: START,
+            deviceId: `${account.id}-device`,
+            encryptedAccessToken: `v2.${account.id}-token`,
+            externalDisplayName: account.id,
+            externalServerId: "server-1",
+            externalUserId: account.externalUserId,
+            externalUsername: account.id,
+            healthState: "linked",
+            id: `${account.id}-link`,
+            lastVerifiedAt: START,
+            service: "jellyfin",
+            tokenCreatedAt: START,
+            updatedAt: START,
+            userId: account.id,
+          })
+          .run();
+      }
+      test.sessions.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "target-administrator-link",
+          userId: "target-administrator",
+        },
+      });
+      test.sessions.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "replacement-account-link",
+          userId: "replacement-account",
+        },
+      });
+      const recovery = seedRecoverySession(test.sessions);
+      const started = await test.service.startAdministratorReplacement({
+        administratorId: "target-administrator",
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        expectedUpdatedAt: START.toISOString(),
+        validatedSession: recovery.validated,
+      });
+      const transaction = handle.sqlite
+        .prepare(
+          "select encrypted_payload as encryptedPayload from jellyfin_quick_connect_transactions where id = ?",
+        )
+        .get(started.transactionId) as { encryptedPayload: string };
+      const plaintext = new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
+        transaction.encryptedPayload,
+        `jellyfin-quick-connect:${started.transactionId}:payload`,
+      );
+      expect(JSON.parse(plaintext)).toMatchObject({
+        administratorId: "target-administrator",
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        expectedUpdatedAt: START.toISOString(),
+        purpose: "administrator_replacement",
+        recoverySessionId: recovery.session.principal.sessionId,
+        schemaVersion: 5,
+        configGeneration: 0,
+        instanceGeneration: 0,
+      });
+      expect(JSON.stringify(transaction)).not.toContain("target-administrator");
+
+      test.advance(JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS);
+      const result = await test.service.pollAdministratorReplacement({
+        ...pollInput(started.transactionId),
+        validatedSession: recovery.validated,
+      });
+      expect(result.status).toBe("replaced");
+      expect(handle.db.select().from(users).all()).toEqual([
+        expect.objectContaining({ id: "target-administrator", status: "disabled" }),
+        expect.objectContaining({ id: "replacement-account", role: "admin", status: "active" }),
+      ]);
+      await expect(
+        test.service.pollAdministratorReplacement({
+          ...pollInput(started.transactionId),
+          validatedSession: recovery.validated,
+        }),
+      ).rejects.toMatchObject({ reason: "recovery_session_required" });
+    } finally {
+      handle.close();
+    }
+  });
+
   it("will not start administrator Quick Connect without a recovery session", async () => {
     const handle = database();
     const test = fixture(handle);
@@ -335,11 +453,18 @@ describe("JellyfinQuickConnectService", () => {
       expect(() => JSON.stringify(started)).toThrow(/cannot be serialized/i);
       const row = handle.sqlite
         .prepare(
-          `select browser_binding_hash as browserBindingHash, encrypted_payload as encryptedPayload
+          `select browser_binding_hash as browserBindingHash,
+                  connector_instance_generation as connectorInstanceGeneration,
+                  encrypted_payload as encryptedPayload
            from jellyfin_quick_connect_transactions`,
         )
-        .get() as { browserBindingHash: string; encryptedPayload: string };
+        .get() as {
+        browserBindingHash: string;
+        connectorInstanceGeneration: number;
+        encryptedPayload: string;
+      };
       expect(row.browserBindingHash).not.toBe(BROWSER_BINDING);
+      expect(row.connectorInstanceGeneration).toBe(0);
       expect(row.encryptedPayload).not.toMatch(/private-quick-connect-secret|AB-1234/);
       expect(
         new EnvelopeCipher(ENCRYPTION_KEY).decrypt(
@@ -486,6 +611,61 @@ describe("JellyfinQuickConnectService", () => {
         reason: "configuration_invalid",
       });
       expect(test.calls.poll).toBe(0);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("keeps a generation-bound transaction valid across a health-only timestamp update", async () => {
+    const handle = database();
+    const test = fixture(handle);
+    try {
+      const started = await test.service.start({});
+      handle.db
+        .update(connectorConfigs)
+        .set({ updatedAt: new Date(START.getTime() + 2) })
+        .run();
+      test.advance(2_000);
+
+      await expect(test.service.poll(pollInput(started.transactionId))).resolves.toMatchObject({
+        status: "pending",
+      });
+      expect(test.calls.poll).toBe(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("never sends an old Quick Connect secret to a replacement generation", async () => {
+    const handle = database();
+    const test = fixture(handle);
+    try {
+      const started = await test.service.start({});
+      handle.db.update(connectorConfigs).set({ instanceGeneration: 1 }).run();
+      test.advance(2_000);
+
+      await expect(test.service.poll(pollInput(started.transactionId))).rejects.toMatchObject({
+        reason: "configuration_invalid",
+      });
+      expect(test.calls.poll).toBe(0);
+      expect(test.calls.authenticate).toBe(0);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("rechecks stable ServerId before sending an old Quick Connect secret", async () => {
+    const handle = database();
+    const test = fixture(handle, { pollServerId: "replacement-server" });
+    try {
+      const started = await test.service.start({});
+      test.advance(2_000);
+
+      await expect(test.service.poll(pollInput(started.transactionId))).rejects.toMatchObject({
+        reason: "configuration_invalid",
+      });
+      expect(test.calls.poll).toBe(0);
+      expect(test.calls.authenticate).toBe(0);
     } finally {
       handle.close();
     }

@@ -271,6 +271,43 @@ describe("acquisition calendar service", () => {
     }
   });
 
+  it("pages 205 source events as 100, 100, and 5 without gaps or duplicates", async () => {
+    const { database, readers, service } = harness();
+    const template = calendarResult("radarr").events[0]!;
+    const sourceEvents = Array.from({ length: 205 }, (_, index) => ({
+      ...template,
+      eventAt: new Date(Date.parse(query.start) + (index + 1) * 60_000).toISOString(),
+      externalId: `movie:calendar-page:${index + 1}`,
+      title: `Calendar movie ${index + 1}`,
+    }));
+    readers.radarr.mockImplementation(async () => ({ events: sourceEvents, truncated: false }));
+    readers.sonarr.mockImplementation(async () => ({ events: [], truncated: false }));
+    try {
+      const first = await service.read({ ...query, limit: 100 }, { principal: principal() });
+      const second = await service.read(
+        { ...query, cursor: first.nextCursor!, limit: 100 },
+        { principal: principal() },
+      );
+      const third = await service.read(
+        { ...query, cursor: second.nextCursor!, limit: 100 },
+        { principal: principal() },
+      );
+
+      expect([first.events.length, second.events.length, third.events.length]).toEqual([
+        100, 100, 5,
+      ]);
+      expect(first.nextCursor).not.toBeNull();
+      expect(second.nextCursor).not.toBeNull();
+      expect(third.nextCursor).toBeNull();
+      const events = [...first.events, ...second.events, ...third.events];
+      expect(new Set(events.map((event) => event.id)).size).toBe(205);
+      expect(events.map((event) => event.title)).toEqual(sourceEvents.map((event) => event.title));
+      expect([first, second, third].every((page) => page.sourceTruncated === false)).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
   it("preserves healthy events when one source is temporarily unavailable", async () => {
     const { database, readers, service } = harness();
     readers.sonarr.mockRejectedValueOnce(
@@ -345,6 +382,31 @@ describe("acquisition calendar service", () => {
       expect(response.state).toBe("degraded");
       expect(response.sources[0]?.failure).toMatchObject({ code: "response_invalid" });
       expect(response.events).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("degrades an over-limit source without returning a partial source page", async () => {
+    const { database, readers, service } = harness();
+    const template = calendarResult("radarr").events[0]!;
+    readers.radarr.mockResolvedValueOnce({
+      events: Array.from({ length: 5_001 }, (_, index) => ({
+        ...template,
+        externalId: `movie:over-limit:${index + 1}`,
+      })),
+      truncated: false,
+    });
+    try {
+      const response = await service.read(query, { principal: principal() });
+
+      expect(response.state).toBe("degraded");
+      expect(response.sourceTruncated).toBe(false);
+      expect(response.events).toHaveLength(1);
+      expect(response.sources[0]?.failure).toMatchObject({
+        code: "response_invalid",
+        retryable: false,
+      });
     } finally {
       database.close();
     }
