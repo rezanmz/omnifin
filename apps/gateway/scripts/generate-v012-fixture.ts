@@ -26,6 +26,9 @@ import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const SOURCE_COMMIT = "b85488b9517680d59ef87dfdb90ad6ec04da5251";
 const RELEASED_MIGRATION_COUNT = 32;
+const RELEASED_JOURNAL_DIGEST = "40db0a680c351971faff6ed6909df1f8659f3ba6ec856ae716a1ab91f72cbc4d";
+const RELEASED_MIGRATIONS_DIGEST =
+  "77165725ab2040b39259e92c77911666603976fdd1c81121e7af3ae621866118";
 const FIXTURE_KEY = Buffer.alloc(32, 0x31);
 const FIXTURE_KEY_BASE64 = FIXTURE_KEY.toString("base64");
 export const IMAGE_FIXTURE_GENERATOR_VERSION = 2;
@@ -66,6 +69,28 @@ interface ContainerState {
   Running?: boolean;
 }
 
+interface MigrationJournal {
+  dialect: "sqlite";
+  entries: Array<{
+    breakpoints: true;
+    idx: number;
+    tag: string;
+    version: "6";
+    when: number;
+  }>;
+  version: "7";
+}
+
+interface ReleasedMigrationCatalog {
+  journal: MigrationJournal;
+  migrations: Map<string, string>;
+}
+
+export interface V012FixtureSourceDependencies {
+  readGitFile?: (filePath: string) => string;
+  readLocalFile?: (filePath: string) => string;
+}
+
 export interface ImageFixtureDockerLifecycleDependencies {
   execute: (arguments_: readonly string[], captureOutput: boolean) => string;
   now?: () => number;
@@ -79,6 +104,106 @@ function gitFile(filePath: string) {
     cwd: repositoryDirectory,
     encoding: "utf8",
   });
+}
+
+function localFile(filePath: string) {
+  return readFileSync(path.join(repositoryDirectory, filePath), "utf8");
+}
+
+class GitSourceUnavailableError extends Error {}
+
+function gitSourceFile(readGitFile: (filePath: string) => string, filePath: string) {
+  try {
+    return readGitFile(filePath);
+  } catch (error) {
+    throw new GitSourceUnavailableError("The exact v0.12 Git object is unavailable.", {
+      cause: error,
+    });
+  }
+}
+
+function releasedMigrationJournal(rawJournal: string) {
+  const parsed = JSON.parse(rawJournal) as unknown;
+  const digest = createHash("sha256").update(JSON.stringify(parsed), "utf8").digest("hex");
+  const journal = parsed as MigrationJournal;
+  if (
+    digest !== RELEASED_JOURNAL_DIGEST ||
+    journal.version !== "7" ||
+    journal.dialect !== "sqlite" ||
+    !Array.isArray(journal.entries) ||
+    journal.entries.length !== RELEASED_MIGRATION_COUNT ||
+    journal.entries.at(-1)?.tag !== "0031_playback_preferences" ||
+    journal.entries.some(
+      (entry, index) =>
+        entry.idx !== index ||
+        entry.version !== "6" ||
+        entry.breakpoints !== true ||
+        !/^[0-9]{4}_[a-z0-9_]+$/u.test(entry.tag),
+    )
+  ) {
+    throw new Error("The exact v0.12 source migration catalog is not the released 0031 prefix.");
+  }
+  return journal;
+}
+
+function validateReleasedMigrationContents(
+  journal: MigrationJournal,
+  migrations: Map<string, string>,
+) {
+  const digest = createHash("sha256");
+  for (const entry of journal.entries) {
+    const migration = migrations.get(entry.tag);
+    if (migration === undefined) {
+      throw new Error(`The exact v0.12 migration ${entry.tag} is unavailable.`);
+    }
+    digest
+      .update(entry.tag, "utf8")
+      .update("\0", "utf8")
+      .update(String(Buffer.byteLength(migration)), "utf8")
+      .update("\0", "utf8")
+      .update(migration, "utf8");
+  }
+  if (digest.digest("hex") !== RELEASED_MIGRATIONS_DIGEST) {
+    throw new Error("The local v0.12 migration prefix does not match the fixed source commit.");
+  }
+}
+
+function migrationCatalogFromReader(
+  journal: MigrationJournal,
+  readFile: (filePath: string) => string,
+): ReleasedMigrationCatalog {
+  const migrations = new Map(
+    journal.entries.map((entry) => [entry.tag, readFile(`apps/gateway/drizzle/${entry.tag}.sql`)]),
+  );
+  validateReleasedMigrationContents(journal, migrations);
+  return { journal, migrations };
+}
+
+function releasedV012MigrationCatalog(
+  dependencies: V012FixtureSourceDependencies,
+): ReleasedMigrationCatalog {
+  const readGitFile = dependencies.readGitFile ?? gitFile;
+  try {
+    const journal = releasedMigrationJournal(
+      gitSourceFile(readGitFile, "apps/gateway/drizzle/meta/_journal.json"),
+    );
+    return migrationCatalogFromReader(journal, (filePath) => gitSourceFile(readGitFile, filePath));
+  } catch (error) {
+    if (!(error instanceof GitSourceUnavailableError)) throw error;
+  }
+
+  const readLocalFile = dependencies.readLocalFile ?? localFile;
+  const currentJournal = JSON.parse(
+    readLocalFile("apps/gateway/drizzle/meta/_journal.json"),
+  ) as MigrationJournal;
+  const releasedPrefix = releasedMigrationJournal(
+    JSON.stringify({
+      version: currentJournal.version,
+      dialect: currentJournal.dialect,
+      entries: currentJournal.entries.slice(0, RELEASED_MIGRATION_COUNT),
+    }),
+  );
+  return migrationCatalogFromReader(releasedPrefix, readLocalFile);
 }
 
 export function deterministicV012FixtureEnvelope(plaintext: string, context: string) {
@@ -118,33 +243,28 @@ function seedFixture(sqlite: Database.Database, encryptedCredentials: string) {
     .run(encryptedCredentials);
 }
 
-export function generateV012FixtureFromSource(outputPath: string) {
+export function generateV012FixtureFromSource(
+  outputPath: string,
+  sourceDependencies: V012FixtureSourceDependencies = {},
+) {
   const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "omnifin-v012-source-"));
   const migrationsDirectory = path.join(temporaryDirectory, "drizzle");
   try {
     mkdirSync(path.join(migrationsDirectory, "meta"), { mode: 0o700, recursive: true });
-    const journal = JSON.parse(gitFile("apps/gateway/drizzle/meta/_journal.json")) as {
-      entries: { idx: number; tag: string }[];
-    };
-    if (
-      journal.entries.length !== RELEASED_MIGRATION_COUNT ||
-      journal.entries.at(-1)?.tag !== "0031_playback_preferences"
-    ) {
-      throw new Error("The exact v0.12 source migration catalog is not the released 0031 prefix.");
-    }
+    const { journal, migrations } = releasedV012MigrationCatalog(sourceDependencies);
     for (const entry of journal.entries) {
       if (entry.idx < 0 || entry.idx >= RELEASED_MIGRATION_COUNT) {
         throw new Error("The exact v0.12 migration order is invalid.");
       }
       writeFileSync(
         path.join(migrationsDirectory, `${entry.tag}.sql`),
-        gitFile(`apps/gateway/drizzle/${entry.tag}.sql`),
+        migrations.get(entry.tag)!,
         { mode: 0o600 },
       );
     }
     writeFileSync(
       path.join(migrationsDirectory, "meta/_journal.json"),
-      gitFile("apps/gateway/drizzle/meta/_journal.json"),
+      `${JSON.stringify(journal, null, 2)}\n`,
       { mode: 0o600 },
     );
 

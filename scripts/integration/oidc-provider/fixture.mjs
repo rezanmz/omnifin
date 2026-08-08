@@ -12,6 +12,7 @@ const oidcProviderTarget = applyCompatibilityTargetOverride({
 }).oidc;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
 const CHECKS = COMPATIBILITY_CHECKS.oidc;
+export const gatewayFixtureImageReference = `omnifin.invalid/oidc-gateway-fixture@sha256:${"0".repeat(64)}`;
 
 export function isPrivateIpv4(address) {
   return (

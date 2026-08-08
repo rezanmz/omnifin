@@ -89,7 +89,7 @@ describe("AdministratorRecoveryCeremony", () => {
     expect(screen.getByText("Jellyfin · OIDC")).toBeVisible();
     expect(screen.getByText("Only OmniFin authority is replaced")).toBeVisible();
     expect(screen.getByText(/Jellyfin and identity-provider accounts/u)).toBeVisible();
-    expect(screen.getByText(/Aug 8, 2026/u)).toBeVisible();
+    expect(screen.getByText("Aug 8, 2026 at 1:45 PM UTC")).toBeVisible();
   });
 
   it("requires the literal confirmation and binds password completion to the shown revision", async () => {

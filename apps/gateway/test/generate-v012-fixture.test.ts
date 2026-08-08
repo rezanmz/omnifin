@@ -32,6 +32,7 @@ const directories: string[] = [];
 const fixtureKey = Buffer.alloc(32, 0x31);
 const readyMarker = "OMNIFIN_V012_FIXTURE_READY_44444444-4444-4444-8444-444444444444";
 const imageReference = `ghcr.io/rezanmz/omnifin@sha256:${"4".repeat(64)}`;
+const repositoryDirectory = path.resolve(import.meta.dirname, "../../..");
 
 function temporaryDirectory() {
   const directory = mkdtempSync(path.join(tmpdir(), "omnifin-v012-generator-test-"));
@@ -89,6 +90,39 @@ describe("v0.12 fixture generator tooling", () => {
 
     const envelope = deterministicV012FixtureEnvelope("fixture", "fixture-context");
     expect(new EnvelopeCipher(fixtureKey).decrypt(envelope, "fixture-context")).toBe("fixture");
+  });
+
+  it("uses only a digest-pinned released prefix when the source Git object is unavailable", () => {
+    const directory = temporaryDirectory();
+    const generated = path.join(directory, "shallow-generated.sqlite");
+    generateV012FixtureFromSource(generated, {
+      readGitFile: () => {
+        throw new Error("source commit unavailable in shallow checkout");
+      },
+    });
+    const sqlite = new Database(generated, { readonly: true });
+    try {
+      expect(() => validateGeneratedV012FixtureDatabase(sqlite)).not.toThrow();
+      expect(sqlite.prepare("select count(*) as count from __drizzle_migrations").get()).toEqual({
+        count: 32,
+      });
+    } finally {
+      sqlite.close();
+    }
+
+    expect(() =>
+      generateV012FixtureFromSource(path.join(directory, "tampered.sqlite"), {
+        readGitFile: () => {
+          throw new Error("source commit unavailable in shallow checkout");
+        },
+        readLocalFile: (filePath) => {
+          const contents = readFileSync(path.join(repositoryDirectory, filePath), "utf8");
+          return filePath.endsWith("/0000_foundation.sql")
+            ? `${contents}\n-- mutable migration`
+            : contents;
+        },
+      }),
+    ).toThrow(/does not match the fixed source commit/u);
   });
 
   it("rejects incorrect migration counts and foreign-key violations", () => {

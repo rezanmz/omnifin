@@ -1147,18 +1147,18 @@ describe("download queue routes", () => {
     }
   });
 
-  it("fails closed across every download mutation route error family", async () => {
-    const routes = [
-      { method: "bulkUpdate", url: "/v1/downloads/queue/bulk-actions" },
-      { method: "update", url: "/v1/downloads/queue/actions" },
-      { method: "remove", url: "/v1/downloads/queue/removals" },
-      { method: "promote", url: "/v1/downloads/queue/promotions" },
-    ] as const;
-    const servicePrototype = DownloadQueueService.prototype as unknown as Record<
-      string,
-      (...arguments_: never[]) => unknown
-    >;
-    for (const route of routes) {
+  it.each([
+    { method: "bulkUpdate", url: "/v1/downloads/queue/bulk-actions" },
+    { method: "update", url: "/v1/downloads/queue/actions" },
+    { method: "remove", url: "/v1/downloads/queue/removals" },
+    { method: "promote", url: "/v1/downloads/queue/promotions" },
+  ] as const)(
+    "fails closed for the $method download mutation route error family",
+    async (route) => {
+      const servicePrototype = DownloadQueueService.prototype as unknown as Record<
+        string,
+        (...arguments_: never[]) => unknown
+      >;
       const errors = [
         new DownloadQueueError("storage_failure"),
         new SafeConnectorError({
@@ -1170,20 +1170,20 @@ describe("download queue routes", () => {
         }),
         new Error("Private unexpected download failure"),
       ];
-      for (const error of errors) {
-        const { app, operator } = await harness();
-        try {
-          const queueResponse = await app.inject({
-            headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
-            method: "GET",
-            url: "/v1/downloads/queue",
-          });
-          const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
-          const target = {
-            connectorId: item.connectorId,
-            expectedState: item.state,
-            itemId: item.id,
-          };
+      const { app, operator } = await harness();
+      try {
+        const queueResponse = await app.inject({
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+          method: "GET",
+          url: "/v1/downloads/queue",
+        });
+        const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+        const target = {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        };
+        for (const error of errors) {
           const operation = vi.spyOn(servicePrototype, route.method).mockRejectedValue(error);
           try {
             const response = await app.inject({
@@ -1211,12 +1211,13 @@ describe("download queue routes", () => {
           } finally {
             operation.mockRestore();
           }
-        } finally {
-          await app.close();
         }
+      } finally {
+        await app.close();
       }
-    }
-  });
+    },
+    10_000,
+  );
 
   it("does not expose an unexpected queue read failure", async () => {
     const { app, operator } = await harness();

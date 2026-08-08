@@ -20,12 +20,14 @@ import {
   parseContainerAddress,
   parseContainerState,
   parseServarrApiKey,
+  readMonitoringStateWithReadback,
   selectAppProfileId,
   selectQualityProfileId,
   serviceContainerArguments,
   validateBazarrSubtitleArtifact,
   validateSanitizedServarrFailureReport,
   validateSanitizedServarrReport,
+  verifyMonitoringMutation,
 } from "../integration/servarr-services.mjs";
 
 const EXPECTED_IMAGE_PATTERNS = Object.freeze({
@@ -307,13 +309,75 @@ test("keeps container-local request headers out of subprocess arguments", () => 
   assert.equal(
     createCurlHeaderConfiguration(
       new Headers({ "content-type": "application/json" }),
-      '{"monitored":false}',
+      new TextEncoder().encode('{"monitored":false}'),
     ).toString("utf8"),
     'header = "content-type: application/json"\ndata-binary = "{\\"monitored\\":false}"\n',
   );
   assert.throws(
     () => createCurlHeaderConfiguration(new Headers(), "unsafe\nbody"),
     /fixture_body_invalid/u,
+  );
+});
+
+test("bounds stale Sonarr monitoring readback until the normalized state converges", async () => {
+  const states = [
+    {
+      monitored: true,
+      target: { kind: "series", mediaId: 77, service: "sonarr" },
+      verifiedAt: "2026-08-08T00:00:00.000Z",
+    },
+    {
+      monitored: false,
+      target: { kind: "series", mediaId: 77, service: "sonarr" },
+      verifiedAt: "2026-08-08T00:00:00.250Z",
+    },
+  ];
+  const waits = [];
+  const result = await readMonitoringStateWithReadback(async () => states.shift(), false, {
+    attempts: 2,
+    intervalMs: 250,
+    wait: async (milliseconds) => waits.push(milliseconds),
+  });
+
+  assert.equal(result.monitored, false);
+  assert.deepEqual(result.target, { kind: "series", mediaId: 77, service: "sonarr" });
+  assert.deepEqual(waits, [250]);
+});
+
+test("restores Sonarr monitoring when bounded fresh readback never converges", async () => {
+  const updates = [];
+  let readCount = 0;
+  const state = (monitored) => ({
+    monitored,
+    target: { kind: "series", mediaId: 77, service: "sonarr" },
+    verifiedAt: "2026-08-08T00:00:00.000Z",
+  });
+  const adapter = {
+    async readAcquisitionMonitoring() {
+      readCount += 1;
+      return state(true);
+    },
+    async updateAcquisitionMonitoring(input) {
+      updates.push(input);
+      return state(input.monitored);
+    },
+  };
+
+  await assert.rejects(
+    verifyMonitoringMutation({ service: "sonarr" }, adapter, 77, {
+      attempts: 2,
+      intervalMs: 0,
+      wait: async () => {},
+    }),
+    /monitoring_fresh_read_invalid/u,
+  );
+  assert.equal(readCount, 4);
+  assert.deepEqual(
+    updates.map(({ expectedMonitored, monitored }) => ({ expectedMonitored, monitored })),
+    [
+      { expectedMonitored: true, monitored: false },
+      { expectedMonitored: false, monitored: true },
+    ],
   );
 });
 

@@ -2051,170 +2051,173 @@ describe("Continue Watching routes", () => {
     }
   });
 
-  it("fails closed across every media read route error family", async () => {
-    const referenceId = `media_${"r".repeat(22)}`;
-    const routes = [
-      {
-        errors: [
-          [new ContinueWatchingError(), 503],
-          [new Error("Private continue-watching failure"), 500],
-        ],
-        method: "read",
-        role: "viewer",
-        url: "/v1/media/continue-watching",
-      },
-      {
-        errors: [
-          [new MediaLibraryError("cursor_invalid"), 400],
-          [new MediaLibraryError("unavailable"), 503],
-          [new ContinueWatchingError(), 503],
-          [new Error("Private library failure"), 500],
-        ],
-        method: "browse",
-        role: "viewer",
-        url: "/v1/media/library",
-      },
-      {
-        errors: [
-          [new ViewingHistoryError("cursor_invalid"), 400],
-          [new ViewingHistoryError("unavailable"), 503],
-          [new ContinueWatchingError(), 503],
-          [new Error("Private history failure"), 500],
-        ],
-        method: "readViewingHistory",
-        role: "viewer",
-        url: "/v1/media/history",
-      },
-      {
-        errors: [
-          [new LibraryRemovalPreviewError("not_found"), 404],
-          [new LibraryRemovalPreviewError("paired_user_cannot_delete"), 403],
-          [new LibraryRemovalPreviewError("unavailable"), 503],
-          [new Error("Private preview failure"), 500],
-        ],
-        method: "previewLibraryRemoval",
-        role: "admin",
-        url: `/v1/media/library/${referenceId}/removal-preview`,
-      },
-      {
-        errors: [
-          [new MediaPlaybackContextError("not_found"), 404],
-          [new MediaPlaybackContextError("unavailable"), 503],
-          [new Error("Private playback-context failure"), 500],
-        ],
-        method: "readPlaybackContext",
-        role: "viewer",
-        url: `/v1/media/${referenceId}/playback-context`,
-      },
-      {
-        errors: [
-          [new MediaLibraryError("not_found"), 404],
-          [new MediaLibraryError("unavailable"), 503],
-          [new Error("Private title failure"), 500],
-        ],
-        method: "readLibraryTitle",
-        role: "viewer",
-        url: `/v1/media/library/${referenceId}`,
-      },
-      {
-        errors: [
-          [new LibraryConnectedActionError("not_found"), 404],
-          [new LibraryConnectedActionError("unavailable"), 503],
-          [new Error("Private connected-action list failure"), 500],
-        ],
-        method: "readConnectedActions",
-        role: "operator",
-        url: `/v1/media/library/${referenceId}/actions`,
-      },
-      {
-        errors: [
-          [new LibraryConnectedActionError("not_found"), 404],
-          [new LibraryConnectedActionError("unavailable"), 503],
-          [new Error("Private connected-action failure"), 500],
-        ],
-        method: "openConnectedAction",
-        role: "operator",
-        url: `/v1/media/library/${referenceId}/actions/radarr`,
-      },
-      {
-        errors: [
-          [new MediaLibraryError("not_found"), 404],
-          [new MediaLibraryError("unavailable"), 503],
-          [new Error("Private person failure"), 500],
-        ],
-        method: "readLibraryPersonProfile",
-        role: "viewer",
-        url: `/v1/media/people/${referenceId}`,
-      },
-      {
-        errors: [
-          [new MediaLibraryError("cursor_invalid"), 400],
-          [new MediaLibraryError("not_found"), 404],
-          [new MediaLibraryError("unavailable"), 503],
-          [new Error("Private extras failure"), 500],
-        ],
-        method: "readLibraryExtras",
-        role: "viewer",
-        url: `/v1/media/library/${referenceId}/extras`,
-      },
-      {
-        errors: [
-          [new MediaLibraryError("cursor_invalid"), 400],
-          [new MediaLibraryError("not_found"), 404],
-          [new MediaLibraryError("unavailable"), 503],
-          [new Error("Private season failure"), 500],
-        ],
-        method: "readLibrarySeasonEpisodes",
-        role: "viewer",
-        url: `/v1/media/library/${referenceId}/seasons/1/episodes`,
-      },
-      {
-        errors: [
-          [new MediaArtworkError("not_found"), 404],
-          [new MediaArtworkError("unavailable"), 503],
-          [new ContinueWatchingError(), 503],
-          [new Error("Private person-artwork failure"), 500],
-        ],
-        method: "readPersonArtwork",
-        role: "viewer",
-        url: `/v1/media/${referenceId}/images/people/${"a".repeat(64)}`,
-      },
-      {
-        errors: [
-          [new MediaArtworkError("not_found"), 404],
-          [new MediaArtworkError("unavailable"), 503],
-          [new ContinueWatchingError(), 503],
-          [new Error("Private artwork failure"), 500],
-        ],
-        method: "readArtwork",
-        role: "viewer",
-        url: `/v1/media/${referenceId}/images/poster`,
-      },
-    ] as const;
-
-    const servicePrototype = ContinueWatchingService.prototype as unknown as Record<
-      string,
-      (...arguments_: never[]) => unknown
-    >;
-    for (const route of routes) {
-      for (const [error, status] of route.errors) {
-        const { app, viewer } = await harness({ role: route.role });
-        const operation = vi.spyOn(servicePrototype, route.method).mockRejectedValue(error);
-        try {
-          const response = await app.inject({
-            headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
-            method: "GET",
-            url: route.url,
-          });
-          expect(response.statusCode, `${route.method}: ${response.body}`).toBe(status);
-          expect(response.body).not.toContain("Private");
-        } finally {
-          operation.mockRestore();
-          await app.close();
+  const referenceId = `media_${"r".repeat(22)}`;
+  it.each([
+    {
+      errors: [
+        [new ContinueWatchingError(), 503],
+        [new Error("Private continue-watching failure"), 500],
+      ],
+      method: "read",
+      role: "viewer",
+      url: "/v1/media/continue-watching",
+    },
+    {
+      errors: [
+        [new MediaLibraryError("cursor_invalid"), 400],
+        [new MediaLibraryError("unavailable"), 503],
+        [new ContinueWatchingError(), 503],
+        [new Error("Private library failure"), 500],
+      ],
+      method: "browse",
+      role: "viewer",
+      url: "/v1/media/library",
+    },
+    {
+      errors: [
+        [new ViewingHistoryError("cursor_invalid"), 400],
+        [new ViewingHistoryError("unavailable"), 503],
+        [new ContinueWatchingError(), 503],
+        [new Error("Private history failure"), 500],
+      ],
+      method: "readViewingHistory",
+      role: "viewer",
+      url: "/v1/media/history",
+    },
+    {
+      errors: [
+        [new LibraryRemovalPreviewError("not_found"), 404],
+        [new LibraryRemovalPreviewError("paired_user_cannot_delete"), 403],
+        [new LibraryRemovalPreviewError("unavailable"), 503],
+        [new Error("Private preview failure"), 500],
+      ],
+      method: "previewLibraryRemoval",
+      role: "admin",
+      url: `/v1/media/library/${referenceId}/removal-preview`,
+    },
+    {
+      errors: [
+        [new MediaPlaybackContextError("not_found"), 404],
+        [new MediaPlaybackContextError("unavailable"), 503],
+        [new Error("Private playback-context failure"), 500],
+      ],
+      method: "readPlaybackContext",
+      role: "viewer",
+      url: `/v1/media/${referenceId}/playback-context`,
+    },
+    {
+      errors: [
+        [new MediaLibraryError("not_found"), 404],
+        [new MediaLibraryError("unavailable"), 503],
+        [new Error("Private title failure"), 500],
+      ],
+      method: "readLibraryTitle",
+      role: "viewer",
+      url: `/v1/media/library/${referenceId}`,
+    },
+    {
+      errors: [
+        [new LibraryConnectedActionError("not_found"), 404],
+        [new LibraryConnectedActionError("unavailable"), 503],
+        [new Error("Private connected-action list failure"), 500],
+      ],
+      method: "readConnectedActions",
+      role: "operator",
+      url: `/v1/media/library/${referenceId}/actions`,
+    },
+    {
+      errors: [
+        [new LibraryConnectedActionError("not_found"), 404],
+        [new LibraryConnectedActionError("unavailable"), 503],
+        [new Error("Private connected-action failure"), 500],
+      ],
+      method: "openConnectedAction",
+      role: "operator",
+      url: `/v1/media/library/${referenceId}/actions/radarr`,
+    },
+    {
+      errors: [
+        [new MediaLibraryError("not_found"), 404],
+        [new MediaLibraryError("unavailable"), 503],
+        [new Error("Private person failure"), 500],
+      ],
+      method: "readLibraryPersonProfile",
+      role: "viewer",
+      url: `/v1/media/people/${referenceId}`,
+    },
+    {
+      errors: [
+        [new MediaLibraryError("cursor_invalid"), 400],
+        [new MediaLibraryError("not_found"), 404],
+        [new MediaLibraryError("unavailable"), 503],
+        [new Error("Private extras failure"), 500],
+      ],
+      method: "readLibraryExtras",
+      role: "viewer",
+      url: `/v1/media/library/${referenceId}/extras`,
+    },
+    {
+      errors: [
+        [new MediaLibraryError("cursor_invalid"), 400],
+        [new MediaLibraryError("not_found"), 404],
+        [new MediaLibraryError("unavailable"), 503],
+        [new Error("Private season failure"), 500],
+      ],
+      method: "readLibrarySeasonEpisodes",
+      role: "viewer",
+      url: `/v1/media/library/${referenceId}/seasons/1/episodes`,
+    },
+    {
+      errors: [
+        [new MediaArtworkError("not_found"), 404],
+        [new MediaArtworkError("unavailable"), 503],
+        [new ContinueWatchingError(), 503],
+        [new Error("Private person-artwork failure"), 500],
+      ],
+      method: "readPersonArtwork",
+      role: "viewer",
+      url: `/v1/media/${referenceId}/images/people/${"a".repeat(64)}`,
+    },
+    {
+      errors: [
+        [new MediaArtworkError("not_found"), 404],
+        [new MediaArtworkError("unavailable"), 503],
+        [new ContinueWatchingError(), 503],
+        [new Error("Private artwork failure"), 500],
+      ],
+      method: "readArtwork",
+      role: "viewer",
+      url: `/v1/media/${referenceId}/images/poster`,
+    },
+  ] as const)(
+    "fails closed for the $method media read route error family",
+    async (route) => {
+      const servicePrototype = ContinueWatchingService.prototype as unknown as Record<
+        string,
+        (...arguments_: never[]) => unknown
+      >;
+      const { app, viewer } = await harness({ role: route.role });
+      try {
+        for (const [error, status] of route.errors) {
+          const operation = vi.spyOn(servicePrototype, route.method).mockRejectedValue(error);
+          try {
+            const response = await app.inject({
+              headers: { cookie: `${SESSION_COOKIE_NAME}=${viewer.sessionToken}` },
+              method: "GET",
+              url: route.url,
+            });
+            expect(response.statusCode, `${route.method}: ${response.body}`).toBe(status);
+            expect(response.body).not.toContain("Private");
+          } finally {
+            operation.mockRestore();
+          }
         }
+      } finally {
+        await app.close();
       }
-    }
-  }, 30_000);
+    },
+    10_000,
+  );
 
   it("does not expose an unexpected library-removal status failure", async () => {
     const { app, viewer } = await harness({ role: "admin" });

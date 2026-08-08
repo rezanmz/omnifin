@@ -7,6 +7,7 @@ import { parse } from "yaml";
 import {
   dotenv,
   failureReportFor,
+  gatewayFixtureImageReference,
   isPrivateIpv4,
   oidcProviderFixture,
   renderConfig,
@@ -91,6 +92,7 @@ test("pins and hardens the isolated standards provider", () => {
     "${OMNIFIN_OIDC_PROVIDER_IMAGE:?immutable OIDC provider image required}",
   );
   assert.match(oidcProviderFixture.image, /^ghcr\.io\/dexidp\/dex:v2\.45\.1@sha256:[a-f0-9]{64}$/u);
+  assert.match(gatewayFixtureImageReference, /^[^\s@]+@sha256:[a-f0-9]{64}$/u);
   assert.equal(provider.read_only, true);
   assert.equal(provider.restart, "no");
   assert.deepEqual(provider.cap_drop, ["ALL"]);
@@ -98,6 +100,10 @@ test("pins and hardens the isolated standards provider", () => {
   assert.ok(provider.tmpfs.includes("/var/dex:uid=1001,gid=1001,mode=0700"));
   assert.deepEqual(compose.networks.fixture, {});
   assert.match(runnerSource, /OMNIFIN_OIDC_PROVIDER_IMAGE: oidcProviderFixture\.image/u);
+  assert.match(runnerSource, /OMNIFIN_BACKUP_DIRECTORY: backupDirectory/u);
+  assert.match(runnerSource, /OMNIFIN_IMAGE_REF: gatewayFixtureImageReference/u);
+  assert.match(runnerSource, /isolateOmnifin: true/u);
+  assert.match(runnerSource, /mkdirSync\(backupDirectory, \{ mode: 0o700 \}\)/u);
   assert.match(JSON.stringify(provider.ports), /127\.0\.0\.1/u);
   assert.doesNotMatch(composeSource, /:\s*latest(?:\s|$)|docker\.sock/u);
 });

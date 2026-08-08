@@ -674,9 +674,16 @@ test("CI rejects migration metadata and schema drift", () => {
 
 test("container CI validates Compose before building the image", () => {
   const source = workflow("ci.yml");
+  const document = workflowDocument("ci.yml");
   const compose = source.indexOf("docker compose config --quiet");
   const build = source.indexOf("- name: Build immutable application image");
   assert.ok(compose >= 0 && compose < build);
+  const validation = namedStep(
+    document.jobs.container.steps,
+    "Validate the Compose deployment model",
+  );
+  assert.equal(validation.run, "docker compose config --quiet");
+  assert.match(validation.env.OMNIFIN_IMAGE, /^[^\s@]+@sha256:[a-f0-9]{64}$/u);
 });
 
 test("Lighthouse diagnostics use the package output and fail when absent", () => {

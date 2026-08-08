@@ -127,18 +127,27 @@ const NOTICE_COPY: Readonly<Record<NoticeState, string>> = Object.freeze({
     "The proof could not be completed. No authority changed, and it is safe to try this proof again.",
 });
 
-const revisionFormatter = new Intl.DateTimeFormat("en", {
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-  timeZoneName: "short",
-  year: "numeric",
-});
+const UTC_MONTHS = Object.freeze([
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+]);
 
 function formattedRevision(value: string) {
-  return revisionFormatter.format(new Date(value));
+  const date = new Date(value);
+  const hour = date.getUTCHours();
+  const displayHour = hour % 12 || 12;
+  const period = hour < 12 ? "AM" : "PM";
+  return `${UTC_MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()} at ${displayHour}:${String(date.getUTCMinutes()).padStart(2, "0")} ${period} UTC`;
 }
 
 function authenticationMethodLabel(method: "jellyfin" | "oidc") {

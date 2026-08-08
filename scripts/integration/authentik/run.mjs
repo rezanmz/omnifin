@@ -15,6 +15,7 @@ import {
   djangoPasswordHash,
   dotenv,
   failureReportFor,
+  gatewayFixtureImageReference,
   reportFor,
   secretLeakDetected,
   selectPrivateHost,
@@ -93,9 +94,14 @@ function sanitizedGatewayFailure(runtime, requestId) {
   return undefined;
 }
 
-function commandEnvironment(overrides = {}) {
+function commandEnvironment(overrides = {}, options = {}) {
+  const inheritedEnvironment = options.isolateOmnifin
+    ? Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => !name.startsWith("OMNIFIN_")),
+      )
+    : process.env;
   return {
-    ...process.env,
+    ...inheritedEnvironment,
     CI: "true",
     COMPOSE_ANSI: "never",
     FORCE_COLOR: "0",
@@ -132,10 +138,10 @@ async function runCommand(command, arguments_, options = {}) {
   return { stderr, stdout };
 }
 
-function spawnRuntime(command, arguments_, environment) {
+function spawnRuntime(command, arguments_, environment, options = {}) {
   const child = spawn(command, arguments_, {
     cwd: root,
-    env: commandEnvironment(environment),
+    env: commandEnvironment(environment, options),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const runtime = { child, spawnFailed: false, stderr: "", stdout: "" };
@@ -375,11 +381,13 @@ async function main(options) {
   const fixtureDirectory = mkdtempSync(join(tmpdir(), "omnifin-authentik-"));
   const environmentFile = join(fixtureDirectory, "fixture.env");
   const databaseFile = join(fixtureDirectory, "omnifin.db");
+  const backupDirectory = join(fixtureDirectory, "backups");
   const project = `omnifin-authentik-${process.pid}`;
   const runtimes = [];
   let composeStarted = false;
 
   try {
+    mkdirSync(backupDirectory, { mode: 0o700 });
     const host = selectPrivateHost();
     const [webPort, gatewayPort, webTlsPort, authentikHttpPort, authentikTlsPort] =
       await Promise.all([
@@ -461,19 +469,26 @@ async function main(options) {
       proxy,
     );
 
-    const gateway = spawnRuntime("node", ["apps/gateway/dist/main.js"], {
-      NODE_ENV: "production",
-      NODE_EXTRA_CA_CERTS: certificates.caCertificate,
-      OMNIFIN_BASE_URL: webOrigin,
-      OMNIFIN_DATABASE_URL: databaseFile,
-      OMNIFIN_ENCRYPTION_KEY: secrets.encryptionKey,
-      OMNIFIN_HOST: "127.0.0.1",
-      OMNIFIN_LOG_LEVEL: "info",
-      OMNIFIN_PORT: String(gatewayPort),
-      OMNIFIN_RECOVERY_SECRET: secrets.recoverySecret,
-      OMNIFIN_SECURE_COOKIES: "true",
-      OMNIFIN_TRUST_PROXY_HOPS: "1",
-    });
+    const gateway = spawnRuntime(
+      "node",
+      ["apps/gateway/dist/main.js"],
+      {
+        NODE_ENV: "production",
+        NODE_EXTRA_CA_CERTS: certificates.caCertificate,
+        OMNIFIN_BACKUP_DIRECTORY: backupDirectory,
+        OMNIFIN_BASE_URL: webOrigin,
+        OMNIFIN_DATABASE_URL: databaseFile,
+        OMNIFIN_ENCRYPTION_KEY: secrets.encryptionKey,
+        OMNIFIN_HOST: "127.0.0.1",
+        OMNIFIN_IMAGE_REF: gatewayFixtureImageReference,
+        OMNIFIN_LOG_LEVEL: "info",
+        OMNIFIN_PORT: String(gatewayPort),
+        OMNIFIN_RECOVERY_SECRET: secrets.recoverySecret,
+        OMNIFIN_SECURE_COOKIES: "true",
+        OMNIFIN_TRUST_PROXY_HOPS: "1",
+      },
+      { isolateOmnifin: true },
+    );
     runtimes.push(gateway);
     await waitForHttp(`http://127.0.0.1:${gatewayPort}/readyz`, gateway);
 

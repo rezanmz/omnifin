@@ -681,14 +681,14 @@ test("light recovery secret entry visual baseline", async ({ page }, testInfo) =
   await expect(page).toHaveScreenshot("recovery-secret-entry-light.png", { fullPage: true });
 });
 
-test("first administrator proof visual baseline", async ({ page }, testInfo) => {
+test("sole administrator recovery preview visual baseline", async ({ page }, testInfo) => {
   test.skip(
     !stateVisualProjects.has(testInfo.project.name),
-    "Administrator proof covers representative desktop and phone geometry",
+    "Administrator recovery preview covers representative desktop and phone geometry",
   );
   await page.goto("/recovery?test-view=bootstrap");
-  await page.getByRole("heading", { name: "Establish trusted control." }).waitFor();
-  await expect(page).toHaveScreenshot("recovery-jellyfin-administrator.png", {
+  await page.getByRole("heading", { name: "Review the authority change" }).waitFor();
+  await expect(page).toHaveScreenshot("recovery-administrator-replacement-preview.png", {
     fullPage: true,
   });
 });

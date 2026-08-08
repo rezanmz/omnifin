@@ -52,6 +52,11 @@ meet this gate must be inaccessible and documented as deferred.
 
 ## Conditional scope
 
+- [#335](https://github.com/rezanmz/omnifin/issues/335) is the first product
+  priority after the data/mutation foundation. Its next-release slice is a secure,
+  single-use invite lifecycle and redemption path through existing OIDC or Jellyfin
+  identity proof. It does not require stored Jellyfin administrator credentials,
+  automatic upstream-user creation, admin invitations, or household-profile runtime.
 - [#309](https://github.com/rezanmz/omnifin/issues/309) is required only as needed to
   preserve the availability invariant: released paths must not present unverified or
   contradictory availability as confirmed availability. Broader availability expansion
@@ -70,8 +75,7 @@ The following do not block stable v1:
   [#258](https://github.com/rezanmz/omnifin/issues/258), the unwired remainder of
   [#260](https://github.com/rezanmz/omnifin/issues/260), and expansion tracked by
   [#329](https://github.com/rezanmz/omnifin/issues/329),
-  [#333](https://github.com/rezanmz/omnifin/issues/333), and
-  [#335](https://github.com/rezanmz/omnifin/issues/335);
+  and [#333](https://github.com/rezanmz/omnifin/issues/333);
 - high availability and multi-node operation;
 - cloud backup exporters;
 - Prometheus metrics and distributed tracing; and

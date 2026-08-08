@@ -2206,7 +2206,7 @@
         },
         "external_mutation_dispatches_kind_check": {
           "name": "external_mutation_dispatches_kind_check",
-          "value": "\"external_mutation_dispatches\".\"kind\" in (\n        'media_request.submit', 'media_issue.update', 'subtitle.download',\n        'library.scan', 'library.item_refresh', 'library.metadata_update',\n        'library.artwork_apply', 'library.remove_files', 'library.unmonitor',\n        'library.remove_manager_record', 'user_media_state.update',\n        'download_queue.remove', 'download_queue.pause', 'download_queue.resume',\n        'download_queue.promote', 'acquisition.queue_recover', 'acquisition.grab',\n        'acquisition.search', 'saved.favorite', 'playback.progress'\n      )"
+          "value": "\"external_mutation_dispatches\".\"kind\" in (\n        'media_request.submit', 'media_issue.update', 'subtitle.download',\n        'library.scan', 'library.item_refresh', 'library.metadata_update',\n        'library.artwork_apply', 'library.remove_files', 'library.unmonitor',\n        'library.remove_manager_record', 'user_media_state.update',\n        'download_queue.remove', 'download_queue.pause', 'download_queue.resume',\n        'download_queue.promote', 'acquisition.queue_recover', 'acquisition.grab',\n        'acquisition.search',\n        'saved.favorite', 'playback.progress'\n      )"
         },
         "external_mutation_dispatches_parent_kind_check": {
           "name": "external_mutation_dispatches_parent_kind_check",
