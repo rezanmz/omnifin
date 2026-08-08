@@ -3,6 +3,7 @@ import {
   type BazarrSubtitleCandidate,
   type BazarrSubtitleSearchResult,
 } from "@omnifin/connectors/adapters/bazarr";
+import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import {
   ROLE_PERMISSIONS,
   sessionPrincipalSchema,
@@ -219,12 +220,13 @@ function harness(options: { candidates?: BazarrSubtitleCandidate[] } = {}) {
   const adapter: SubtitleAdapter = { downloadSubtitle, searchSubtitles };
   const searchTokens = ["s".repeat(22), "t".repeat(22), "u".repeat(22)];
   const resultTokens = ["r".repeat(22), "q".repeat(22), "p".repeat(22)];
+  const operationTokens = ["o".repeat(22), "n".repeat(22), "l".repeat(22)];
   let auditId = 0;
   const service = new SubtitleOperationService(database, appConfig, {
     clock: () => new Date(now),
     createAdapter: vi.fn(() => adapter),
     createAuditId: () => `subtitle-audit-${++auditId}`,
-    createOperationToken: () => "o".repeat(22),
+    createOperationToken: () => operationTokens.shift() ?? "k".repeat(22),
     createResultToken: () => resultTokens.shift() ?? "x".repeat(22),
     createSearchToken: () => searchTokens.shift() ?? "y".repeat(22),
     mediaReferences: { clock: () => new Date(now) },
@@ -321,12 +323,20 @@ describe("SubtitleOperationService", () => {
         { episodeId: 73, kind: "episode", seriesId: 41 },
         expect.objectContaining({ subtitleToken: privateSubtitleToken }),
         undefined,
+        expect.stringMatching(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u),
       );
       expect(
         test.database.sqlite
           .prepare("select state, response_json as responseJson from subtitle_download_operations")
           .get(),
       ).toMatchObject({ state: "succeeded", responseJson: expect.any(String) });
+      expect(
+        test.database.sqlite
+          .prepare(
+            "select state, dispatch_attempt_count as dispatchAttemptCount from external_mutation_dispatches",
+          )
+          .get(),
+      ).toEqual({ dispatchAttemptCount: 1, state: "succeeded" });
       expect(
         test.database.sqlite
           .prepare("select event_type as eventType, outcome from audit_events order by created_at")
@@ -358,6 +368,55 @@ describe("SubtitleOperationService", () => {
           .prepare("select state, failure_code as failureCode from subtitle_download_operations")
           .get(),
       ).toEqual({ failureCode: "search_expired", state: "failed" });
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("quarantines a lost Bazarr download response without redispatch under any key", async () => {
+    const test = harness();
+    try {
+      const search = await test.service.search(test.mediaReference, context());
+      const resultId = search.results[0]!.id;
+      test.downloadSubtitle.mockRejectedValueOnce(
+        new SafeConnectorError({
+          code: "timeout",
+          message: "private Bazarr timeout",
+          operation: "subtitle.download",
+          retryable: true,
+          service: "bazarr",
+        }),
+      );
+      const attempt = (key: string) =>
+        test.service.download(search.searchId, resultId, key, context());
+
+      await expect(attempt("subtitle-download-timeout-0001")).rejects.toMatchObject({
+        reason: "outcome_uncertain",
+      });
+      await expect(attempt("subtitle-download-timeout-0001")).rejects.toMatchObject({
+        reason: "outcome_uncertain",
+      });
+      await expect(attempt("subtitle-download-timeout-0002")).rejects.toMatchObject({
+        reason: "outcome_uncertain",
+      });
+      expect(test.downloadSubtitle).toHaveBeenCalledOnce();
+      expect(
+        test.database.sqlite
+          .prepare("select state, failure_code as failureCode from external_mutation_dispatches")
+          .get(),
+      ).toEqual({ failureCode: "outcome_uncertain", state: "uncertain" });
+      expect(
+        JSON.stringify(
+          test.database.sqlite
+            .prepare("select encrypted_normalized_request from external_mutation_dispatches")
+            .get(),
+        ),
+      ).not.toContain(privateSubtitleToken);
+      expect(
+        test.database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 1 });
     } finally {
       test.database.close();
     }

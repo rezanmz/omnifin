@@ -5,11 +5,13 @@ import {
   createRetainedDatabaseBackup,
   MaintenanceError,
   restoreDatabaseBackup,
+  restoreDatabaseBackupIntoEmptyTarget,
   verifyDatabaseBackup,
 } from "./db/maintenance.js";
 import { runDeploymentDoctor } from "./operations/deployment-doctor.js";
 import {
   assertOnlyMaintenanceValues,
+  assertOnlyMaintenanceFlags,
   parseMaintenanceArguments,
   requireMaintenanceInteger,
   requireMaintenanceValue,
@@ -22,6 +24,8 @@ const USAGE = `Usage:
   omnifin maintenance verify --input /backups/omnifin.sqlite
   omnifin maintenance restore --input /backups/omnifin.sqlite \\
     --rollback-output /backups/pre-restore.sqlite --confirm-gateway-stopped
+  omnifin maintenance restore-empty --input /backups/omnifin.sqlite \\
+    --confirm-gateway-stopped --confirm-empty-target
   omnifin maintenance unlock --confirm-gateway-stopped
 `;
 
@@ -42,7 +46,7 @@ async function run() {
 
   if (operation === "doctor") {
     assertOnlyMaintenanceValues(arguments_, []);
-    if (arguments_.flags.size > 0) throw new Error("usage");
+    assertOnlyMaintenanceFlags(arguments_, []);
     const report = await runDeploymentDoctor({
       backupDirectory: process.env.OMNIFIN_BACKUP_DIRECTORY ?? "/backups",
       databasePath,
@@ -69,7 +73,7 @@ async function run() {
 
   if (operation === "backup") {
     assertOnlyMaintenanceValues(arguments_, ["--output"]);
-    if (arguments_.flags.size > 0) throw new Error("usage");
+    assertOnlyMaintenanceFlags(arguments_, []);
     writeResult(
       operation,
       await createDatabaseBackup({
@@ -83,7 +87,7 @@ async function run() {
 
   if (operation === "backup-retained") {
     assertOnlyMaintenanceValues(arguments_, ["--retain"]);
-    if (arguments_.flags.size > 0) throw new Error("usage");
+    assertOnlyMaintenanceFlags(arguments_, []);
     const result = await createRetainedDatabaseBackup({
       backupDirectory: process.env.OMNIFIN_BACKUP_DIRECTORY ?? "/backups",
       databasePath,
@@ -101,7 +105,7 @@ async function run() {
 
   if (operation === "verify") {
     assertOnlyMaintenanceValues(arguments_, ["--input"]);
-    if (arguments_.flags.size > 0) throw new Error("usage");
+    assertOnlyMaintenanceFlags(arguments_, []);
     writeResult(
       operation,
       await verifyDatabaseBackup({
@@ -113,6 +117,7 @@ async function run() {
 
   if (operation === "restore") {
     assertOnlyMaintenanceValues(arguments_, ["--input", "--rollback-output"]);
+    assertOnlyMaintenanceFlags(arguments_, ["--confirm-gateway-stopped"]);
     writeResult(
       operation,
       await restoreDatabaseBackup({
@@ -129,8 +134,27 @@ async function run() {
     return;
   }
 
+  if (operation === "restore-empty") {
+    assertOnlyMaintenanceValues(arguments_, ["--input"]);
+    assertOnlyMaintenanceFlags(arguments_, ["--confirm-empty-target", "--confirm-gateway-stopped"]);
+    writeResult(
+      operation,
+      await restoreDatabaseBackupIntoEmptyTarget({
+        backupPath: requireMaintenanceValue(arguments_, "--input"),
+        confirmedEmptyTarget: arguments_.flags.has("--confirm-empty-target"),
+        confirmedGatewayStopped: arguments_.flags.has("--confirm-gateway-stopped"),
+        databasePath,
+        ...(process.env.OMNIFIN_GATEWAY_HEALTH_URL
+          ? { gatewayHealthUrl: process.env.OMNIFIN_GATEWAY_HEALTH_URL }
+          : {}),
+      }),
+    );
+    return;
+  }
+
   if (operation === "unlock") {
     assertOnlyMaintenanceValues(arguments_, []);
+    assertOnlyMaintenanceFlags(arguments_, ["--confirm-gateway-stopped"]);
     writeResult(
       operation,
       await clearDatabaseMaintenanceLock({

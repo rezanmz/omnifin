@@ -23,6 +23,11 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  DiscoveryArtworkError,
+  DiscoverySearchError,
+  DiscoverySearchService,
+} from "../src/discovery/search-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -64,7 +69,7 @@ const normalizedResponse: DiscoverySearchResponse = {
   generatedAt: now.toISOString(),
   items: [
     {
-      availability: "available",
+      availability: "unknown",
       id: "series:1396",
       kind: "series",
       originalTitle: "Breaking Bad",
@@ -86,7 +91,7 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   generatedAt: now.toISOString(),
   item: {
     artwork: { backdropPath: null, posterPath: null },
-    availability: "available",
+    availability: "unknown",
     cast: [],
     crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
     episodeCount: 62,
@@ -138,7 +143,7 @@ const normalizedPersonResponse: DiscoveryPersonDetailResponse = {
 const normalizedPersonCreditsResponse: DiscoveryPersonCreditsResponse = {
   generatedAt: now.toISOString(),
   items: Array.from({ length: 6 }, (_, index) => ({
-    availability: "available",
+    availability: "unknown",
     kind: "movie",
     role: `Role ${index + 25}`,
     title: `Movie ${index + 25}`,
@@ -235,6 +240,14 @@ async function harness(
         personCredits: personCreditsImplementation,
         readDiscoveryArtwork: artworkImplementation,
         search: searchImplementation,
+      }),
+      verifyOwnership: async (_input, principal) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: "not_owned",
+        userId: principal.userId!,
+        userRevision: now.getTime(),
       }),
     },
     sessionDependencies: sessionDependencies(),
@@ -414,7 +427,10 @@ describe("discovery search routes", () => {
       expect(response.headers.vary).toBe("Cookie");
       expect(response.body).not.toContain("/private/");
       expect(response.body).not.toContain("route-private-api-key");
-      expect(browseImplementation).toHaveBeenCalledWith(page.criteria, expect.any(AbortSignal));
+      expect(browseImplementation).toHaveBeenCalledWith(
+        { ...page.criteria, availability: "any" },
+        expect.any(AbortSignal),
+      );
     } finally {
       await app.close();
     }
@@ -762,6 +778,159 @@ describe("discovery search routes", () => {
       expect(response.headers["retry-after"]).toBeUndefined();
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("discovery_rate_limited");
       expect(response.body).not.toContain("Private person upstream details");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["connector_unconfigured", "discovery_not_configured"],
+    ["connector_ambiguous", "discovery_configuration_unavailable"],
+    ["connector_integrity_failure", "discovery_configuration_unavailable"],
+    ["storage_failure", "discovery_configuration_unavailable"],
+  ] as const)("maps discovery service failure %s", async (reason, code) => {
+    const { app, session } = await harness();
+    const browse = vi
+      .spyOn(DiscoverySearchService.prototype, "browse")
+      .mockRejectedValue(new DiscoverySearchError(reason));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/browse",
+      });
+      expect(response.statusCode, response.body).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+    } finally {
+      browse.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["rate_limited", 429, "discovery_rate_limited"],
+    ["configuration_invalid", 503, "discovery_configuration_unavailable"],
+    ["destination_blocked", 503, "discovery_configuration_unavailable"],
+    ["upstream_error", 503, "discovery_temporarily_unavailable"],
+  ] as const)("maps additional discovery connector failure %s", async (reason, status, code) => {
+    const { app, session } = await harness();
+    const browse = vi.spyOn(DiscoverySearchService.prototype, "browse").mockRejectedValue(
+      new SafeConnectorError({
+        code: reason,
+        message: "Private discovery diagnostic",
+        operation: "discovery.browse",
+        retryable: reason === "rate_limited" || reason === "upstream_error",
+        service: "seerr",
+      }),
+    );
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/discovery/browse",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.body).not.toContain("Private discovery diagnostic");
+    } finally {
+      browse.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["browse", "/v1/discovery/browse"],
+    ["search", "/v1/discovery/search?query=matrix"],
+    ["detail", "/v1/discovery/details/movie/603"],
+    ["personDetail", "/v1/discovery/people/6384"],
+    ["personCredits", "/v1/discovery/people/6384/credits"],
+  ] as const)("fails closed for every %s route error family", async (method, url) => {
+    const cases = [
+      { error: new DiscoverySearchError("storage_failure"), status: 503 },
+      {
+        error: new SafeConnectorError({
+          code: "timeout",
+          message: "Private discovery route failure",
+          operation: "discovery.read",
+          retryable: true,
+          service: "seerr",
+        }),
+        status: 504,
+      },
+      { error: new Error("Private unexpected discovery route failure"), status: 500 },
+    ];
+    for (const errorCase of cases) {
+      const { app, session } = await harness();
+      const operation = vi
+        .spyOn(DiscoverySearchService.prototype, method)
+        .mockRejectedValue(errorCase.error);
+      try {
+        const response = await app.inject({
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+          method: "GET",
+          url,
+        });
+        expect(response.statusCode, response.body).toBe(errorCase.status);
+        expect(response.body).not.toContain("Private");
+      } finally {
+        operation.mockRestore();
+        await app.close();
+      }
+    }
+  });
+
+  it("maps feed error families without exposing internals", async () => {
+    const feedCases = [
+      new DiscoverySearchError("storage_failure"),
+      new Error("Private feed error"),
+    ];
+    const { app, session } = await harness();
+    try {
+      for (const error of feedCases) {
+        const feed = vi.spyOn(DiscoverySearchService.prototype, "feed").mockRejectedValue(error);
+        try {
+          const response = await app.inject({
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+            method: "GET",
+            url: "/v1/discovery/feed",
+          });
+          expect(response.statusCode, response.body).toBe(
+            error instanceof DiscoverySearchError ? 503 : 500,
+          );
+          expect(response.body).not.toContain("Private feed error");
+        } finally {
+          feed.mockRestore();
+        }
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps artwork error families without exposing internals", async () => {
+    const artworkCases = [
+      { error: new DiscoveryArtworkError("unavailable"), status: 503 },
+      { error: new DiscoverySearchError("storage_failure"), status: 503 },
+      { error: new Error("Private artwork error"), status: 500 },
+    ];
+    const { app, session } = await harness();
+    try {
+      for (const errorCase of artworkCases) {
+        const artwork = vi
+          .spyOn(DiscoverySearchService.prototype, "readArtwork")
+          .mockRejectedValue(errorCase.error);
+        try {
+          const response = await app.inject({
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+            method: "GET",
+            url: `/v1/discovery/artwork/discovery_art_${"a".repeat(22)}`,
+          });
+          expect(response.statusCode, response.body).toBe(errorCase.status);
+          expect(response.body).not.toContain("Private artwork error");
+        } finally {
+          artwork.mockRestore();
+        }
+      }
     } finally {
       await app.close();
     }

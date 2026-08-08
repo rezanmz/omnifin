@@ -59,7 +59,7 @@ function validFiles() {
   });
   files["compose.yaml"] = [
     "x-service: &service",
-    "  image: ${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}",
+    "  image: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
     "  init: true",
     "  read_only: true",
     "  cap_drop: [ALL]",
@@ -67,6 +67,8 @@ function validFiles() {
     "services:",
     "  gateway:",
     "    <<: *service",
+    "    environment:",
+    "      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
     "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/healthz] }",
     "  maintenance:",
     "    <<: *service",
@@ -74,8 +76,11 @@ function validFiles() {
     "      NODE_ENV: production",
     "      OMNIFIN_BACKUP_DIRECTORY: /backups",
     "      OMNIFIN_BASE_URL: ${OMNIFIN_BASE_URL:-http://localhost:3000}",
+    "      OMNIFIN_ENCRYPTION_KEY_FILE: /run/secrets/omnifin_encryption_key",
     "      OMNIFIN_GATEWAY_HEALTH_URL: http://gateway:4000/healthz",
     "      OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz",
+    "      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
+    "    secrets: [omnifin_encryption_key]",
     "  web:",
     "    <<: *service",
     '    ports: ["127.0.0.1:3000:3000"]',
@@ -137,21 +142,18 @@ test("accepts the complete public-project foundation contract", async () => {
   });
 });
 
-test("rejects a maintenance service that mounts application secrets", async () => {
+test("rejects a maintenance service that mounts the recovery secret", async () => {
   await withRepository(
     (files) => {
       files["compose.yaml"] = files["compose.yaml"].replace(
-        "      OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz",
-        [
-          "      OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz",
-          "    secrets: [omnifin_encryption_key]",
-        ].join("\n"),
+        "    secrets: [omnifin_encryption_key]",
+        "    secrets: [omnifin_encryption_key, omnifin_recovery_secret]",
       );
     },
     async (root) => {
       await assert.rejects(
         checkFoundationContract({ root }),
-        /maintenance service must not mount application secrets/u,
+        /maintenance service must mount only the encryption-key secret/u,
       );
     },
   );

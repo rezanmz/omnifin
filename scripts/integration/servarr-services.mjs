@@ -99,6 +99,8 @@ const MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_READY_TIMEOUT_MS = 120_000;
 const BAZARR_ARTIFACT_TIMEOUT_MS = 30_000;
+const SONARR_MONITORING_READBACK_ATTEMPTS = 20;
+const SONARR_MONITORING_READBACK_INTERVAL_MS = 250;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
 const API_KEY_PATTERN = /^[a-f0-9]{32}$/u;
 const SIDECAR_FIXTURE_SERVICES = new Set(["prowlarr", "radarr", "sonarr"]);
@@ -866,6 +868,7 @@ function createContainerLocalTransport(context) {
 
 export function createCurlHeaderConfiguration(headers, body) {
   if (!(headers instanceof Headers)) throw new ServarrFixtureFailure("fixture_headers_invalid");
+  if (body instanceof Uint8Array) body = new TextDecoder().decode(body);
   if (
     body !== undefined &&
     (typeof body !== "string" ||
@@ -1194,36 +1197,111 @@ function assertMonitoringState(state, context, mediaId, monitored, failureCode) 
   }
 }
 
-async function verifyMonitoringMutation(context, adapter, mediaId) {
+export async function readMonitoringStateWithReadback(
+  readState,
+  monitored,
+  {
+    attempts = SONARR_MONITORING_READBACK_ATTEMPTS,
+    intervalMs = SONARR_MONITORING_READBACK_INTERVAL_MS,
+    wait = sleep,
+  } = {},
+) {
+  if (
+    typeof readState !== "function" ||
+    typeof monitored !== "boolean" ||
+    !Number.isSafeInteger(attempts) ||
+    attempts < 1 ||
+    attempts > SONARR_MONITORING_READBACK_ATTEMPTS ||
+    !Number.isSafeInteger(intervalMs) ||
+    intervalMs < 0 ||
+    intervalMs > 1_000 ||
+    typeof wait !== "function"
+  ) {
+    throw new ServarrFixtureFailure("monitoring_readback_policy_invalid");
+  }
+  let state;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    state = await readState();
+    if (state?.monitored === monitored) return state;
+    if (attempt < attempts - 1) await wait(intervalMs);
+  }
+  return state;
+}
+
+export async function verifyMonitoringMutation(context, adapter, mediaId, options = {}) {
   const target = { mediaId, service: context.service };
-  const initial = await connectorOperation("monitoring_read", () =>
-    adapter.readAcquisitionMonitoring(target),
-  );
-  assertMonitoringState(initial, context, mediaId, true, "monitoring_read_invalid");
-  const updated = await connectorOperation("monitoring_update", () =>
-    adapter.updateAcquisitionMonitoring({
-      ...target,
-      expectedMonitored: true,
-      monitored: false,
-    }),
-  );
-  assertMonitoringState(updated, context, mediaId, false, "monitoring_update_invalid");
-  const fresh = await connectorOperation("monitoring_fresh_read", () =>
-    adapter.readAcquisitionMonitoring(target),
-  );
-  assertMonitoringState(fresh, context, mediaId, false, "monitoring_fresh_read_invalid");
-  const restored = await connectorOperation("monitoring_restore", () =>
-    adapter.updateAcquisitionMonitoring({
-      ...target,
-      expectedMonitored: false,
-      monitored: true,
-    }),
-  );
-  assertMonitoringState(restored, context, mediaId, true, "monitoring_restore_invalid");
-  const finalState = await connectorOperation("monitoring_restore_read", () =>
-    adapter.readAcquisitionMonitoring(target),
-  );
-  assertMonitoringState(finalState, context, mediaId, true, "monitoring_restore_read_invalid");
+  const readbackOptions = {
+    attempts:
+      context.service === "sonarr" ? (options.attempts ?? SONARR_MONITORING_READBACK_ATTEMPTS) : 1,
+    intervalMs: options.intervalMs ?? SONARR_MONITORING_READBACK_INTERVAL_MS,
+    wait: options.wait ?? sleep,
+  };
+  let updateAttempted = false;
+  let updateConfirmed = false;
+  try {
+    const initial = await connectorOperation("monitoring_read", () =>
+      adapter.readAcquisitionMonitoring(target),
+    );
+    assertMonitoringState(initial, context, mediaId, true, "monitoring_read_invalid");
+    updateAttempted = true;
+    const updated = await connectorOperation("monitoring_update", () =>
+      adapter.updateAcquisitionMonitoring({
+        ...target,
+        expectedMonitored: true,
+        monitored: false,
+      }),
+    );
+    assertMonitoringState(updated, context, mediaId, false, "monitoring_update_invalid");
+    updateConfirmed = true;
+    const fresh = await connectorOperation("monitoring_fresh_read", () =>
+      readMonitoringStateWithReadback(
+        () => adapter.readAcquisitionMonitoring(target),
+        false,
+        readbackOptions,
+      ),
+    );
+    assertMonitoringState(fresh, context, mediaId, false, "monitoring_fresh_read_invalid");
+  } finally {
+    let restoreRequired = updateConfirmed;
+    if (!restoreRequired) {
+      const current = await connectorOperation("monitoring_restore_probe", () =>
+        readMonitoringStateWithReadback(
+          () => adapter.readAcquisitionMonitoring(target),
+          false,
+          updateAttempted ? readbackOptions : { ...readbackOptions, attempts: 1 },
+        ),
+      );
+      if (typeof current?.monitored !== "boolean") {
+        throw new ServarrFixtureFailure("monitoring_restore_probe_invalid");
+      }
+      assertMonitoringState(
+        current,
+        context,
+        mediaId,
+        current.monitored,
+        "monitoring_restore_probe_invalid",
+      );
+      restoreRequired = !current.monitored;
+    }
+    if (restoreRequired) {
+      const restored = await connectorOperation("monitoring_restore", () =>
+        adapter.updateAcquisitionMonitoring({
+          ...target,
+          expectedMonitored: false,
+          monitored: true,
+        }),
+      );
+      assertMonitoringState(restored, context, mediaId, true, "monitoring_restore_invalid");
+    }
+    const finalState = await connectorOperation("monitoring_restore_read", () =>
+      readMonitoringStateWithReadback(
+        () => adapter.readAcquisitionMonitoring(target),
+        true,
+        readbackOptions,
+      ),
+    );
+    assertMonitoringState(finalState, context, mediaId, true, "monitoring_restore_read_invalid");
+  }
 }
 
 async function verifyQueueMutationBoundary(context, adapter, mediaId) {

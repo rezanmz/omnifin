@@ -93,8 +93,15 @@ function serviceError(error: DownloadQueueError) {
     case "operation_failed":
       return new SafeHttpError({
         cause: error,
-        code: "download_queue_removal_failed",
-        message: "The previous queue removal attempt failed. Refresh before trying again.",
+        code: "download_queue_operation_failed",
+        message: "The previous queue operation failed. Refresh before trying again.",
+        statusCode: 409,
+      });
+    case "operation_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_outcome_uncertain",
+        message: "The queue operation outcome is uncertain and will not be automatically retried.",
         statusCode: 409,
       });
     case "operation_limit_reached":
@@ -109,6 +116,27 @@ function serviceError(error: DownloadQueueError) {
         cause: error,
         code: "download_queue_order_unavailable",
         message: "That download client is not exposing a verifiable queue order.",
+        statusCode: 409,
+      });
+    case "reconciliation_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_reconciliation_required",
+        message: "The queue operation requires reconciliation before another write is safe.",
+        statusCode: 409,
+      });
+    case "target_locked":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_target_locked",
+        message: "Another unresolved queue operation holds this exact target.",
+        statusCode: 409,
+      });
+    case "generation_mismatch":
+      return new SafeHttpError({
+        cause: error,
+        code: "download_queue_connector_generation_changed",
+        message: "The download connector changed before the operation was dispatched.",
         statusCode: 409,
       });
     case "response_invalid":
@@ -127,6 +155,21 @@ function serviceError(error: DownloadQueueError) {
         statusCode: 503,
       });
   }
+}
+
+function automaticIdempotencyKey(requestId: string) {
+  return `automatic:${requestId.replace(/[^A-Za-z0-9._:]/gu, "_")}`.slice(0, 128);
+}
+
+function writeOperationErrorHeaders(reply: FastifyReply, error: DownloadQueueError) {
+  if (error.operationId) reply.header("x-omnifin-operation-id", error.operationId);
+  reply.header("idempotency-replayed", String(error.replayed));
+}
+
+function writeAdapterOperationHeaders(reply: FastifyReply, error: SafeConnectorError) {
+  const operationId = (error as SafeConnectorError & { operationId?: string }).operationId;
+  if (operationId) reply.header("x-omnifin-operation-id", operationId);
+  reply.header("idempotency-replayed", "false");
 }
 
 function upstreamError(error: SafeConnectorError, reply: FastifyReply) {
@@ -351,10 +394,17 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
           ),
         );
         reply.header("idempotency-replayed", String(result.replayed));
+        reply.header("x-omnifin-operation-id", result.operationId);
         return result;
       } catch (error) {
-        if (error instanceof DownloadQueueError) throw serviceError(error);
-        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        if (error instanceof DownloadQueueError) {
+          writeOperationErrorHeaders(reply, error);
+          throw serviceError(error);
+        }
+        if (error instanceof SafeConnectorError) {
+          writeAdapterOperationHeaders(reply, error);
+          throw upstreamError(error, reply);
+        }
         throw error;
       } finally {
         request.raw.off("aborted", abort);
@@ -381,20 +431,34 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
         app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
         "downloads.manage",
       );
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"] ?? automaticIdempotencyKey(request.id),
+      );
       const controller = new AbortController();
       const abort = () => controller.abort();
       request.raw.once("aborted", abort);
       try {
-        return downloadQueueActionResponseSchema.parse(
-          await queue.update(
-            downloadQueueActionInputSchema.parse(request.body),
-            { ipAddress: request.ip, principal, requestId: request.id },
-            controller.signal,
-          ),
+        const serviceResult = await queue.update(
+          downloadQueueActionInputSchema.parse(request.body),
+          { ipAddress: request.ip, principal, requestId: request.id },
+          controller.signal,
+          idempotencyKey,
         );
+        const receipt = queue.operationReceipt(serviceResult);
+        if (receipt) {
+          reply.header("x-omnifin-operation-id", receipt.operationId);
+          reply.header("idempotency-replayed", String(receipt.replayed));
+        }
+        return downloadQueueActionResponseSchema.parse(serviceResult);
       } catch (error) {
-        if (error instanceof DownloadQueueError) throw serviceError(error);
-        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        if (error instanceof DownloadQueueError) {
+          writeOperationErrorHeaders(reply, error);
+          throw serviceError(error);
+        }
+        if (error instanceof SafeConnectorError) {
+          writeAdapterOperationHeaders(reply, error);
+          throw upstreamError(error, reply);
+        }
         throw error;
       } finally {
         request.raw.off("aborted", abort);
@@ -435,10 +499,17 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
           ),
         );
         reply.header("idempotency-replayed", String(result.replayed));
+        reply.header("x-omnifin-operation-id", result.operationId);
         return result;
       } catch (error) {
-        if (error instanceof DownloadQueueError) throw serviceError(error);
-        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        if (error instanceof DownloadQueueError) {
+          writeOperationErrorHeaders(reply, error);
+          throw serviceError(error);
+        }
+        if (error instanceof SafeConnectorError) {
+          writeAdapterOperationHeaders(reply, error);
+          throw upstreamError(error, reply);
+        }
         throw error;
       } finally {
         request.raw.off("aborted", abort);
@@ -465,20 +536,34 @@ export const downloadQueueRoutes: FastifyPluginAsync<DownloadQueueRoutesOptions>
         app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
         "downloads.manage",
       );
+      const idempotencyKey = idempotencyKeySchema.parse(
+        request.headers["idempotency-key"] ?? automaticIdempotencyKey(request.id),
+      );
       const controller = new AbortController();
       const abort = () => controller.abort();
       request.raw.once("aborted", abort);
       try {
-        return downloadQueuePromotionResponseSchema.parse(
-          await queue.promote(
-            downloadQueuePromotionInputSchema.parse(request.body),
-            { ipAddress: request.ip, principal, requestId: request.id },
-            controller.signal,
-          ),
+        const serviceResult = await queue.promote(
+          downloadQueuePromotionInputSchema.parse(request.body),
+          { ipAddress: request.ip, principal, requestId: request.id },
+          controller.signal,
+          idempotencyKey,
         );
+        const receipt = queue.operationReceipt(serviceResult);
+        if (receipt) {
+          reply.header("x-omnifin-operation-id", receipt.operationId);
+          reply.header("idempotency-replayed", String(receipt.replayed));
+        }
+        return downloadQueuePromotionResponseSchema.parse(serviceResult);
       } catch (error) {
-        if (error instanceof DownloadQueueError) throw serviceError(error);
-        if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
+        if (error instanceof DownloadQueueError) {
+          writeOperationErrorHeaders(reply, error);
+          throw serviceError(error);
+        }
+        if (error instanceof SafeConnectorError) {
+          writeAdapterOperationHeaders(reply, error);
+          throw upstreamError(error, reply);
+        }
         throw error;
       } finally {
         request.raw.off("aborted", abort);

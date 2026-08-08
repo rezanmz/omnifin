@@ -233,6 +233,14 @@ export function parseDoctorSmokeReport(rawReport, imageReference) {
   return report;
 }
 
+export function immutableSmokeImageReference(image, imageId) {
+  if (IMMUTABLE_IMAGE_PATTERN.test(image)) return image;
+  if (!/^sha256:[a-f0-9]{64}$/u.test(imageId)) {
+    throw new Error("smoke_image_id_invalid");
+  }
+  return `omnifin.invalid/container-smoke@${imageId}`;
+}
+
 export function parseRetainedBackupSmokeReport(rawReport) {
   let report;
   try {
@@ -528,6 +536,11 @@ async function main() {
       docker(["build", "--tag", image, "."], "image_build", { inherit: true, timeout: 900_000 });
     }
     docker(["image", "inspect", image], "image_inspection");
+    const imageId = docker(
+      ["image", "inspect", "--format", "{{.Id}}", image],
+      "image_id_inspection",
+    );
+    const imageReference = immutableSmokeImageReference(image, imageId);
     const runtimeUser = docker(
       ["image", "inspect", "--format", "{{.Config.User}}", image],
       "image_user_inspection",
@@ -576,17 +589,23 @@ async function main() {
         "--volume",
         `${volume}:/data`,
         "--volume",
+        `${backupVolume}:/backups`,
+        "--volume",
         `${encryptionFile}:/run/secrets/omnifin_encryption_key:ro`,
         "--volume",
         `${recoveryFile}:/run/secrets/omnifin_recovery_secret:ro`,
         "--env",
         "NODE_ENV=production",
         "--env",
+        "OMNIFIN_BACKUP_DIRECTORY=/backups",
+        "--env",
         "OMNIFIN_BASE_URL=https://omnifin.example",
         "--env",
         "OMNIFIN_DATABASE_URL=/data/omnifin.db",
         "--env",
         "OMNIFIN_ENCRYPTION_KEY_FILE=/run/secrets/omnifin_encryption_key",
+        "--env",
+        `OMNIFIN_IMAGE_REF=${imageReference}`,
         "--env",
         "OMNIFIN_RECOVERY_SECRET_FILE=/run/secrets/omnifin_recovery_secret",
         "--env",
@@ -623,6 +642,8 @@ async function main() {
       `${volume}:/data`,
       "--volume",
       `${backupVolume}:/backups`,
+      "--volume",
+      `${encryptionFile}:/run/secrets/omnifin_encryption_key:ro`,
       "--env",
       "NODE_ENV=production",
       "--env",
@@ -632,11 +653,13 @@ async function main() {
       "--env",
       "OMNIFIN_DATABASE_URL=/data/omnifin.db",
       "--env",
+      "OMNIFIN_ENCRYPTION_KEY_FILE=/run/secrets/omnifin_encryption_key",
+      "--env",
       "OMNIFIN_GATEWAY_HEALTH_URL=http://gateway:4000/healthz",
       "--env",
       "OMNIFIN_GATEWAY_READY_URL=http://gateway:4000/readyz",
       "--env",
-      `OMNIFIN_IMAGE_REF=${image}`,
+      `OMNIFIN_IMAGE_REF=${imageReference}`,
       image,
       "maintenance",
     ];
@@ -707,7 +730,7 @@ async function main() {
     );
     parseDoctorSmokeReport(
       dockerExpectExit([...maintenanceRuntime, "doctor"], "maintenance_doctor", 78),
-      image,
+      imageReference,
     );
     dockerExpectExit(
       [...maintenanceRuntime, "doctor", "--input", "/backups/container-smoke.sqlite"],

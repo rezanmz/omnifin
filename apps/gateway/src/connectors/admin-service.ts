@@ -24,17 +24,19 @@ import {
   type ManagedConnectorService,
 } from "@omnifin/contracts/connectors";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
-import { createHash, randomUUID, X509Certificate } from "node:crypto";
+import { createHash, createHmac, randomUUID, X509Certificate } from "node:crypto";
 
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { requirePermission } from "../auth/authorization.js";
+import { revokeConnectorSessionsForReplacement } from "../auth/session-service.js";
 import { EnvelopeCipher, privacyHash } from "../security/crypto.js";
 
 const MAX_CONNECTORS = 100;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 export const CONNECTOR_VALIDATION_TTL_MS = 10 * 60 * 1_000;
 const CONNECTOR_PROBE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const MAX_GENERATION = Number.MAX_SAFE_INTEGER;
 
 interface ConnectorRow {
   id: string;
@@ -47,6 +49,9 @@ interface ConnectorRow {
   insecureHttpApproved: number;
   capabilitySnapshotJson: string;
   healthState: string;
+  instanceGeneration: number;
+  configGeneration: number;
+  instanceIdentityHash: string | null;
   enabled: number;
   createdAt: number;
   updatedAt: number;
@@ -56,6 +61,7 @@ interface StoredSnapshot {
   schemaVersion: 1;
   health?: ConnectorHealth;
   authentication?: unknown;
+  configGeneration?: number;
 }
 
 interface StoredSecrets {
@@ -147,10 +153,40 @@ function healthIsFresh(health: ConnectorHealth | undefined, now: number) {
   );
 }
 
-function revisionFor(row: Pick<ConnectorRow, "id" | "type" | "updatedAt">) {
+function revisionFor(row: Pick<ConnectorRow, "configGeneration" | "id" | "type">) {
+  return createHash("sha256")
+    .update(`${row.type}\0${row.id}\0${row.configGeneration}`, "utf8")
+    .digest("base64url");
+}
+
+function legacyRevisionFor(row: Pick<ConnectorRow, "id" | "type" | "updatedAt">) {
   return createHash("sha256")
     .update(`${row.type}\0${row.id}\0${row.updatedAt}`, "utf8")
     .digest("base64url");
+}
+
+function revisionMatches(row: ConnectorRow, revision: string) {
+  if (revisionFor(row) === revision) return true;
+  return (
+    row.instanceGeneration === 0 &&
+    row.configGeneration === 0 &&
+    legacyRevisionFor(row) === revision
+  );
+}
+
+function safeGeneration(value: number) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_GENERATION;
+}
+
+function stableInstanceIdentityHash(value: string, key: Buffer) {
+  return createHmac("sha256", key)
+    .update("omnifin:v1:connector-instance-identity\0", "utf8")
+    .update(value, "utf8")
+    .digest("base64url");
+}
+
+function sameCredentials(left: ConnectorCredentialInput, right: ConnectorCredentialInput) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function canonicalBaseUrl(value: string, allowInsecureHttp: boolean) {
@@ -224,11 +260,54 @@ function parseSnapshot(row: ConnectorRow): StoredSnapshot {
     }
     health = parsedHealth.data;
   }
+  const snapshotConfigGeneration = record.configGeneration;
+  if (
+    snapshotConfigGeneration !== undefined &&
+    (!safeGeneration(snapshotConfigGeneration as number) || health === undefined)
+  ) {
+    throw new ConnectorAdminError("integrity_failure");
+  }
   return {
     schemaVersion: 1,
     ...(health === undefined ? {} : { health }),
     ...(record.authentication === undefined ? {} : { authentication: record.authentication }),
+    ...(snapshotConfigGeneration === undefined
+      ? {}
+      : { configGeneration: snapshotConfigGeneration as number }),
   };
+}
+
+function validationMatchesGeneration(row: ConnectorRow, snapshot: StoredSnapshot) {
+  return (
+    snapshot.configGeneration === row.configGeneration ||
+    (snapshot.configGeneration === undefined &&
+      row.instanceGeneration === 0 &&
+      row.configGeneration === row.updatedAt)
+  );
+}
+
+function carryValidationForward(
+  snapshot: StoredSnapshot,
+  nextGeneration: number,
+  validationIsCurrent: boolean,
+) {
+  const authentication =
+    snapshot.authentication !== null &&
+    typeof snapshot.authentication === "object" &&
+    !Array.isArray(snapshot.authentication)
+      ? {
+          ...(snapshot.authentication as Record<string, unknown>),
+          configGeneration: nextGeneration,
+        }
+      : snapshot.authentication;
+  return {
+    schemaVersion: 1,
+    ...(snapshot.health === undefined ? {} : { health: snapshot.health }),
+    ...(authentication === undefined ? {} : { authentication }),
+    ...(snapshot.health !== undefined && validationIsCurrent
+      ? { configGeneration: nextGeneration }
+      : {}),
+  } satisfies StoredSnapshot;
 }
 
 function defaultAdapterFactory(input: ConnectorAdapterFactoryInput): ConnectorAdapter {
@@ -325,6 +404,9 @@ export class ConnectorAdminService {
             insecure_http_approved as insecureHttpApproved,
             capability_snapshot_json as capabilitySnapshotJson,
             health_state as healthState,
+            instance_generation as instanceGeneration,
+            config_generation as configGeneration,
+            instance_identity_hash as instanceIdentityHash,
             enabled,
             created_at as createdAt,
             updated_at as updatedAt
@@ -407,10 +489,13 @@ export class ConnectorAdminService {
                 insecure_http_approved,
                 capability_snapshot_json,
                 health_state,
+                instance_generation,
+                config_generation,
+                instance_identity_hash,
                 enabled,
                 created_at,
                 updated_at
-              ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?)`,
+              ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, 0, null, 0, ?, ?)`,
             )
             .run(
               connector.id,
@@ -460,7 +545,7 @@ export class ConnectorAdminService {
     const current = this.#row(connectorId);
     const service = this.#service(current.type);
     this.#authorize(context, service);
-    if (revisionFor(current) !== parsed.data.revision) {
+    if (!revisionMatches(current, parsed.data.revision)) {
       throw new ConnectorAdminError("revision_conflict");
     }
     const currentSecrets = this.#secrets(current, service);
@@ -498,43 +583,88 @@ export class ConnectorAdminService {
     if (parsed.data.tlsCaCertificatePem !== undefined) {
       validateCaCertificate(parsed.data.tlsCaCertificatePem, requestedAt);
     }
-    const materialChange =
-      baseUrl !== current.baseUrl ||
-      parsed.data.credentials !== undefined ||
-      candidate.data.tlsPolicy !== current.tlsPolicy ||
-      parsed.data.tlsCaCertificatePem !== undefined ||
+    const displayNameChanged = candidate.data.displayName !== current.displayName;
+    const baseUrlChanged = baseUrl !== current.baseUrl;
+    const publicUiUrlChanged = publicUiUrl !== current.publicUiUrl;
+    const credentialsChanged = !sameCredentials(credentials, currentSecrets.credentials);
+    const tlsPolicyChanged = candidate.data.tlsPolicy !== current.tlsPolicy;
+    const tlsCaCertificateChanged = tlsCaCertificatePem !== currentSecrets.tlsCaCertificatePem;
+    const insecureHttpApprovalChanged =
       candidate.data.insecureHttpApproved !== (current.insecureHttpApproved === 1);
-    if (materialChange && parsed.data.enabled === true) {
-      throw new ConnectorAdminError("connector_not_validated");
+    const requestedEnabled = parsed.data.enabled ?? current.enabled === 1;
+    const enablementChanged = requestedEnabled !== (current.enabled === 1);
+    const validationSensitiveChange =
+      baseUrlChanged ||
+      credentialsChanged ||
+      tlsPolicyChanged ||
+      tlsCaCertificateChanged ||
+      insecureHttpApprovalChanged;
+    const configChanged =
+      displayNameChanged ||
+      baseUrlChanged ||
+      publicUiUrlChanged ||
+      credentialsChanged ||
+      tlsPolicyChanged ||
+      tlsCaCertificateChanged ||
+      insecureHttpApprovalChanged ||
+      enablementChanged;
+    if (!configChanged) return this.#present(current);
+    if (!safeGeneration(current.configGeneration) || current.configGeneration >= MAX_GENERATION) {
+      throw new ConnectorAdminError("integrity_failure");
     }
     if (
-      !materialChange &&
-      parsed.data.enabled === true &&
+      baseUrlChanged &&
+      (!safeGeneration(current.instanceGeneration) || current.instanceGeneration >= MAX_GENERATION)
+    ) {
+      throw new ConnectorAdminError("integrity_failure");
+    }
+    if (validationSensitiveChange && parsed.data.enabled === true) {
+      throw new ConnectorAdminError("connector_not_validated");
+    }
+    const currentSnapshot = parseSnapshot(current);
+    if (
+      enablementChanged &&
+      requestedEnabled &&
       (current.healthState !== "healthy" ||
-        !healthIsFresh(parseSnapshot(current).health, requestedAt))
+        !healthIsFresh(currentSnapshot.health, requestedAt) ||
+        !validationMatchesGeneration(current, currentSnapshot))
     ) {
       throw new ConnectorAdminError("connector_not_validated");
     }
     const now = Math.max(requestedAt, current.updatedAt + 1);
+    const nextConfigGeneration = current.configGeneration + 1;
+    const nextInstanceGeneration = baseUrlChanged
+      ? current.instanceGeneration + 1
+      : current.instanceGeneration;
     const auditId = this.#id();
-    const encryptedCredentials = this.#cipher.encrypt(
-      JSON.stringify({
-        credentials,
-        schemaVersion: 1,
-        ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
-      } satisfies StoredSecrets),
-      credentialContext(service, current.id),
-    );
-    const enabled = materialChange ? false : (parsed.data.enabled ?? current.enabled === 1);
+    const encryptedCredentials =
+      credentialsChanged || tlsPolicyChanged || tlsCaCertificateChanged
+        ? this.#cipher.encrypt(
+            JSON.stringify({
+              credentials,
+              schemaVersion: 1,
+              ...(tlsCaCertificatePem === undefined ? {} : { tlsCaCertificatePem }),
+            } satisfies StoredSecrets),
+            credentialContext(service, current.id),
+          )
+        : current.encryptedCredentials;
+    const enabled = validationSensitiveChange ? false : requestedEnabled;
+    const snapshot = validationSensitiveChange
+      ? ({ schemaVersion: 1 } satisfies StoredSnapshot)
+      : carryValidationForward(
+          currentSnapshot,
+          nextConfigGeneration,
+          validationMatchesGeneration(current, currentSnapshot),
+        );
     const changedFields = [
-      ...(parsed.data.displayName === undefined ? [] : ["displayName"]),
-      ...(parsed.data.baseUrl === undefined ? [] : ["baseUrl"]),
-      ...(parsed.data.publicUiUrl === undefined ? [] : ["publicUiUrl"]),
-      ...(parsed.data.credentials === undefined ? [] : ["credentials"]),
-      ...(parsed.data.tlsPolicy === undefined ? [] : ["tlsPolicy"]),
-      ...(parsed.data.tlsCaCertificatePem === undefined ? [] : ["tlsCaCertificatePem"]),
-      ...(parsed.data.insecureHttpApproved === undefined ? [] : ["insecureHttpApproved"]),
-      ...(parsed.data.enabled === undefined ? [] : ["enabled"]),
+      ...(displayNameChanged ? ["displayName"] : []),
+      ...(baseUrlChanged ? ["baseUrl"] : []),
+      ...(publicUiUrlChanged ? ["publicUiUrl"] : []),
+      ...(credentialsChanged ? ["credentials"] : []),
+      ...(tlsPolicyChanged ? ["tlsPolicy"] : []),
+      ...(tlsCaCertificateChanged ? ["tlsCaCertificatePem"] : []),
+      ...(insecureHttpApprovalChanged ? ["insecureHttpApproved"] : []),
+      ...(enablementChanged ? ["enabled"] : []),
     ];
     try {
       this.#database.sqlite
@@ -551,8 +681,14 @@ export class ConnectorAdminService {
                    capability_snapshot_json = ?,
                    health_state = ?,
                    enabled = ?,
+                   instance_generation = ?,
+                   config_generation = ?,
+                   instance_identity_hash = ?,
                    updated_at = ?
-               where id = ? and updated_at = ?`,
+               where id = ?
+                 and instance_generation = ?
+                 and config_generation = ?
+                 and updated_at = ?`,
             )
             .run(
               candidate.data.displayName,
@@ -561,23 +697,36 @@ export class ConnectorAdminService {
               encryptedCredentials,
               candidate.data.tlsPolicy,
               candidate.data.insecureHttpApproved ? 1 : 0,
-              materialChange
-                ? JSON.stringify({ schemaVersion: 1 })
-                : current.capabilitySnapshotJson,
-              materialChange ? "unknown" : current.healthState,
+              JSON.stringify(snapshot),
+              validationSensitiveChange ? "unknown" : current.healthState,
               enabled ? 1 : 0,
+              nextInstanceGeneration,
+              nextConfigGeneration,
+              baseUrlChanged ? null : current.instanceIdentityHash,
               now,
               current.id,
+              current.instanceGeneration,
+              current.configGeneration,
               current.updatedAt,
             );
           if (result.changes !== 1) throw new ConnectorAdminError("revision_conflict");
+          const replacement = baseUrlChanged
+            ? this.#invalidateConnectorInstance(current.id, now)
+            : undefined;
           this.#audit(
             auditId,
             "connector.configuration.updated",
             "success",
             current.id,
             context,
-            { changedFields, service },
+            {
+              changedFields,
+              configGeneration: nextConfigGeneration,
+              instanceGeneration: nextInstanceGeneration,
+              instanceReplaced: baseUrlChanged,
+              ...(replacement === undefined ? {} : { replacement }),
+              service,
+            },
             now,
           );
         })
@@ -616,7 +765,17 @@ export class ConnectorAdminService {
       if (error instanceof ConnectorAdminError) throw error;
       throw new ConnectorAdminError("integrity_failure", { cause: error });
     }
-    const health = connectorHealthSchema.parse(await adapter.probe());
+    const identityAware = adapter as ConnectorAdapter & {
+      probeWithIdentity?: (signal?: AbortSignal) => Promise<{
+        health: ConnectorHealth;
+        stableInstanceIdentity: string | null;
+      }>;
+    };
+    const probeResult =
+      service === "jellyfin" && typeof identityAware.probeWithIdentity === "function"
+        ? await identityAware.probeWithIdentity()
+        : { health: await adapter.probe(), stableInstanceIdentity: null };
+    const health = connectorHealthSchema.parse(probeResult.health);
     if (health.connectorId !== current.id || health.service !== service) {
       throw new ConnectorAdminError("integrity_failure");
     }
@@ -629,38 +788,99 @@ export class ConnectorAdminService {
     ) {
       throw new ConnectorAdminError("integrity_failure");
     }
+    let nextInstanceIdentityHash = current.instanceIdentityHash;
+    let instanceIdentityReplaced = false;
+    if (service === "jellyfin" && health.status === "healthy") {
+      if (
+        typeof probeResult.stableInstanceIdentity !== "string" ||
+        probeResult.stableInstanceIdentity.length < 1 ||
+        probeResult.stableInstanceIdentity.length > 256
+      ) {
+        throw new ConnectorAdminError("integrity_failure");
+      }
+      nextInstanceIdentityHash = stableInstanceIdentityHash(
+        probeResult.stableInstanceIdentity,
+        this.#config.encryptionKey,
+      );
+      instanceIdentityReplaced =
+        current.instanceIdentityHash !== null &&
+        current.instanceIdentityHash !== nextInstanceIdentityHash;
+      if (
+        instanceIdentityReplaced &&
+        (!safeGeneration(current.instanceGeneration) ||
+          current.instanceGeneration >= MAX_GENERATION)
+      ) {
+        throw new ConnectorAdminError("integrity_failure");
+      }
+    }
     const previous = parseSnapshot(current);
     const snapshot: StoredSnapshot = {
       schemaVersion: 1,
       health,
       ...(previous.authentication === undefined ? {} : { authentication: previous.authentication }),
+      configGeneration: current.configGeneration,
     };
     const auditId = this.#id();
     try {
       this.#database.sqlite
         .transaction(() => {
-          const result = this.#database.sqlite
-            .prepare(
-              `update connector_configs
-               set capability_snapshot_json = ?, health_state = ?, updated_at = ?
-               where id = ? and updated_at = ?`,
-            )
-            .run(
-              JSON.stringify(snapshot),
-              healthStateFor(health),
-              now,
-              current.id,
-              current.updatedAt,
-            );
+          const result = instanceIdentityReplaced
+            ? this.#database.sqlite
+                .prepare(
+                  `update connector_configs
+                   set capability_snapshot_json = ?, health_state = 'unknown', enabled = 0,
+                       instance_generation = instance_generation + 1,
+                       instance_identity_hash = ?, updated_at = ?
+                   where id = ?
+                     and instance_generation = ?
+                     and config_generation = ?
+                     and updated_at = ?`,
+                )
+                .run(
+                  JSON.stringify({ schemaVersion: 1 } satisfies StoredSnapshot),
+                  nextInstanceIdentityHash,
+                  now,
+                  current.id,
+                  current.instanceGeneration,
+                  current.configGeneration,
+                  current.updatedAt,
+                )
+            : this.#database.sqlite
+                .prepare(
+                  `update connector_configs
+                   set capability_snapshot_json = ?, health_state = ?,
+                       instance_identity_hash = ?, updated_at = ?
+                   where id = ?
+                     and instance_generation = ?
+                     and config_generation = ?
+                     and updated_at = ?`,
+                )
+                .run(
+                  JSON.stringify(snapshot),
+                  healthStateFor(health),
+                  nextInstanceIdentityHash,
+                  now,
+                  current.id,
+                  current.instanceGeneration,
+                  current.configGeneration,
+                  current.updatedAt,
+                );
           if (result.changes !== 1) throw new ConnectorAdminError("revision_conflict");
+          const replacement = instanceIdentityReplaced
+            ? this.#invalidateConnectorInstance(current.id, now)
+            : undefined;
           this.#audit(
             auditId,
-            "connector.probed",
+            instanceIdentityReplaced ? "connector.instance.replaced" : "connector.probed",
             health.status === "healthy" ? "success" : "failure",
             current.id,
             context,
             {
               failureCode: health.failure?.code ?? null,
+              configGeneration: current.configGeneration,
+              instanceGeneration: current.instanceGeneration + (instanceIdentityReplaced ? 1 : 0),
+              instanceReplaced: instanceIdentityReplaced,
+              ...(replacement === undefined ? {} : { replacement }),
               service,
               status: health.status,
               version: health.version,
@@ -679,7 +899,7 @@ export class ConnectorAdminService {
   public delete(connectorId: string, revision: string, context: ConnectorAdminContext) {
     const current = this.#row(connectorId);
     this.#authorize(context, this.#service(current.type));
-    if (revisionFor(current) !== revision) throw new ConnectorAdminError("revision_conflict");
+    if (!revisionMatches(current, revision)) throw new ConnectorAdminError("revision_conflict");
     if (current.enabled === 1) throw new ConnectorAdminError("connector_must_be_disabled");
     const auditId = this.#id();
     const now = Math.max(this.#now(), current.updatedAt + 1);
@@ -691,8 +911,16 @@ export class ConnectorAdminService {
             .get(current.id);
           if (inUse) throw new ConnectorAdminError("connector_in_use");
           const result = this.#database.sqlite
-            .prepare("delete from connector_configs where id = ? and updated_at = ?")
-            .run(current.id, current.updatedAt);
+            .prepare(
+              `delete from connector_configs
+               where id = ? and instance_generation = ? and config_generation = ? and updated_at = ?`,
+            )
+            .run(
+              current.id,
+              current.instanceGeneration,
+              current.configGeneration,
+              current.updatedAt,
+            );
           if (result.changes !== 1) throw new ConnectorAdminError("revision_conflict");
           this.#audit(
             auditId,
@@ -778,7 +1006,216 @@ export class ConnectorAdminService {
     }
   }
 
+  #invalidateConnectorInstance(connectorId: string, occurredAt: number) {
+    if (!this.#database.sqlite.inTransaction) {
+      throw new ConnectorAdminError("integrity_failure");
+    }
+    const overflowingLink = this.#database.sqlite
+      .prepare(
+        `select 1 from service_identity_links
+         where connector_id = ? and revision >= 2147483647 limit 1`,
+      )
+      .get(connectorId);
+    if (overflowingLink) throw new ConnectorAdminError("integrity_failure");
+
+    const revokedSessions = revokeConnectorSessionsForReplacement(
+      this.#database,
+      connectorId,
+      occurredAt,
+    );
+    const quickConnectTransactions = this.#database.sqlite
+      .prepare("delete from jellyfin_quick_connect_transactions where connector_id = ?")
+      .run(connectorId).changes;
+
+    const parentOperationUpdates = [
+      ["media_request_operations", "media_request_operation"],
+      ["media_issue_operations", "media_issue_operation"],
+      ["subtitle_download_operations", "subtitle_download_operation"],
+      ["library_mutation_operations", "library_mutation_operation"],
+      ["user_media_state_operations", "user_media_state_operation"],
+      ["acquisition_search_operations", "acquisition_search_operation"],
+      ["acquisition_grab_operations", "acquisition_grab_operation"],
+    ] as const;
+    let invalidatedOperations = 0;
+    for (const [table, parentType] of parentOperationUpdates) {
+      invalidatedOperations += this.#database.sqlite
+        .prepare(
+          `update ${table}
+           set state = 'failed', response_json = null,
+               failure_code = 'connector_instance_replaced',
+               completed_at = max(created_at, updated_at, @occurredAt),
+               updated_at = max(created_at, updated_at, @occurredAt)
+           where state = 'pending'
+             and id in (
+               select parent_operation_id from external_mutation_dispatches
+               where connector_id = @connectorId and parent_operation_type = @parentType
+             )`,
+        )
+        .run({ connectorId, occurredAt, parentType }).changes;
+    }
+    invalidatedOperations += this.#database.sqlite
+      .prepare(
+        `update saved_list_operations
+         set state = 'failed', encrypted_response = null,
+             failure_code = 'connector_instance_replaced',
+             completed_at = max(created_at, updated_at, @occurredAt),
+             updated_at = max(created_at, updated_at, @occurredAt)
+         where state = 'pending'
+           and id in (
+             select parent_operation_id from external_mutation_dispatches
+             where connector_id = @connectorId
+               and parent_operation_type = 'saved_list_operation'
+           )`,
+      )
+      .run({ connectorId, occurredAt }).changes;
+    invalidatedOperations += this.#database.sqlite
+      .prepare(
+        `update library_removal_operations
+         set state = 'failed', failure_code = 'connector_instance_replaced',
+             completed_at = max(created_at, started_at, updated_at, @occurredAt),
+             updated_at = max(created_at, started_at, updated_at, @occurredAt)
+         where state = 'running'
+           and id in (
+             select parent_operation_id from external_mutation_dispatches
+             where connector_id = @connectorId
+               and parent_operation_type = 'library_removal_operation'
+           )`,
+      )
+      .run({ connectorId, occurredAt }).changes;
+    for (const [table, parentType] of [
+      ["download_queue_removal_operations", "download_queue_removal_operation"],
+      ["acquisition_queue_recovery_operations", "acquisition_queue_recovery_operation"],
+    ] as const) {
+      invalidatedOperations += this.#database.sqlite
+        .prepare(
+          `update ${table}
+           set state = 'failed', response_json = null,
+               failure_code = 'connector_instance_replaced',
+               completed_at = max(created_at, updated_at, @occurredAt),
+               updated_at = max(created_at, updated_at, @occurredAt)
+           where connector_id = @connectorId and state = 'pending'`,
+        )
+        .run({ connectorId, occurredAt, parentType }).changes;
+    }
+    for (const table of [
+      "download_queue_item_operations",
+      "playback_progress_operations",
+    ] as const) {
+      invalidatedOperations += this.#database.sqlite
+        .prepare(
+          `update ${table}
+           set state = 'failed', failure_code = 'connector_instance_replaced',
+               completed_at = max(created_at, updated_at, @occurredAt),
+               updated_at = max(created_at, updated_at, @occurredAt)
+           where connector_id = @connectorId and state = 'pending'`,
+        )
+        .run({ connectorId, occurredAt }).changes;
+    }
+    this.#database.sqlite
+      .prepare(
+        `delete from external_mutation_target_locks
+         where owner_dispatch_id in (
+           select id from external_mutation_dispatches
+           where connector_id = ?
+             and state in ('reserved', 'dispatched', 'reconcile_required')
+         )`,
+      )
+      .run(connectorId);
+    invalidatedOperations += this.#database.sqlite
+      .prepare(
+        `update external_mutation_dispatches
+         set state = 'failed', lease_owner = null, lease_expires_at = null,
+             reconcile_required_at = null, uncertain_at = null,
+             completed_at = max(created_at, updated_at, @occurredAt),
+             failure_code = 'connector_instance_replaced',
+             updated_at = max(created_at, updated_at, @occurredAt)
+         where connector_id = @connectorId
+           and state in ('reserved', 'dispatched', 'reconcile_required')`,
+      )
+      .run({ connectorId, occurredAt }).changes;
+
+    const transientReferenceTables = [
+      "subtitle_searches",
+      "discovery_artwork_references",
+      "external_issue_references",
+      "media_request_profile_preferences",
+    ] as const;
+    let invalidatedReferences = 0;
+    for (const table of transientReferenceTables) {
+      invalidatedReferences += this.#database.sqlite
+        .prepare(`delete from ${table} where connector_id = ?`)
+        .run(connectorId).changes;
+    }
+    for (const table of [
+      "library_artwork_searches",
+      "library_removal_previews",
+      "saved_targets",
+    ] as const) {
+      invalidatedReferences += this.#database.sqlite
+        .prepare(
+          `delete from ${table}
+           where service_identity_link_id in (
+             select id from service_identity_links where connector_id = ?
+           )`,
+        )
+        .run(connectorId).changes;
+    }
+    invalidatedReferences += this.#database.sqlite
+      .prepare(
+        `delete from media_references
+         where service_identity_link_id in (
+           select id from service_identity_links where connector_id = ?
+         )`,
+      )
+      .run(connectorId).changes;
+
+    const linkResult = this.#database.sqlite
+      .prepare(
+        `update service_identity_links
+         set encrypted_access_token = null,
+             token_created_at = null,
+             last_verified_at = null,
+             health_state = case
+               when health_state = 'revoked' then 'revoked'
+               else 'relink_required'
+             end,
+             revoked_at = case
+               when health_state = 'revoked' then max(coalesce(revoked_at, created_at), @occurredAt)
+               else null
+             end,
+             revision = revision + 1,
+             updated_at = max(created_at, updated_at, @occurredAt)
+         where connector_id = @connectorId`,
+      )
+      .run({ connectorId, occurredAt });
+    const pendingUsers = this.#database.sqlite
+      .prepare(
+        `update users
+         set status = 'pending_link', updated_at = max(created_at, updated_at, @occurredAt)
+         where status = 'active'
+           and id in (
+             select user_id from service_identity_links where connector_id = @connectorId
+           )`,
+      )
+      .run({ connectorId, occurredAt }).changes;
+    return {
+      invalidatedOperations,
+      invalidatedReferences,
+      pendingUsers,
+      relinkRequiredLinks: linkResult.changes,
+      revokedSessions,
+      quickConnectTransactions,
+    };
+  }
+
   #present(row: ConnectorRow): ConnectorAdmin {
+    if (
+      !safeGeneration(row.instanceGeneration) ||
+      !safeGeneration(row.configGeneration) ||
+      (row.instanceIdentityHash !== null && !/^[A-Za-z0-9_-]{43}$/u.test(row.instanceIdentityHash))
+    ) {
+      throw new ConnectorAdminError("integrity_failure");
+    }
     const service = this.#service(row.type);
     const secrets = this.#secrets(row, service);
     const snapshot = parseSnapshot(row);
@@ -822,6 +1259,9 @@ export class ConnectorAdminService {
             insecure_http_approved as insecureHttpApproved,
             capability_snapshot_json as capabilitySnapshotJson,
             health_state as healthState,
+            instance_generation as instanceGeneration,
+            config_generation as configGeneration,
+            instance_identity_hash as instanceIdentityHash,
             enabled,
             created_at as createdAt,
             updated_at as updatedAt

@@ -7,9 +7,42 @@ import {
   BUDGETS,
   evaluateBudgets,
   HOSTED_BASELINE_MEMORY_ALLOWANCE_MIB,
+  LOAD_GATEWAY_IMAGE_REFERENCE,
+  createLoadGatewayEnvironment,
   percentile,
   workloadRoute,
 } from "../load/gateway-smoke.mjs";
+
+const runnerSource = readFileSync(new URL("../load/gateway-smoke.mjs", import.meta.url), "utf8");
+
+test("load gateway startup uses an isolated production preflight fixture", () => {
+  const environment = createLoadGatewayEnvironment(
+    {
+      backupDirectory: "/private/load/backups",
+      databaseUrl: "/private/load/omnifin.db",
+      encryptionKey: "encryption-material",
+      port: 41234,
+      recoverySecret: "recovery-material",
+    },
+    {
+      OMNIFIN_ENCRYPTION_KEY_FILE: "/host/encryption-key",
+      OMNIFIN_JELLYFIN_URL: "http://host-jellyfin.invalid",
+      PATH: "/usr/bin",
+    },
+  );
+
+  assert.equal(environment.PATH, "/usr/bin");
+  assert.equal(environment.OMNIFIN_BACKUP_DIRECTORY, "/private/load/backups");
+  assert.equal(environment.OMNIFIN_DATABASE_URL, "/private/load/omnifin.db");
+  assert.equal(environment.OMNIFIN_ENCRYPTION_KEY, "encryption-material");
+  assert.equal(environment.OMNIFIN_IMAGE_REF, LOAD_GATEWAY_IMAGE_REFERENCE);
+  assert.equal(environment.OMNIFIN_RECOVERY_SECRET, "recovery-material");
+  assert.equal(environment.OMNIFIN_PORT, "41234");
+  assert.equal(Object.hasOwn(environment, "OMNIFIN_ENCRYPTION_KEY_FILE"), false);
+  assert.equal(Object.hasOwn(environment, "OMNIFIN_JELLYFIN_URL"), false);
+  assert.match(LOAD_GATEWAY_IMAGE_REFERENCE, /^[^\s@]+@sha256:[a-f0-9]{64}$/u);
+  assert.match(runnerSource, /mkdir\(backupDirectory, \{ mode: 0o700 \}\)/u);
+});
 
 test("load percentiles select the upper observation at each boundary", () => {
   assert.equal(percentile([], 0.95), 0);

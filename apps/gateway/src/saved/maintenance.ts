@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "../db/client.js";
+import { cleanupTerminalExternalMutations } from "../operations/external-mutation-journal.js";
 
 export const SAVED_MAINTENANCE_INTERVAL_MS = 60 * 60 * 1_000;
 export const SAVED_OPERATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -7,6 +8,7 @@ export const SAVED_MAINTENANCE_BATCH_SIZE = 100;
 export interface SavedMaintenanceResult {
   catalogItems: number;
   lists: number;
+  lifecycleMismatches: number;
   operations: number;
   targets: number;
 }
@@ -26,6 +28,11 @@ export function purgeExpiredSavedState(
           `delete from saved_lists where id in (
              select id from saved_lists
              where kind = 'custom' and deleted_at is not null and undo_expires_at <= ?
+               and not exists (
+                 select 1 from saved_list_operations operation
+                 where operation.resource_id = saved_lists.id
+                   and operation.state not in ('succeeded', 'failed')
+               )
              order by undo_expires_at, id limit ?
            )`,
         )
@@ -34,18 +41,21 @@ export function purgeExpiredSavedState(
         .prepare(
           `delete from saved_targets where id in (
              select id from saved_targets where expires_at <= ?
+               and not exists (
+                 select 1 from saved_list_operations operation
+                 where operation.resource_id = saved_targets.id
+                   and operation.state not in ('succeeded', 'failed')
+               )
              order by expires_at, id limit ?
            )`,
         )
         .run(now, batchSize).changes;
-      const operations = database.sqlite
-        .prepare(
-          `delete from saved_list_operations where id in (
-             select id from saved_list_operations where updated_at < ?
-             order by updated_at, id limit ?
-           )`,
-        )
-        .run(now - SAVED_OPERATION_RETENTION_MS, batchSize).changes;
+      const lifecycle = cleanupTerminalExternalMutations(database.sqlite, {
+        completedBefore: now - SAVED_OPERATION_RETENTION_MS,
+        limit: batchSize,
+        parentOperationType: "saved_list_operation",
+      });
+      const operations = lifecycle.parents;
       const catalogItems = database.sqlite
         .prepare(
           `delete from saved_catalog_items where id in (
@@ -59,7 +69,13 @@ export function purgeExpiredSavedState(
            )`,
         )
         .run(batchSize).changes;
-      return { catalogItems, lists, operations, targets };
+      return {
+        catalogItems,
+        lifecycleMismatches: lifecycle.mismatchedParents,
+        lists,
+        operations,
+        targets,
+      };
     })
     .immediate();
 }

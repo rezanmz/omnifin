@@ -10,7 +10,12 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
-import type { MediaRequestAdapter } from "../src/requests/media-request-service.js";
+import {
+  MediaRequestService,
+  MediaRequestServiceError,
+  type MediaRequestAdapter,
+  type MediaRequestServiceErrorReason,
+} from "../src/requests/media-request-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -64,6 +69,7 @@ async function harness(
   options: {
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
     listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
+    ownership?: "not_owned" | "owned" | "stale" | "unavailable";
     role?: "admin" | "requester" | "viewer";
   } = {},
 ) {
@@ -105,6 +111,26 @@ async function harness(
       clock: () => now,
       createAdapter: () => ({ createMediaRequest, listRequestRouting, resolveUser }),
       createId: () => `media-route-request-${++requestIdentifier}`,
+      verifyOwnership: async () => {
+        const state = options.ownership ?? "not_owned";
+        return state === "unavailable"
+          ? {
+              connectorRevision: null,
+              linkId: null,
+              linkRevision: null,
+              state,
+              userId: "viewer-user",
+              userRevision: null,
+            }
+          : {
+              connectorRevision: now.getTime(),
+              linkId: "viewer-link",
+              linkRevision: 0,
+              state,
+              userId: "viewer-user",
+              userRevision: now.getTime(),
+            };
+      },
     },
     sessionDependencies: sessionDependencies(),
   });
@@ -415,6 +441,34 @@ describe("media request routes", () => {
     }
   });
 
+  it.each([
+    ["owned", 409, "request_title_already_owned"],
+    ["stale", 503, "request_availability_unverified"],
+    ["unavailable", 503, "request_availability_unverified"],
+  ] as const)(
+    "maps %s ownership evidence before a Seerr write",
+    async (ownership, status, code) => {
+      const { app, createMediaRequest, headers, listRequestRouting, resolveUser } = await harness({
+        ownership,
+      });
+      try {
+        const response = await app.inject({
+          headers,
+          method: "POST",
+          payload: { kind: "movie", tmdbId: 550 },
+          url: "/v1/requests",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(resolveUser).not.toHaveBeenCalled();
+        expect(listRequestRouting).not.toHaveBeenCalled();
+        expect(createMediaRequest).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it("rejects missing CSRF, invalid origin, and browser-controlled administration fields", async () => {
     const { app, createMediaRequest, headers } = await harness();
     try {
@@ -470,7 +524,7 @@ describe("media request routes", () => {
     }
   });
 
-  it("maps upstream failures without exposing their contents", async () => {
+  it("maps post-dispatch failures to a stable uncertain outcome without exposing details", async () => {
     const privateMessage = "private upstream request failure";
     const createMediaRequest = vi.fn<MediaRequestAdapter["createMediaRequest"]>(async () =>
       Promise.reject(new Error(privateMessage)),
@@ -483,10 +537,9 @@ describe("media request routes", () => {
         payload: { kind: "movie", tmdbId: 550 },
         url: "/v1/requests",
       });
-      expect(response.statusCode).toBe(503);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
-        "request_temporarily_unavailable",
-      );
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_outcome_uncertain");
+      expect(response.headers["operation-id"]).toBeTruthy();
       expect(response.body).not.toContain(privateMessage);
     } finally {
       await app.close();
@@ -510,6 +563,117 @@ describe("media request routes", () => {
       expect(createMediaRequest).not.toHaveBeenCalled();
     } finally {
       await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: MediaRequestServiceErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "request_title_already_owned", reason: "title_already_owned", status: 409 },
+    {
+      code: "request_availability_unverified",
+      reason: "availability_unverified",
+      status: 503,
+    },
+    { code: "request_identity_link_required", reason: "identity_link_required", status: 409 },
+    { code: "request_identity_unavailable", reason: "identity_unavailable", status: 409 },
+    { code: "request_denied", reason: "request_denied", status: 403 },
+    { code: "request_no_seasons_available", reason: "no_seasons_available", status: 409 },
+    { code: "request_already_exists", reason: "request_conflict", status: 409 },
+    { code: "request_routing_invalid", reason: "routing_invalid", status: 409 },
+    { code: "request_routing_unavailable", reason: "routing_unavailable", status: 409 },
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "request_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    { code: "request_outcome_uncertain", reason: "request_outcome_uncertain", status: 409 },
+    { code: "request_response_invalid", reason: "response_invalid", status: 502 },
+    {
+      code: "request_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    { code: "request_configuration_unavailable", reason: "integrity_failure", status: 503 },
+    { code: "request_configuration_unavailable", reason: "storage_failure", status: 503 },
+    { code: "request_temporarily_unavailable", reason: "temporarily_unavailable", status: 503 },
+  ])("maps media request failure $reason", async ({ code, reason, retryAfter, status }) => {
+    const { app, headers } = await harness();
+    const create = vi
+      .spyOn(MediaRequestService.prototype, "create")
+      .mockRejectedValue(
+        new MediaRequestServiceError(reason, { operationId: "request-operation" }),
+      );
+    try {
+      const response = await app.inject({
+        headers,
+        method: "POST",
+        payload: { kind: "movie", tmdbId: 550 },
+        url: "/v1/requests",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["operation-id"]).toBe("request-operation");
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      create.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("maps routing-option and preference service failures without mutation", async () => {
+    const requester = await harness();
+    const routingOptions = vi
+      .spyOn(MediaRequestService.prototype, "routingOptions")
+      .mockRejectedValue(new MediaRequestServiceError("temporarily_unavailable"));
+    try {
+      const response = await requester.app.inject({
+        headers: { cookie: requester.headers.cookie },
+        method: "GET",
+        url: "/v1/requests/routing-options?kind=movie&is4k=false",
+      });
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "request_temporarily_unavailable",
+      );
+    } finally {
+      routingOptions.mockRestore();
+      await requester.app.close();
+    }
+
+    const administrator = await harness({ role: "admin" });
+    const preference = vi
+      .spyOn(MediaRequestService.prototype, "setRoutingPreference")
+      .mockRejectedValue(new MediaRequestServiceError("routing_invalid"));
+    try {
+      const response = await administrator.app.inject({
+        headers: administrator.headers,
+        method: "PUT",
+        payload: {
+          is4k: false,
+          kind: "movie",
+          routing: {
+            destination:
+              "routing-v1.v2.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB.CCCCCCCCCCCCCCCCCCCCCC",
+            languageProfile: null,
+            qualityProfile:
+              "routing-v1.v2.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB.CCCCCCCCCCCCCCCCCCCCCC",
+            rootFolder:
+              "routing-v1.v2.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB.CCCCCCCCCCCCCCCCCCCCCC",
+          },
+        },
+        url: "/v1/requests/routing-preference",
+      });
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_routing_invalid");
+    } finally {
+      preference.mockRestore();
+      await administrator.app.close();
     }
   });
 });

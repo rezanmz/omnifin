@@ -111,6 +111,23 @@ export {
 } from "./connectors/admin-service.js";
 export { openDatabase, type DatabaseHandle } from "./db/client.js";
 export * as databaseSchema from "./db/schema.js";
+export {
+  EXTERNAL_MUTATION_POLICIES,
+  EXTERNAL_MUTATION_TARGET_LOCK_RELEASE_POLICY,
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  externalMutationRequestEncryptionContext,
+  type ClaimStaleReservedInput,
+  type ExternalMutationJournalErrorCode,
+  type ExternalMutationKind,
+  type ExternalMutationParentOperationType,
+  type ExternalMutationRecord,
+  type ExternalMutationRequestEncryptionContext,
+  type ExternalMutationState,
+  type ExternalMutationTargetScope,
+  type JsonValue,
+  type ReserveExternalMutationInput,
+} from "./operations/external-mutation-journal.js";
 export { SafeHttpError } from "./http-error.js";
 export {
   SetupReadinessError,

@@ -16,6 +16,7 @@ export const PROVIDER_VALIDATION_MAX_WAIT_MS = 300_000;
 const PROVIDER_VALIDATION_JITTER_SECONDS = 6;
 const PRIVATE_IPV4_PATTERNS = [/^10\./u, /^192\.168\./u, /^172\.(?:1[6-9]|2\d|3[01])\./u];
 const CHECKS = COMPATIBILITY_CHECKS.authentik;
+export const gatewayFixtureImageReference = `omnifin.invalid/authentik-gateway-fixture@sha256:${"0".repeat(64)}`;
 
 export function isPrivateIpv4(address) {
   return (

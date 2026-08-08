@@ -1,5 +1,5 @@
 const VALUE_ARGUMENTS = new Set(["--input", "--output", "--retain", "--rollback-output"]);
-const FLAG_ARGUMENTS = new Set(["--confirm-gateway-stopped"]);
+const FLAG_ARGUMENTS = new Set(["--confirm-empty-target", "--confirm-gateway-stopped"]);
 
 export interface MaintenanceArguments {
   flags: Set<string>;
@@ -49,6 +49,12 @@ export function requireMaintenanceInteger(
 
 export function assertOnlyMaintenanceValues(arguments_: MaintenanceArguments, allowed: string[]) {
   for (const name of arguments_.values.keys()) {
+    if (!allowed.includes(name)) throw new Error("usage");
+  }
+}
+
+export function assertOnlyMaintenanceFlags(arguments_: MaintenanceArguments, allowed: string[]) {
+  for (const name of arguments_.flags) {
     if (!allowed.includes(name)) throw new Error("usage");
   }
 }

@@ -138,7 +138,11 @@ describe("Servarr acquisition provenance", () => {
     ]);
 
     await expect(
-      adapter.queueAcquisitionSearch({ mediaId: 42, service: "radarr" }),
+      adapter.queueAcquisitionSearch(
+        { mediaId: 42, service: "radarr" },
+        undefined,
+        `mutation_dispatch_${"s".repeat(22)}`,
+      ),
     ).resolves.toEqual({
       acceptedAt: "2026-07-25T12:00:00.000Z",
       operationId: "radarr:command:812",
@@ -150,6 +154,9 @@ describe("Servarr acquisition provenance", () => {
     expect(requests[0]?.init.method).toBe("POST");
     expect(requests[0]?.init.headers.get("content-type")).toBe("application/json");
     expect(requests[0]?.init.headers.get("x-api-key")).toBe("radarr-fixture-key");
+    expect(requests[0]?.init.headers.get("x-omnifin-operation-id")).toBe(
+      `mutation_dispatch_${"s".repeat(22)}`,
+    );
     expect(JSON.parse(new TextDecoder().decode(requests[0]?.init.body))).toEqual({
       movieIds: [42],
       name: "MoviesSearch",
@@ -402,12 +409,19 @@ describe("Servarr acquisition provenance", () => {
         externalId: 91,
       }),
     ]);
-    await adapter.removeAndBlocklistAcquisitionQueueItem(91);
+    await adapter.removeAndBlocklistAcquisitionQueueItem(
+      91,
+      undefined,
+      `mutation_dispatch_${"q".repeat(22)}`,
+    );
 
     expect(requests[0]?.url.pathname).toBe("/api/v3/queue");
     expect(requests[0]?.url.searchParams.get("movieIds")).toBe("42");
     expect(requests[1]?.url.pathname).toBe("/api/v3/queue/91");
     expect(requests[1]?.init.method).toBe("DELETE");
+    expect(requests[1]?.init.headers.get("x-omnifin-operation-id")).toBe(
+      `mutation_dispatch_${"q".repeat(22)}`,
+    );
     expect(Object.fromEntries(requests[1]?.url.searchParams ?? [])).toEqual({
       blocklist: "true",
       changeCategory: "false",

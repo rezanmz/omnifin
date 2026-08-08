@@ -40,6 +40,7 @@ import {
   type DiscoverySearchClient,
   type DiscoverySearchClientErrorKind,
 } from "../lib/discovery-search";
+import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
 import type { MediaRequestClient } from "../lib/media-requests";
 import type { DiscoveryMediaDetailClient, DiscoveryPersonDetailClient } from "../lib/media-details";
 import {
@@ -700,7 +701,7 @@ export function GlobalSearch({
     selectedResult !== null &&
     selectedResult.kind !== "person" &&
     !selectedLocallyRequested &&
-    (selectedResult.availability === "unavailable" || selectedResult.availability === "partial");
+    discoveryAvailabilityIsRequestable(selectedResult.availability);
   const permissions = permissionState.kind === "ready" ? permissionState.permissions : [];
   const commandMatches = matchingCommands(permissions, normalizedQuery);
   const commandFallbackState: PaletteMediaState | null =

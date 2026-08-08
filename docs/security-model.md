@@ -9,7 +9,8 @@ design and review.
 > The current checkpoint implements defensive foundations plus OIDC authentication,
 > opaque local sessions, identity resolution, authentication audit records, and hidden
 > recovery access. Password and Quick Connect Jellyfin linking, RP-initiated logout,
-> and provider-initiated OIDC back- and front-channel logout are implemented, while
+> provider-initiated OIDC back- and front-channel logout, and narrow inaccessible-sole-administrator
+> replacement are implemented, while
 > encrypted and audited connector administration is implemented through the versioned
 > gateway API. Permission enforcement covers every current route and is repeated inside
 > administrative services. Browser-safe user access administration additionally protects OIDC
@@ -78,9 +79,24 @@ application boundary; operators must still patch and isolate the host.
   both service and connector identity. Browser responses expose only the credential kind
   and whether credentials are configured.
 - New connector records are disabled. A successful probe must persist normalized health
-  and capabilities before enablement, and that evidence expires after ten minutes; any
+  and capabilities together with the exact configuration generation before enablement, and that
+  evidence expires after ten minutes; any
   destination, credential, HTTP, CA, or TLS policy change disables the connector and
   clears the evidence.
+- The opaque administrative revision is derived from connector type, connector ID, and
+  configuration generation. Health and capability probes update operational timestamps but not that
+  revision. Semantic no-ops write nothing; each effective display, public-UI, enablement,
+  destination, credential, HTTP, CA, or TLS change advances configuration generation exactly once.
+- Instance generation changes only when the canonical base URL is replaced or a trusted probe proves
+  that the stable upstream instance changed. A Jellyfin public probe keeps `Id` inside the gateway,
+  stores only a keyed 43-character identity hash on the connector, and never adds the raw server ID
+  to public health, administration responses, logs, or audit metadata.
+- Endpoint or stable-identity replacement commits as one immediate transaction. It leaves the
+  connector disabled, advances instance generation, clears validation, Quick Connect and transient
+  references, terminates outstanding connector operations, revokes dependent sessions, erases
+  Jellyfin access tokens, marks links for relinking, moves affected active users to `pending_link`,
+  and records bounded audit counts. A fresh successful probe and a separate explicit enable are
+  required before the replacement can receive authority.
 - Destination literals are validated before storage and resolved addresses are checked at
   request time. Redirects remain blocked and DNS-pinned transports cannot fall back to an
   unvalidated address. Plain HTTP requires explicit approval. Self-signed TLS requires
@@ -91,7 +107,9 @@ application boundary; operators must still patch and isolate the host.
   service constrain that session to Jellyfin records, and list queries exclude every other
   connector. The service repeats permission and scope checks so future non-HTTP callers cannot
   bypass authorization.
-- Updates and deletion require the latest opaque revision. Enabled connectors cannot be
+- Probe results compare-and-swap configuration generation and `updated_at`, so a slow result cannot
+  replace newer configuration or newer probe evidence. Updates and deletion require the latest
+  opaque revision. Enabled connectors cannot be
   deleted, and connectors referenced by a service identity link remain protected.
 - Creation, validation, update, and deletion write bounded audit metadata without connector
   credentials, private response bodies, or raw client addresses.
@@ -113,6 +131,34 @@ application boundary; operators must still patch and isolate the host.
 - The account update, target-session revocation, and sanitized `auth.user.access_updated` audit
   record commit atomically. Audit metadata contains only previous/new role and state plus the
   revoked-session count; client addresses are privacy-hashed.
+
+## Sole-administrator recovery controls
+
+- `recovery.administrator.replace` exists only on the isolated recovery principal. Ordinary local
+  administrators remain denied, and the normal user-access service and routes do not implement this
+  transfer.
+- Preview and every proof start require the exact recovery session, canonical origin, session-bound
+  CSRF token, and mutation rate limits. The preview exposes only the opaque target ID, display name,
+  revision, local authentication-method names, and active-session count. Zero, multiple, stale, or
+  malformed administrator states fail closed without disclosing which invariant failed.
+- Password proof is fresh and must return Jellyfin `IsAdministrator=true`. Quick Connect is
+  browser-bound, recovery-bound, expiring, and one-use; its authenticated-encryption payload binds
+  the target ID/revision, literal confirmation, recovery session, connector revision, and upstream
+  proof secret. Existing payload versions remain parseable only for their original sign-in,
+  pairing, and first-admin purposes.
+- OIDC replacement requires a fresh authorization-code callback with S256 PKCE and the exact
+  browser/transaction binding. The subject must already belong to a distinct active local account,
+  current claims must resolve to `admin`, and one enabled usable Jellyfin link must remain. JIT,
+  missing identities, and pending-link accounts are unavailable rather than provisioned or upgraded.
+- One immediate transaction rechecks exactly one active administrator, applies the target revision
+  compare-and-swap, promotes the candidate, disables the target, verifies the final-administrator
+  invariant, revokes target/candidate/recovery sessions, issues one normal administrator session,
+  and inserts one sanitized `auth.administrator.replaced` event. Audit or session failure restores
+  every user, link, session, and token row.
+- Public outcomes are fixed `denied`, `unavailable`, or `replaced` states. Completion responses omit
+  principals and upstream identity data; logs and audit metadata exclude passwords, Quick Connect
+  secrets, OIDC assertions, subjects, issuers, external Jellyfin users, server IDs, connector
+  destinations, and access tokens.
 
 ## Operator audit-trail controls
 
@@ -445,6 +491,11 @@ diagnostic.
   when another active local admin already exists, and the recovery session is replaced rather
   than upgraded in place. An OIDC bootstrap administrator remains denied from media operations
   until separately proving control of a Jellyfin account.
+  An existing sole administrator can be replaced only by the separate recovery-only permission and
+  a fresh administrator proof. That transfer requires an existing usable candidate account, exact
+  target revision and confirmation, atomically disables the old administrator, and leaves only one
+  active administrator and one replacement session. It does not widen ordinary user administration
+  or alter first-administrator bootstrap.
 
 Password and Quick Connect Jellyfin proof-of-control pairing now have
 immutable-ownership, exact-session binding, CSRF, session-rotation, migration, token

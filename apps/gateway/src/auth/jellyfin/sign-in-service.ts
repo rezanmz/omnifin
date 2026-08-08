@@ -4,11 +4,19 @@ import {
   type JellyfinPublicSystemInfo,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
+import type {
+  AdministratorRecoveryConfirmationRequest,
+  AdministratorRecoveryTarget,
+} from "@omnifin/contracts/auth";
 
 import type { AppConfig } from "../../config.js";
 import type { DatabaseHandle } from "../../db/client.js";
 import { EnvelopeCipher } from "../../security/crypto.js";
+import {
+  AdministratorRecoveryService,
+  type AdministratorRecoveryReplacementResult,
+} from "../administrator-recovery-service.js";
 import {
   SessionIssuanceLimitError,
   type CreateSessionInput,
@@ -28,6 +36,7 @@ const DISPLAY_WHITESPACE = /\s+/gu;
 
 interface ExistingLinkRow {
   connectorId: string;
+  connectorInstanceGeneration: number;
   createdAt: number;
   externalServerId: string;
   externalUserId: string;
@@ -65,6 +74,13 @@ export interface JellyfinPasswordBootstrapInput extends Omit<
   readonly validatedSession?: unknown;
 }
 
+export interface JellyfinPasswordAdministratorReplacementInput
+  extends
+    Omit<JellyfinPasswordSignInInput, "currentSessionToken">,
+    AdministratorRecoveryConfirmationRequest {
+  readonly validatedSession?: unknown;
+}
+
 export interface JellyfinAuthenticatedSignInInput {
   readonly authentication: JellyfinAuthenticationResult;
   readonly currentSessionToken?: unknown;
@@ -91,6 +107,13 @@ export interface JellyfinAuthenticatedBootstrapInput extends Omit<
   JellyfinAuthenticatedPairingInput,
   "validatedSession"
 > {
+  readonly validatedSession?: unknown;
+}
+
+export interface JellyfinAuthenticatedAdministratorReplacementInput
+  extends
+    Omit<JellyfinAuthenticatedPairingInput, "validatedSession">,
+    AdministratorRecoveryConfirmationRequest {
   readonly validatedSession?: unknown;
 }
 
@@ -222,11 +245,13 @@ function accessTokenContext(linkId: string) {
 
 export class JellyfinSignInService {
   readonly #cipher: EnvelopeCipher;
+  readonly #administratorRecovery: AdministratorRecoveryService;
   readonly #clock: () => Date;
   readonly #createClient: NonNullable<JellyfinSignInServiceDependencies["createClient"]>;
   readonly #createDeviceId: () => string;
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #identityHashKey: Buffer;
   readonly #registry: JellyfinConnectorRegistry;
   readonly #sessionService: SessionService;
 
@@ -240,6 +265,15 @@ export class JellyfinSignInService {
       throw new JellyfinSignInServiceError("configuration_invalid");
     }
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
+    this.#identityHashKey = Buffer.from(config.encryptionKey);
+    this.#administratorRecovery = new AdministratorRecoveryService(
+      database,
+      sessionService,
+      config,
+      {
+        ...(dependencies.clock === undefined ? {} : { clock: dependencies.clock }),
+      },
+    );
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createClient =
       dependencies.createClient ??
@@ -249,11 +283,15 @@ export class JellyfinSignInService {
           connectorId: target.connectorId,
           displayName: target.displayName,
           insecureHttpApproved: target.insecureHttpApproved,
+          tlsPolicy: target.tlsPolicy ?? "strict",
+          ...(target.tlsCaCertificatePem === undefined
+            ? {}
+            : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
         }));
     this.#createDeviceId = dependencies.createDeviceId ?? randomUUID;
     this.#createId = dependencies.createId ?? randomUUID;
     this.#database = database;
-    this.#registry = new JellyfinConnectorRegistry(database);
+    this.#registry = new JellyfinConnectorRegistry(database, config.encryptionKey);
     this.#sessionService = sessionService;
   }
 
@@ -269,6 +307,14 @@ export class JellyfinSignInService {
   /** @internal Resolves only the exact recovery session eligible for first-admin bootstrap. */
   public resolveEligibleRecoveryBootstrapSession(validatedSession: unknown) {
     return this.#sessionService.beginValidatedRecoveryBootstrapSession(validatedSession);
+  }
+
+  /** @internal Resolves an exact recovery session and optional administrator target. */
+  public resolveEligibleAdministratorReplacementSession(
+    validatedSession: unknown,
+    target?: AdministratorRecoveryTarget,
+  ) {
+    return this.#administratorRecovery.beginValidatedReplacement(validatedSession, target);
   }
 
   public async signInWithPassword(
@@ -290,6 +336,9 @@ export class JellyfinSignInService {
     let authentication: JellyfinAuthenticationResult;
     try {
       publicInfo = await client.getPublicSystemInfo();
+      if (!this.#serverIdentityMatchesTarget(publicInfo.Id, target)) {
+        throw new JellyfinSignInServiceError("server_mismatch");
+      }
       authentication = await client.authenticateByName({
         deviceId,
         password: input.password,
@@ -305,7 +354,10 @@ export class JellyfinSignInService {
       if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
-    if (publicInfo.Id !== authentication.ServerId) {
+    if (
+      publicInfo.Id !== authentication.ServerId ||
+      !this.#serverIdentityMatchesTarget(publicInfo.Id, target)
+    ) {
       throw new JellyfinSignInServiceError("server_mismatch");
     }
 
@@ -349,6 +401,9 @@ export class JellyfinSignInService {
     let authentication: JellyfinAuthenticationResult;
     try {
       publicInfo = await client.getPublicSystemInfo();
+      if (!this.#serverIdentityMatchesTarget(publicInfo.Id, target)) {
+        throw new JellyfinSignInServiceError("server_mismatch");
+      }
       authentication = await client.authenticateByName({
         deviceId,
         password: input.password,
@@ -361,9 +416,13 @@ export class JellyfinSignInService {
           status: "denied" as const,
         });
       }
+      if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
-    if (publicInfo.Id !== authentication.ServerId) {
+    if (
+      publicInfo.Id !== authentication.ServerId ||
+      !this.#serverIdentityMatchesTarget(publicInfo.Id, target)
+    ) {
       throw new JellyfinSignInServiceError("server_mismatch");
     }
 
@@ -404,6 +463,9 @@ export class JellyfinSignInService {
     let authentication: JellyfinAuthenticationResult;
     try {
       publicInfo = await client.getPublicSystemInfo();
+      if (!this.#serverIdentityMatchesTarget(publicInfo.Id, target)) {
+        throw new JellyfinSignInServiceError("server_mismatch");
+      }
       authentication = await client.authenticateByName({
         deviceId,
         password: input.password,
@@ -416,9 +478,13 @@ export class JellyfinSignInService {
           status: "denied" as const,
         });
       }
+      if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
-    if (publicInfo.Id !== authentication.ServerId) {
+    if (
+      publicInfo.Id !== authentication.ServerId ||
+      !this.#serverIdentityMatchesTarget(publicInfo.Id, target)
+    ) {
       throw new JellyfinSignInServiceError("server_mismatch");
     }
 
@@ -429,6 +495,74 @@ export class JellyfinSignInService {
       proof: "password",
       ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
       target,
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+      validatedSession: input.validatedSession,
+    });
+  }
+
+  public async replaceAdministratorWithPassword(
+    input: JellyfinPasswordAdministratorReplacementInput,
+  ): Promise<AdministratorRecoveryReplacementResult> {
+    this.#validatePasswordInput(input);
+    const target = {
+      administratorId: input.administratorId,
+      expectedUpdatedAt: input.expectedUpdatedAt,
+    };
+    if (!this.#administratorRecovery.beginValidatedReplacement(input.validatedSession, target)) {
+      return internalResult({
+        reason: "state_unavailable" as const,
+        status: "unavailable" as const,
+      });
+    }
+    let connectorTarget: JellyfinConnectorTarget;
+    try {
+      connectorTarget = this.#registry.resolve();
+    } catch (error) {
+      if (error instanceof JellyfinConnectorConfigurationError) {
+        throw new JellyfinSignInServiceError("configuration_invalid", { cause: error });
+      }
+      throw error;
+    }
+    const deviceId = this.#nextIdentifier(this.#createDeviceId());
+    const client = this.#createClient(connectorTarget);
+    let publicInfo: JellyfinPublicSystemInfo;
+    let authentication: JellyfinAuthenticationResult;
+    try {
+      publicInfo = await client.getPublicSystemInfo();
+      if (!this.#serverIdentityMatchesTarget(publicInfo.Id, connectorTarget)) {
+        throw new JellyfinSignInServiceError("server_mismatch");
+      }
+      authentication = await client.authenticateByName({
+        deviceId,
+        password: input.password,
+        username: input.username,
+      });
+    } catch (error) {
+      if (error instanceof SafeConnectorError && error.code === "invalid_credentials") {
+        return internalResult({
+          reason: "proof_denied" as const,
+          status: "denied" as const,
+        });
+      }
+      if (error instanceof JellyfinSignInServiceError) throw error;
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+    if (
+      publicInfo.Id !== authentication.ServerId ||
+      !this.#serverIdentityMatchesTarget(publicInfo.Id, connectorTarget)
+    ) {
+      throw new JellyfinSignInServiceError("server_mismatch");
+    }
+    return this.completeAuthenticatedAdministratorReplacement({
+      administratorId: input.administratorId,
+      authentication,
+      confirmation: input.confirmation,
+      deviceId,
+      expectedUpdatedAt: input.expectedUpdatedAt,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      proof: "password",
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      target: connectorTarget,
       ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
       validatedSession: input.validatedSession,
     });
@@ -537,6 +671,16 @@ export class JellyfinSignInService {
     }
   }
 
+  public completeAuthenticatedAdministratorReplacement(
+    input: JellyfinAuthenticatedAdministratorReplacementInput,
+  ): AdministratorRecoveryReplacementResult {
+    this.#validateAuthenticatedPairingInput(input);
+    if (!this.#serverIdentityMatchesTarget(input.authentication.ServerId, input.target)) {
+      throw new JellyfinSignInServiceError("server_mismatch");
+    }
+    return this.#administratorRecovery.replaceWithJellyfin(input);
+  }
+
   #reconcileAndIssueSession(input: {
     authentication: JellyfinAuthenticationResult;
     deviceId: string;
@@ -606,7 +750,11 @@ export class JellyfinSignInService {
     requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
     target: JellyfinConnectorTarget;
   }): JellyfinPairingDeniedResult | { readonly linkId: string; readonly status: "resolved" } {
-    if (!this.#database.sqlite.inTransaction || !this.#registry.bindingIsCurrent(input.target)) {
+    if (
+      !this.#database.sqlite.inTransaction ||
+      !this.#registry.bindingIsCurrent(input.target) ||
+      !this.#serverIdentityMatchesTarget(input.authentication.ServerId, input.target)
+    ) {
       throw new JellyfinSignInServiceError("configuration_invalid");
     }
     const externalUserId = normalizedDisplayText(input.authentication.User.Id, 256);
@@ -618,6 +766,7 @@ export class JellyfinSignInService {
           l.user_id as linkUserId,
           l.service,
           l.connector_id as connectorId,
+          l.connector_instance_generation as connectorInstanceGeneration,
           l.external_server_id as externalServerId,
           l.external_user_id as externalUserId,
           l.health_state as healthState,
@@ -630,11 +779,13 @@ export class JellyfinSignInService {
          from service_identity_links l
          left join users u on u.id = l.user_id
          where l.connector_id = ?
+           and l.connector_instance_generation = ?
            and l.external_server_id = ?
            and l.external_user_id = ?`,
       )
       .get(
         input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
         input.authentication.ServerId,
         input.authentication.User.Id,
       ) as ExistingLinkRow | undefined;
@@ -736,13 +887,110 @@ export class JellyfinSignInService {
 
     const existingUserLink = this.#database.sqlite
       .prepare(
-        `select id
-         from service_identity_links
-         where user_id = ? and service = 'jellyfin'
+        `select
+           l.id,
+           l.user_id as linkUserId,
+           l.service,
+           l.connector_id as connectorId,
+           l.connector_instance_generation as connectorInstanceGeneration,
+           l.external_server_id as externalServerId,
+           l.external_user_id as externalUserId,
+           l.health_state as healthState,
+           l.revision,
+           l.created_at as createdAt,
+           u.id as userId,
+           u.role as userRole,
+           u.role_source as userRoleSource,
+           u.status as userStatus
+         from service_identity_links l
+         left join users u on u.id = l.user_id
+         where l.user_id = ? and l.service = 'jellyfin'
          limit 1`,
       )
-      .get(input.pairingSession.userId) as { id: string } | undefined;
+      .get(input.pairingSession.userId) as ExistingLinkRow | undefined;
     if (existingUserLink) {
+      const replacementRelink =
+        input.pairingSession.serviceIdentityLinkId === null &&
+        existingUserLink.userId === input.pairingSession.userId &&
+        existingUserLink.userStatus === "pending_link" &&
+        existingUserLink.connectorId === input.target.connectorId &&
+        existingUserLink.connectorInstanceGeneration < (input.target.instanceGeneration ?? 0) &&
+        (existingUserLink.healthState === "relink_required" ||
+          existingUserLink.healthState === "revoked") &&
+        (existingUserLink.externalServerId !== input.authentication.ServerId ||
+          existingUserLink.externalUserId === input.authentication.User.Id) &&
+        this.#replacementLinkIsValid(existingUserLink, input.occurredAt);
+      if (replacementRelink) {
+        const encryptedAccessToken = this.#cipher.encrypt(
+          input.authentication.AccessToken,
+          accessTokenContext(existingUserLink.id),
+        );
+        const relinked = this.#database.sqlite
+          .prepare(
+            `update service_identity_links
+             set connector_instance_generation = ?,
+                 external_server_id = ?,
+                 external_user_id = ?,
+                 external_username = ?,
+                 external_display_name = ?,
+                 encrypted_access_token = ?,
+                 device_id = ?,
+                 token_created_at = ?,
+                 health_state = 'linked',
+                 last_verified_at = ?,
+                 revoked_at = null,
+                 revision = revision + 1,
+                 updated_at = ?
+             where id = ? and user_id = ?
+               and connector_instance_generation = ? and revision = ?`,
+          )
+          .run(
+            input.target.instanceGeneration ?? 0,
+            input.authentication.ServerId,
+            input.authentication.User.Id,
+            externalUsername,
+            externalUsername,
+            encryptedAccessToken,
+            input.deviceId,
+            input.occurredAt,
+            input.occurredAt,
+            input.occurredAt,
+            existingUserLink.id,
+            input.pairingSession.userId,
+            existingUserLink.connectorInstanceGeneration,
+            existingUserLink.revision,
+          );
+        if (relinked.changes !== 1) {
+          throw new JellyfinSignInServiceError("provider_unavailable");
+        }
+        const activated = this.#database.sqlite
+          .prepare(
+            `update users set status = 'active', updated_at = ?
+             where id = ? and status = 'pending_link'`,
+          )
+          .run(input.occurredAt, input.pairingSession.userId);
+        if (activated.changes !== 1) {
+          throw new JellyfinSignInServiceError("provider_unavailable");
+        }
+        this.#insertAudit({
+          actorUserId: input.pairingSession.userId,
+          eventType: "auth.jellyfin.identity.paired",
+          metadata: {
+            instanceReplaced: true,
+            proof: input.proof,
+            provisioned: false,
+            relinked: true,
+          },
+          occurredAt: input.occurredAt,
+          outcome: "success",
+          ...(input.requestContext.requestId === undefined
+            ? {}
+            : { requestId: input.requestContext.requestId }),
+          targetId: existingUserLink.id,
+          targetType: "service_identity_link",
+        });
+        return Object.freeze({ linkId: existingUserLink.id, status: "resolved" as const });
+      }
       this.#insertAudit({
         actorUserId: input.pairingSession.userId,
         eventType: "auth.jellyfin.identity.pairing_denied",
@@ -770,6 +1018,7 @@ export class JellyfinSignInService {
           user_id,
           service,
           connector_id,
+          connector_instance_generation,
           external_server_id,
           external_user_id,
           external_username,
@@ -782,12 +1031,13 @@ export class JellyfinSignInService {
           revision,
           created_at,
           updated_at
-        ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
+        ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
       )
       .run(
         linkId,
         input.pairingSession.userId,
         input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
         input.authentication.ServerId,
         input.authentication.User.Id,
         externalUsername,
@@ -834,7 +1084,11 @@ export class JellyfinSignInService {
   }):
     | JellyfinSignInDeniedResult
     | { readonly linkId: string; readonly status: "resolved"; readonly userId: string } {
-    if (!this.#database.sqlite.inTransaction || !this.#registry.bindingIsCurrent(input.target)) {
+    if (
+      !this.#database.sqlite.inTransaction ||
+      !this.#registry.bindingIsCurrent(input.target) ||
+      !this.#serverIdentityMatchesTarget(input.authentication.ServerId, input.target)
+    ) {
       throw new JellyfinSignInServiceError("configuration_invalid");
     }
     const externalUserId = normalizedDisplayText(input.authentication.User.Id, 256);
@@ -847,6 +1101,7 @@ export class JellyfinSignInService {
           l.user_id as linkUserId,
           l.service,
           l.connector_id as connectorId,
+          l.connector_instance_generation as connectorInstanceGeneration,
           l.external_server_id as externalServerId,
           l.external_user_id as externalUserId,
           l.health_state as healthState,
@@ -859,11 +1114,13 @@ export class JellyfinSignInService {
          from service_identity_links l
          left join users u on u.id = l.user_id
          where l.connector_id = ?
+           and l.connector_instance_generation = ?
            and l.external_server_id = ?
            and l.external_user_id = ?`,
       )
       .get(
         input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
         input.authentication.ServerId,
         input.authentication.User.Id,
       ) as ExistingLinkRow | undefined;
@@ -953,6 +1210,36 @@ export class JellyfinSignInService {
       });
     }
 
+    const replacedIdentity = this.#database.sqlite
+      .prepare(
+        `select id
+         from service_identity_links
+         where connector_id = ?
+           and connector_instance_generation < ?
+           and external_user_id = ?
+           and health_state in ('relink_required', 'revoked')
+         limit 1`,
+      )
+      .get(
+        input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
+        input.authentication.User.Id,
+      ) as { id: string } | undefined;
+    if (replacedIdentity) {
+      this.#insertAudit({
+        eventType: "auth.jellyfin.sign_in",
+        metadata: { reason: "proved_relink_required" },
+        occurredAt: input.occurredAt,
+        outcome: "denied",
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        targetId: replacedIdentity.id,
+        targetType: "service_identity_link",
+      });
+      return internalResult({ reason: "invalid_credentials" as const, status: "denied" as const });
+    }
+
     const userId = this.#nextIdentifier(this.#createId());
     const linkId = this.#nextIdentifier(this.#createId());
     const encryptedAccessToken = this.#cipher.encrypt(
@@ -973,6 +1260,7 @@ export class JellyfinSignInService {
           user_id,
           service,
           connector_id,
+          connector_instance_generation,
           external_server_id,
           external_user_id,
           external_username,
@@ -985,12 +1273,13 @@ export class JellyfinSignInService {
           revision,
           created_at,
           updated_at
-        ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
+        ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
       )
       .run(
         linkId,
         userId,
         input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
         input.authentication.ServerId,
         input.authentication.User.Id,
         externalUsername,
@@ -1039,7 +1328,11 @@ export class JellyfinSignInService {
   }):
     | JellyfinBootstrapDeniedResult
     | { readonly linkId: string; readonly status: "resolved"; readonly userId: string } {
-    if (!this.#database.sqlite.inTransaction || !this.#registry.bindingIsCurrent(input.target)) {
+    if (
+      !this.#database.sqlite.inTransaction ||
+      !this.#registry.bindingIsCurrent(input.target) ||
+      !this.#serverIdentityMatchesTarget(input.authentication.ServerId, input.target)
+    ) {
       throw new JellyfinSignInServiceError("configuration_invalid");
     }
     if (input.authentication.User.Policy.IsAdministrator !== true) {
@@ -1084,10 +1377,12 @@ export class JellyfinSignInService {
       .prepare(
         `select id
          from service_identity_links
-         where connector_id = ? and external_server_id = ? and external_user_id = ?`,
+         where connector_id = ? and connector_instance_generation = ?
+           and external_server_id = ? and external_user_id = ?`,
       )
       .get(
         input.target.connectorId,
+        input.target.instanceGeneration ?? 0,
         input.authentication.ServerId,
         input.authentication.User.Id,
       ) as { id: string } | undefined;
@@ -1140,6 +1435,7 @@ export class JellyfinSignInService {
       row.userId === row.linkUserId &&
       row.service === "jellyfin" &&
       row.connectorId === input.target.connectorId &&
+      row.connectorInstanceGeneration === (input.target.instanceGeneration ?? 0) &&
       row.externalServerId === input.authentication.ServerId &&
       row.externalUserId === normalizedExternalUserId &&
       ["linked", "relink_required", "revoked", "unavailable"].includes(row.healthState) &&
@@ -1152,6 +1448,23 @@ export class JellyfinSignInService {
         row.userRoleSource ?? "",
       ) &&
       ["active", "pending_link", "disabled"].includes(row.userStatus ?? "")
+    );
+  }
+
+  #replacementLinkIsValid(row: ExistingLinkRow, occurredAt: number) {
+    return (
+      validIdentifier(row.id) &&
+      validIdentifier(row.linkUserId) &&
+      row.userId === row.linkUserId &&
+      row.service === "jellyfin" &&
+      Number.isSafeInteger(row.connectorInstanceGeneration) &&
+      row.connectorInstanceGeneration >= 0 &&
+      Number.isSafeInteger(row.revision) &&
+      row.revision >= 0 &&
+      row.revision < 2_147_483_647 &&
+      validTimestamp(row.createdAt, occurredAt) &&
+      ["viewer", "requester", "operator", "admin"].includes(row.userRole ?? "") &&
+      ["default", "oidc_mapping", "manual", "recovery_bootstrap"].includes(row.userRoleSource ?? "")
     );
   }
 
@@ -1198,6 +1511,16 @@ export class JellyfinSignInService {
       throw new JellyfinSignInServiceError("provider_unavailable");
     }
     return time;
+  }
+
+  #serverIdentityMatchesTarget(serverId: string, target: JellyfinConnectorTarget) {
+    if ((target.instanceIdentityHash ?? null) === null) return true;
+    if (typeof serverId !== "string" || serverId.length < 1 || serverId.length > 256) return false;
+    const hash = createHmac("sha256", this.#identityHashKey)
+      .update("omnifin:v1:connector-instance-identity\0", "utf8")
+      .update(serverId, "utf8")
+      .digest("base64url");
+    return hash === target.instanceIdentityHash;
   }
 
   #nextIdentifier(value: string) {

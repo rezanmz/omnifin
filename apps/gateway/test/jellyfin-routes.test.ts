@@ -1,12 +1,36 @@
-import { authenticatedSessionResponseSchema } from "@omnifin/contracts/auth";
+import {
+  ADMINISTRATOR_RECOVERY_CONFIRMATION,
+  administratorRecoveryReplacementResponseSchema,
+  authenticatedSessionResponseSchema,
+} from "@omnifin/contracts/auth";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import type { JellyfinSignInServiceDependencies } from "../src/auth/jellyfin/sign-in-service.js";
+import {
+  AdministratorRecoveryError,
+  type AdministratorRecoveryReplacementResult,
+} from "../src/auth/administrator-recovery-service.js";
+import {
+  JellyfinQuickConnectService,
+  JellyfinQuickConnectServiceError,
+} from "../src/auth/jellyfin/quick-connect-service.js";
+import {
+  JellyfinSignInService,
+  JellyfinSignInServiceError,
+  type JellyfinSignInServiceDependencies,
+} from "../src/auth/jellyfin/sign-in-service.js";
+import { SessionIssuanceLimitError } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
-import { externalIdentities, oidcProviders, users } from "../src/db/schema.js";
+import {
+  connectorConfigs,
+  externalIdentities,
+  oidcProviders,
+  serviceIdentityLinks,
+  sessions,
+  users,
+} from "../src/db/schema.js";
 
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -126,6 +150,30 @@ function pendingOidcSession(app: Awaited<ReturnType<typeof createApp>>) {
 
 function recoverySession(app: Awaited<ReturnType<typeof createApp>>) {
   return app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
+}
+
+async function administratorRecoveryRouteHarness() {
+  const app = await createApp({
+    config: config(),
+    jellyfinDependencies: dependencyFixture({ isAdministrator: true }).dependencies,
+  });
+  const recovery = recoverySession(app);
+  const target = {
+    administratorId: "target-administrator",
+    confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+    expectedUpdatedAt: new Date().toISOString(),
+  };
+  return {
+    app,
+    headers: {
+      cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+      origin: "https://omnifin.example",
+      "x-omnifin-csrf": recovery.csrfToken,
+    },
+    passwordBody: { ...target, password: "private-password", username: "replacement" },
+    recovery,
+    target,
+  };
 }
 
 describe("POST /v1/auth/jellyfin/password", () => {
@@ -504,6 +552,383 @@ describe("POST /v1/auth/bootstrap/jellyfin/password", () => {
       await app.close();
     }
   });
+});
+
+describe("POST /v1/auth/recovery/administrator-replacement/jellyfin/password", () => {
+  it("requires exact recovery browser proof and replaces only the sole administrator", async () => {
+    const output: string[] = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stdout.write);
+    const fixture = dependencyFixture({ isAdministrator: true });
+    const app = await createApp({
+      config: config({ logLevel: "info" }),
+      jellyfinDependencies: fixture.dependencies,
+    });
+    const createdAt = new Date(Date.now() - 1_000);
+    try {
+      const connector = app.database.db.select().from(connectorConfigs).get();
+      if (!connector) throw new Error("Expected the configured Jellyfin connector.");
+      for (const account of [
+        {
+          externalUserId: "upstream-target",
+          id: "target-administrator",
+          role: "admin" as const,
+        },
+        {
+          externalUserId: "jellyfin-user-1",
+          id: "replacement-account",
+          role: "viewer" as const,
+        },
+      ]) {
+        app.database.db
+          .insert(users)
+          .values({
+            createdAt,
+            displayName: account.role === "admin" ? "Current administrator" : "Replacement account",
+            id: account.id,
+            role: account.role,
+            roleSource: account.role === "admin" ? "manual" : "default",
+            status: "active",
+            updatedAt: createdAt,
+          })
+          .run();
+        app.database.db
+          .insert(serviceIdentityLinks)
+          .values({
+            connectorId: connector.id,
+            createdAt,
+            deviceId: `${account.id}-device`,
+            encryptedAccessToken: `v2.${account.id}-token`,
+            externalDisplayName: account.id,
+            externalServerId: "server-1",
+            externalUserId: account.externalUserId,
+            externalUsername: account.id,
+            healthState: "linked",
+            id: `${account.id}-link`,
+            lastVerifiedAt: createdAt,
+            service: "jellyfin",
+            tokenCreatedAt: createdAt,
+            updatedAt: createdAt,
+            userId: account.id,
+          })
+          .run();
+      }
+      const administrator = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "target-administrator-link",
+          userId: "target-administrator",
+        },
+      });
+      app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "replacement-account-link",
+          userId: "replacement-account",
+        },
+      });
+      const recovery = recoverySession(app);
+      const body = {
+        administratorId: "target-administrator",
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        expectedUpdatedAt: createdAt.toISOString(),
+        password: "private-password",
+        username: "replacement",
+      };
+      const endpoint = "/v1/auth/recovery/administrator-replacement/jellyfin/password";
+
+      const blocked = await Promise.all([
+        app.inject({
+          body,
+          headers: { origin: "https://omnifin.example" },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body,
+          headers: {
+            cookie: `__Host-omnifin_session=${administrator.sessionToken}`,
+            origin: "https://omnifin.example",
+            "x-omnifin-csrf": administrator.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body,
+          headers: {
+            cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+            origin: "https://omnifin.example",
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body,
+          headers: {
+            cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+            origin: "https://attacker.example",
+            "x-omnifin-csrf": recovery.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+      ]);
+      expect(blocked.map((response) => response.statusCode)).toEqual([403, 403, 403, 403]);
+      expect(fixture.calls).toEqual({ authentication: 0, publicInfo: 0 });
+
+      const response = await app.inject({
+        body,
+        headers: {
+          cookie: `__Host-omnifin_session=${recovery.sessionToken}`,
+          origin: "https://omnifin.example",
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: endpoint,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(administratorRecoveryReplacementResponseSchema.parse(response.json())).toMatchObject({
+        revokedSessions: { recovery: 1, replacement: 1, target: 1 },
+        status: "replaced",
+      });
+      expect(response.body).not.toMatch(
+        /private-password|private-jellyfin-access-token|jellyfin-user-1|server-1/,
+      );
+      expect(fixture.calls).toEqual({ authentication: 1, publicInfo: 1 });
+      expect(
+        app.database.db
+          .select()
+          .from(users)
+          .all()
+          .map(({ id, role, status }) => ({ id, role, status })),
+      ).toEqual([
+        { id: "target-administrator", role: "admin", status: "disabled" },
+        { id: "replacement-account", role: "admin", status: "active" },
+      ]);
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .filter((session) => session.revokedAt === null),
+      ).toHaveLength(1);
+      expect(output.join("\n")).not.toMatch(
+        /private-password|private-jellyfin-access-token|jellyfin-user-1|server-1/,
+      );
+    } finally {
+      await app.close();
+      stdout.mockRestore();
+    }
+  });
+
+  it.each([
+    ["denied", 403],
+    ["unavailable", 409],
+  ] as const)("returns a bounded %s replacement outcome", async (status, expectedStatus) => {
+    const test = await administratorRecoveryRouteHarness();
+    const replace = vi
+      .spyOn(JellyfinSignInService.prototype, "replaceAdministratorWithPassword")
+      .mockResolvedValue({ status } as AdministratorRecoveryReplacementResult);
+    try {
+      const response = await test.app.inject({
+        body: test.passwordBody,
+        headers: test.headers,
+        method: "POST",
+        url: "/v1/auth/recovery/administrator-replacement/jellyfin/password",
+      });
+      expect(response.statusCode, response.body).toBe(expectedStatus);
+      expect(administratorRecoveryReplacementResponseSchema.parse(response.json())).toEqual({
+        status,
+      });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    } finally {
+      replace.mockRestore();
+      await test.app.close();
+    }
+  });
+
+  it.each([
+    [new SessionIssuanceLimitError("issuance_rate_limit"), 429, "rate_limit_exceeded", "86400"],
+    [new JellyfinSignInServiceError("provider_unavailable"), 503, undefined, undefined],
+    [new AdministratorRecoveryError("storage_failure"), 503, undefined, undefined],
+  ] as const)(
+    "fails closed when password replacement throws %#",
+    async (error, status, code, retryAfter) => {
+      const test = await administratorRecoveryRouteHarness();
+      const replace = vi
+        .spyOn(JellyfinSignInService.prototype, "replaceAdministratorWithPassword")
+        .mockRejectedValue(error);
+      try {
+        const response = await test.app.inject({
+          body: test.passwordBody,
+          headers: test.headers,
+          method: "POST",
+          url: "/v1/auth/recovery/administrator-replacement/jellyfin/password",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(response.headers["retry-after"]).toBe(retryAfter);
+        if (code) expect(response.json()).toMatchObject({ error: { code } });
+        else expect(response.json()).toEqual({ status: "unavailable" });
+      } finally {
+        replace.mockRestore();
+        await test.app.close();
+      }
+    },
+  );
+
+  it("rejects malformed password replacement input before service dispatch", async () => {
+    const test = await administratorRecoveryRouteHarness();
+    const replace = vi.spyOn(JellyfinSignInService.prototype, "replaceAdministratorWithPassword");
+    try {
+      const response = await test.app.inject({
+        body: { ...test.passwordBody, unexpected: true },
+        headers: test.headers,
+        method: "POST",
+        url: "/v1/auth/recovery/administrator-replacement/jellyfin/password",
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: "invalid_request" } });
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      replace.mockRestore();
+      await test.app.close();
+    }
+  });
+
+  it.each([
+    ["recovery_session_required", 409],
+    ["capacity_exceeded", 503],
+    ["configuration_invalid", 503],
+    ["invalid_transaction", 503],
+    ["pairing_session_required", 503],
+    ["provider_unavailable", 503],
+    ["quick_connect_disabled", 503],
+  ] as const)("maps administrator Quick Connect start failure %s", async (reason, status) => {
+    const test = await administratorRecoveryRouteHarness();
+    const start = vi
+      .spyOn(JellyfinQuickConnectService.prototype, "startAdministratorReplacement")
+      .mockRejectedValue(new JellyfinQuickConnectServiceError(reason));
+    try {
+      const response = await test.app.inject({
+        body: test.target,
+        headers: test.headers,
+        method: "POST",
+        url: "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(response.json()).toEqual({ status: "unavailable" });
+    } finally {
+      start.mockRestore();
+      await test.app.close();
+    }
+  });
+
+  it("starts administrator Quick Connect and rejects malformed confirmation", async () => {
+    const test = await administratorRecoveryRouteHarness();
+    const start = vi
+      .spyOn(JellyfinQuickConnectService.prototype, "startAdministratorReplacement")
+      .mockResolvedValue({
+        browserBindingToken: Buffer.alloc(32, 7).toString("base64url"),
+        code: "ABCD12",
+        expiresAt: new Date(Date.now() + 60_000),
+        pollAfterMs: 1_000,
+        transactionId: "quick-connect-1",
+      } as never);
+    try {
+      const invalid = await test.app.inject({
+        body: { ...test.target, confirmation: "incorrect" },
+        headers: test.headers,
+        method: "POST",
+        url: "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect",
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(start).not.toHaveBeenCalled();
+
+      const response = await test.app.inject({
+        body: test.target,
+        headers: test.headers,
+        method: "POST",
+        url: "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect",
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ code: "ABCD12", transactionId: "quick-connect-1" });
+      expect(response.headers["set-cookie"]).toBeTruthy();
+    } finally {
+      start.mockRestore();
+      await test.app.close();
+    }
+  });
+
+  it.each([
+    [{ status: "expired" }, 200, "expired"],
+    [
+      { expiresAt: new Date(Date.now() + 60_000), pollAfterMs: 1_000, status: "pending" },
+      200,
+      "pending",
+    ],
+    [{ status: "denied" }, 403, "denied"],
+    [{ status: "unavailable" }, 409, "unavailable"],
+  ] as const)(
+    "maps administrator Quick Connect poll result %#",
+    async (result, status, bodyStatus) => {
+      const test = await administratorRecoveryRouteHarness();
+      const poll = vi
+        .spyOn(JellyfinQuickConnectService.prototype, "pollAdministratorReplacement")
+        .mockResolvedValue(result as never);
+      try {
+        const response = await test.app.inject({
+          body: {},
+          headers: test.headers,
+          method: "POST",
+          url: "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect/quick-connect-1/poll",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(response.json()).toMatchObject({ status: bodyStatus });
+      } finally {
+        poll.mockRestore();
+        await test.app.close();
+      }
+    },
+  );
+
+  it.each([
+    [new SessionIssuanceLimitError("active_session_limit"), 429, "rate_limit_exceeded"],
+    [
+      new JellyfinQuickConnectServiceError("invalid_transaction"),
+      400,
+      "authentication_attempt_invalid",
+    ],
+    [new JellyfinQuickConnectServiceError("recovery_session_required"), 409, undefined],
+    [new JellyfinQuickConnectServiceError("provider_unavailable"), 503, undefined],
+    [new AdministratorRecoveryError("unavailable"), 503, undefined],
+  ] as const)(
+    "fails closed for administrator Quick Connect poll error %#",
+    async (error, status, code) => {
+      const test = await administratorRecoveryRouteHarness();
+      const poll = vi
+        .spyOn(JellyfinQuickConnectService.prototype, "pollAdministratorReplacement")
+        .mockRejectedValue(error);
+      try {
+        const response = await test.app.inject({
+          body: {},
+          headers: test.headers,
+          method: "POST",
+          url: "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect/quick-connect-1/poll",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        if (code) expect(response.json()).toMatchObject({ error: { code } });
+        else expect(response.json()).toEqual({ status: "unavailable" });
+      } finally {
+        poll.mockRestore();
+        await test.app.close();
+      }
+    },
+  );
 });
 
 describe("POST /v1/auth/jellyfin/link/password", () => {

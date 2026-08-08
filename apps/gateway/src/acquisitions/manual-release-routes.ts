@@ -45,6 +45,7 @@ function readError(error: ManualReleaseError) {
     case "download_unavailable":
     case "idempotency_conflict":
     case "idempotency_in_progress":
+    case "outcome_uncertain":
     case "override_required":
     case "rate_limited":
     case "response_invalid":
@@ -73,6 +74,14 @@ function grabError(error: ManualReleaseError, reply: FastifyReply) {
         cause: error,
         code: "manual_release_grab_outcome_pending",
         message: "The outcome of this release grab is still being determined.",
+        statusCode: 409,
+      });
+    case "outcome_uncertain":
+      return new SafeHttpError({
+        cause: error,
+        code: "manual_release_grab_outcome_uncertain",
+        message:
+          "The release grab may have been accepted. Verify acquisition history before acting again.",
         statusCode: 409,
       });
     case "candidate_expired":

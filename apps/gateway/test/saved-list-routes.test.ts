@@ -178,6 +178,88 @@ async function harness() {
 }
 
 describe("saved-list routes", () => {
+  it("accepts bodyless list and membership DELETE requests over a real socket", async () => {
+    const { app, headers, referenceId } = await harness();
+    try {
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      const created = await fetch(`${address}/v1/saved/lists`, {
+        body: JSON.stringify({ description: null, name: "Delete over socket" }),
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": "saved-route-socket-create-0001",
+        },
+        method: "POST",
+      });
+      expect(created.status, await created.clone().text()).toBe(201);
+      const customList = savedListMutationResponseSchema.parse(await created.json()).list;
+
+      const listsResponse = await fetch(`${address}/v1/saved/lists`, {
+        headers: { cookie: headers.cookie },
+      });
+      const watchLater = savedListsResponseSchema.parse(await listsResponse.json()).watchLater;
+      const watchLaterResponse = await fetch(`${address}/v1/saved/lists/${watchLater.id}`, {
+        headers: { cookie: headers.cookie },
+      });
+      const targetResponse = await fetch(`${address}/v1/saved/targets/library/${referenceId}`, {
+        body: "{}",
+        headers: { ...headers, "content-type": "application/json" },
+        method: "POST",
+      });
+      const target = savedMembershipSummarySchema.parse(await targetResponse.json());
+      const added = await fetch(`${address}/v1/saved/lists/${watchLater.id}/items`, {
+        body: JSON.stringify({ targetReferenceId: target.targetReferenceId }),
+        headers: {
+          ...headers,
+          "content-type": "application/json",
+          "idempotency-key": "saved-route-socket-add-0001",
+          "if-match": String(watchLaterResponse.headers.get("etag")),
+        },
+        method: "POST",
+      });
+      expect(added.status, await added.clone().text()).toBe(201);
+      const addedItem = savedListMembershipResponseSchema.parse(await added.json()).item;
+
+      const deleteListHeaders = new Headers({
+        ...headers,
+        accept: "application/json",
+        "if-match": String(created.headers.get("etag")),
+      });
+      expect(deleteListHeaders.has("content-type")).toBe(false);
+      const deleted = await fetch(`${address}/v1/saved/lists/${customList.id}`, {
+        headers: deleteListHeaders,
+        method: "DELETE",
+      });
+      const deletedBody = await deleted.text();
+      expect(deleted.status, deletedBody).toBe(200);
+      expect(deletedBody).not.toContain("FST_ERR_CTP_EMPTY_JSON_BODY");
+      expect(savedListDeleteResponseSchema.parse(JSON.parse(deletedBody))).toMatchObject({
+        listId: customList.id,
+      });
+
+      const removeItemHeaders = new Headers({
+        ...headers,
+        accept: "application/json",
+        "if-match": String(added.headers.get("etag")),
+      });
+      expect(removeItemHeaders.has("content-type")).toBe(false);
+      const removed = await fetch(
+        `${address}/v1/saved/lists/${watchLater.id}/items/${addedItem.catalog.id}`,
+        { headers: removeItemHeaders, method: "DELETE" },
+      );
+      const removedBody = await removed.text();
+      expect(removed.status, removedBody).toBe(200);
+      expect(removedBody).not.toContain("FST_ERR_CTP_EMPTY_JSON_BODY");
+      expect(savedListMembershipDeleteResponseSchema.parse(JSON.parse(removedBody))).toMatchObject({
+        catalogReferenceId: addedItem.catalog.id,
+        listId: watchLater.id,
+        removed: true,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns one private no-store Watch Later list to an authenticated user", async () => {
     const { app, headers } = await harness();
     try {

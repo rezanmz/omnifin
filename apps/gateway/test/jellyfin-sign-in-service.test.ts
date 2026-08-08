@@ -4,6 +4,7 @@ import type {
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
 import { eq } from "drizzle-orm";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +31,13 @@ import { EnvelopeCipher, privacyHash } from "../src/security/crypto.js";
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 const EARLIER = new Date("2026-07-26T11:00:00.000Z");
 const ENCRYPTION_KEY = Buffer.alloc(32, 73);
+
+function instanceIdentityHash(serverId: string) {
+  return createHmac("sha256", ENCRYPTION_KEY)
+    .update("omnifin:v1:connector-instance-identity\0", "utf8")
+    .update(serverId, "utf8")
+    .digest("base64url");
+}
 
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -967,6 +975,137 @@ describe("JellyfinSignInService", () => {
       });
     } finally {
       handle.close();
+    }
+  });
+
+  it("relinks a proved pending user to the replacement Jellyfin instance", async () => {
+    const handle = database();
+    seedConnector(handle, {
+      instanceGeneration: 1,
+      instanceIdentityHash: instanceIdentityHash("replacement-server"),
+    });
+    const replacement = service(handle, {
+      authentication: authentication({
+        AccessToken: "replacement-private-access-token",
+        ServerId: "replacement-server",
+        User: {
+          Id: "replacement-user-id",
+          Name: "Riley replacement",
+          Policy: { IsAdministrator: false },
+        },
+      }),
+      publicInfo: publicInfo({ Id: "replacement-server" }),
+    });
+    try {
+      const pending = seedPendingOidcSession(handle, replacement.sessions);
+      handle.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          connectorInstanceGeneration: 0,
+          createdAt: EARLIER,
+          deviceId: "retired-device",
+          encryptedAccessToken: null,
+          externalDisplayName: "Riley retired",
+          externalServerId: "retired-server",
+          externalUserId: "retired-user-id",
+          externalUsername: "Riley retired",
+          healthState: "relink_required",
+          id: "replacement-link",
+          lastVerifiedAt: null,
+          service: "jellyfin",
+          tokenCreatedAt: null,
+          updatedAt: EARLIER,
+          userId: "oidc-user-1",
+        })
+        .run();
+
+      const result = await replacement.signIn.pairWithPassword({
+        ...credentials({ requestId: "request-instance-relink" }),
+        validatedSession: pending.validated,
+      });
+
+      expect(result.status).toBe("paired");
+      expect(handle.db.select().from(serviceIdentityLinks).get()).toMatchObject({
+        connectorInstanceGeneration: 1,
+        externalServerId: "replacement-server",
+        externalUserId: "replacement-user-id",
+        healthState: "linked",
+        id: "replacement-link",
+        revision: 1,
+      });
+      expect(handle.db.select().from(users).get()).toMatchObject({ status: "active" });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("denies cross-server replacement proof and same-server identity takeover", async () => {
+    for (const sameServerTakeover of [false, true]) {
+      const handle = database();
+      seedConnector(handle, {
+        instanceGeneration: 1,
+        instanceIdentityHash: instanceIdentityHash("replacement-server"),
+      });
+      const attemptedServer = sameServerTakeover ? "replacement-server" : "unbound-server";
+      const attempted = service(handle, {
+        authentication: authentication({
+          ServerId: attemptedServer,
+          User: {
+            Id: "attacker-user-id",
+            Name: "Attacker",
+            Policy: { IsAdministrator: false },
+          },
+        }),
+        publicInfo: publicInfo({ Id: attemptedServer }),
+      });
+      try {
+        const pending = seedPendingOidcSession(handle, attempted.sessions);
+        handle.db
+          .insert(serviceIdentityLinks)
+          .values({
+            connectorId: "jellyfin-home",
+            connectorInstanceGeneration: 0,
+            createdAt: EARLIER,
+            deviceId: "retired-device",
+            encryptedAccessToken: null,
+            externalDisplayName: "Riley",
+            externalServerId: sameServerTakeover ? "replacement-server" : "retired-server",
+            externalUserId: "owned-user-id",
+            externalUsername: "Riley",
+            healthState: "relink_required",
+            id: "owned-replacement-link",
+            service: "jellyfin",
+            updatedAt: EARLIER,
+            userId: "oidc-user-1",
+          })
+          .run();
+
+        if (sameServerTakeover) {
+          await expect(
+            attempted.signIn.pairWithPassword({
+              ...credentials(),
+              validatedSession: pending.validated,
+            }),
+          ).resolves.toMatchObject({ reason: "link_already_exists", status: "denied" });
+        } else {
+          await expect(
+            attempted.signIn.pairWithPassword({
+              ...credentials(),
+              validatedSession: pending.validated,
+            }),
+          ).rejects.toMatchObject({ reason: "server_mismatch" });
+        }
+        expect(handle.db.select().from(serviceIdentityLinks).get()).toMatchObject({
+          connectorInstanceGeneration: 0,
+          encryptedAccessToken: null,
+          externalUserId: "owned-user-id",
+          healthState: "relink_required",
+          revision: 0,
+        });
+      } finally {
+        handle.close();
+      }
     }
   });
 

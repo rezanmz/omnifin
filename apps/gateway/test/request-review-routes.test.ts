@@ -11,7 +11,12 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
-import type { RequestReviewAdapter } from "../src/requests/request-review-service.js";
+import {
+  RequestReviewService,
+  RequestReviewServiceError,
+  type RequestReviewAdapter,
+  type RequestReviewServiceErrorReason,
+} from "../src/requests/request-review-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -288,7 +293,7 @@ describe("request review routes", () => {
     }
   });
 
-  it("maps stale request conflicts without exposing upstream response details", async () => {
+  it("fails closed when a stale request conflict cannot be exactly reconciled", async () => {
     const privateMessage = "private stale request detail";
     const reviewMediaRequest = vi.fn<RequestReviewAdapter["reviewMediaRequest"]>(async () => {
       const error = new SeerrRequestError("request_conflict");
@@ -304,9 +309,112 @@ describe("request review routes", () => {
         url: "/v1/requests/request:101/review",
       });
       expect(response.statusCode).toBe(409);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe("request_review_conflict");
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "request_review_outcome_uncertain",
+      );
+      expect(response.headers["operation-id"]).toBeTruthy();
       expect(response.body).not.toContain(privateMessage);
     } finally {
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: RequestReviewServiceErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "request_review_not_found", reason: "request_not_found", status: 404 },
+    { code: "request_review_denied", reason: "request_denied", status: 403 },
+    { code: "request_review_conflict", reason: "request_conflict", status: 409 },
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "request_review_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    {
+      code: "request_review_outcome_uncertain",
+      reason: "request_review_outcome_uncertain",
+      status: 409,
+    },
+    {
+      code: "request_review_reconcile_required",
+      reason: "request_review_reconcile_required",
+      status: 409,
+    },
+    { code: "request_review_response_invalid", reason: "response_invalid", status: 502 },
+    {
+      code: "request_review_principal_unavailable",
+      reason: "principal_unavailable",
+      status: 403,
+    },
+    {
+      code: "request_review_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    {
+      code: "request_review_configuration_unavailable",
+      reason: "integrity_failure",
+      status: 503,
+    },
+    {
+      code: "request_review_configuration_unavailable",
+      reason: "storage_failure",
+      status: 503,
+    },
+    {
+      code: "request_review_temporarily_unavailable",
+      reason: "temporarily_unavailable",
+      status: 503,
+    },
+  ])(
+    "maps $reason to a stable operation response",
+    async ({ code, reason, retryAfter, status }) => {
+      const { app, mutationHeaders } = await harness();
+      const operationId = "request-review-route-operation";
+      const review = vi
+        .spyOn(RequestReviewService.prototype, "review")
+        .mockRejectedValue(new RequestReviewServiceError(reason, { operationId }));
+      try {
+        const response = await app.inject({
+          headers: mutationHeaders,
+          method: "POST",
+          payload: { decision: "approve" },
+          url: "/v1/requests/request:101/review",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(response.headers["operation-id"]).toBe(operationId);
+        expect(response.headers["retry-after"]).toBe(retryAfter);
+      } finally {
+        review.mockRestore();
+        await app.close();
+      }
+    },
+  );
+
+  it("maps list service failures without an operation identifier", async () => {
+    const { app, cookie } = await harness();
+    const list = vi
+      .spyOn(RequestReviewService.prototype, "list")
+      .mockRejectedValue(new RequestReviewServiceError("temporarily_unavailable"));
+    try {
+      const response = await app.inject({
+        headers: { cookie },
+        method: "GET",
+        url: "/v1/requests/review",
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.headers["operation-id"]).toBeUndefined();
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "request_review_temporarily_unavailable",
+      );
+    } finally {
+      list.mockRestore();
       await app.close();
     }
   });

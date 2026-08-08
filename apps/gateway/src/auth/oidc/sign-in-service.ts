@@ -4,6 +4,12 @@ import {
   type IssuedSession,
   type SessionService,
 } from "../session-service.js";
+import type { AdministratorRecoveryConfirmationRequest } from "@omnifin/contracts/auth";
+import {
+  AdministratorRecoveryError,
+  type AdministratorRecoveryReplacementResult,
+  type AdministratorRecoveryService,
+} from "../administrator-recovery-service.js";
 import type { OidcIdentityDenialReason, OidcIdentityService } from "./identity-service.js";
 import type { VerifiedOidcGrant } from "./protocol.js";
 import type { DatabaseHandle } from "../../db/client.js";
@@ -17,6 +23,12 @@ export interface OidcSignInInput {
 }
 
 export interface OidcAdministratorBootstrapInput extends OidcSignInInput {
+  readonly recoverySessionId: string;
+}
+
+export interface OidcAdministratorReplacementInput
+  extends Omit<OidcSignInInput, "currentSessionToken">, AdministratorRecoveryConfirmationRequest {
+  readonly currentRecoverySessionToken?: unknown;
   readonly recoverySessionId: string;
 }
 
@@ -67,6 +79,7 @@ function internalResult<T extends Readonly<Record<string, unknown>>>(
 }
 
 export class OidcSignInService {
+  readonly #administratorRecovery: AdministratorRecoveryService | undefined;
   readonly #database: DatabaseHandle;
   readonly #identityService: OidcIdentityService;
   readonly #sessionService: SessionService;
@@ -75,15 +88,18 @@ export class OidcSignInService {
     database: DatabaseHandle,
     identityService: OidcIdentityService,
     sessionService: SessionService,
+    administratorRecovery?: AdministratorRecoveryService,
   ) {
     if (
       !identityService.isBoundToDatabase(database) ||
-      !sessionService.isBoundToDatabase(database)
+      !sessionService.isBoundToDatabase(database) ||
+      (administratorRecovery !== undefined && !administratorRecovery.isBoundToDatabase(database))
     ) {
       throw new OidcSignInServiceError();
     }
 
     this.#database = database;
+    this.#administratorRecovery = administratorRecovery;
     this.#identityService = identityService;
     this.#sessionService = sessionService;
   }
@@ -179,6 +195,34 @@ export class OidcSignInService {
     } catch (error) {
       if (error instanceof SessionIssuanceLimitError) throw error;
       if (error instanceof OidcSignInServiceError) throw error;
+      throw new OidcSignInServiceError({ cause: error });
+    }
+  }
+
+  public replaceAdministrator(
+    input: OidcAdministratorReplacementInput,
+  ): AdministratorRecoveryReplacementResult {
+    if (!this.#administratorRecovery) {
+      return internalResult({
+        reason: "state_unavailable" as const,
+        status: "unavailable" as const,
+      });
+    }
+    try {
+      return this.#administratorRecovery.replaceWithOidc({
+        administratorId: input.administratorId,
+        confirmation: input.confirmation,
+        currentRecoverySessionToken: input.currentRecoverySessionToken,
+        expectedUpdatedAt: input.expectedUpdatedAt,
+        grant: input.grant,
+        ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+        recoverySessionId: input.recoverySessionId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+      });
+    } catch (error) {
+      if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof AdministratorRecoveryError) throw error;
       throw new OidcSignInServiceError({ cause: error });
     }
   }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { RECOVERY_PERMISSIONS } from "@omnifin/contracts/auth";
 
 const csrfToken = "e2e_identity_provider_csrf_0123456789abcdefgh";
 const provider = {
@@ -113,7 +114,7 @@ test("starts the first-administrator OIDC claim only from recovery access", asyn
     authenticationMethod: { kind: "recovery" },
     displayName: "Recovery access",
     linkedServices: [],
-    permissions: ["recovery.oidc.manage", "recovery.jellyfin.manage", "recovery.sessions.revoke"],
+    permissions: [...RECOVERY_PERMISSIONS],
     userId: null,
   };
   await mockAdministrationReads(page, [], recoveryPrincipal, [{ ...provider, enabled: true }]);

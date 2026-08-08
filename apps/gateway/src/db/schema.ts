@@ -19,6 +19,23 @@ const timestamps = {
     .default(sql`(unixepoch('subsec') * 1000)`),
 };
 
+export const databaseKeyVerifiers = sqliteTable(
+  "database_key_verifiers",
+  {
+    id: integer("id").primaryKey(),
+    formatVersion: integer("format_version").notNull().default(1),
+    verifier: text("verifier").notNull(),
+  },
+  (table) => [
+    check("database_key_verifiers_singleton_check", sql`${table.id} = 1`),
+    check("database_key_verifiers_format_check", sql`${table.formatVersion} = 1`),
+    check(
+      "database_key_verifiers_value_check",
+      sql`length(${table.verifier}) = 43 and ${table.verifier} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+  ],
+);
+
 export const users = sqliteTable(
   "users",
   {
@@ -338,11 +355,18 @@ export const connectorConfigs = sqliteTable(
     healthState: text("health_state", { enum: ["unknown", "healthy", "degraded", "offline"] })
       .notNull()
       .default("unknown"),
+    instanceGeneration: integer("instance_generation").notNull().default(0),
+    configGeneration: integer("config_generation").notNull().default(0),
+    instanceIdentityHash: text("instance_identity_hash"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("connector_configs_id_type_unique").on(table.id, table.type),
+    uniqueIndex("connector_configs_id_instance_generation_unique").on(
+      table.id,
+      table.instanceGeneration,
+    ),
     index("connector_configs_type_idx").on(table.type),
     check(
       "connector_configs_type_check",
@@ -374,6 +398,7 @@ export const mediaRequestProfilePreferences = sqliteTable(
     connectorId: text("connector_id")
       .notNull()
       .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     kind: text("kind", { enum: ["movie", "series"] }).notNull(),
     is4k: integer("is_4k", { mode: "boolean" }).notNull(),
     destinationId: integer("destination_id").notNull(),
@@ -410,6 +435,7 @@ export const serviceIdentityLinks = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     service: text("service", { enum: ["jellyfin"] }).notNull(),
     connectorId: text("connector_id"),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     externalServerId: text("external_server_id").notNull(),
     externalUserId: text("external_user_id").notNull(),
     externalUsername: text("external_username").notNull(),
@@ -543,6 +569,7 @@ export const discoveryArtworkReferences = sqliteTable(
     connectorId: text("connector_id")
       .notNull()
       .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     itemDigest: text("item_digest").notNull(),
     encryptedPayload: text("encrypted_payload").notNull(),
     lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
@@ -773,6 +800,7 @@ export const externalIssueReferences = sqliteTable(
     connectorId: text("connector_id")
       .notNull()
       .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     upstreamIdDigest: text("upstream_id_digest").notNull(),
     encryptedUpstreamId: text("encrypted_upstream_id").notNull(),
     lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }).notNull(),
@@ -825,6 +853,7 @@ export const subtitleSearches = sqliteTable(
     connectorId: text("connector_id")
       .notNull()
       .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     encryptedPayload: text("encrypted_payload").notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     ...timestamps,
@@ -872,7 +901,9 @@ export const subtitleDownloadOperations = sqliteTable(
     resultId: text("result_id").notNull(),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -916,7 +947,7 @@ export const subtitleDownloadOperations = sqliteTable(
     ),
     check(
       "subtitle_download_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "subtitle_download_operations_response_json_check",
@@ -936,7 +967,7 @@ export const subtitleDownloadOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -1010,7 +1041,9 @@ export const libraryMutationOperations = sqliteTable(
     referenceId: text("reference_id"),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -1055,7 +1088,7 @@ export const libraryMutationOperations = sqliteTable(
     ),
     check(
       "library_mutation_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "library_mutation_operations_response_json_check",
@@ -1075,7 +1108,7 @@ export const libraryMutationOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -1169,7 +1202,7 @@ export const libraryRemovalOperations = sqliteTable(
     fingerprintHash: text("fingerprint_hash").notNull(),
     targetDigest: text("target_digest").notNull(),
     state: text("state", {
-      enum: ["running", "succeeded", "reconcile_required", "failed"],
+      enum: ["running", "succeeded", "reconcile_required", "uncertain", "failed"],
     })
       .notNull()
       .default("running"),
@@ -1249,7 +1282,7 @@ export const libraryRemovalOperations = sqliteTable(
     ),
     check(
       "library_removal_operations_state_check",
-      sql`${table.state} in ('running', 'succeeded', 'reconcile_required', 'failed')`,
+      sql`${table.state} in ('running', 'succeeded', 'reconcile_required', 'uncertain', 'failed')`,
     ),
     check(
       "library_removal_operations_response_check",
@@ -1272,7 +1305,7 @@ export const libraryRemovalOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} in ('reconcile_required', 'failed')
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
         )`,
@@ -1301,7 +1334,9 @@ export const userMediaStateOperations = sqliteTable(
       .references(() => mediaReferences.id, { onDelete: "cascade" }),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -1340,7 +1375,7 @@ export const userMediaStateOperations = sqliteTable(
     ),
     check(
       "user_media_state_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "user_media_state_operations_response_json_check",
@@ -1360,7 +1395,7 @@ export const userMediaStateOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -1606,7 +1641,7 @@ export const savedListOperations = sqliteTable(
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
     state: text("state", {
-      enum: ["pending", "succeeded", "reconcile_required", "failed"],
+      enum: ["pending", "succeeded", "reconcile_required", "uncertain", "failed"],
     })
       .notNull()
       .default("pending"),
@@ -1641,7 +1676,7 @@ export const savedListOperations = sqliteTable(
     ),
     check(
       "saved_list_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'reconcile_required', 'failed')`,
+      sql`${table.state} in ('pending', 'succeeded', 'reconcile_required', 'uncertain', 'failed')`,
     ),
     check(
       "saved_list_operations_response_check",
@@ -1661,7 +1696,7 @@ export const savedListOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} in ('reconcile_required', 'failed')
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.encryptedResponse} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -1687,7 +1722,9 @@ export const downloadQueueRemovalOperations = sqliteTable(
     itemId: text("item_id").notNull(),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     itemSnapshotJson: text("item_snapshot_json"),
@@ -1732,7 +1769,7 @@ export const downloadQueueRemovalOperations = sqliteTable(
     ),
     check(
       "download_queue_removal_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "download_queue_removal_operations_item_snapshot_check",
@@ -1759,7 +1796,7 @@ export const downloadQueueRemovalOperations = sqliteTable(
           and ${table.mutationStartedAt} is not null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -1782,7 +1819,7 @@ export const downloadQueueBulkOperations = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded"] })
+    state: text("state", { enum: ["pending", "quarantined", "succeeded"] })
       .notNull()
       .default("pending"),
     requestJson: text("request_json").notNull(),
@@ -1815,7 +1852,7 @@ export const downloadQueueBulkOperations = sqliteTable(
     ),
     check(
       "download_queue_bulk_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded')`,
+      sql`${table.state} in ('pending', 'quarantined', 'succeeded')`,
     ),
     check(
       "download_queue_bulk_operations_request_json_check",
@@ -1836,6 +1873,10 @@ export const downloadQueueBulkOperations = sqliteTable(
           ${table.state} = 'pending'
           and ${table.responseJson} is null
           and ${table.completedAt} is null
+        ) or (
+          ${table.state} = 'quarantined'
+          and ${table.responseJson} is null
+          and ${table.completedAt} is not null
         ) or (
           ${table.state} = 'succeeded'
           and ${table.responseJson} is not null
@@ -2284,6 +2325,7 @@ export const jellyfinQuickConnectTransactions = sqliteTable(
   {
     id: text("id").primaryKey(),
     connectorId: text("connector_id").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull().default(0),
     connectorType: text("connector_type", { enum: ["jellyfin"] })
       .notNull()
       .default("jellyfin"),
@@ -2405,7 +2447,9 @@ export const mediaRequestOperations = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -2431,7 +2475,7 @@ export const mediaRequestOperations = sqliteTable(
     ),
     check(
       "media_request_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "media_request_operations_response_json_check",
@@ -2451,7 +2495,7 @@ export const mediaRequestOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -2476,7 +2520,9 @@ export const mediaIssueOperations = sqliteTable(
     desiredStatus: text("desired_status", { enum: ["open", "resolved"] }).notNull(),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -2520,7 +2566,7 @@ export const mediaIssueOperations = sqliteTable(
     ),
     check(
       "media_issue_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "media_issue_operations_response_json_check",
@@ -2540,7 +2586,7 @@ export const mediaIssueOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -2562,7 +2608,9 @@ export const acquisitionSearchOperations = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -2588,7 +2636,7 @@ export const acquisitionSearchOperations = sqliteTable(
     ),
     check(
       "acquisition_search_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "acquisition_search_operations_response_json_check",
@@ -2608,7 +2656,7 @@ export const acquisitionSearchOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -2634,7 +2682,9 @@ export const acquisitionQueueRecoveryOperations = sqliteTable(
     eventId: text("event_id").notNull(),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     eventSnapshotJson: text("event_snapshot_json"),
@@ -2682,7 +2732,7 @@ export const acquisitionQueueRecoveryOperations = sqliteTable(
     ),
     check(
       "acquisition_queue_recovery_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "acquisition_queue_recovery_operations_event_snapshot_check",
@@ -2709,7 +2759,7 @@ export const acquisitionQueueRecoveryOperations = sqliteTable(
           and ${table.mutationStartedAt} is not null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -2732,7 +2782,9 @@ export const acquisitionGrabOperations = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     idempotencyKeyHash: text("idempotency_key_hash").notNull(),
     fingerprintHash: text("fingerprint_hash").notNull(),
-    state: text("state", { enum: ["pending", "succeeded", "failed"] })
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
       .notNull()
       .default("pending"),
     responseJson: text("response_json"),
@@ -2758,7 +2810,7 @@ export const acquisitionGrabOperations = sqliteTable(
     ),
     check(
       "acquisition_grab_operations_state_check",
-      sql`${table.state} in ('pending', 'succeeded', 'failed')`,
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
     ),
     check(
       "acquisition_grab_operations_response_json_check",
@@ -2778,7 +2830,7 @@ export const acquisitionGrabOperations = sqliteTable(
           and ${table.failureCode} is null
           and ${table.completedAt} is not null
         ) or (
-          ${table.state} = 'failed'
+          ${table.state} in ('reconcile_required', 'uncertain', 'failed')
           and ${table.responseJson} is null
           and length(${table.failureCode}) between 1 and 64
           and ${table.completedAt} is not null
@@ -2787,6 +2839,450 @@ export const acquisitionGrabOperations = sqliteTable(
     check(
       "acquisition_grab_operations_timestamp_order_check",
       sql`${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const externalMutationDispatches = sqliteTable(
+  "external_mutation_dispatches",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", {
+      enum: [
+        "media_request.submit",
+        "media_issue.update",
+        "subtitle.download",
+        "library.scan",
+        "library.item_refresh",
+        "library.metadata_update",
+        "library.artwork_apply",
+        "library.remove_files",
+        "library.unmonitor",
+        "library.remove_manager_record",
+        "user_media_state.update",
+        "download_queue.remove",
+        "download_queue.pause",
+        "download_queue.resume",
+        "download_queue.promote",
+        "acquisition.queue_recover",
+        "acquisition.grab",
+        "acquisition.search",
+        "saved.favorite",
+        "playback.progress",
+      ],
+    }).notNull(),
+    parentOperationType: text("parent_operation_type", {
+      enum: [
+        "media_request_operation",
+        "media_issue_operation",
+        "subtitle_download_operation",
+        "library_mutation_operation",
+        "library_removal_operation",
+        "user_media_state_operation",
+        "download_queue_removal_operation",
+        "download_queue_item_operation",
+        "acquisition_queue_recovery_operation",
+        "acquisition_grab_operation",
+        "acquisition_search_operation",
+        "saved_list_operation",
+        "playback_progress_operation",
+      ],
+    }).notNull(),
+    parentOperationId: text("parent_operation_id").notNull(),
+    userId: text("user_id").notNull(),
+    connectorId: text("connector_id").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorConfigGeneration: integer("connector_config_generation").notNull(),
+    state: text("state", {
+      enum: ["reserved", "dispatched", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
+      .notNull()
+      .default("reserved"),
+    encryptedNormalizedRequest: text("encrypted_normalized_request").notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    dispatchAttemptCount: integer("dispatch_attempt_count").notNull().default(0),
+    dispatchedAt: integer("dispatched_at", { mode: "timestamp_ms" }),
+    reconcileRequiredAt: integer("reconcile_required_at", { mode: "timestamp_ms" }),
+    uncertainAt: integer("uncertain_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    failureCode: text("failure_code"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("external_mutation_dispatches_parent_kind_unique").on(
+      table.parentOperationType,
+      table.parentOperationId,
+      table.kind,
+    ),
+    index("external_mutation_dispatches_state_lease_idx").on(table.state, table.leaseExpiresAt),
+    index("external_mutation_dispatches_connector_generation_idx").on(
+      table.connectorId,
+      table.connectorInstanceGeneration,
+      table.connectorConfigGeneration,
+    ),
+    index("external_mutation_dispatches_user_created_idx").on(table.userId, table.createdAt),
+    check(
+      "external_mutation_dispatches_id_check",
+      sql`length(${table.id}) = 40
+        and substr(${table.id}, 1, 18) = 'mutation_dispatch_'
+        and substr(${table.id}, 19) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "external_mutation_dispatches_kind_check",
+      sql`${table.kind} in (
+        'media_request.submit', 'media_issue.update', 'subtitle.download',
+        'library.scan', 'library.item_refresh', 'library.metadata_update',
+        'library.artwork_apply', 'library.remove_files', 'library.unmonitor',
+        'library.remove_manager_record', 'user_media_state.update',
+        'download_queue.remove', 'download_queue.pause', 'download_queue.resume',
+        'download_queue.promote', 'acquisition.queue_recover', 'acquisition.grab',
+        'acquisition.search',
+        'saved.favorite', 'playback.progress'
+      )`,
+    ),
+    check(
+      "external_mutation_dispatches_parent_kind_check",
+      sql`(${table.kind} = 'media_request.submit'
+          and ${table.parentOperationType} = 'media_request_operation')
+        or (${table.kind} = 'media_issue.update'
+          and ${table.parentOperationType} = 'media_issue_operation')
+        or (${table.kind} = 'subtitle.download'
+          and ${table.parentOperationType} = 'subtitle_download_operation')
+        or (${table.kind} in ('library.scan', 'library.item_refresh',
+              'library.metadata_update', 'library.artwork_apply')
+          and ${table.parentOperationType} = 'library_mutation_operation')
+        or (${table.kind} in ('library.remove_files', 'library.unmonitor',
+              'library.remove_manager_record')
+          and ${table.parentOperationType} = 'library_removal_operation')
+        or (${table.kind} = 'user_media_state.update'
+          and ${table.parentOperationType} = 'user_media_state_operation')
+        or (${table.kind} = 'download_queue.remove'
+          and ${table.parentOperationType} = 'download_queue_removal_operation')
+        or (${table.kind} in ('download_queue.pause', 'download_queue.resume',
+              'download_queue.promote')
+          and ${table.parentOperationType} = 'download_queue_item_operation')
+        or (${table.kind} = 'acquisition.queue_recover'
+          and ${table.parentOperationType} = 'acquisition_queue_recovery_operation')
+        or (${table.kind} = 'acquisition.grab'
+          and ${table.parentOperationType} = 'acquisition_grab_operation')
+        or (${table.kind} = 'acquisition.search'
+          and ${table.parentOperationType} = 'acquisition_search_operation')
+        or (${table.kind} = 'saved.favorite'
+          and ${table.parentOperationType} = 'saved_list_operation')
+        or (${table.kind} = 'playback.progress'
+          and ${table.parentOperationType} = 'playback_progress_operation')`,
+    ),
+    check(
+      "external_mutation_dispatches_parent_id_check",
+      sql`length(${table.parentOperationId}) between 1 and 128
+        and ${table.parentOperationId} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "external_mutation_dispatches_snapshot_check",
+      sql`length(${table.userId}) between 1 and 128
+        and length(${table.connectorId}) between 1 and 128
+        and typeof(${table.connectorInstanceGeneration}) = 'integer'
+        and ${table.connectorInstanceGeneration} between 0 and 9007199254740991
+        and typeof(${table.connectorConfigGeneration}) = 'integer'
+        and ${table.connectorConfigGeneration} between 0 and 9007199254740991`,
+    ),
+    check(
+      "external_mutation_dispatches_request_check",
+      sql`length(${table.encryptedNormalizedRequest}) between 1 and 4194304`,
+    ),
+    check(
+      "external_mutation_dispatches_attempt_count_check",
+      sql`typeof(${table.dispatchAttemptCount}) = 'integer'
+        and ${table.dispatchAttemptCount} between 0 and 2147483647`,
+    ),
+    check(
+      "external_mutation_dispatches_state_check",
+      sql`${table.state} in ('reserved', 'dispatched', 'reconcile_required',
+        'uncertain', 'succeeded', 'failed')`,
+    ),
+    check(
+      "external_mutation_dispatches_state_invariants_check",
+      sql`(
+          ${table.state} = 'reserved'
+          and length(${table.leaseOwner}) between 1 and 128
+          and ${table.leaseExpiresAt} is not null
+          and ${table.dispatchAttemptCount} = 0
+          and ${table.dispatchedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'dispatched'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.dispatchAttemptCount} between 1 and 2147483647
+          and ${table.dispatchedAt} is not null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'reconcile_required'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.dispatchAttemptCount} between 1 and 2147483647
+          and ${table.dispatchedAt} is not null
+          and ${table.reconcileRequiredAt} is not null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and length(${table.failureCode}) between 1 and 64
+        ) or (
+          ${table.state} = 'uncertain'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.dispatchAttemptCount} between 1 and 2147483647
+          and ${table.dispatchedAt} is not null
+          and ${table.uncertainAt} is not null
+          and ${table.completedAt} is not null
+          and length(${table.failureCode}) between 1 and 64
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.dispatchAttemptCount} between 1 and 2147483647
+          and ${table.dispatchedAt} is not null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is not null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is not null
+          and length(${table.failureCode}) between 1 and 64
+          and ((${table.dispatchedAt} is null and ${table.dispatchAttemptCount} = 0)
+            or (${table.dispatchedAt} is not null
+              and ${table.dispatchAttemptCount} between 1 and 2147483647))
+        )`,
+    ),
+    check(
+      "external_mutation_dispatches_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.leaseExpiresAt} is null or ${table.leaseExpiresAt} >= ${table.createdAt})
+        and (${table.dispatchedAt} is null or ${table.dispatchedAt} >= ${table.createdAt})
+        and (${table.reconcileRequiredAt} is null
+          or ${table.reconcileRequiredAt} >= ${table.dispatchedAt})
+        and (${table.uncertainAt} is null or ${table.uncertainAt} >= ${table.dispatchedAt})
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const externalMutationTargetLocks = sqliteTable(
+  "external_mutation_target_locks",
+  {
+    targetScope: text("target_scope", {
+      enum: [
+        "media_request",
+        "media_issue",
+        "subtitle",
+        "library",
+        "user_media_state",
+        "download_queue",
+        "acquisition",
+        "saved_favorite",
+        "playback_progress",
+      ],
+    }).notNull(),
+    targetDigest: text("target_digest").notNull(),
+    ownerDispatchId: text("owner_dispatch_id")
+      .notNull()
+      .references(() => externalMutationDispatches.id, { onDelete: "cascade" }),
+    acquiredAt: integer("acquired_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.targetScope, table.targetDigest] }),
+    index("external_mutation_target_locks_owner_idx").on(table.ownerDispatchId),
+    check(
+      "external_mutation_target_locks_scope_check",
+      sql`${table.targetScope} in ('media_request', 'media_issue', 'subtitle', 'library',
+        'user_media_state', 'download_queue', 'acquisition', 'saved_favorite',
+        'playback_progress')`,
+    ),
+    check(
+      "external_mutation_target_locks_digest_check",
+      sql`length(${table.targetDigest}) in (22, 43)
+        and ${table.targetDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check("external_mutation_target_locks_timestamp_check", sql`${table.acquiredAt} >= 0`),
+  ],
+);
+
+export const downloadQueueItemOperations = sqliteTable(
+  "download_queue_item_operations",
+  {
+    id: text("id").primaryKey(),
+    bulkOperationId: text("bulk_operation_id").references(() => downloadQueueBulkOperations.id, {
+      onDelete: "cascade",
+    }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "restrict" }),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorConfigGeneration: integer("connector_config_generation").notNull(),
+    itemDigest: text("item_digest").notNull(),
+    kind: text("kind", { enum: ["pause", "resume", "promote"] }).notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash"),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("download_queue_item_operations_user_key_unique")
+      .on(table.userId, table.idempotencyKeyHash)
+      .where(sql`${table.idempotencyKeyHash} is not null`),
+    uniqueIndex("download_queue_item_operations_bulk_target_unique")
+      .on(table.bulkOperationId, table.kind, table.itemDigest)
+      .where(sql`${table.bulkOperationId} is not null`),
+    index("download_queue_item_operations_state_created_idx").on(table.state, table.createdAt),
+    check(
+      "download_queue_item_operations_id_check",
+      sql`length(${table.id}) = 46
+        and substr(${table.id}, 1, 24) = 'download_item_operation_'
+        and substr(${table.id}, 25) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_item_operations_kind_check",
+      sql`${table.kind} in ('pause', 'resume', 'promote')`,
+    ),
+    check(
+      "download_queue_item_operations_parent_check",
+      sql`(${table.bulkOperationId} is null
+          and ${table.idempotencyKeyHash} is not null
+          and length(${table.idempotencyKeyHash}) = 43
+          and ${table.idempotencyKeyHash} not glob '*[^A-Za-z0-9_-]*')
+        or (${table.bulkOperationId} is not null and ${table.idempotencyKeyHash} is null)`,
+    ),
+    check(
+      "download_queue_item_operations_snapshot_check",
+      sql`typeof(${table.connectorInstanceGeneration}) = 'integer'
+        and ${table.connectorInstanceGeneration} between 0 and 9007199254740991
+        and typeof(${table.connectorConfigGeneration}) = 'integer'
+        and ${table.connectorConfigGeneration} between 0 and 9007199254740991`,
+    ),
+    check(
+      "download_queue_item_operations_digest_check",
+      sql`length(${table.itemDigest}) = 22
+        and ${table.itemDigest} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_item_operations_fingerprint_check",
+      sql`length(${table.fingerprintHash}) = 43
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "download_queue_item_operations_state_check",
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
+    ),
+    check(
+      "download_queue_item_operations_outcome_check",
+      sql`(${table.state} = 'pending' and ${table.failureCode} is null
+          and ${table.completedAt} is null)
+        or (${table.state} in ('reconcile_required', 'uncertain', 'failed')
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null)
+        or (${table.state} = 'succeeded' and ${table.failureCode} is null
+          and ${table.completedAt} is not null)`,
+    ),
+    check(
+      "download_queue_item_operations_timestamp_order_check",
+      sql`${table.createdAt} >= 0 and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const playbackProgressOperations = sqliteTable(
+  "playback_progress_operations",
+  {
+    id: text("id").primaryKey(),
+    playbackSessionId: text("playback_session_id").notNull(),
+    sessionRevision: integer("session_revision").notNull(),
+    userId: text("user_id").notNull(),
+    connectorId: text("connector_id").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorConfigGeneration: integer("connector_config_generation").notNull(),
+    positionSeconds: integer("position_seconds").notNull(),
+    state: text("state", {
+      enum: ["pending", "reconcile_required", "uncertain", "succeeded", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    failureCode: text("failure_code"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("playback_progress_operations_session_revision_unique").on(
+      table.playbackSessionId,
+      table.sessionRevision,
+    ),
+    index("playback_progress_operations_state_created_idx").on(table.state, table.createdAt),
+    index("playback_progress_operations_user_created_idx").on(table.userId, table.createdAt),
+    check(
+      "playback_progress_operations_id_check",
+      sql`length(${table.id}) = 50
+        and substr(${table.id}, 1, 28) = 'playback_progress_operation_'
+        and substr(${table.id}, 29) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "playback_progress_operations_session_check",
+      sql`length(${table.playbackSessionId}) = 31
+        and substr(${table.playbackSessionId}, 1, 9) = 'playback_'
+        and substr(${table.playbackSessionId}, 10) not glob '*[^A-Za-z0-9_-]*'
+        and typeof(${table.sessionRevision}) = 'integer'
+        and ${table.sessionRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "playback_progress_operations_snapshot_check",
+      sql`length(${table.userId}) between 1 and 128
+        and length(${table.connectorId}) between 1 and 128
+        and typeof(${table.connectorInstanceGeneration}) = 'integer'
+        and ${table.connectorInstanceGeneration} between 0 and 9007199254740991
+        and typeof(${table.connectorConfigGeneration}) = 'integer'
+        and ${table.connectorConfigGeneration} between 0 and 9007199254740991`,
+    ),
+    check(
+      "playback_progress_operations_position_check",
+      sql`${table.positionSeconds} between 0 and 10000000`,
+    ),
+    check(
+      "playback_progress_operations_state_check",
+      sql`${table.state} in ('pending', 'reconcile_required', 'uncertain', 'succeeded', 'failed')`,
+    ),
+    check(
+      "playback_progress_operations_outcome_check",
+      sql`(${table.state} = 'pending' and ${table.failureCode} is null
+          and ${table.completedAt} is null)
+        or (${table.state} in ('reconcile_required', 'uncertain', 'failed')
+          and length(${table.failureCode}) between 1 and 64
+          and ${table.completedAt} is not null)
+        or (${table.state} = 'succeeded' and ${table.failureCode} is null
+          and ${table.completedAt} is not null)`,
+    ),
+    check(
+      "playback_progress_operations_timestamp_order_check",
+      sql`${table.createdAt} >= 0 and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
     ),
   ],
 );

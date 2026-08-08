@@ -1,15 +1,40 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   boundDiagnosticTail,
   collectContainerDiagnostics,
   createFailureReport,
+  immutableSmokeImageReference,
   parseDoctorSmokeReport,
   parseRetainedBackupSmokeReport,
   parseRuntimeIdentity,
   redactDiagnosticText,
 } from "../container-smoke.mjs";
+
+const runnerSource = readFileSync(new URL("../container-smoke.mjs", import.meta.url), "utf8");
+
+test("container smoke derives immutable runtime metadata from a local image ID", () => {
+  const imageId = `sha256:${"a".repeat(64)}`;
+  const immutableImage = `ghcr.io/rezanmz/omnifin@sha256:${"b".repeat(64)}`;
+
+  assert.equal(
+    immutableSmokeImageReference("omnifin:ci", imageId),
+    `omnifin.invalid/container-smoke@${imageId}`,
+  );
+  assert.equal(immutableSmokeImageReference(immutableImage, imageId), immutableImage);
+  assert.throws(
+    () => immutableSmokeImageReference("omnifin:ci", "sha256:short"),
+    /smoke_image_id_invalid/u,
+  );
+  assert.equal((runnerSource.match(/`\$\{backupVolume\}:\/backups`/gu) ?? []).length, 2);
+  assert.match(runnerSource, /`OMNIFIN_IMAGE_REF=\$\{imageReference\}`/u);
+  assert.match(
+    runnerSource,
+    /const maintenanceRuntime = \[[\s\S]*OMNIFIN_ENCRYPTION_KEY_FILE=\/run\/secrets\/omnifin_encryption_key/u,
+  );
+});
 
 test("runtime identity smoke accepts only the exact public image identity", () => {
   const revision = "0123456789abcdef0123456789abcdef01234567";

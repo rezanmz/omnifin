@@ -22,6 +22,7 @@ const privateApiKey = "manual-release-private-api-key";
 const releaseId = "release_00000000000000000000000000000001";
 const operationId = "release_grab_00000000000000000000000000000001";
 const secondOperationId = "release_grab_00000000000000000000000000000002";
+const thirdOperationId = "release_grab_00000000000000000000000000000003";
 
 function testConfig(): AppConfig {
   return {
@@ -190,10 +191,11 @@ function harness(options: { withConnector?: boolean } = {}) {
   const createAdapter = vi.fn(() => ({ grabManualRelease, searchManualReleases }));
   let current = now;
   let operationSequence = 0;
+  const operationIds = [operationId, secondOperationId, thirdOperationId];
   const service = new ManualReleaseService(database, config, {
     clock: () => current,
     createAdapter,
-    createOperationId: () => (operationSequence++ === 0 ? operationId : secondOperationId),
+    createOperationId: () => operationIds[operationSequence++] ?? thirdOperationId,
     createReleaseId: () => releaseId,
   });
   return {
@@ -276,6 +278,7 @@ describe("manual release service", () => {
       expect(grabManualRelease).toHaveBeenCalledWith(
         { guid: "private-release-guid", indexerId: 14 },
         undefined,
+        expect.stringMatching(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u),
       );
       const operation = database.sqlite
         .prepare(
@@ -286,6 +289,18 @@ describe("manual release service", () => {
       expect(operation).toMatchObject({ state: "succeeded" });
       expect(operation.keyHash).toHaveLength(43);
       expect(operation.responseJson).not.toContain("private-release-guid");
+      expect(
+        database.sqlite
+          .prepare(
+            "select state, dispatch_attempt_count as dispatchAttemptCount from external_mutation_dispatches",
+          )
+          .get(),
+      ).toEqual({ dispatchAttemptCount: 1, state: "succeeded" });
+      expect(
+        database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 0 });
       const audit = database.sqlite
         .prepare(
           `select event_type as eventType, outcome, metadata_json as metadataJson, ip_hash as ipHash
@@ -393,13 +408,30 @@ describe("manual release service", () => {
         fixture.service.grab({ overrideRejections: false, releaseId }, key, {
           principal: principal("operator", "operator-user"),
         }),
-      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
       await expect(
         fixture.service.grab({ overrideRejections: false, releaseId }, key, {
           principal: principal("operator", "operator-user"),
         }),
-      ).rejects.toMatchObject({ reason: "temporarily_unavailable" });
+      ).rejects.toMatchObject({ reason: "outcome_uncertain" });
+      await expect(
+        fixture.service.grab(
+          { overrideRejections: false, releaseId },
+          "manual-grab-timeout-new-key-0001",
+          { principal: principal("operator", "operator-user") },
+        ),
+      ).rejects.toMatchObject({ reason: "candidate_expired" });
       expect(fixture.grabManualRelease).toHaveBeenCalledTimes(1);
+      expect(
+        fixture.database.sqlite
+          .prepare("select state, failure_code as failureCode from external_mutation_dispatches")
+          .get(),
+      ).toEqual({ failureCode: "outcome_uncertain", state: "uncertain" });
+      expect(
+        fixture.database.sqlite
+          .prepare("select count(*) as count from external_mutation_target_locks")
+          .get(),
+      ).toEqual({ count: 1 });
       expect(
         JSON.stringify(
           fixture.database.sqlite

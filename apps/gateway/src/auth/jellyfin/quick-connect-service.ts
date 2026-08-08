@@ -3,6 +3,10 @@ import {
   type JellyfinQuickConnectResult,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
 import { randomUUID } from "node:crypto";
+import {
+  ADMINISTRATOR_RECOVERY_CONFIRMATION,
+  type AdministratorRecoveryConfirmationRequest,
+} from "@omnifin/contracts/auth";
 
 import type { AppConfig } from "../../config.js";
 import type { DatabaseHandle } from "../../db/client.js";
@@ -18,6 +22,7 @@ import {
   JellyfinConnectorRegistry,
   type JellyfinConnectorTarget,
 } from "./connector-registry.js";
+import type { AdministratorRecoveryReplacementResult } from "../administrator-recovery-service.js";
 import type {
   JellyfinBootstrapDenialReason,
   JellyfinPairingDenialReason,
@@ -41,7 +46,8 @@ const MAX_INSERTION_ATTEMPTS = 8;
 const CLEANUP_BATCH_SIZE = 64;
 const MAX_POLL_COUNT = 150;
 
-type QuickConnectPurpose = "bootstrap" | "pairing" | "sign_in";
+type QuickConnectPurpose = "administrator_replacement" | "bootstrap" | "pairing" | "sign_in";
+type StoredQuickConnectPurpose = Exclude<QuickConnectPurpose, "administrator_replacement">;
 
 type QuickConnectClient = Pick<
   JellyfinAuthenticationClient,
@@ -72,6 +78,11 @@ export interface StartJellyfinQuickConnectBootstrapInput extends StartJellyfinQu
   readonly validatedSession?: unknown;
 }
 
+export interface StartJellyfinQuickConnectAdministratorReplacementInput
+  extends StartJellyfinQuickConnectInput, AdministratorRecoveryConfirmationRequest {
+  readonly validatedSession?: unknown;
+}
+
 export interface PollJellyfinQuickConnectInput {
   readonly browserBindingToken?: unknown;
   readonly currentSessionToken?: unknown;
@@ -89,6 +100,13 @@ export interface PollJellyfinQuickConnectPairingInput extends Omit<
 }
 
 export interface PollJellyfinQuickConnectBootstrapInput extends Omit<
+  PollJellyfinQuickConnectInput,
+  "currentSessionToken"
+> {
+  readonly validatedSession?: unknown;
+}
+
+export interface PollJellyfinQuickConnectAdministratorReplacementInput extends Omit<
   PollJellyfinQuickConnectInput,
   "currentSessionToken"
 > {
@@ -149,6 +167,16 @@ export type JellyfinQuickConnectBootstrapPollResult =
     }
   | { readonly session: IssuedSession; readonly status: "bootstrapped"; toJSON(): never };
 
+export type JellyfinQuickConnectAdministratorReplacementPollResult =
+  | {
+      readonly expiresAt: Date;
+      readonly pollAfterMs: number;
+      readonly status: "pending";
+      toJSON(): never;
+    }
+  | { readonly status: "expired"; toJSON(): never }
+  | AdministratorRecoveryReplacementResult;
+
 export class JellyfinQuickConnectServiceError extends Error {
   public readonly code = "jellyfin_quick_connect_failed";
   public readonly reason:
@@ -170,6 +198,7 @@ export class JellyfinQuickConnectServiceError extends Error {
 interface StoredQuickConnectTransaction {
   browserBindingHash: string;
   connectorId: string;
+  connectorInstanceGeneration: number;
   connectorType: string;
   consumedAt: number | null;
   createdAt: number;
@@ -179,18 +208,24 @@ interface StoredQuickConnectTransaction {
   nextPollAt: number;
   pollCount: number;
   pairingSessionId: string | null;
-  purpose: QuickConnectPurpose;
+  purpose: StoredQuickConnectPurpose;
 }
 
 interface QuickConnectPayload {
+  administratorId: string | null;
   baseUrl: string;
   code: string;
+  configGeneration: number | null;
+  confirmation: typeof ADMINISTRATOR_RECOVERY_CONFIRMATION | null;
   connectorId: string;
   deviceId: string;
+  expectedUpdatedAt: string | null;
   insecureHttpApproved: boolean;
+  instanceGeneration: number | null;
   pairingSessionId: string | null;
   purpose: QuickConnectPurpose;
-  schemaVersion: 1 | 2 | 3;
+  recoverySessionId: string | null;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
   secret: string;
   serverId: string;
   targetUpdatedAt: number;
@@ -253,11 +288,17 @@ function parsePayload(plaintext: string): QuickConnectPayload {
     "baseUrl,code,connectorId,deviceId,insecureHttpApproved,schemaVersion,secret,serverId,targetUpdatedAt";
   const currentKeys =
     "baseUrl,code,connectorId,deviceId,insecureHttpApproved,pairingSessionId,purpose,schemaVersion,secret,serverId,targetUpdatedAt";
+  const replacementKeys =
+    "administratorId,baseUrl,code,confirmation,connectorId,deviceId,expectedUpdatedAt,insecureHttpApproved,pairingSessionId,purpose,recoverySessionId,schemaVersion,secret,serverId,targetUpdatedAt";
+  const generationKeys =
+    "administratorId,baseUrl,code,configGeneration,confirmation,connectorId,deviceId,expectedUpdatedAt,insecureHttpApproved,instanceGeneration,pairingSessionId,purpose,recoverySessionId,schemaVersion,secret,serverId,targetUpdatedAt";
   const keys = Object.keys(candidate).sort().join(",");
   if (
     ((candidate.schemaVersion !== 1 || keys !== legacyKeys) &&
       (candidate.schemaVersion !== 2 || keys !== currentKeys) &&
-      (candidate.schemaVersion !== 3 || keys !== currentKeys)) ||
+      (candidate.schemaVersion !== 3 || keys !== currentKeys) &&
+      (candidate.schemaVersion !== 4 || keys !== replacementKeys) &&
+      (candidate.schemaVersion !== 5 || keys !== generationKeys)) ||
     typeof candidate.baseUrl !== "string" ||
     candidate.baseUrl.length < 1 ||
     candidate.baseUrl.length > 2_048 ||
@@ -279,14 +320,75 @@ function parsePayload(plaintext: string): QuickConnectPayload {
   }
   if (candidate.schemaVersion === 1) {
     return {
-      ...(candidate as unknown as Omit<
-        QuickConnectPayload,
-        "pairingSessionId" | "purpose" | "schemaVersion"
-      >),
+      ...(candidate as unknown as Omit<QuickConnectPayload, "schemaVersion">),
+      administratorId: null,
+      configGeneration: null,
+      confirmation: null,
+      expectedUpdatedAt: null,
+      instanceGeneration: null,
       pairingSessionId: null,
       purpose: "sign_in",
+      recoverySessionId: null,
       schemaVersion: 1,
     };
+  }
+  if (candidate.schemaVersion === 4) {
+    const expectedUpdatedAtTime =
+      typeof candidate.expectedUpdatedAt === "string"
+        ? Date.parse(candidate.expectedUpdatedAt)
+        : Number.NaN;
+    if (
+      candidate.purpose !== "administrator_replacement" ||
+      !validIdentifier(candidate.pairingSessionId) ||
+      !validIdentifier(candidate.recoverySessionId) ||
+      candidate.pairingSessionId !== candidate.recoverySessionId ||
+      !validIdentifier(candidate.administratorId) ||
+      candidate.confirmation !== ADMINISTRATOR_RECOVERY_CONFIRMATION ||
+      !Number.isFinite(expectedUpdatedAtTime) ||
+      new Date(expectedUpdatedAtTime).toISOString() !== candidate.expectedUpdatedAt
+    ) {
+      throw new JellyfinQuickConnectServiceError("invalid_transaction");
+    }
+    return {
+      ...(candidate as unknown as QuickConnectPayload),
+      configGeneration: null,
+      instanceGeneration: null,
+    };
+  }
+  if (candidate.schemaVersion === 5) {
+    const administratorReplacement = candidate.purpose === "administrator_replacement";
+    const expectedUpdatedAtTime =
+      typeof candidate.expectedUpdatedAt === "string"
+        ? Date.parse(candidate.expectedUpdatedAt)
+        : Number.NaN;
+    if (
+      !Number.isSafeInteger(candidate.instanceGeneration) ||
+      (candidate.instanceGeneration as number) < 0 ||
+      !Number.isSafeInteger(candidate.configGeneration) ||
+      (candidate.configGeneration as number) < 0 ||
+      (administratorReplacement
+        ? !validIdentifier(candidate.pairingSessionId) ||
+          !validIdentifier(candidate.recoverySessionId) ||
+          candidate.pairingSessionId !== candidate.recoverySessionId ||
+          !validIdentifier(candidate.administratorId) ||
+          candidate.confirmation !== ADMINISTRATOR_RECOVERY_CONFIRMATION ||
+          !Number.isFinite(expectedUpdatedAtTime) ||
+          new Date(expectedUpdatedAtTime).toISOString() !== candidate.expectedUpdatedAt
+        : (candidate.purpose !== "sign_in" &&
+            candidate.purpose !== "pairing" &&
+            candidate.purpose !== "bootstrap") ||
+          (candidate.purpose === "sign_in" && candidate.pairingSessionId !== null) ||
+          (candidate.purpose !== "sign_in" && !validIdentifier(candidate.pairingSessionId)) ||
+          candidate.administratorId !== null ||
+          candidate.confirmation !== null ||
+          candidate.expectedUpdatedAt !== null ||
+          (candidate.purpose === "bootstrap"
+            ? candidate.recoverySessionId !== candidate.pairingSessionId
+            : candidate.recoverySessionId !== null))
+    ) {
+      throw new JellyfinQuickConnectServiceError("invalid_transaction");
+    }
+    return candidate as unknown as QuickConnectPayload;
   }
   if (
     (candidate.purpose !== "sign_in" &&
@@ -298,7 +400,40 @@ function parsePayload(plaintext: string): QuickConnectPayload {
   ) {
     throw new JellyfinQuickConnectServiceError("invalid_transaction");
   }
-  return candidate as unknown as QuickConnectPayload;
+  return {
+    ...(candidate as unknown as Omit<
+      QuickConnectPayload,
+      "administratorId" | "confirmation" | "expectedUpdatedAt" | "recoverySessionId"
+    >),
+    administratorId: null,
+    configGeneration: null,
+    confirmation: null,
+    expectedUpdatedAt: null,
+    instanceGeneration: null,
+    recoverySessionId:
+      candidate.purpose === "bootstrap" ? (candidate.pairingSessionId as string) : null,
+  };
+}
+
+function serializePayload(payload: QuickConnectPayload) {
+  if (payload.schemaVersion === 4 || payload.schemaVersion === 5) return JSON.stringify(payload);
+  return JSON.stringify({
+    baseUrl: payload.baseUrl,
+    code: payload.code,
+    connectorId: payload.connectorId,
+    deviceId: payload.deviceId,
+    insecureHttpApproved: payload.insecureHttpApproved,
+    pairingSessionId: payload.pairingSessionId,
+    purpose: payload.purpose,
+    schemaVersion: payload.schemaVersion,
+    secret: payload.secret,
+    serverId: payload.serverId,
+    targetUpdatedAt: payload.targetUpdatedAt,
+  });
+}
+
+function storedPurpose(purpose: QuickConnectPurpose): StoredQuickConnectPurpose {
+  return purpose === "administrator_replacement" ? "bootstrap" : purpose;
 }
 
 function validQuickConnectResult(result: JellyfinQuickConnectResult, payload: QuickConnectPayload) {
@@ -374,11 +509,15 @@ export class JellyfinQuickConnectService {
           connectorId: target.connectorId,
           displayName: target.displayName,
           insecureHttpApproved: target.insecureHttpApproved,
+          tlsPolicy: target.tlsPolicy ?? "strict",
+          ...(target.tlsCaCertificatePem === undefined
+            ? {}
+            : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
         }));
     this.#createDeviceId = dependencies.createDeviceId ?? randomUUID;
     this.#createId = dependencies.createId ?? randomUUID;
     this.#database = database;
-    this.#registry = new JellyfinConnectorRegistry(database);
+    this.#registry = new JellyfinConnectorRegistry(database, config.encryptionKey);
     this.#signIn = signIn;
   }
 
@@ -412,11 +551,35 @@ export class JellyfinQuickConnectService {
     return this.#start(input, "bootstrap", recoverySession.sessionId, input.validatedSession);
   }
 
+  public async startAdministratorReplacement(
+    input: StartJellyfinQuickConnectAdministratorReplacementInput,
+  ): Promise<StartedJellyfinQuickConnect> {
+    const target = {
+      administratorId: input?.administratorId,
+      expectedUpdatedAt: input?.expectedUpdatedAt,
+    };
+    const recoverySession = this.#signIn.resolveEligibleAdministratorReplacementSession(
+      input?.validatedSession,
+      target,
+    );
+    if (!recoverySession || input.confirmation !== ADMINISTRATOR_RECOVERY_CONFIRMATION) {
+      throw new JellyfinQuickConnectServiceError("recovery_session_required");
+    }
+    return this.#start(
+      input,
+      "administrator_replacement",
+      recoverySession.sessionId,
+      input.validatedSession,
+      input,
+    );
+  }
+
   async #start(
     input: StartJellyfinQuickConnectInput,
     purpose: QuickConnectPurpose,
     pairingSessionId: string | null,
     validatedSession: unknown,
+    replacement?: AdministratorRecoveryConfirmationRequest,
   ): Promise<StartedJellyfinQuickConnect> {
     if (!input || typeof input !== "object") {
       throw new JellyfinQuickConnectServiceError("invalid_transaction");
@@ -447,6 +610,12 @@ export class JellyfinQuickConnectService {
     if (initiated.Authenticated || !CODE_PATTERN.test(initiated.Code)) {
       throw new JellyfinQuickConnectServiceError("provider_unavailable");
     }
+    if (
+      !this.#registry.bindingIsCurrent(target) ||
+      !this.#registry.serverIdentityIsCurrent(target, publicInfo.Id)
+    ) {
+      throw new JellyfinQuickConnectServiceError("configuration_invalid");
+    }
     if (purpose === "pairing") {
       const currentPairingSession = this.#signIn.resolveEligiblePairingSession(validatedSession);
       if (!currentPairingSession || currentPairingSession.sessionId !== pairingSessionId) {
@@ -456,6 +625,21 @@ export class JellyfinQuickConnectService {
       const currentRecoverySession =
         this.#signIn.resolveEligibleRecoveryBootstrapSession(validatedSession);
       if (!currentRecoverySession || currentRecoverySession.sessionId !== pairingSessionId) {
+        throw new JellyfinQuickConnectServiceError("recovery_session_required");
+      }
+    } else if (purpose === "administrator_replacement") {
+      const currentRecoverySession = this.#signIn.resolveEligibleAdministratorReplacementSession(
+        validatedSession,
+        {
+          administratorId: replacement?.administratorId ?? "",
+          expectedUpdatedAt: replacement?.expectedUpdatedAt ?? "",
+        },
+      );
+      if (
+        !currentRecoverySession ||
+        currentRecoverySession.sessionId !== pairingSessionId ||
+        replacement?.confirmation !== ADMINISTRATOR_RECOVERY_CONFIRMATION
+      ) {
         throw new JellyfinQuickConnectServiceError("recovery_session_required");
       }
     }
@@ -468,14 +652,23 @@ export class JellyfinQuickConnectService {
     }
     const expiresAt = new Date(now + JELLYFIN_QUICK_CONNECT_TRANSACTION_TTL_MS);
     const payload: QuickConnectPayload = {
+      administratorId: replacement?.administratorId ?? null,
       baseUrl: target.baseUrl,
       code: initiated.Code,
+      configGeneration: target.configGeneration ?? 0,
+      confirmation: replacement?.confirmation ?? null,
       connectorId: target.connectorId,
       deviceId,
+      expectedUpdatedAt: replacement?.expectedUpdatedAt ?? null,
       insecureHttpApproved: target.insecureHttpApproved,
+      instanceGeneration: target.instanceGeneration ?? 0,
       pairingSessionId,
       purpose,
-      schemaVersion: 3,
+      recoverySessionId:
+        purpose === "administrator_replacement" || purpose === "bootstrap"
+          ? pairingSessionId
+          : null,
+      schemaVersion: 5,
       secret: initiated.Secret,
       serverId: publicInfo.Id,
       targetUpdatedAt: target.updatedAt,
@@ -487,16 +680,17 @@ export class JellyfinQuickConnectService {
       const inserted = this.#insert({
         browserBindingHash: hashToken(browserBindingToken),
         connectorId: target.connectorId,
+        connectorInstanceGeneration: target.instanceGeneration ?? 0,
         createdAt: now,
         encryptedPayload: this.#cipher.encrypt(
-          JSON.stringify(payload),
+          serializePayload(payload),
           payloadContext(transactionId),
         ),
         expiresAt: expiresAt.getTime(),
         id: transactionId,
         nextPollAt: now + JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS,
         pairingSessionId,
-        purpose,
+        purpose: storedPurpose(purpose),
       });
       if (inserted === "capacity") {
         throw new JellyfinQuickConnectServiceError("capacity_exceeded");
@@ -539,6 +733,18 @@ export class JellyfinQuickConnectService {
     return this.#poll(input, "bootstrap", recoverySession.sessionId);
   }
 
+  public async pollAdministratorReplacement(
+    input: PollJellyfinQuickConnectAdministratorReplacementInput,
+  ): Promise<JellyfinQuickConnectAdministratorReplacementPollResult> {
+    const recoverySession = this.#signIn.resolveEligibleAdministratorReplacementSession(
+      input?.validatedSession,
+    );
+    if (!recoverySession) {
+      throw new JellyfinQuickConnectServiceError("recovery_session_required");
+    }
+    return this.#poll(input, "administrator_replacement", recoverySession.sessionId);
+  }
+
   #poll(
     input: PollJellyfinQuickConnectInput,
     purpose: "sign_in",
@@ -554,8 +760,14 @@ export class JellyfinQuickConnectService {
     purpose: "bootstrap",
     pairingSessionId: string,
   ): Promise<JellyfinQuickConnectBootstrapPollResult>;
+  #poll(
+    input: PollJellyfinQuickConnectAdministratorReplacementInput,
+    purpose: "administrator_replacement",
+    pairingSessionId: string,
+  ): Promise<JellyfinQuickConnectAdministratorReplacementPollResult>;
   async #poll(
     input:
+      | PollJellyfinQuickConnectAdministratorReplacementInput
       | PollJellyfinQuickConnectBootstrapInput
       | PollJellyfinQuickConnectInput
       | PollJellyfinQuickConnectPairingInput,
@@ -563,6 +775,7 @@ export class JellyfinQuickConnectService {
     pairingSessionId: string | null,
   ): Promise<
     | JellyfinQuickConnectBootstrapPollResult
+    | JellyfinQuickConnectAdministratorReplacementPollResult
     | JellyfinQuickConnectPairingPollResult
     | JellyfinQuickConnectPollResult
   > {
@@ -580,7 +793,7 @@ export class JellyfinQuickConnectService {
       input.transactionId,
       browserBindingHash,
       now,
-      purpose,
+      storedPurpose(purpose),
       pairingSessionId,
     );
     if (reservation.status === "expired") return internalResult({ status: "expired" as const });
@@ -596,12 +809,31 @@ export class JellyfinQuickConnectService {
     const target = this.#resolveTarget();
     if (
       !this.#payloadMatchesTarget(payload, target) ||
+      reservation.row.connectorInstanceGeneration !== (target.instanceGeneration ?? 0) ||
       payload.purpose !== purpose ||
-      payload.pairingSessionId !== pairingSessionId
+      payload.pairingSessionId !== pairingSessionId ||
+      (purpose === "administrator_replacement" &&
+        (payload.administratorId === null ||
+          payload.confirmation !== ADMINISTRATOR_RECOVERY_CONFIRMATION ||
+          payload.expectedUpdatedAt === null ||
+          payload.recoverySessionId !== pairingSessionId))
     ) {
       throw new JellyfinQuickConnectServiceError("configuration_invalid");
     }
     const client = this.#createClient(target);
+    let currentPublicInfo;
+    try {
+      currentPublicInfo = await client.getPublicSystemInfo();
+    } catch (error) {
+      throw new JellyfinQuickConnectServiceError("provider_unavailable", { cause: error });
+    }
+    if (
+      currentPublicInfo.Id !== payload.serverId ||
+      !this.#registry.serverIdentityIsCurrent(target, currentPublicInfo.Id) ||
+      !this.#registry.bindingIsCurrent(target)
+    ) {
+      throw new JellyfinQuickConnectServiceError("configuration_invalid");
+    }
     let upstream;
     try {
       upstream = await client.pollQuickConnect({
@@ -623,7 +855,14 @@ export class JellyfinQuickConnectService {
     }
 
     if (
-      !this.#consume(reservation.row, browserBindingHash, now, target, purpose, pairingSessionId)
+      !this.#consume(
+        reservation.row,
+        browserBindingHash,
+        now,
+        target,
+        storedPurpose(purpose),
+        pairingSessionId,
+      )
     ) {
       throw new JellyfinQuickConnectServiceError("invalid_transaction");
     }
@@ -640,19 +879,23 @@ export class JellyfinQuickConnectService {
       throw new JellyfinQuickConnectServiceError("provider_unavailable");
     }
     const result =
-      purpose === "pairing"
-        ? this.#signIn.completeAuthenticatedPairing({
+      purpose === "administrator_replacement"
+        ? this.#signIn.completeAuthenticatedAdministratorReplacement({
+            administratorId: payload.administratorId!,
             authentication,
+            confirmation: payload.confirmation!,
             deviceId: payload.deviceId,
+            expectedUpdatedAt: payload.expectedUpdatedAt!,
             ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
             proof: "quick_connect",
             ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
             target,
             ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
-            validatedSession: (input as PollJellyfinQuickConnectPairingInput).validatedSession,
+            validatedSession: (input as PollJellyfinQuickConnectAdministratorReplacementInput)
+              .validatedSession,
           })
-        : purpose === "bootstrap"
-          ? this.#signIn.completeAuthenticatedBootstrap({
+        : purpose === "pairing"
+          ? this.#signIn.completeAuthenticatedPairing({
               authentication,
               deviceId: payload.deviceId,
               ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
@@ -660,18 +903,34 @@ export class JellyfinQuickConnectService {
               ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
               target,
               ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
-              validatedSession: (input as PollJellyfinQuickConnectBootstrapInput).validatedSession,
+              validatedSession: (input as PollJellyfinQuickConnectPairingInput).validatedSession,
             })
-          : this.#signIn.completeAuthenticatedSignIn({
-              authentication,
-              currentSessionToken: (input as PollJellyfinQuickConnectInput).currentSessionToken,
-              deviceId: payload.deviceId,
-              ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
-              proof: "quick_connect",
-              ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
-              target,
-              ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
-            });
+          : purpose === "bootstrap"
+            ? this.#signIn.completeAuthenticatedBootstrap({
+                authentication,
+                deviceId: payload.deviceId,
+                ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+                proof: "quick_connect",
+                ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+                target,
+                ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+                validatedSession: (input as PollJellyfinQuickConnectBootstrapInput)
+                  .validatedSession,
+              })
+            : this.#signIn.completeAuthenticatedSignIn({
+                authentication,
+                currentSessionToken: (input as PollJellyfinQuickConnectInput).currentSessionToken,
+                deviceId: payload.deviceId,
+                ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+                proof: "quick_connect",
+                ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+                target,
+                ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+              });
+    if (purpose === "administrator_replacement") {
+      return result as AdministratorRecoveryReplacementResult;
+    }
+    if (result.status === "unavailable") return result;
     if (result.status === "denied") {
       return internalResult({ reason: result.reason, status: "denied" as const });
     }
@@ -689,13 +948,14 @@ export class JellyfinQuickConnectService {
   #insert(input: {
     browserBindingHash: string;
     connectorId: string;
+    connectorInstanceGeneration: number;
     createdAt: number;
     encryptedPayload: string;
     expiresAt: number;
     id: string;
     nextPollAt: number;
     pairingSessionId: string | null;
-    purpose: QuickConnectPurpose;
+    purpose: StoredQuickConnectPurpose;
   }): "capacity" | "collision" | "inserted" {
     try {
       return this.#database.sqlite
@@ -731,6 +991,7 @@ export class JellyfinQuickConnectService {
               `insert into jellyfin_quick_connect_transactions (
                 id,
                 connector_id,
+                connector_instance_generation,
                 connector_type,
                 purpose,
                 pairing_session_id,
@@ -740,11 +1001,12 @@ export class JellyfinQuickConnectService {
                 next_poll_at,
                 poll_count,
                 created_at
-              ) values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, 0, ?)`,
+              ) values (?, ?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, 0, ?)`,
             )
             .run(
               input.id,
               input.connectorId,
+              input.connectorInstanceGeneration,
               input.purpose,
               input.pairingSessionId,
               input.browserBindingHash,
@@ -765,7 +1027,7 @@ export class JellyfinQuickConnectService {
     transactionId: string,
     browserBindingHash: string,
     now: number,
-    purpose: QuickConnectPurpose,
+    purpose: StoredQuickConnectPurpose,
     pairingSessionId: string | null,
   ):
     | { status: "expired" }
@@ -779,6 +1041,7 @@ export class JellyfinQuickConnectService {
               `select
                 id,
                 connector_id as connectorId,
+                connector_instance_generation as connectorInstanceGeneration,
                 connector_type as connectorType,
                 purpose,
                 pairing_session_id as pairingSessionId,
@@ -822,6 +1085,7 @@ export class JellyfinQuickConnectService {
                  and browser_binding_hash = ?
                  and purpose = ?
                  and pairing_session_id is ?
+                 and connector_instance_generation = ?
                  and consumed_at is null
                  and poll_count = ?
                  and next_poll_at = ?`,
@@ -832,6 +1096,7 @@ export class JellyfinQuickConnectService {
               browserBindingHash,
               purpose,
               pairingSessionId,
+              row.connectorInstanceGeneration,
               row.pollCount,
               row.nextPollAt,
             );
@@ -855,7 +1120,7 @@ export class JellyfinQuickConnectService {
     browserBindingHash: string,
     now: number,
     target: JellyfinConnectorTarget,
-    purpose: QuickConnectPurpose,
+    purpose: StoredQuickConnectPurpose,
     pairingSessionId: string | null,
   ) {
     try {
@@ -870,11 +1135,21 @@ export class JellyfinQuickConnectService {
                  and browser_binding_hash = ?
                  and purpose = ?
                  and pairing_session_id is ?
+                 and connector_instance_generation = ?
                  and consumed_at is null
                  and expires_at > ?
                  and poll_count = ?`,
             )
-            .run(now, row.id, browserBindingHash, purpose, pairingSessionId, now, row.pollCount);
+            .run(
+              now,
+              row.id,
+              browserBindingHash,
+              purpose,
+              pairingSessionId,
+              target.instanceGeneration ?? 0,
+              now,
+              row.pollCount,
+            );
           return result.changes === 1;
         })
         .immediate();
@@ -916,7 +1191,12 @@ export class JellyfinQuickConnectService {
       payload.connectorId === target.connectorId &&
       payload.baseUrl === target.baseUrl &&
       payload.insecureHttpApproved === target.insecureHttpApproved &&
-      payload.targetUpdatedAt === target.updatedAt &&
+      (payload.schemaVersion === 5 || payload.targetUpdatedAt === target.updatedAt) &&
+      (payload.instanceGeneration === null ||
+        payload.instanceGeneration === (target.instanceGeneration ?? 0)) &&
+      (payload.configGeneration === null ||
+        payload.configGeneration === (target.configGeneration ?? 0)) &&
+      this.#registry.serverIdentityIsCurrent(target, payload.serverId) &&
       this.#registry.bindingIsCurrent(target)
     );
   }

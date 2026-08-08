@@ -16,6 +16,11 @@ import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
+import {
+  AcquisitionProvenanceError,
+  AcquisitionProvenanceService,
+  type AcquisitionProvenanceErrorReason,
+} from "../src/acquisitions/provenance-service.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
@@ -437,7 +442,11 @@ describe("acquisition provenance routes", () => {
       expect(replay.statusCode, replay.body).toBe(200);
       expect(replay.headers["idempotency-replayed"]).toBe("true");
       expect(queueAcquisitionSearch).toHaveBeenCalledTimes(1);
-      expect(queueAcquisitionSearch).toHaveBeenCalledWith(body, expect.any(AbortSignal));
+      expect(queueAcquisitionSearch).toHaveBeenCalledWith(
+        body,
+        expect.any(AbortSignal),
+        expect.stringMatching(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u),
+      );
       expect(created.body).not.toContain("route-private-api-key");
     } finally {
       await app.close();
@@ -483,6 +492,43 @@ describe("acquisition provenance routes", () => {
         { mediaId: 42, service: "radarr" },
         expect.any(AbortSignal),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a stable terminal uncertainty code after a lost automatic-search response", async () => {
+    const { app, operator, queueAcquisitionSearch } = await harness();
+    queueAcquisitionSearch.mockRejectedValueOnce(
+      new SafeConnectorError({
+        code: "timeout",
+        message: "private lost search response",
+        operation: "acquisition.search",
+        retryable: true,
+        service: "radarr",
+      }),
+    );
+    const request = () =>
+      app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "acquisition-route-timeout-0001",
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload: { mediaId: 42, service: "radarr" },
+        url: "/v1/acquisitions/searches",
+      });
+    try {
+      const first = await request();
+      const replay = await request();
+      expect(first.statusCode).toBe(409);
+      expect(replay.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(first.json()).error.code).toBe(
+        "acquisition_search_outcome_uncertain",
+      );
+      expect(queueAcquisitionSearch).toHaveBeenCalledOnce();
     } finally {
       await app.close();
     }
@@ -806,4 +852,194 @@ describe("acquisition provenance routes", () => {
       await app.close();
     }
   });
+
+  const allFailureReasons: AcquisitionProvenanceErrorReason[] = [
+    "connector_unconfigured",
+    "connector_ambiguous",
+    "connector_integrity_failure",
+    "configuration_unavailable",
+    "idempotency_conflict",
+    "idempotency_in_progress",
+    "identity_required",
+    "operation_failed",
+    "operation_limit_reached",
+    "outcome_uncertain",
+    "outcome_unconfirmed",
+    "rate_limited",
+    "reference_expired",
+    "reference_invalid",
+    "response_invalid",
+    "stale_state",
+    "storage_failure",
+    "temporarily_unavailable",
+  ];
+
+  it.each(allFailureReasons)("maps provenance configuration failure %s", async (reason) => {
+    const { app, operator } = await harness();
+    const read = vi
+      .spyOn(AcquisitionProvenanceService.prototype, "read")
+      .mockRejectedValue(new AcquisitionProvenanceError(reason));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance?service=radarr&mediaId=42",
+      });
+      expect(response.statusCode, response.body).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        reason === "connector_unconfigured"
+          ? "acquisition_not_configured"
+          : "acquisition_configuration_unavailable",
+      );
+    } finally {
+      read.mockRestore();
+      await app.close();
+    }
+  });
+
+  const searchFailureMappings: Array<[AcquisitionProvenanceErrorReason, number, string, string?]> =
+    [
+      ["idempotency_conflict", 409, "idempotency_key_conflict"],
+      ["idempotency_in_progress", 409, "acquisition_search_outcome_pending", "2"],
+      ["identity_required", 403, "acquisition_search_identity_required"],
+      ["rate_limited", 429, "acquisition_search_rate_limited", "30"],
+      ["outcome_uncertain", 409, "acquisition_search_outcome_uncertain"],
+      ["response_invalid", 502, "acquisition_search_response_invalid"],
+      ["connector_unconfigured", 503, "acquisition_search_configuration_unavailable"],
+      ["connector_ambiguous", 503, "acquisition_search_configuration_unavailable"],
+      ["connector_integrity_failure", 503, "acquisition_search_configuration_unavailable"],
+      ["configuration_unavailable", 503, "acquisition_search_configuration_unavailable"],
+      ["storage_failure", 503, "acquisition_search_configuration_unavailable"],
+      ["operation_failed", 503, "acquisition_search_configuration_unavailable"],
+      ["operation_limit_reached", 503, "acquisition_search_configuration_unavailable"],
+      ["outcome_unconfirmed", 503, "acquisition_search_configuration_unavailable"],
+      ["reference_expired", 503, "acquisition_search_configuration_unavailable"],
+      ["reference_invalid", 503, "acquisition_search_configuration_unavailable"],
+      ["stale_state", 503, "acquisition_search_configuration_unavailable"],
+      ["temporarily_unavailable", 503, "acquisition_search_temporarily_unavailable"],
+    ];
+
+  it.each(searchFailureMappings)(
+    "maps acquisition search failure %s",
+    async (reason, status, code, retryAfter) => {
+      const { app, operator } = await harness();
+      const search = vi
+        .spyOn(AcquisitionProvenanceService.prototype, "queueSearch")
+        .mockRejectedValue(new AcquisitionProvenanceError(reason));
+      try {
+        const response = await app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            "idempotency-key": "acquisition-search-error-mapping",
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: { mediaId: 42, service: "radarr" },
+          url: "/v1/acquisitions/searches",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(response.headers["retry-after"]).toBe(retryAfter);
+      } finally {
+        search.mockRestore();
+        await app.close();
+      }
+    },
+  );
+
+  const monitoringFailureMappings: Array<[AcquisitionProvenanceErrorReason, number, string]> = [
+    ["identity_required", 403, "acquisition_monitoring_identity_required"],
+    ["response_invalid", 502, "acquisition_monitoring_response_invalid"],
+    ["rate_limited", 429, "acquisition_monitoring_rate_limited"],
+    ["connector_unconfigured", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["connector_ambiguous", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["connector_integrity_failure", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["configuration_unavailable", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["storage_failure", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["operation_failed", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["operation_limit_reached", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["outcome_uncertain", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["outcome_unconfirmed", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["reference_expired", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["reference_invalid", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["stale_state", 503, "acquisition_monitoring_configuration_unavailable"],
+    ["temporarily_unavailable", 503, "acquisition_monitoring_temporarily_unavailable"],
+    ["idempotency_conflict", 503, "acquisition_monitoring_temporarily_unavailable"],
+    ["idempotency_in_progress", 503, "acquisition_monitoring_temporarily_unavailable"],
+  ];
+
+  it.each(monitoringFailureMappings)(
+    "maps acquisition monitoring failure %s",
+    async (reason, status, code) => {
+      const { app, operator } = await harness();
+      const monitoring = vi
+        .spyOn(AcquisitionProvenanceService.prototype, "readMonitoring")
+        .mockRejectedValue(new AcquisitionProvenanceError(reason));
+      try {
+        const response = await app.inject({
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+          method: "GET",
+          url: "/v1/acquisitions/monitoring?service=radarr&mediaId=42",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      } finally {
+        monitoring.mockRestore();
+        await app.close();
+      }
+    },
+  );
+
+  const recoveryFailureMappings: Array<
+    [AcquisitionProvenanceErrorReason, number, string, string?]
+  > = [
+    ["reference_invalid", 400, "acquisition_queue_recovery_reference_invalid"],
+    ["reference_expired", 409, "acquisition_queue_recovery_stale"],
+    ["stale_state", 409, "acquisition_queue_recovery_stale"],
+    ["idempotency_conflict", 409, "idempotency_key_conflict"],
+    ["idempotency_in_progress", 409, "acquisition_queue_recovery_pending", "2"],
+    ["operation_failed", 409, "acquisition_queue_recovery_failed"],
+    ["identity_required", 403, "acquisition_queue_recovery_identity_required"],
+    ["operation_limit_reached", 429, "acquisition_queue_recovery_limit_reached"],
+    ["rate_limited", 429, "acquisition_queue_recovery_rate_limited", "30"],
+    ["response_invalid", 502, "acquisition_queue_recovery_unconfirmed"],
+    ["outcome_unconfirmed", 502, "acquisition_queue_recovery_unconfirmed"],
+    ["outcome_uncertain", 502, "acquisition_queue_recovery_unconfirmed"],
+    ["connector_unconfigured", 503, "acquisition_queue_recovery_configuration_unavailable"],
+    ["connector_ambiguous", 503, "acquisition_queue_recovery_configuration_unavailable"],
+    ["connector_integrity_failure", 503, "acquisition_queue_recovery_configuration_unavailable"],
+    ["configuration_unavailable", 503, "acquisition_queue_recovery_configuration_unavailable"],
+    ["storage_failure", 503, "acquisition_queue_recovery_configuration_unavailable"],
+    ["temporarily_unavailable", 503, "acquisition_queue_recovery_temporarily_unavailable"],
+  ];
+
+  it.each(recoveryFailureMappings)(
+    "maps acquisition queue recovery failure %s",
+    async (reason, status, code, retryAfter) => {
+      const { app, operator } = await harness();
+      const recovery = vi
+        .spyOn(AcquisitionProvenanceService.prototype, "recoverQueueItem")
+        .mockRejectedValue(new AcquisitionProvenanceError(reason));
+      try {
+        const response = await app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            "idempotency-key": "acquisition-recovery-error-mapping",
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: { reference: `aqr_v2.${"r".repeat(90)}` },
+          url: "/v1/acquisitions/queue-recoveries",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(response.headers["retry-after"]).toBe(retryAfter);
+      } finally {
+        recovery.mockRestore();
+        await app.close();
+      }
+    },
+  );
 });

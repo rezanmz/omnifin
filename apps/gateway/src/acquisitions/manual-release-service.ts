@@ -22,11 +22,16 @@ import {
   connectorCredentialInputSchema,
   connectorHealthSchema,
 } from "@omnifin/contracts/connectors";
-import { X509Certificate } from "node:crypto";
+import { createHmac, X509Certificate } from "node:crypto";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
+import {
+  ExternalMutationJournal,
+  ExternalMutationJournalError,
+  type ExternalMutationRecord,
+} from "../operations/external-mutation-journal.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 
 const RELEASE_TTL_MS = 20 * 60 * 1_000;
@@ -35,6 +40,8 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/u;
 const CONNECTOR_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const RELEASE_IDENTIFIER_PATTERN = /^release_[A-Za-z0-9_-]{32}$/u;
 const OPERATION_IDENTIFIER_PATTERN = /^release_grab_[A-Za-z0-9_-]{32}$/u;
+const DISPATCH_LEASE_MS = 30_000;
+const OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 type CandidateDetails = Omit<ManualReleaseCandidate, "id">;
 
@@ -50,7 +57,11 @@ interface AdapterSearchResult {
 }
 
 export interface ManualReleaseAdapter {
-  grabManualRelease(reference: ManualReleaseReference, signal?: AbortSignal): Promise<void>;
+  grabManualRelease(
+    reference: ManualReleaseReference,
+    signal?: AbortSignal,
+    operationId?: string,
+  ): Promise<void>;
   searchManualReleases(
     input: ManualReleaseTargetInput,
     signal?: AbortSignal,
@@ -60,11 +71,13 @@ export interface ManualReleaseAdapter {
 interface AcquisitionConnectorRow {
   baseUrl: string;
   capabilitySnapshotJson: string;
+  configGeneration: number;
   displayName: string;
   encryptedCredentials: string;
   healthState: string;
   id: string;
   insecureHttpApproved: number;
+  instanceGeneration: number;
   tlsPolicy: string;
   type: string;
 }
@@ -76,7 +89,9 @@ interface StoredConnectorSecrets {
 }
 
 interface CachedRelease {
+  connectorConfigGeneration: number;
   connectorId: string;
+  connectorInstanceGeneration: number;
   details: CandidateDetails;
   expiresAt: number;
   reference: ManualReleaseReference;
@@ -90,6 +105,7 @@ interface CachedRelease {
 interface GrabOperationRow {
   failureCode: string | null;
   fingerprintHash: string;
+  id: string;
   responseJson: string | null;
   state: string;
 }
@@ -108,6 +124,8 @@ export interface ManualReleaseDependencies {
   ) => ManualReleaseAdapter;
   createOperationId?: () => string;
   createReleaseId?: () => string;
+  createDispatchId?: () => string;
+  createLeaseOwner?: () => string;
 }
 
 export interface ManualReleaseGrabResult {
@@ -142,6 +160,7 @@ export type ManualReleaseErrorReason =
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "identity_required"
+  | "outcome_uncertain"
   | "storage_failure";
 
 export class ManualReleaseError extends Error {
@@ -249,6 +268,20 @@ function knownGrabFailure(error: unknown): ManualReleaseGrabFailureCode {
   return "temporarily_unavailable";
 }
 
+function ambiguousDispatchFailure(error: unknown) {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (!(error instanceof SafeConnectorError)) return true;
+  if (["response_invalid", "timeout", "unreachable"].includes(error.code)) return true;
+  return error.code === "upstream_error" && (error.status === null || error.status >= 500);
+}
+
+function mutationTargetDigest(value: unknown, key: Buffer) {
+  return createHmac("sha256", key)
+    .update("omnifin:v1:external-mutation-target\0", "utf8")
+    .update(JSON.stringify(value), "utf8")
+    .digest("base64url");
+}
+
 function targetFingerprint(target: ManualReleaseTarget) {
   return hashToken(
     JSON.stringify({
@@ -266,9 +299,12 @@ export class ManualReleaseService {
   readonly #clock: () => Date;
   readonly #config: AppConfig;
   readonly #createAdapter: NonNullable<ManualReleaseDependencies["createAdapter"]>;
+  readonly #createDispatchId: () => string;
+  readonly #createLeaseOwner: () => string;
   readonly #createOperationId: () => string;
   readonly #createReleaseId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #journal: ExternalMutationJournal;
 
   public constructor(
     database: DatabaseHandle,
@@ -280,9 +316,14 @@ export class ManualReleaseService {
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapter;
+    this.#createDispatchId =
+      dependencies.createDispatchId ?? (() => `mutation_dispatch_${randomToken(16)}`);
+    this.#createLeaseOwner =
+      dependencies.createLeaseOwner ?? (() => `mutation_lease_${randomToken(16)}`);
     this.#createOperationId =
       dependencies.createOperationId ?? (() => `release_grab_${randomToken(24)}`);
     this.#createReleaseId = dependencies.createReleaseId ?? (() => `release_${randomToken(24)}`);
+    this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
   }
 
   public async search(
@@ -292,7 +333,7 @@ export class ManualReleaseService {
   ): Promise<ManualReleaseSearchResponse> {
     const principal = this.#activePrincipal(context);
     const input = manualReleaseTargetInputSchema.parse(rawInput);
-    const { adapter, connectorId } = this.#adapter(input.service);
+    const { adapter, row } = this.#adapter(input.service);
     const result = await adapter.searchManualReleases(input, signal);
     const now = this.#now();
     const expiresAt = now + RELEASE_TTL_MS;
@@ -307,7 +348,9 @@ export class ManualReleaseService {
       const releaseId = this.#releaseId();
       const candidate = { ...details, id: releaseId };
       this.#cache.set(releaseId, {
-        connectorId,
+        connectorConfigGeneration: row.configGeneration,
+        connectorId: row.id,
+        connectorInstanceGeneration: row.instanceGeneration,
         details,
         expiresAt,
         reference,
@@ -349,10 +392,39 @@ export class ManualReleaseService {
     if (reservation.kind === "failure") {
       throw new ManualReleaseError(reservation.failureCode);
     }
+    if (reservation.kind === "uncertain") throw new ManualReleaseError("outcome_uncertain");
     if (reservation.kind === "conflict") throw new ManualReleaseError("idempotency_conflict");
-    if (reservation.kind === "pending") throw new ManualReleaseError("idempotency_in_progress");
+    if (reservation.kind === "pending") {
+      const priorDispatch = this.#journal.replay({
+        kind: "acquisition.grab",
+        parentOperationId: reservation.operationId,
+        parentOperationType: "acquisition_grab_operation",
+      });
+      if (priorDispatch && ["dispatched", "reconcile_required"].includes(priorDispatch.state)) {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          undefined,
+          input,
+          context,
+          priorDispatch.id,
+        );
+        throw new ManualReleaseError("outcome_uncertain");
+      }
+      if (
+        !priorDispatch ||
+        priorDispatch.state !== "reserved" ||
+        priorDispatch.leaseExpiresAt! >= this.#now()
+      ) {
+        throw new ManualReleaseError("idempotency_in_progress");
+      }
+    }
 
     let cached: CachedRelease | undefined;
+    let dispatch: ExternalMutationRecord | undefined;
+    let crossedDispatchBoundary = false;
     try {
       cached = this.#candidate(input.releaseId, principal.userId);
       if (!cached.details.downloadAllowed) {
@@ -361,11 +433,64 @@ export class ManualReleaseService {
       if (cached.details.requiresOverride && !input.overrideRejections) {
         throw new ManualReleaseError("override_required");
       }
-      const { adapter } = this.#adapter(cached.service, cached.connectorId);
-      await adapter.grabManualRelease(cached.reference, signal);
+      const { adapter, row } = this.#adapter(cached.service, cached.connectorId);
+      if (
+        row.instanceGeneration !== cached.connectorInstanceGeneration ||
+        row.configGeneration !== cached.connectorConfigGeneration
+      ) {
+        throw new ManualReleaseError("candidate_expired");
+      }
+      dispatch = this.#reserveDispatch(reservation.operationId, principal.userId, cached);
+      this.#journal.markDispatched({
+        id: dispatch.id,
+        leaseOwner: dispatch.leaseOwner!,
+        now: this.#now(),
+      });
+      crossedDispatchBoundary = true;
+      this.#cache.delete(cached.releaseId);
+      await adapter.grabManualRelease(cached.reference, signal, dispatch.id);
     } catch (error) {
+      if (crossedDispatchBoundary && dispatch && ambiguousDispatchFailure(error)) {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          cached,
+          input,
+          context,
+          dispatch.id,
+        );
+        throw new ManualReleaseError("outcome_uncertain", { cause: error });
+      }
+      if (error instanceof ManualReleaseError && error.reason === "outcome_uncertain") {
+        this.#complete(
+          reservation.operationId,
+          "uncertain",
+          null,
+          "outcome_uncertain",
+          cached,
+          input,
+          context,
+        );
+        throw error;
+      }
       const failureCode = knownGrabFailure(error);
-      this.#complete(reservation.operationId, "failure", null, failureCode, cached, input, context);
+      const reservedDispatch = this.#journal.replay({
+        kind: "acquisition.grab",
+        parentOperationId: reservation.operationId,
+        parentOperationType: "acquisition_grab_operation",
+      });
+      this.#complete(
+        reservation.operationId,
+        "failure",
+        null,
+        failureCode,
+        cached,
+        input,
+        context,
+        dispatch?.id ?? (reservedDispatch?.state === "reserved" ? reservedDispatch.id : undefined),
+      );
       throw new ManualReleaseError(failureCode, { cause: error });
     }
     const response = manualReleaseGrabResponseSchema.parse({
@@ -375,7 +500,16 @@ export class ManualReleaseService {
       service: cached.service,
       state: "accepted",
     });
-    this.#complete(reservation.operationId, "success", response, null, cached, input, context);
+    this.#complete(
+      reservation.operationId,
+      "success",
+      response,
+      null,
+      cached,
+      input,
+      context,
+      dispatch!.id,
+    );
     this.#cache.delete(cached.releaseId);
     return { grab: response, replayed: false };
   }
@@ -423,7 +557,7 @@ export class ManualReleaseService {
             : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
           clock: { now: this.#clock, monotonicNow: () => performance.now() },
         }),
-        connectorId: row.id,
+        row,
       };
     } catch (error) {
       if (error instanceof ManualReleaseError) throw error;
@@ -468,9 +602,16 @@ export class ManualReleaseService {
   #reserve(userId: string, keyHash: string, fingerprintHash: string) {
     try {
       return this.#database.sqlite.transaction(() => {
+        const cleanup = this.#journal.cleanupTerminalParents({
+          completedBefore: this.#now() - OPERATION_RETENTION_MS,
+          limit: 100,
+          parentOperationType: "acquisition_grab_operation",
+          userId,
+        });
+        if (cleanup.mismatchedParents > 0) throw new ManualReleaseError("storage_failure");
         const existing = this.#database.sqlite
           .prepare(
-            `select fingerprint_hash as fingerprintHash, state,
+            `select id, fingerprint_hash as fingerprintHash, state,
                     response_json as responseJson, failure_code as failureCode
              from acquisition_grab_operations
              where user_id = ? and idempotency_key_hash = ?
@@ -479,7 +620,12 @@ export class ManualReleaseService {
           .get(userId, keyHash) as GrabOperationRow | undefined;
         if (existing) {
           if (existing.fingerprintHash !== fingerprintHash) return { kind: "conflict" as const };
-          if (existing.state === "pending") return { kind: "pending" as const };
+          if (existing.state === "pending") {
+            return { kind: "pending" as const, operationId: existing.id };
+          }
+          if (existing.state === "uncertain" || existing.state === "reconcile_required") {
+            return { kind: "uncertain" as const };
+          }
           if (existing.state === "failed") {
             if (
               !existing.failureCode ||
@@ -523,16 +669,30 @@ export class ManualReleaseService {
 
   #complete(
     operationId: string,
-    outcome: "success" | "failure",
+    outcome: "success" | "failure" | "uncertain",
     response: ManualReleaseGrabResponse | null,
-    failureCode: ManualReleaseGrabFailureCode | null,
+    failureCode: ManualReleaseGrabFailureCode | "outcome_uncertain" | null,
     candidate: CachedRelease | undefined,
     input: ManualReleaseGrabInput,
     context: ManualReleaseContext,
+    dispatchId?: string,
   ) {
     try {
       const now = this.#now();
       this.#database.sqlite.transaction(() => {
+        if (dispatchId) {
+          if (outcome === "success") {
+            this.#journal.completeSucceeded({ id: dispatchId, now });
+          } else if (outcome === "uncertain") {
+            this.#journal.completeUncertain({
+              failureCode: "outcome_uncertain",
+              id: dispatchId,
+              now,
+            });
+          } else {
+            this.#journal.completeFailed({ failureCode: failureCode!, id: dispatchId, now });
+          }
+        }
         const update = this.#database.sqlite
           .prepare(
             `update acquisition_grab_operations
@@ -540,7 +700,7 @@ export class ManualReleaseService {
              where id = ? and state = 'pending'`,
           )
           .run(
-            outcome === "success" ? "succeeded" : "failed",
+            outcome === "success" ? "succeeded" : outcome === "failure" ? "failed" : "uncertain",
             response ? JSON.stringify(response) : null,
             failureCode,
             now,
@@ -548,7 +708,15 @@ export class ManualReleaseService {
             operationId,
           );
         if (update.changes !== 1) throw new ManualReleaseError("connector_integrity_failure");
-        this.#audit(outcome, operationId, candidate, input, context, now, failureCode);
+        this.#audit(
+          outcome === "success" ? "success" : "failure",
+          operationId,
+          candidate,
+          input,
+          context,
+          now,
+          failureCode,
+        );
       })();
     } catch (error) {
       if (error instanceof ManualReleaseError) throw error;
@@ -563,7 +731,7 @@ export class ManualReleaseService {
     input: ManualReleaseGrabInput,
     context: ManualReleaseContext,
     createdAt: number,
-    failureCode: ManualReleaseGrabFailureCode | null,
+    failureCode: ManualReleaseGrabFailureCode | "outcome_uncertain" | null,
   ) {
     this.#database.sqlite
       .prepare(
@@ -607,7 +775,9 @@ export class ManualReleaseService {
                   encrypted_credentials as encryptedCredentials,
                   capability_snapshot_json as capabilitySnapshotJson,
                   health_state as healthState, tls_policy as tlsPolicy,
-                  insecure_http_approved as insecureHttpApproved
+                  insecure_http_approved as insecureHttpApproved,
+                  instance_generation as instanceGeneration,
+                  config_generation as configGeneration
            from connector_configs
            where type = ? and enabled = 1
            order by id asc
@@ -620,6 +790,77 @@ export class ManualReleaseService {
     } catch (error) {
       if (error instanceof ManualReleaseError) throw error;
       throw new ManualReleaseError("storage_failure", { cause: error });
+    }
+  }
+
+  #reserveDispatch(operationId: string, userId: string, cached: CachedRelease) {
+    const existing = this.#journal.replay({
+      kind: "acquisition.grab",
+      parentOperationId: operationId,
+      parentOperationType: "acquisition_grab_operation",
+    });
+    const now = this.#now();
+    const leaseOwner = this.#createLeaseOwner();
+    if (existing) {
+      if (
+        existing.state !== "reserved" ||
+        existing.connectorId !== cached.connectorId ||
+        existing.connectorInstanceGeneration !== cached.connectorInstanceGeneration ||
+        existing.connectorConfigGeneration !== cached.connectorConfigGeneration
+      ) {
+        throw new ManualReleaseError(
+          existing.state === "uncertain" || existing.state === "reconcile_required"
+            ? "outcome_uncertain"
+            : "connector_integrity_failure",
+        );
+      }
+      if (existing.leaseExpiresAt! >= now) throw new ManualReleaseError("idempotency_in_progress");
+      return this.#journal.claimStaleReserved({
+        expectedLeaseExpiresAt: existing.leaseExpiresAt!,
+        expectedLeaseOwner: existing.leaseOwner!,
+        id: existing.id,
+        leaseExpiresAt: now + DISPATCH_LEASE_MS,
+        leaseOwner,
+        now,
+      });
+    }
+    try {
+      return this.#journal.reserve({
+        connectorConfigGeneration: cached.connectorConfigGeneration,
+        connectorId: cached.connectorId,
+        connectorInstanceGeneration: cached.connectorInstanceGeneration,
+        id: this.#createDispatchId(),
+        kind: "acquisition.grab",
+        leaseExpiresAt: now + DISPATCH_LEASE_MS,
+        leaseOwner,
+        normalizedRequest: {
+          action: "manual_release_grab",
+          guid: cached.reference.guid,
+          indexerId: cached.reference.indexerId,
+          releaseId: cached.releaseId,
+          service: cached.service,
+          target: cached.target,
+        },
+        now,
+        parentOperationId: operationId,
+        parentOperationType: "acquisition_grab_operation",
+        targetDigest: mutationTargetDigest(
+          {
+            action: "manual_release_grab",
+            connectorId: cached.connectorId,
+            connectorInstanceGeneration: cached.connectorInstanceGeneration,
+            guid: cached.reference.guid,
+            indexerId: cached.reference.indexerId,
+          },
+          this.#config.encryptionKey,
+        ),
+        userId,
+      });
+    } catch (error) {
+      if (error instanceof ExternalMutationJournalError && error.code === "target_locked") {
+        throw new ManualReleaseError("outcome_uncertain", { cause: error });
+      }
+      throw error;
     }
   }
 

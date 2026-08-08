@@ -1,4 +1,7 @@
-import { sessionResponseSchema } from "@omnifin/contracts/auth";
+import {
+  administratorRecoveryPreviewResponseSchema,
+  sessionResponseSchema,
+} from "@omnifin/contracts/auth";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,6 +22,7 @@ import {
 } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
+import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { privacyHash } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -265,76 +269,61 @@ describe("recovery access route", () => {
     }
   });
 
-  it("makes missing configuration, wrong credentials, and malformed bodies indistinguishable", async () => {
-    const cases: {
-      body: Record<string, unknown>;
-      configured: boolean;
-      reason: "credential_mismatch" | "invalid_request";
-    }[] = [
-      { body: { secret: recoverySecret }, configured: false, reason: "credential_mismatch" },
-      { body: { secret: wrongRecoverySecret }, configured: true, reason: "credential_mismatch" },
-      { body: { secret: "not canonical base64" }, configured: true, reason: "invalid_request" },
-      { body: {}, configured: true, reason: "invalid_request" },
-      {
-        body: { secret: recoverySecret, unexpected: true },
-        configured: true,
-        reason: "invalid_request",
-      },
-    ];
-    const denials: { code: string; message: string; status: number }[] = [];
-
-    for (const testCase of cases) {
-      const database = openDatabase(":memory:");
-      const app = await createApp({
-        config: testConfig({ recoveryConfigured: testCase.configured }),
-        database,
+  it.each([
+    { body: { secret: recoverySecret }, configured: false, reason: "credential_mismatch" },
+    { body: { secret: wrongRecoverySecret }, configured: true, reason: "credential_mismatch" },
+    { body: { secret: "not canonical base64" }, configured: true, reason: "invalid_request" },
+    { body: {}, configured: true, reason: "invalid_request" },
+    {
+      body: { secret: recoverySecret, unexpected: true },
+      configured: true,
+      reason: "invalid_request",
+    },
+  ] as const)("makes recovery denial case %# indistinguishable", async (testCase) => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({
+      config: testConfig({ recoveryConfigured: testCase.configured }),
+      database,
+    });
+    try {
+      const response = await app.inject(recoveryRequest(testCase.body));
+      const error = apiErrorSchema.parse(response.json()).error;
+      expect({ code: error.code, message: error.message, status: response.statusCode }).toEqual({
+        code: "recovery_access_denied",
+        message: "Recovery access was denied.",
+        status: 401,
       });
-      try {
-        const response = await app.inject(recoveryRequest(testCase.body));
-        const error = apiErrorSchema.parse(response.json()).error;
-        denials.push({ code: error.code, message: error.message, status: response.statusCode });
-        expect(response.headers["set-cookie"]).toBeUndefined();
-        expect(response.headers["cache-control"]).toBe("no-store");
-        expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
-          count: 0,
-        });
-        const audit = database.sqlite
-          .prepare(
-            `select outcome, metadata_json as metadataJson
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 0,
+      });
+      const audit = database.sqlite
+        .prepare(
+          `select outcome, metadata_json as metadataJson
              from audit_events
              where event_type = 'auth.recovery_access.attempt'`,
-          )
-          .get() as { metadataJson: string; outcome: string };
-        expect(audit).toEqual({
-          metadataJson: JSON.stringify({
-            reason: testCase.reason,
-            userAgentHash: privacyHash(
-              "user_agent",
-              "recovery-route-test-agent",
-              testConfig().encryptionKey,
-            ),
-          }),
-          outcome: "denied",
-        });
-        expect(database.sqlite.serialize().toString("utf8")).not.toContain(
-          typeof (testCase.body as { secret?: unknown })?.secret === "string"
-            ? ((testCase.body as { secret: string }).secret ?? "unreachable")
-            : recoverySecret,
-        );
-      } finally {
-        await app.close();
-      }
-    }
-
-    expect(new Set(denials.map((denial) => JSON.stringify(denial)))).toEqual(
-      new Set([
-        JSON.stringify({
-          code: "recovery_access_denied",
-          message: "Recovery access was denied.",
-          status: 401,
+        )
+        .get() as { metadataJson: string; outcome: string };
+      expect(audit).toEqual({
+        metadataJson: JSON.stringify({
+          reason: testCase.reason,
+          userAgentHash: privacyHash(
+            "user_agent",
+            "recovery-route-test-agent",
+            testConfig().encryptionKey,
+          ),
         }),
-      ]),
-    );
+        outcome: "denied",
+      });
+      expect(database.sqlite.serialize().toString("utf8")).not.toContain(
+        typeof (testCase.body as { secret?: unknown })?.secret === "string"
+          ? ((testCase.body as { secret: string }).secret ?? "unreachable")
+          : recoverySecret,
+      );
+    } finally {
+      await app.close();
+    }
   });
 
   it("requires the exact public origin and audits policy denials without invoking recovery", async () => {
@@ -882,5 +871,135 @@ describe("recovery access route", () => {
 
     expect(output.join("\n")).not.toContain(wrongRecoverySecret);
     expect(database.sqlite.open).toBe(false);
+  });
+});
+
+describe("administrator recovery preview route", () => {
+  it("is hidden, CSRF-bound, recovery-only, and returns no upstream identifiers", async () => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      recoveryAccessDependencies: { clock: () => new Date(initialTime) },
+      sessionDependencies: sessionDependencies(),
+    });
+    try {
+      database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin.example.test",
+          createdAt: initialTime,
+          displayName: "Home Jellyfin",
+          encryptedCredentials: "v2.private-connector-secret",
+          id: "jellyfin-home",
+          type: "jellyfin",
+          updatedAt: initialTime,
+        })
+        .run();
+      database.db
+        .insert(users)
+        .values({
+          createdAt: initialTime,
+          displayName: "Current administrator",
+          id: "opaque-administrator",
+          role: "admin",
+          roleSource: "manual",
+          status: "active",
+          updatedAt: initialTime,
+        })
+        .run();
+      database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: "jellyfin-home",
+          createdAt: initialTime,
+          deviceId: "private-device-id",
+          encryptedAccessToken: "v2.private-access-token",
+          externalDisplayName: "Upstream administrator",
+          externalServerId: "private-server-id",
+          externalUserId: "private-upstream-user-id",
+          externalUsername: "upstream-admin",
+          healthState: "linked",
+          id: "administrator-link",
+          lastVerifiedAt: initialTime,
+          service: "jellyfin",
+          tokenCreatedAt: initialTime,
+          updatedAt: initialTime,
+          userId: "opaque-administrator",
+        })
+        .run();
+      const administrator = app.sessionService.createSession({
+        attribution: {
+          authMethod: "jellyfin",
+          serviceIdentityLinkId: "administrator-link",
+          userId: "opaque-administrator",
+        },
+      });
+      const recovery = app.sessionService.createSession({
+        attribution: { authMethod: "recovery" },
+      });
+      const endpoint = "/v1/auth/recovery/administrator-replacement/preview";
+      const blocked = await Promise.all([
+        app.inject({
+          body: {},
+          headers: { origin: baseUrl },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: {
+            cookie: sessionCookie(administrator.sessionToken),
+            origin: baseUrl,
+            "x-omnifin-csrf": administrator.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: { cookie: sessionCookie(recovery.sessionToken), origin: baseUrl },
+          method: "POST",
+          url: endpoint,
+        }),
+        app.inject({
+          body: {},
+          headers: {
+            cookie: sessionCookie(recovery.sessionToken),
+            origin: "https://attacker.example",
+            "x-omnifin-csrf": recovery.csrfToken,
+          },
+          method: "POST",
+          url: endpoint,
+        }),
+      ]);
+      expect(blocked.map((response) => response.statusCode)).toEqual([403, 403, 403, 403]);
+
+      const response = await app.inject({
+        body: {},
+        headers: {
+          cookie: sessionCookie(recovery.sessionToken),
+          origin: baseUrl,
+          "x-omnifin-csrf": recovery.csrfToken,
+        },
+        method: "POST",
+        url: endpoint,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(administratorRecoveryPreviewResponseSchema.parse(response.json())).toEqual({
+        administrator: {
+          activeSessions: 1,
+          authenticationMethods: ["jellyfin"],
+          displayName: "Current administrator",
+          id: "opaque-administrator",
+          updatedAt: initialTime.toISOString(),
+        },
+        status: "available",
+      });
+      expect(response.body).not.toMatch(/private-|upstream-admin|administrator-link|jellyfin-home/);
+      expect(response.headers["cache-control"]).toBe("no-store");
+    } finally {
+      await app.close();
+    }
   });
 });

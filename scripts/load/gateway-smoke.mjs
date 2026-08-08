@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 
 const executeFile = promisify(execFile);
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
+export const LOAD_GATEWAY_IMAGE_REFERENCE = `omnifin.invalid/load-gateway@sha256:${"0".repeat(64)}`;
 const PROFILE = Object.freeze({
   concurrency: 80,
   requestCount: 20_000,
@@ -91,6 +92,28 @@ export function workloadRoute(requestIndex, concurrency = PROFILE.concurrency) {
   const clientNumber = requestIndex % concurrency;
   const clientIteration = Math.floor(requestIndex / concurrency);
   return WORKLOAD[(clientIteration + clientNumber) % WORKLOAD.length];
+}
+
+export function createLoadGatewayEnvironment(values, inheritedEnvironment = process.env) {
+  const environment = Object.fromEntries(
+    Object.entries(inheritedEnvironment).filter(([name]) => !name.startsWith("OMNIFIN_")),
+  );
+  return {
+    ...environment,
+    NODE_ENV: "production",
+    OMNIFIN_BACKUP_DIRECTORY: values.backupDirectory,
+    OMNIFIN_BASE_URL: "http://localhost:3000",
+    OMNIFIN_DATABASE_URL: values.databaseUrl,
+    OMNIFIN_ENCRYPTION_KEY: values.encryptionKey,
+    OMNIFIN_HOST: "127.0.0.1",
+    OMNIFIN_IMAGE_REF: LOAD_GATEWAY_IMAGE_REFERENCE,
+    OMNIFIN_INSECURE_LOOPBACK_PREVIEW: "true",
+    OMNIFIN_LOG_LEVEL: "silent",
+    OMNIFIN_PORT: String(values.port),
+    OMNIFIN_RECOVERY_SECRET: values.recoverySecret,
+    OMNIFIN_SECURE_COOKIES: "false",
+    OMNIFIN_TRUST_PROXY_HOPS: "1",
+  };
 }
 
 async function reservePort() {
@@ -282,28 +305,25 @@ async function writeReport(reportPath, report) {
 
 async function main(options) {
   const temporaryDirectory = await mkdtemp(`${tmpdir()}/omnifin-load-`);
-  const port = await reservePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const gatewayArtifact = resolve(REPOSITORY_ROOT, "apps/gateway/dist/main.js");
-  const child = spawn(process.execPath, [gatewayArtifact], {
-    cwd: REPOSITORY_ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      OMNIFIN_BASE_URL: "http://localhost:3000",
-      OMNIFIN_DATABASE_URL: `${temporaryDirectory}/omnifin.db`,
-      OMNIFIN_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
-      OMNIFIN_HOST: "127.0.0.1",
-      OMNIFIN_INSECURE_LOOPBACK_PREVIEW: "true",
-      OMNIFIN_LOG_LEVEL: "silent",
-      OMNIFIN_PORT: String(port),
-      OMNIFIN_SECURE_COOKIES: "false",
-      OMNIFIN_TRUST_PROXY_HOPS: "1",
-    },
-    stdio: "ignore",
-  });
+  const backupDirectory = resolve(temporaryDirectory, "backups");
+  let child;
 
   try {
+    await mkdir(backupDirectory, { mode: 0o700 });
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const gatewayArtifact = resolve(REPOSITORY_ROOT, "apps/gateway/dist/main.js");
+    child = spawn(process.execPath, [gatewayArtifact], {
+      cwd: REPOSITORY_ROOT,
+      env: createLoadGatewayEnvironment({
+        backupDirectory,
+        databaseUrl: resolve(temporaryDirectory, "omnifin.db"),
+        encryptionKey: randomBytes(32).toString("base64"),
+        port,
+        recoverySecret: randomBytes(48).toString("base64"),
+      }),
+      stdio: "ignore",
+    });
     await waitForGateway(baseUrl, child);
     await runWarmup(baseUrl);
     const metrics = roundedMetrics(await runMeasuredWorkload(baseUrl, child));
@@ -324,7 +344,7 @@ async function main(options) {
     process.stdout.write(`${JSON.stringify(report)}\n`);
     if (budgetFailures.length > 0) process.exitCode = 1;
   } finally {
-    await stopGateway(child);
+    if (child) await stopGateway(child);
     await rm(temporaryDirectory, { force: true, recursive: true });
   }
 }

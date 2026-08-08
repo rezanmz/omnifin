@@ -88,10 +88,17 @@ describe("saved-state maintenance", () => {
 
       expect(now - SAVED_OPERATION_RETENTION_MS).toBeGreaterThan(1001);
       const first = purgeExpiredSavedState(database, now, 1);
-      expect(first).toEqual({ catalogItems: 1, lists: 1, operations: 1, targets: 1 });
+      expect(first).toEqual({
+        catalogItems: 1,
+        lifecycleMismatches: 0,
+        lists: 1,
+        operations: 1,
+        targets: 1,
+      });
       expect(purgeExpiredSavedState(database, now, 1).operations).toBe(1);
       expect(purgeExpiredSavedState(database, now, 1)).toEqual({
         catalogItems: 0,
+        lifecycleMismatches: 0,
         lists: 0,
         operations: 0,
         targets: 0,

@@ -191,7 +191,12 @@ describe("Bazarr subtitle operations", () => {
     const { adapter: client, mock } = adapter([new Response(null, { status: 204 })]);
 
     await expect(
-      client.downloadSubtitle({ kind: "movie", radarrId: 17 }, candidate()),
+      client.downloadSubtitle(
+        { kind: "movie", radarrId: 17 },
+        candidate(),
+        undefined,
+        `mutation_dispatch_${"d".repeat(22)}`,
+      ),
     ).resolves.toBe(undefined);
 
     const request = mock.requests[0]!;
@@ -200,6 +205,9 @@ describe("Bazarr subtitle operations", () => {
     expect(request.init.method).toBe("POST");
     expect(request.init.headers.get("content-type")).toBe(
       "application/x-www-form-urlencoded;charset=UTF-8",
+    );
+    expect(request.init.headers.get("x-omnifin-operation-id")).toBe(
+      `mutation_dispatch_${"d".repeat(22)}`,
     );
     expect(Object.fromEntries(body)).toEqual({
       forced: "false",

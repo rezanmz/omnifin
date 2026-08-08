@@ -33,6 +33,7 @@ import {
   type DiscoveryFeedQuery,
   type DiscoveryFeedRailKind,
   type DiscoveryFeedResponse,
+  type DiscoveryAvailability,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryPersonDetailParams,
@@ -52,6 +53,13 @@ import {
   DiscoveryArtworkReferenceError,
   DiscoveryArtworkReferenceService,
 } from "./artwork-reference-service.js";
+import {
+  reconcileVerifiedAvailability,
+  unavailableOwnershipEvidence,
+  VerifiedAvailabilityService,
+  type VerifiedAvailabilityInput,
+  type VerifiedOwnershipEvidence,
+} from "../media/verified-availability-service.js";
 
 interface DiscoveryConnectorRow {
   baseUrl: string;
@@ -105,6 +113,11 @@ export interface DiscoverySearchAdapter {
 export interface DiscoverySearchDependencies {
   clock?: () => Date;
   createAdapter?: (config: OptionalApiKeyConnectorConfig) => DiscoverySearchAdapter;
+  verifyOwnership?: (
+    input: VerifiedAvailabilityInput,
+    principal: SessionPrincipal,
+    signal?: AbortSignal,
+  ) => Promise<VerifiedOwnershipEvidence>;
 }
 
 export type DiscoverySearchErrorReason =
@@ -144,6 +157,29 @@ const FEED_KINDS = [
   "popular_series",
   "upcoming",
 ] as const satisfies readonly DiscoveryFeedRailKind[];
+const DISCOVERY_AVAILABILITY_MAX_TITLES = 100;
+const DISCOVERY_AVAILABILITY_CONCURRENCY = 6;
+
+interface AvailabilityMedia {
+  availability: DiscoveryAvailability;
+  kind: "movie" | "series";
+  tmdbId: number;
+}
+
+function availabilityKey(input: Pick<AvailabilityMedia, "kind" | "tmdbId">) {
+  return `${input.kind}:${input.tmdbId}`;
+}
+
+function matchesReconciledAvailability(
+  availability: DiscoveryAvailability,
+  filter: DiscoveryBrowseQuery["availability"],
+) {
+  if (filter === "any") return true;
+  if (filter === "requestable") {
+    return availability === "partial" || availability === "unavailable";
+  }
+  return availability === filter;
+}
 
 function feedFailure(
   error: unknown,
@@ -230,6 +266,7 @@ export class DiscoverySearchService {
   readonly #createAdapter: (config: OptionalApiKeyConnectorConfig) => DiscoverySearchAdapter;
   readonly #database: DatabaseHandle;
   readonly #references: DiscoveryArtworkReferenceService;
+  readonly #verifyOwnership: NonNullable<DiscoverySearchDependencies["verifyOwnership"]>;
 
   public constructor(
     database: DatabaseHandle,
@@ -241,6 +278,11 @@ export class DiscoverySearchService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? ((input) => new SeerrAdapter(input));
     this.#references = new DiscoveryArtworkReferenceService(database, config, this.#clock);
+    if (dependencies.verifyOwnership) this.#verifyOwnership = dependencies.verifyOwnership;
+    else {
+      const availability = new VerifiedAvailabilityService(database, config);
+      this.#verifyOwnership = availability.verifyOwnership.bind(availability);
+    }
   }
 
   public async feed(
@@ -323,8 +365,20 @@ export class DiscoverySearchService {
     if (referenceIndex !== artworkReferences.length) {
       throw new DiscoverySearchError("storage_failure");
     }
-    const failures = rails.flatMap((rail) => (rail.failure === null ? [] : [rail.failure]));
-    const itemCount = rails.reduce((total, rail) => total + rail.items.length, 0);
+    const reconciledItems = await this.#reconcileMedia(
+      rails.flatMap((rail) => rail.items),
+      principal,
+      signal,
+    );
+    let reconciledIndex = 0;
+    const reconciledRails = rails.map((rail) => ({
+      ...rail,
+      items: reconciledItems.slice(reconciledIndex, (reconciledIndex += rail.items.length)),
+    }));
+    const failures = reconciledRails.flatMap((rail) =>
+      rail.failure === null ? [] : [rail.failure],
+    );
+    const itemCount = reconciledRails.reduce((total, rail) => total + rail.items.length, 0);
     const state =
       failures.length === FEED_KINDS.length
         ? "unavailable"
@@ -336,7 +390,7 @@ export class DiscoverySearchService {
     return discoveryFeedResponseSchema.parse({
       failures,
       generatedAt: occurredAt.toISOString(),
-      rails,
+      rails: reconciledRails,
       state,
     });
   }
@@ -353,9 +407,23 @@ export class DiscoverySearchService {
     const adapter = this.#adapterFor(row);
     const browse = adapter.browse?.bind(adapter);
     if (!browse) throw new DiscoverySearchError("connector_integrity_failure");
-    const page = await browse(criteria, signal);
+    const page = await browse(
+      criteria.availability === "any" ? criteria : { ...criteria, availability: "any" },
+      signal,
+    );
     const rawItems = page.items.slice(0, DISCOVERY_BROWSE_MAX_ITEMS_PER_PAGE);
-    const artworkInputs = rawItems.flatMap(({ artwork }) => [
+    const reconciledMedia = await this.#reconcileMedia(
+      rawItems.map(({ media }) => media),
+      principal,
+      signal,
+    );
+    const filteredItems = rawItems.flatMap((item, index) => {
+      const media = reconciledMedia[index];
+      return media && matchesReconciledAvailability(media.availability, criteria.availability)
+        ? [{ ...item, media }]
+        : [];
+    });
+    const artworkInputs = filteredItems.flatMap(({ artwork }) => [
       ...(artwork.backdropPath === null
         ? []
         : [{ kind: "backdrop" as const, path: artwork.backdropPath }]),
@@ -376,7 +444,7 @@ export class DiscoverySearchService {
       if (!reference) throw new DiscoverySearchError("storage_failure");
       return `/v1/discovery/artwork/${reference}`;
     };
-    const items = rawItems.map(({ artwork, media }) => ({
+    const items = filteredItems.map(({ artwork, media }) => ({
       ...media,
       artwork: {
         backdropPath: artworkPath(artwork.backdropPath),
@@ -436,10 +504,23 @@ export class DiscoverySearchService {
     context: DiscoverySearchContext,
     signal?: AbortSignal,
   ) {
-    requirePermission(context.principal, "media.view");
+    const principal = requirePermission(context.principal, "media.view");
+    if (principal.userId === null) throw new DiscoverySearchError("connector_integrity_failure");
     const query = discoverySearchQuerySchema.parse(input);
     const adapter = this.#adapter();
-    return discoverySearchResponseSchema.parse(await adapter.search(query, signal));
+    const response = discoverySearchResponseSchema.parse(await adapter.search(query, signal));
+    const media = response.items.filter(
+      (item): item is Extract<(typeof response.items)[number], { kind: "movie" | "series" }> =>
+        item.kind !== "person",
+    );
+    const reconciled = await this.#reconcileMedia(media, principal, signal);
+    let mediaIndex = 0;
+    return discoverySearchResponseSchema.parse({
+      ...response,
+      items: response.items.map((item) =>
+        item.kind === "person" ? item : reconciled[mediaIndex++]!,
+      ),
+    });
   }
 
   public async detail(
@@ -497,7 +578,30 @@ export class DiscoverySearchService {
       },
     });
     if (referenceIndex !== references.length) throw new DiscoverySearchError("storage_failure");
-    return response;
+    const reconciledAvailability = await this.#reconcileMedia(
+      [response.item, ...response.item.intelligence.recommendations],
+      principal,
+      signal,
+    );
+    const [itemAvailability, ...recommendationAvailability] = reconciledAvailability;
+    if (!itemAvailability) throw new DiscoverySearchError("connector_integrity_failure");
+    return discoveryMediaDetailResponseSchema.parse({
+      ...response,
+      item: {
+        ...response.item,
+        availability: itemAvailability.availability,
+        intelligence: {
+          ...response.item.intelligence,
+          recommendations: response.item.intelligence.recommendations.map(
+            (recommendation, index) => ({
+              ...recommendation,
+              availability:
+                recommendationAvailability[index]?.availability ?? recommendation.availability,
+            }),
+          ),
+        },
+      },
+    });
   }
 
   public async trailers(
@@ -542,9 +646,16 @@ export class DiscoverySearchService {
         throw new DiscoverySearchError("storage_failure", { cause: error });
       }
     }
-    return discoveryPersonDetailResponseSchema.parse({
+    const response = discoveryPersonDetailResponseSchema.parse({
       ...detail.response,
       item: { ...detail.response.item, profilePath },
+    });
+    return discoveryPersonDetailResponseSchema.parse({
+      ...response,
+      item: {
+        ...response.item,
+        credits: await this.#reconcileMedia(response.item.credits, principal, signal),
+      },
     });
   }
 
@@ -559,8 +670,53 @@ export class DiscoverySearchService {
     const params = discoveryPersonDetailParamsSchema.parse(paramsInput);
     const query = discoveryPersonCreditsQuerySchema.parse(queryInput);
     const row = this.#connector();
-    const response = await this.#adapterFor(row).personCredits(params, query, signal);
-    return discoveryPersonCreditsResponseSchema.parse(response);
+    const response = discoveryPersonCreditsResponseSchema.parse(
+      await this.#adapterFor(row).personCredits(params, query, signal),
+    );
+    return discoveryPersonCreditsResponseSchema.parse({
+      ...response,
+      items: await this.#reconcileMedia(response.items, principal, signal),
+    });
+  }
+
+  async #reconcileMedia<T extends AvailabilityMedia>(
+    items: readonly T[],
+    principal: SessionPrincipal,
+    signal?: AbortSignal,
+  ): Promise<T[]> {
+    const unique = new Map<string, VerifiedAvailabilityInput>();
+    for (const item of items) {
+      unique.set(availabilityKey(item), { kind: item.kind, tmdbId: item.tmdbId });
+    }
+    if (unique.size > DISCOVERY_AVAILABILITY_MAX_TITLES) {
+      throw new DiscoverySearchError("connector_integrity_failure");
+    }
+    const pending = [...unique.entries()];
+    const evidence = new Map<string, VerifiedOwnershipEvidence>();
+    let index = 0;
+    const worker = async () => {
+      while (index < pending.length) {
+        const entry = pending[index++];
+        if (!entry) return;
+        const [key, input] = entry;
+        try {
+          evidence.set(key, await this.#verifyOwnership(input, principal, signal));
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          evidence.set(key, unavailableOwnershipEvidence(principal.userId));
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(DISCOVERY_AVAILABILITY_CONCURRENCY, pending.length) }, worker),
+    );
+    return items.map((item) => ({
+      ...item,
+      availability: reconcileVerifiedAvailability(
+        item.availability,
+        evidence.get(availabilityKey(item)) ?? unavailableOwnershipEvidence(principal.userId),
+      ),
+    }));
   }
 
   #adapter() {

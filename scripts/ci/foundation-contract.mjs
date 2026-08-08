@@ -78,7 +78,7 @@ export const REQUIRED_ROOT_SCRIPTS = Object.freeze([
 
 const requiredWorkspacePatterns = ["apps/*", "packages/*"];
 const requiredServiceNames = ["gateway", "maintenance", "web"];
-const defaultImage = "${OMNIFIN_IMAGE:-ghcr.io/rezanmz/omnifin:latest}";
+const requiredImage = "${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -235,8 +235,8 @@ async function verifyDeployment(root, problems) {
   );
   const image = services.gateway?.image;
   requireValue(
-    image === defaultImage,
-    "compose.yaml must default to the public Omnifin GHCR image.",
+    image === requiredImage,
+    "compose.yaml must require the release's immutable Omnifin image.",
     problems,
   );
   for (const serviceName of requiredServiceNames) {
@@ -264,19 +264,30 @@ async function verifyDeployment(root, problems) {
     );
   }
   const maintenanceEnvironment = services.maintenance?.environment;
+  const gatewayEnvironment = services.gateway?.environment;
+  requireValue(
+    isRecord(gatewayEnvironment) && gatewayEnvironment.OMNIFIN_IMAGE_REF === requiredImage,
+    "The gateway must receive the exact required image reference.",
+    problems,
+  );
   requireValue(
     isRecord(maintenanceEnvironment) &&
       maintenanceEnvironment.NODE_ENV === "production" &&
       maintenanceEnvironment.OMNIFIN_BACKUP_DIRECTORY === "/backups" &&
       maintenanceEnvironment.OMNIFIN_BASE_URL === "${OMNIFIN_BASE_URL:-http://localhost:3000}" &&
+      maintenanceEnvironment.OMNIFIN_ENCRYPTION_KEY_FILE ===
+        "/run/secrets/omnifin_encryption_key" &&
+      maintenanceEnvironment.OMNIFIN_IMAGE_REF === requiredImage &&
       maintenanceEnvironment.OMNIFIN_GATEWAY_HEALTH_URL === "http://gateway:4000/healthz" &&
       maintenanceEnvironment.OMNIFIN_GATEWAY_READY_URL === "http://gateway:4000/readyz",
-    "The maintenance service must receive only the fixed deployment-doctor runtime inputs.",
+    "The maintenance service must receive the fixed runtime inputs and encryption-key file path.",
     problems,
   );
   requireValue(
-    services.maintenance?.secrets === undefined,
-    "The maintenance service must not mount application secrets.",
+    Array.isArray(services.maintenance?.secrets) &&
+      services.maintenance.secrets.length === 1 &&
+      services.maintenance.secrets[0] === "omnifin_encryption_key",
+    "The maintenance service must mount only the encryption-key secret.",
     problems,
   );
   requireValue(

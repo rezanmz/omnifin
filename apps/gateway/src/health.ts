@@ -12,10 +12,14 @@ const REQUIRED_TABLES = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "database_key_verifiers",
   "download_queue_bulk_operations",
+  "download_queue_item_operations",
   "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
+  "external_mutation_dispatches",
+  "external_mutation_target_locks",
   "library_removal_operations",
   "library_removal_previews",
   "media_issue_operations",
@@ -25,6 +29,7 @@ const REQUIRED_TABLES = [
   "oidc_providers",
   "operational_failures",
   "playback_sessions",
+  "playback_progress_operations",
   "role_mappings",
   "service_identity_links",
   "session_rotation_aliases",
@@ -51,10 +56,31 @@ function assertDatabaseReady(database: DatabaseHandle) {
     if (tables.length !== REQUIRED_TABLES.length) {
       throw new Error("Required database schema is not present.");
     }
+    const keyVerifier = database.sqlite
+      .prepare(
+        "select count(*) as count from database_key_verifiers where id = 1 and format_version = 1",
+      )
+      .get() as { count: number };
+    if (keyVerifier.count !== 1) throw new Error("Database key verifier is not initialized.");
 
     database.sqlite
       .prepare(
         "select id, user_id, idempotency_key_hash, fingerprint_hash, state, request_json, results_json, response_json, completed_at from download_queue_bulk_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, bulk_operation_id, user_id, connector_id, connector_instance_generation, connector_config_generation, item_digest, kind, idempotency_key_hash, fingerprint_hash, state, failure_code, completed_at from download_queue_item_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, kind, parent_operation_type, parent_operation_id, user_id, connector_id, connector_instance_generation, connector_config_generation, state, encrypted_normalized_request, lease_owner, lease_expires_at, dispatch_attempt_count, dispatched_at, reconcile_required_at, uncertain_at, completed_at, failure_code from external_mutation_dispatches limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select target_scope, target_digest, owner_dispatch_id, acquired_at from external_mutation_target_locks limit 0",
       )
       .all();
     database.sqlite
@@ -79,7 +105,7 @@ function assertDatabaseReady(database: DatabaseHandle) {
       .all();
     database.sqlite
       .prepare(
-        "select id, connector_id, upstream_id_digest, encrypted_upstream_id, last_used_at, expires_at from external_issue_references limit 0",
+        "select id, connector_id, connector_instance_generation, upstream_id_digest, encrypted_upstream_id, last_used_at, expires_at from external_issue_references limit 0",
       )
       .all();
     database.sqlite
@@ -94,7 +120,12 @@ function assertDatabaseReady(database: DatabaseHandle) {
       .all();
     database.sqlite
       .prepare(
-        "select id, user_id, service_identity_link_id, link_revision, media_reference_id, connector_id, encrypted_payload, expires_at from subtitle_searches limit 0",
+        "select id, playback_session_id, session_revision, user_id, connector_id, connector_instance_generation, connector_config_generation, position_seconds, state, failure_code, completed_at from playback_progress_operations limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, user_id, service_identity_link_id, link_revision, media_reference_id, connector_id, connector_instance_generation, encrypted_payload, expires_at from subtitle_searches limit 0",
       )
       .all();
     database.sqlite
@@ -150,6 +181,31 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, claim_path_json, operator, values_json, enabled from role_mappings limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, type, instance_generation, config_generation, instance_identity_hash from connector_configs limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, connector_id, connector_instance_generation from service_identity_links limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select connector_id, connector_instance_generation, kind, is_4k from media_request_profile_preferences limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, connector_id, connector_instance_generation, item_digest from discovery_artwork_references limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, connector_id, connector_instance_generation, purpose from jellyfin_quick_connect_transactions limit 0",
       )
       .all();
 

@@ -9,7 +9,8 @@ and contributors changing a security-sensitive flow.
 > resolution, direct Jellyfin password and Quick Connect sign-in, password and Quick
 > Connect OIDC-to-Jellyfin pairing, RP-initiated logout, provider-initiated back- and
 > front-channel logout, opaque sessions, and break-glass
-> recovery. The permission-checked identity control room and API can create, list, and validate
+> recovery, including narrow replacement of an inaccessible sole administrator. The
+> permission-checked identity control room and API can create, list, and validate
 > encrypted configurations and administer provider lifecycles and explicit role mappings. A pinned,
 > isolated Authentik environment exercises real authorization, guarded role-mapping updates, RP logout, and
 > back-channel logout. A separate digest-pinned Dex environment exercises generic discovery, S256
@@ -126,6 +127,21 @@ Provider states have deliberately narrow meanings:
 - `misconfigured` means persisted discovery or security attribution is inconsistent
   and requires administrator repair; the row is non-interactive.
 
+Jellyfin authentication is bound to the connector's instance and configuration generations as well
+as its exact endpoint and TLS policy. Password and Quick Connect flows recheck that binding before
+committing a token or local session. Quick Connect rows and encrypted protocol payloads carry the
+instance generation, so a secret initiated for an old generation is rejected locally and is never
+sent to a replacement endpoint. The stable Jellyfin `ServerId` is compared with the privacy-hashed
+identity established by connector probing; the raw value remains internal.
+
+Replacing a Jellyfin endpoint or stable server identity revokes dependent sessions and tokens and
+moves affected accounts to `pending_link`. A fresh probe plus an explicit connector enable are
+required. A pending OIDC session still proves the local account owner and may relink that account's
+existing revoked or relink-required row to the replacement generation after fresh Jellyfin proof.
+The transaction preserves the local link ID, advances its revision, and updates its upstream server
+and user identity. An identity already owned by another account, a different server than the probed
+replacement, or an attempt to switch users on the same stable server remains denied.
+
 An empty successful response is shown as an unconfigured installation. A timeout,
 malformed response, or failed gateway request produces the distinct control-plane
 unavailable state. Discovery runtimes cache for five minutes; failures back off from
@@ -138,44 +154,49 @@ Browsers and configured identity providers use the public web routes below. The 
 process forwards them to the versioned gateway API; operators must not expose the
 gateway directly.
 
-| Route                                                                          | Purpose                                                                                                                            |
-| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/auth/providers`                                                      | Return the bounded browser-safe provider list.                                                                                     |
-| `GET /api/auth/oidc/{providerId}/start`                                        | Bind the browser, create a one-time transaction, and start OIDC.                                                                   |
-| `GET /api/auth/oidc/callback/{providerId}`                                     | Consume the transaction, validate the grant, and establish a session.                                                              |
-| `POST /api/auth/bootstrap/oidc/{providerId}/start`                             | Start a CSRF- and recovery-bound OIDC first-administrator claim.                                                                   |
-| `POST /api/auth/oidc/logout`                                                   | Revoke locally, then request RP-initiated provider logout when available.                                                          |
-| `POST /api/auth/oidc/backchannel/{providerId}`                                 | Verify a provider Logout Token and revoke its exact local session scope.                                                           |
-| `GET /api/auth/oidc/frontchannel/{providerId}`                                 | Accept exact session-aware provider logout in a restricted iframe.                                                                 |
-| `POST /api/auth/jellyfin/password`                                             | Verify credentials with Jellyfin and establish a local session.                                                                    |
-| `POST /api/auth/bootstrap/jellyfin/password`                                   | Establish the first admin from recovery plus Jellyfin admin proof.                                                                 |
-| `POST /api/auth/bootstrap/jellyfin/quick-connect`                              | Start recovery-bound first-admin Quick Connect proof.                                                                              |
-| `POST /api/auth/bootstrap/jellyfin/quick-connect/{transactionId}/poll`         | Complete first-admin bootstrap for the exact recovery session.                                                                     |
-| `POST /api/auth/jellyfin/link/password`                                        | Pair fresh credentials to the exact pending OIDC session.                                                                          |
-| `POST /api/auth/jellyfin/link/quick-connect`                                   | Create Quick Connect proof bound to the exact pending OIDC session.                                                                |
-| `POST /api/auth/jellyfin/link/quick-connect/{transactionId}/poll`              | Complete pairing only for the originating OIDC session.                                                                            |
-| `POST /api/auth/jellyfin/quick-connect`                                        | Create a browser-bound Quick Connect code transaction.                                                                             |
-| `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll`                   | Poll by opaque ID and establish a session only after approval.                                                                     |
-| `GET /api/auth/session`                                                        | Inspect and, when due, rotate the current local session.                                                                           |
-| `DELETE /api/auth/session`                                                     | Revoke the current session; requires same-origin CSRF protection.                                                                  |
-| `DELETE /api/auth/sessions`                                                    | Revoke every local session owned by the current user.                                                                              |
-| `GET /api/auth/identity-links`                                                 | Inspect the current user's normalized Jellyfin link and health.                                                                    |
-| `DELETE /api/auth/identity-links/{linkId}`                                     | Revoke an owned link, erase its token, and reduce local authority.                                                                 |
-| `POST /api/auth/recovery/session`                                              | Hidden, rate-limited recovery endpoint; never linked from the login UI.                                                            |
-| `GET /api/admin/setup/readiness`                                               | Read a no-store, detail-free setup summary; requires a full administrator.                                                         |
-| `POST /api/admin/setup/verification`                                           | Run fresh, CSRF-protected identity and connector checks and return a privacy-safe aggregate report; requires a full administrator. |
-| `GET /api/admin/setup/deployment`                                              | Read four no-store deployment posture bits; requires a full administrator.                                                         |
-| `GET /api/admin/auth/oidc/providers`                                           | List secret-free OIDC configuration for an authorized administrator.                                                               |
-| `POST /api/admin/auth/oidc/providers`                                          | Create an encrypted, audited OIDC configuration; requires session CSRF.                                                            |
-| `PUT /api/admin/auth/oidc/providers/{providerId}`                              | Replace configuration, invalidate stale runtime state, and revoke sessions.                                                        |
-| `DELETE /api/admin/auth/oidc/providers/{providerId}`                           | Delete a disabled provider only when no external identities depend on it.                                                          |
-| `POST /api/admin/auth/oidc/providers/{providerId}/validate`                    | Freshly validate discovery and return only safe capability information.                                                            |
-| `GET /api/admin/auth/oidc/providers/{providerId}/role-mappings`                | List exact claim-to-role rules for an authorized administrator.                                                                    |
-| `POST /api/admin/auth/oidc/providers/{providerId}/role-mappings`               | Create an audited rule and revoke affected role-derived sessions.                                                                  |
-| `PUT /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}`    | Atomically update a rule and revoke only affected role-derived sessions.                                                           |
-| `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}` | Delete a rule and revoke affected role-derived sessions.                                                                           |
-| `GET /api/admin/users`                                                         | List bounded, browser-safe account authority and activity summaries.                                                               |
-| `PATCH /api/admin/users/{userId}`                                              | Apply a revision-bound role or local-state change and revoke sessions.                                                             |
+| Route                                                                                           | Purpose                                                                                                                            |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/auth/providers`                                                                       | Return the bounded browser-safe provider list.                                                                                     |
+| `GET /api/auth/oidc/{providerId}/start`                                                         | Bind the browser, create a one-time transaction, and start OIDC.                                                                   |
+| `GET /api/auth/oidc/callback/{providerId}`                                                      | Consume the transaction, validate the grant, and establish a session.                                                              |
+| `POST /api/auth/bootstrap/oidc/{providerId}/start`                                              | Start a CSRF- and recovery-bound OIDC first-administrator claim.                                                                   |
+| `POST /api/auth/oidc/logout`                                                                    | Revoke locally, then request RP-initiated provider logout when available.                                                          |
+| `POST /api/auth/oidc/backchannel/{providerId}`                                                  | Verify a provider Logout Token and revoke its exact local session scope.                                                           |
+| `GET /api/auth/oidc/frontchannel/{providerId}`                                                  | Accept exact session-aware provider logout in a restricted iframe.                                                                 |
+| `POST /api/auth/jellyfin/password`                                                              | Verify credentials with Jellyfin and establish a local session.                                                                    |
+| `POST /api/auth/bootstrap/jellyfin/password`                                                    | Establish the first admin from recovery plus Jellyfin admin proof.                                                                 |
+| `POST /api/auth/bootstrap/jellyfin/quick-connect`                                               | Start recovery-bound first-admin Quick Connect proof.                                                                              |
+| `POST /api/auth/bootstrap/jellyfin/quick-connect/{transactionId}/poll`                          | Complete first-admin bootstrap for the exact recovery session.                                                                     |
+| `POST /api/auth/jellyfin/link/password`                                                         | Pair fresh credentials to the exact pending OIDC session.                                                                          |
+| `POST /api/auth/jellyfin/link/quick-connect`                                                    | Create Quick Connect proof bound to the exact pending OIDC session.                                                                |
+| `POST /api/auth/jellyfin/link/quick-connect/{transactionId}/poll`                               | Complete pairing only for the originating OIDC session.                                                                            |
+| `POST /api/auth/jellyfin/quick-connect`                                                         | Create a browser-bound Quick Connect code transaction.                                                                             |
+| `POST /api/auth/jellyfin/quick-connect/{transactionId}/poll`                                    | Poll by opaque ID and establish a session only after approval.                                                                     |
+| `GET /api/auth/session`                                                                         | Inspect and, when due, rotate the current local session.                                                                           |
+| `DELETE /api/auth/session`                                                                      | Revoke the current session; requires same-origin CSRF protection.                                                                  |
+| `DELETE /api/auth/sessions`                                                                     | Revoke every local session owned by the current user.                                                                              |
+| `GET /api/auth/identity-links`                                                                  | Inspect the current user's normalized Jellyfin link and health.                                                                    |
+| `DELETE /api/auth/identity-links/{linkId}`                                                      | Revoke an owned link, erase its token, and reduce local authority.                                                                 |
+| `POST /api/auth/recovery/session`                                                               | Hidden, rate-limited recovery endpoint; never linked from the login UI.                                                            |
+| `POST /api/auth/recovery/administrator-replacement/preview`                                     | Return the sole active administrator's opaque, recovery-safe replacement preview.                                                  |
+| `POST /api/auth/recovery/administrator-replacement/jellyfin/password`                           | Replace the exact sole administrator after fresh Jellyfin administrator password proof.                                            |
+| `POST /api/auth/recovery/administrator-replacement/jellyfin/quick-connect`                      | Start browser- and recovery-bound Quick Connect proof for the exact administrator revision.                                        |
+| `POST /api/auth/recovery/administrator-replacement/jellyfin/quick-connect/{transactionId}/poll` | Consume replacement Quick Connect proof and issue the single replacement session.                                                  |
+| `POST /api/auth/recovery/administrator-replacement/oidc/{providerId}/start`                     | Start fresh PKCE proof bound to recovery, the exact administrator revision, and literal confirmation.                              |
+| `GET /api/admin/setup/readiness`                                                                | Read a no-store, detail-free setup summary; requires a full administrator.                                                         |
+| `POST /api/admin/setup/verification`                                                            | Run fresh, CSRF-protected identity and connector checks and return a privacy-safe aggregate report; requires a full administrator. |
+| `GET /api/admin/setup/deployment`                                                               | Read four no-store deployment posture bits; requires a full administrator.                                                         |
+| `GET /api/admin/auth/oidc/providers`                                                            | List secret-free OIDC configuration for an authorized administrator.                                                               |
+| `POST /api/admin/auth/oidc/providers`                                                           | Create an encrypted, audited OIDC configuration; requires session CSRF.                                                            |
+| `PUT /api/admin/auth/oidc/providers/{providerId}`                                               | Replace configuration, invalidate stale runtime state, and revoke sessions.                                                        |
+| `DELETE /api/admin/auth/oidc/providers/{providerId}`                                            | Delete a disabled provider only when no external identities depend on it.                                                          |
+| `POST /api/admin/auth/oidc/providers/{providerId}/validate`                                     | Freshly validate discovery and return only safe capability information.                                                            |
+| `GET /api/admin/auth/oidc/providers/{providerId}/role-mappings`                                 | List exact claim-to-role rules for an authorized administrator.                                                                    |
+| `POST /api/admin/auth/oidc/providers/{providerId}/role-mappings`                                | Create an audited rule and revoke affected role-derived sessions.                                                                  |
+| `PUT /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}`                     | Atomically update a rule and revoke only affected role-derived sessions.                                                           |
+| `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}`                  | Delete a rule and revoke affected role-derived sessions.                                                                           |
+| `GET /api/admin/users`                                                                          | List bounded, browser-safe account authority and activity summaries.                                                               |
+| `PATCH /api/admin/users/{userId}`                                                               | Apply a revision-bound role or local-state change and revoke sessions.                                                             |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect
@@ -469,6 +490,34 @@ One immediate SQLite transaction verifies the first-admin invariant, records
 `recovery_bootstrap` provenance, replaces recovery access, and revokes competing user sessions.
 A pending OIDC bootstrap administrator may configure identity and connectors but has no media or
 playback permissions until explicit Jellyfin pairing. Ordinary sign-in never imports authority.
+
+When exactly one active administrator already exists but is inaccessible, recovery can perform a
+separate replacement ceremony. `recovery.administrator.replace` is issued only to the short-lived
+recovery principal; an ordinary administrator, including the administrator being replaced, never
+receives it. The no-store preview is deliberately narrower than the normal user directory: it
+contains only an opaque local administrator ID, display name, `updatedAt` revision, available local
+authentication methods, and active-session count. Zero or multiple active administrators collapse
+to the same unavailable outcome.
+
+Every replacement start submits the exact administrator ID and revision plus the literal
+`REPLACE ADMINISTRATOR` confirmation. Password completion requires a fresh Jellyfin authentication
+whose returned policy explicitly has `IsAdministrator=true`. Quick Connect stores the target,
+revision, confirmation, recovery session, browser binding, connector revision, and one-use upstream
+proof only inside the encrypted five-minute transaction. OIDC stores the same replacement binding
+inside its encrypted PKCE transaction and accepts only an existing, distinct, active account whose
+current claims resolve to the local `admin` mapping and whose Jellyfin link remains usable. OIDC JIT,
+pending-link accounts, and accounts without a usable link are unavailable for replacement and do not
+change the target.
+
+The commit rechecks that the target is still the sole active administrator, applies its exact
+`updatedAt` compare-and-swap, promotes the proven candidate, disables the target, and verifies that
+the candidate is now the only active administrator. It then revokes every prior target and candidate
+session plus every recovery session, creates one normal replacement administrator session, and writes
+one `auth.administrator.replaced` audit event in the same immediate transaction. Audit metadata uses
+only local opaque IDs, proof kind, prior local role provenance, and revocation counts; credentials,
+upstream users, subjects, issuers, connector details, and token material are excluded. Any target,
+session, audit, or issuance failure rolls the entire transfer back. The fresh-database first-admin
+bootstrap remains a separate unchanged flow.
 
 The implemented recovery boundary allows only one active recovery session: a newly
 verified break-glass login atomically supersedes the prior recovery session and records

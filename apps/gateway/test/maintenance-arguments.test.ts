@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertOnlyMaintenanceFlags,
   assertOnlyMaintenanceValues,
   parseMaintenanceArguments,
   requireMaintenanceInteger,
@@ -7,18 +8,22 @@ import {
 } from "../src/operations/maintenance-arguments.js";
 
 describe("maintenance argument grammar", () => {
-  it("parses bounded values and the explicit stopped-gateway flag", () => {
+  it("parses bounded values and explicit restore confirmation flags", () => {
     const parsed = parseMaintenanceArguments([
       "--input",
       "/backups/source.sqlite",
       "--rollback-output",
       "/backups/rollback.sqlite",
       "--confirm-gateway-stopped",
+      "--confirm-empty-target",
     ]);
 
     expect(requireMaintenanceValue(parsed, "--input")).toBe("/backups/source.sqlite");
     expect(requireMaintenanceValue(parsed, "--rollback-output")).toBe("/backups/rollback.sqlite");
-    expect(parsed.flags).toEqual(new Set(["--confirm-gateway-stopped"]));
+    expect(parsed.flags).toEqual(new Set(["--confirm-gateway-stopped", "--confirm-empty-target"]));
+    expect(() =>
+      assertOnlyMaintenanceFlags(parsed, ["--confirm-empty-target", "--confirm-gateway-stopped"]),
+    ).not.toThrow();
   });
 
   it("parses an explicitly bounded retention count", () => {
@@ -52,7 +57,7 @@ describe("maintenance argument grammar", () => {
     expect(() => assertOnlyMaintenanceValues(value, [])).toThrow("usage");
 
     const flag = parseMaintenanceArguments(["--confirm-gateway-stopped"]);
-    expect(flag.flags.size).toBe(1);
+    expect(() => assertOnlyMaintenanceFlags(flag, [])).toThrow("usage");
   });
 
   it("rejects missing required operation values", () => {

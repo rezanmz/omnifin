@@ -19,7 +19,12 @@ import {
   serviceIdentityLinks,
   users,
 } from "../src/db/schema.js";
-import type { IssueWorkbenchConnector } from "../src/media/issue-workbench-service.js";
+import {
+  IssueWorkbenchService,
+  IssueWorkbenchServiceError,
+  type IssueWorkbenchConnector,
+  type IssueWorkbenchServiceErrorReason,
+} from "../src/media/issue-workbench-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -477,7 +482,7 @@ describe("issue workbench routes", () => {
     }
   });
 
-  it("maps stale Seerr conflicts without exposing upstream details", async () => {
+  it("fails closed when a stale Seerr conflict cannot be exactly reconciled", async () => {
     const privateMessage = "private stale issue detail";
     const updateIssueStatus = vi.fn<IssueWorkbenchConnector["updateIssueStatus"]>(async () => {
       const error = new SeerrIssueError("issue_conflict");
@@ -499,9 +504,86 @@ describe("issue workbench routes", () => {
         url: `/v1/issues/${issueId}/status`,
       });
       expect(response.statusCode).toBe(409);
-      expect(apiErrorSchema.parse(response.json()).error.code).toBe("media_issue_conflict");
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "media_issue_outcome_uncertain",
+      );
+      expect(response.headers["operation-id"]).toBeTruthy();
       expect(response.body).not.toContain(privateMessage);
     } finally {
+      await app.close();
+    }
+  });
+
+  it.each<{
+    code: string;
+    reason: IssueWorkbenchServiceErrorReason;
+    retryAfter?: string;
+    status: number;
+  }>([
+    { code: "media_issue_not_found", reason: "issue_not_found", status: 404 },
+    { code: "media_issue_conflict", reason: "issue_conflict", status: 409 },
+    { code: "idempotency_key_conflict", reason: "idempotency_conflict", status: 409 },
+    {
+      code: "media_issue_outcome_pending",
+      reason: "idempotency_in_progress",
+      retryAfter: "2",
+      status: 409,
+    },
+    { code: "media_issue_outcome_uncertain", reason: "media_issue_outcome_uncertain", status: 409 },
+    {
+      code: "media_issue_reconcile_required",
+      reason: "media_issue_reconcile_required",
+      status: 409,
+    },
+    { code: "media_issue_response_invalid", reason: "response_invalid", status: 502 },
+    { code: "media_issue_principal_unavailable", reason: "principal_unavailable", status: 403 },
+    {
+      code: "media_issue_configuration_unavailable",
+      reason: "configuration_unavailable",
+      status: 503,
+    },
+    { code: "media_issue_configuration_unavailable", reason: "integrity_failure", status: 503 },
+    { code: "media_issue_configuration_unavailable", reason: "storage_failure", status: 503 },
+    { code: "media_issue_temporarily_unavailable", reason: "temporarily_unavailable", status: 503 },
+  ])("maps issue operation failure $reason", async ({ code, reason, retryAfter, status }) => {
+    const { app, mutationHeaders } = await harness();
+    const update = vi
+      .spyOn(IssueWorkbenchService.prototype, "updateStatus")
+      .mockRejectedValue(
+        new IssueWorkbenchServiceError(reason, { operationId: "issue-operation" }),
+      );
+    try {
+      const response = await app.inject({
+        headers: mutationHeaders,
+        method: "POST",
+        payload: { status: "resolved" },
+        url: `/v1/issues/issue_${"i".repeat(22)}/status`,
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.headers["operation-id"]).toBe("issue-operation");
+      expect(response.headers["retry-after"]).toBe(retryAfter);
+    } finally {
+      update.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("maps issue-list failures without an operation identifier", async () => {
+    const { app, cookie } = await harness();
+    const list = vi
+      .spyOn(IssueWorkbenchService.prototype, "list")
+      .mockRejectedValue(new IssueWorkbenchServiceError("temporarily_unavailable"));
+    try {
+      const response = await app.inject({
+        headers: { cookie },
+        method: "GET",
+        url: "/v1/issues",
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.headers["operation-id"]).toBeUndefined();
+    } finally {
+      list.mockRestore();
       await app.close();
     }
   });

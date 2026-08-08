@@ -787,8 +787,8 @@ export function ReadyCalendar({
           ) : null}
           {calendar.sourceTruncated ? (
             <div className={styles.truncatedNotice} role="status">
-              <Layers3 aria-hidden="true" size={18} />A source returned more events than this
-              bounded view can safely display.
+              <Layers3 aria-hidden="true" size={18} />
+              Additional calendar sources were omitted from this bounded view.
             </div>
           ) : null}
 

@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   AUTH_USERS_PAGE_MAX_COUNT,
+  ADMINISTRATOR_RECOVERY_CONFIRMATION,
   OIDC_ISSUER_MAX_LENGTH,
   PENDING_BOOTSTRAP_ADMIN_PERMISSIONS,
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   appearanceUpdateResponseSchema,
+  administratorRecoveryConfirmationRequestSchema,
+  administratorRecoveryJellyfinPasswordRequestSchema,
+  administratorRecoveryPreviewResponseSchema,
+  administratorRecoveryReplacementResponseSchema,
+  administratorRecoveryTargetSchema,
   authenticatedSessionResponseSchema,
   authProviderSchema,
   externalIdentitySchema,
@@ -309,6 +315,85 @@ describe("user access administration contracts", () => {
       userAccessListResponseSchema.safeParse({
         nextCursor: null,
         users: Array.from({ length: AUTH_USERS_PAGE_MAX_COUNT + 1 }, () => user),
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("sole-administrator recovery contracts", () => {
+  const target = {
+    administratorId: "opaque-administrator-1",
+    expectedUpdatedAt: "2026-07-25T12:00:00.000Z",
+  };
+
+  it("keeps the target and confirmation exact", () => {
+    expect(administratorRecoveryTargetSchema.parse(target)).toEqual(target);
+    expect(
+      administratorRecoveryTargetSchema.safeParse({ ...target, candidateId: "forged" }).success,
+    ).toBe(false);
+    expect(
+      administratorRecoveryConfirmationRequestSchema.parse({
+        ...target,
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+      }),
+    ).toEqual({ ...target, confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION });
+    expect(
+      administratorRecoveryConfirmationRequestSchema.safeParse({
+        ...target,
+        confirmation: "replace administrator",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("exposes only the bounded administrator preview", () => {
+    const preview = administratorRecoveryPreviewResponseSchema.parse({
+      administrator: {
+        activeSessions: 2,
+        authenticationMethods: ["jellyfin", "oidc"],
+        displayName: "Current administrator",
+        id: target.administratorId,
+        updatedAt: target.expectedUpdatedAt,
+      },
+      status: "available",
+    });
+    expect(preview).not.toHaveProperty("externalUserId");
+    expect(preview).not.toHaveProperty("issuer");
+    expect(
+      administratorRecoveryPreviewResponseSchema.safeParse({
+        ...preview,
+        connectorId: "must-not-cross",
+      }).success,
+    ).toBe(false);
+    expect(administratorRecoveryPreviewResponseSchema.parse({ status: "unavailable" })).toEqual({
+      status: "unavailable",
+    });
+    expect(administratorRecoveryPreviewResponseSchema.parse({ status: "denied" })).toEqual({
+      status: "denied",
+    });
+  });
+
+  it("keeps proof and completion responses credential-free", () => {
+    expect(
+      administratorRecoveryJellyfinPasswordRequestSchema.parse({
+        ...target,
+        confirmation: ADMINISTRATOR_RECOVERY_CONFIRMATION,
+        password: "private-password",
+        username: "candidate",
+      }),
+    ).toMatchObject({ password: "private-password" });
+    expect(
+      administratorRecoveryReplacementResponseSchema.parse({
+        csrfToken: "c".repeat(43),
+        revokedSessions: { recovery: 1, replacement: 2, target: 3 },
+        status: "replaced",
+      }),
+    ).not.toHaveProperty("principal");
+    expect(
+      administratorRecoveryReplacementResponseSchema.safeParse({
+        accessToken: "private",
+        csrfToken: "c".repeat(43),
+        revokedSessions: { recovery: 1, replacement: 2, target: 3 },
+        status: "replaced",
       }).success,
     ).toBe(false);
   });
@@ -869,6 +954,7 @@ describe("authentication contracts", () => {
     expect(RECOVERY_PERMISSIONS).toEqual([
       "recovery.oidc.manage",
       "recovery.jellyfin.manage",
+      "recovery.administrator.replace",
       "recovery.sessions.revoke",
     ]);
 

@@ -23,10 +23,13 @@ const optionalSecretSetting = z.preprocess(
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   OMNIFIN_BASE_URL: z.url().default("http://localhost:3000"),
+  OMNIFIN_BACKUP_DIRECTORY: z.string().min(1).default("/backups"),
+  OMNIFIN_BACKUP_RETENTION_COUNT: z.coerce.number().int().min(2).max(365).default(14),
   OMNIFIN_DATABASE_URL: z.string().min(1).default("./data/omnifin.db"),
   OMNIFIN_ENCRYPTION_KEY: optionalSecretSetting,
   OMNIFIN_ENCRYPTION_KEY_FILE: optionalSecretSetting,
   OMNIFIN_HOST: z.string().min(1).default("127.0.0.1"),
+  OMNIFIN_IMAGE_REF: optionalSecretSetting,
   OMNIFIN_INSECURE_LOOPBACK_PREVIEW: booleanString,
   OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: booleanString,
   OMNIFIN_JELLYFIN_URL: optionalUrlString,
@@ -41,11 +44,14 @@ const environmentSchema = z.object({
 });
 
 export interface AppConfig {
+  backupDirectory?: string;
+  backupRetentionCount?: number;
   baseUrl: URL;
   databaseUrl: string;
   encryptionKey: Buffer;
   environment: "development" | "test" | "production";
   host: string;
+  imageReference?: string;
   insecureLoopbackPreview: boolean;
   jellyfinInsecureHttpApproved: boolean;
   jellyfinUrl?: URL;
@@ -67,6 +73,7 @@ const RECOVERY_SECRET_MIN_BYTES = 32;
 const RECOVERY_SECRET_MAX_BYTES = 128;
 const RECOVERY_SECRET_MAX_ENCODED_CHARACTERS = Math.ceil(RECOVERY_SECRET_MAX_BYTES / 3) * 4;
 const RECOVERY_SECRET_DIGEST_BYTES = 32;
+const IMMUTABLE_IMAGE_PATTERN = /^[^\s@]+@sha256:[a-f0-9]{64}$/u;
 
 function secretFromEnvironment(
   value: string | undefined,
@@ -236,13 +243,22 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   ) {
     throw new StartupError("base_url_invalid");
   }
+  if (
+    parsed.NODE_ENV === "production" &&
+    (!parsed.OMNIFIN_IMAGE_REF || !IMMUTABLE_IMAGE_PATTERN.test(parsed.OMNIFIN_IMAGE_REF))
+  ) {
+    throw new StartupError("image_reference_invalid");
+  }
 
   return {
+    backupDirectory: parsed.OMNIFIN_BACKUP_DIRECTORY,
+    backupRetentionCount: parsed.OMNIFIN_BACKUP_RETENTION_COUNT,
     baseUrl,
     databaseUrl: parsed.OMNIFIN_DATABASE_URL,
     encryptionKey: decodeEncryptionKey(encryptionKey),
     environment: parsed.NODE_ENV,
     host: parsed.OMNIFIN_HOST,
+    ...(parsed.OMNIFIN_IMAGE_REF ? { imageReference: parsed.OMNIFIN_IMAGE_REF } : {}),
     insecureLoopbackPreview,
     jellyfinInsecureHttpApproved: parsed.OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED,
     ...(jellyfinUrl ? { jellyfinUrl } : {}),

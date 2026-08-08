@@ -142,6 +142,14 @@ function operationError(error: LibraryOperationError, reply: FastifyReply) {
         message: "The outcome of this library operation is still being determined.",
         statusCode: 409,
       });
+    case "outcome_unknown":
+    case "reconciliation_required":
+      return new SafeHttpError({
+        cause: error,
+        code: "library_operation_outcome_unknown",
+        message: "The library operation outcome could not be confirmed and will not be repeated.",
+        statusCode: 409,
+      });
     case "identity_required":
     case "permission_denied":
       return new SafeHttpError({

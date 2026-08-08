@@ -78,6 +78,15 @@ export interface IssuedSession {
   sessionToken: string;
 }
 
+export interface AdministratorReplacementSessionCompletion {
+  readonly revokedSessions: {
+    readonly recovery: number;
+    readonly replacement: number;
+    readonly target: number;
+  };
+  readonly session: IssuedSession;
+}
+
 export interface ResolvedSession {
   absoluteExpiresAt: Date;
   csrfToken: string;
@@ -95,6 +104,40 @@ export interface SessionServiceDependencies {
   clock?: () => Date;
   createId?: () => string;
   createToken?: () => string;
+}
+
+/**
+ * Revokes every user session whose local authority depends on a connector being replaced.
+ * The caller must hold the replacement transaction so no old authority can survive its commit.
+ */
+export function revokeConnectorSessionsForReplacement(
+  database: DatabaseHandle,
+  connectorId: string,
+  occurredAt: number,
+) {
+  if (
+    !database.sqlite.inTransaction ||
+    !SESSION_ID_PATTERN.test(connectorId) ||
+    !Number.isSafeInteger(occurredAt) ||
+    occurredAt < 0
+  ) {
+    throw new TypeError("Connector session invalidation requires a valid replacement transaction.");
+  }
+  return database.sqlite
+    .prepare(
+      `update sessions
+       set revoked_at = max(created_at, @occurredAt)
+       where revoked_at is null
+         and (
+           service_identity_link_id in (
+             select id from service_identity_links where connector_id = @connectorId
+           )
+           or user_id in (
+             select user_id from service_identity_links where connector_id = @connectorId
+           )
+         )`,
+    )
+    .run({ connectorId, occurredAt }).changes;
 }
 
 export interface ValidatedSession {
@@ -1364,6 +1407,127 @@ export class SessionService {
     if (!replaced) throw new Error("The recovery bootstrap session could not be replaced.");
     this.auditSessionReplacement(replaced, issued, sessionInput, now, "recovery_bootstrap");
     return issued;
+  }
+
+  /** @internal Replaces recovery access after an atomic sole-administrator transfer. */
+  public completeValidatedAdministratorReplacementSession(
+    recoverySession: unknown,
+    targetAdministratorId: string,
+    replacementAdministratorId: string,
+    attribution: Exclude<SessionAttribution, { authMethod: "recovery" }>,
+    input: Omit<CreateSessionInput, "attribution"> = {},
+  ): AdministratorReplacementSessionCompletion {
+    if (!this.database.sqlite.inTransaction) {
+      throw new Error("A surrounding administrator replacement transaction is required.");
+    }
+    if (
+      !recoverySession ||
+      typeof recoverySession !== "object" ||
+      (recoverySession as Partial<ValidatedRecoveryBootstrapSession>)[
+        VALIDATED_RECOVERY_BOOTSTRAP_SESSION_BRAND
+      ] !== true
+    ) {
+      throw new Error("The administrator recovery session is invalid.");
+    }
+    const proof = recoverySession as ValidatedRecoveryBootstrapSession;
+    assertIdentifier(targetAdministratorId, "Target administrator identifier");
+    assertIdentifier(replacementAdministratorId, "Replacement administrator identifier");
+    if (targetAdministratorId === replacementAdministratorId) {
+      throw new Error("The administrator replacement identity is invalid.");
+    }
+    const validatedAttribution = this.validateAttribution(attribution);
+    if (
+      validatedAttribution.authMethod === "recovery" ||
+      validatedAttribution.userId !== replacementAdministratorId
+    ) {
+      throw new Error("The administrator replacement attribution is invalid.");
+    }
+
+    const now = new Date(proof.operationTime);
+    const recoveryRow = this.loadJoinedSessionById(proof.sessionId);
+    if (
+      !recoveryRow ||
+      !this.sessionLifecycleIsActive(recoveryRow, now) ||
+      recoveryRow.authMethod !== "recovery" ||
+      recoveryRow.sessionUserId !== null ||
+      recoveryRow.externalIdentityId !== null ||
+      recoveryRow.oidcProviderId !== null ||
+      recoveryRow.serviceIdentityLinkId !== null
+    ) {
+      throw new Error("The administrator recovery session could not be replaced.");
+    }
+
+    const revokeUserSessions = this.database.sqlite.prepare(
+      `update sessions
+       set revoked_at = max(@now, created_at)
+       where user_id = @userId and revoked_at is null`,
+    );
+    const replacementRevoked = revokeUserSessions.run({
+      now: now.getTime(),
+      userId: replacementAdministratorId,
+    }).changes;
+    const targetRevoked = revokeUserSessions.run({
+      now: now.getTime(),
+      userId: targetAdministratorId,
+    }).changes;
+    const recoveryRevoked = this.database.sqlite
+      .prepare(
+        `update sessions
+         set revoked_at = max(@now, created_at)
+         where auth_method = 'recovery' and revoked_at is null`,
+      )
+      .run({ now: now.getTime() }).changes;
+    if (
+      !Number.isSafeInteger(replacementRevoked) ||
+      replacementRevoked < 0 ||
+      !Number.isSafeInteger(targetRevoked) ||
+      targetRevoked < 0 ||
+      !Number.isSafeInteger(recoveryRevoked) ||
+      recoveryRevoked < 1
+    ) {
+      throw new Error("Administrator replacement session revocation failed.");
+    }
+
+    const sessionInput: CreateSessionInput = {
+      attribution: validatedAttribution,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
+    };
+    const session = this.issueSessionInCurrentTransaction(sessionInput, new Set(), now);
+    if (
+      session.principal.accountState !== "active" ||
+      session.principal.userId !== replacementAdministratorId ||
+      session.principal.role !== "admin" ||
+      session.principal.authenticationMethod.kind === "recovery"
+    ) {
+      throw new Error("The replacement administrator session could not be established.");
+    }
+    const remaining = this.database.sqlite
+      .prepare(
+        `select count(*) as count
+         from sessions
+         where revoked_at is null
+           and id <> @replacementSessionId
+           and (auth_method = 'recovery' or user_id in (@targetId, @replacementId))`,
+      )
+      .get({
+        replacementId: replacementAdministratorId,
+        replacementSessionId: session.principal.sessionId,
+        targetId: targetAdministratorId,
+      }) as { count: number };
+    if (remaining.count !== 0) {
+      throw new Error("Administrator replacement left prior sessions active.");
+    }
+
+    return Object.freeze({
+      revokedSessions: Object.freeze({
+        recovery: recoveryRevoked,
+        replacement: replacementRevoked,
+        target: targetRevoked,
+      }),
+      session,
+    });
   }
 
   public revokeValidatedSession(

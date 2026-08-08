@@ -27,6 +27,11 @@ authorization, and audit records. The runtime includes permission-checked identi
 media-operation surfaces; the compatibility matrix, not the presence of a route, determines which
 upstream versions have enough evidence for a release claim.
 
+The gateway also has a narrow writable bind mount at `/backups`. It is used only for bounded private
+database inspection and to publish a verified retained recovery pair before recovering an unclean
+WAL timeline or applying a pending migration. Prepare it with the same private ownership as the
+maintenance service; do not replace it with a broad host mount or make it read-only.
+
 The production image is distroless and runs without a shell or package manager as a
 numeric non-root user. Use the application health endpoints and structured logs for
 normal diagnosis; do not install troubleshooting tools into a running release image.
@@ -40,6 +45,10 @@ runtime-only `compose.yaml`, a version-labelled `omnifin.env.example` containing
 digest, and `SHA256SUMS`. Verify the checksums before copying the template to `.env`; never replace
 its immutable digest with a moving tag for a persistent installation. Avoid `edge`: it follows the
 default branch and may include migrations that have not passed a release gate.
+Compose passes that exact `OMNIFIN_IMAGE` value to the gateway as `OMNIFIN_IMAGE_REF`. Production
+startup rejects a missing value, a moving tag, whitespace or multiple references, and any value that
+is not a single `name@sha256:<64 lowercase hex>` reference. Automatic recovery manifests therefore
+identify the exact code image that created them.
 
 ## Requirements for a supported deployment
 
@@ -273,9 +282,12 @@ confirm a structured `status: "ok"` result before enabling unattended execution.
 ## Upgrade
 
 1. Read the release notes and compatibility changes.
-2. Back up and verify the recovery set.
+2. Back up and verify the recovery set. Confirm the gateway's private writable backup mount and
+   `OMNIFIN_BACKUP_RETENTION_COUNT` (default `14`, range `2`–`365`) before startup.
 3. Pull the immutable version tag and record its digest.
-4. Let the release's migration step complete before serving traffic.
+4. Let the release's preflight → verified recovery pair → migration → key-verifier → integrity and
+   schema-check sequence complete before serving traffic. Do not bypass a stable startup error or
+   delete WAL/SHM files to force startup.
 5. Run the setup guide's stack verification, then check authentication, a representative read, and
    a safe mutation.
 6. Retain the previous verified digest and pre-upgrade backup until the observation

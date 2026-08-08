@@ -6,7 +6,9 @@ combination is described as supported.
 
 > [!NOTE]
 > There is no verified public compatibility baseline yet. Every entry below is a
-> target for pre-release integration work, not a support claim.
+> target for pre-release integration work, not a support claim. All `v0.x` releases
+> are pre-v1 previews and are not supported as stable releases. V1 support remains
+> pending the evidence in the [v1 stability gate](v1-stability.md).
 
 | Service                           | Intended use                                                                       | Current status                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -121,10 +123,11 @@ profile must also be `ready` in the schema-validated coverage ledger; strict mod
 closed on a pending entry before making a probe. All live entries are currently
 pending, so there is no verified live baseline.
 
-The stable release workflow applies the strict cumulative matrix declared by its
-reviewed phase profile. A Phase 0 release has no live compatibility claim; later
-profiles enter the same protected environment for every capability they claim, and
-`v1` requires the complete fixture and live service matrix.
+The release workflow applies the strict cumulative matrix declared by its reviewed
+profile. A Phase 0 release has no live compatibility claim; later profiles enter the
+protected environment for every capability they claim. Stable v1 additionally requires
+the four cumulative evidence tiers and exact-candidate support record defined by the
+[v1 stability gate](v1-stability.md). That evidence has not passed yet.
 
 The weekly and manually dispatched compatibility canary is separate from that protected live
 installation baseline. It uses no repository or environment secrets. At the start of each run it

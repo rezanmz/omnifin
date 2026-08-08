@@ -3,8 +3,10 @@ import {
   type PlaybackNegotiationResponse,
   type PlaybackPreferences,
   type PlaybackPreferencesResponse,
+  type PlaybackProgressRequest,
+  type PlaybackProgressResponse,
 } from "@omnifin/contracts/playback";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -145,6 +147,27 @@ const session: PlaybackNegotiationResponse = {
   subtitleTracks: [],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function playbackReportResponse(
+  reportedSessionId: string,
+  request: PlaybackProgressRequest,
+): PlaybackProgressResponse {
+  return {
+    acceptedAt: "2026-07-28T12:30:00.000Z",
+    positionSeconds: request.positionSeconds,
+    sessionId: reportedSessionId,
+    state:
+      request.event === "paused" ? "paused" : request.event === "stopped" ? "stopped" : "playing",
+  };
+}
+
 function readyClient(
   preparedSession: PlaybackNegotiationResponse = session,
   canManageLibrary = false,
@@ -154,13 +177,9 @@ function readyClient(
   reportIssue: ReturnType<typeof vi.fn>;
 } {
   const prepare = vi.fn(async () => ({ canManageLibrary, csrfToken, session: preparedSession }));
-  const report = vi.fn<PlaybackClient["report"]>(async (_id, request) => ({
-    acceptedAt: "2026-07-28T12:30:00.000Z",
-    positionSeconds: request.positionSeconds,
-    sessionId,
-    state:
-      request.event === "paused" ? "paused" : request.event === "stopped" ? "stopped" : "playing",
-  }));
+  const report = vi.fn<PlaybackClient["report"]>(async (reportedSessionId, request) =>
+    playbackReportResponse(reportedSessionId, request),
+  );
   const reportIssue = vi.fn<PlaybackClient["reportIssue"]>(async (_id, request) => ({
     category: request.category,
     createdAt: "2026-07-28T12:30:00.000Z",
@@ -374,6 +393,163 @@ describe("TheaterPlayer", () => {
 
     await user.click(screen.getByRole("button", { name: "Enter full screen" }));
     expect(requestFullscreen).toHaveBeenCalledOnce();
+  });
+
+  it("sends an unmount stop last after deferred progress", async () => {
+    const progressGate = deferred<void>();
+    const client = readyClient();
+    const calls: Array<{
+      event: PlaybackProgressRequest["event"];
+      keepalive: boolean;
+      sessionId: string;
+    }> = [];
+    client.report.mockImplementation(async (reportedSessionId, request, _token, options) => {
+      calls.push({
+        event: request.event,
+        keepalive: options?.keepalive ?? false,
+        sessionId: reportedSessionId,
+      });
+      if (request.event === "progress") await progressGate.promise;
+      return playbackReportResponse(reportedSessionId, request);
+    });
+    const view = render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    await waitFor(() => expect(calls.map(({ event }) => event)).toEqual(["started"]));
+    video.currentTime = 1_212;
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(calls.map(({ event }) => event)).toEqual(["started", "progress"]));
+
+    view.unmount();
+    await Promise.resolve();
+    expect(calls.map(({ event }) => event)).toEqual(["started", "progress"]);
+
+    await act(async () => {
+      progressGate.resolve(undefined);
+      await progressGate.promise;
+    });
+    await waitFor(() =>
+      expect(calls.map(({ event }) => event)).toEqual(["started", "progress", "stopped"]),
+    );
+    expect(calls.at(-1)).toEqual({ event: "stopped", keepalive: true, sessionId });
+  });
+
+  it("sends a terminal stop after a failed progress report", async () => {
+    const progressGate = deferred<void>();
+    const client = readyClient();
+    const events: PlaybackProgressRequest["event"][] = [];
+    client.report.mockImplementation(async (reportedSessionId, request) => {
+      events.push(request.event);
+      if (request.event === "progress") {
+        await progressGate.promise;
+        throw new Error("progress unavailable");
+      }
+      return playbackReportResponse(reportedSessionId, request);
+    });
+    const view = render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    await waitFor(() => expect(events).toEqual(["started"]));
+    video.currentTime = 1_212;
+    fireEvent.timeUpdate(video);
+    await waitFor(() => expect(events).toEqual(["started", "progress"]));
+    view.unmount();
+
+    await act(async () => {
+      progressGate.resolve(undefined);
+      await progressGate.promise;
+    });
+    await waitFor(() => expect(events).toEqual(["started", "progress", "stopped"]));
+  });
+
+  it("keeps a replacement session independent while the old session stop waits behind progress", async () => {
+    const user = userEvent.setup();
+    const progressGate = deferred<void>();
+    const replacementSessionId = `playback_${"q".repeat(22)}`;
+    const replacementSession: PlaybackNegotiationResponse = {
+      ...session,
+      positionSeconds: 1_212,
+      sessionId: replacementSessionId,
+      streamPath: `/v1/playback/${replacementSessionId}/stream`,
+    };
+    const client = readyClient();
+    const calls: Array<{ event: PlaybackProgressRequest["event"]; sessionId: string }> = [];
+    client.report.mockImplementation(async (reportedSessionId, request) => {
+      calls.push({ event: request.event, sessionId: reportedSessionId });
+      if (reportedSessionId === sessionId && request.event === "progress") {
+        await progressGate.promise;
+      }
+      return playbackReportResponse(reportedSessionId, request);
+    });
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.play(video);
+    await waitFor(() => expect(calls).toEqual([{ event: "started", sessionId }]));
+    video.currentTime = 1_212;
+    fireEvent.timeUpdate(video);
+    await waitFor(() =>
+      expect(calls).toEqual([
+        { event: "started", sessionId },
+        { event: "progress", sessionId },
+      ]),
+    );
+
+    client.prepare.mockResolvedValueOnce({
+      canManageLibrary: false,
+      csrfToken,
+      session: replacementSession,
+    });
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    await waitFor(() =>
+      expect(video).toHaveAttribute("src", `/api/playback/${replacementSessionId}/stream`),
+    );
+    fireEvent.canPlay(video);
+    fireEvent.play(video);
+    await waitFor(() =>
+      expect(calls).toContainEqual({ event: "started", sessionId: replacementSessionId }),
+    );
+    expect(calls).not.toContainEqual({ event: "stopped", sessionId });
+
+    await act(async () => {
+      progressGate.resolve(undefined);
+      await progressGate.promise;
+    });
+    await waitFor(() => expect(calls).toContainEqual({ event: "stopped", sessionId }));
+    const oldSessionEvents = calls
+      .filter((call) => call.sessionId === sessionId)
+      .map(({ event }) => event);
+    expect(oldSessionEvents).toEqual(["started", "progress", "stopped"]);
   });
 
   it("toggles playback on a single click and full screen on a double click", async () => {

@@ -1,4 +1,8 @@
 import {
+  administratorRecoveryConfirmationRequestSchema,
+  administratorRecoveryJellyfinPasswordRequestSchema,
+  administratorRecoveryQuickConnectPollResponseSchema,
+  administratorRecoveryReplacementResponseSchema,
   authenticatedSessionResponseSchema,
   jellyfinIdentityPairingResponseSchema,
   jellyfinPasswordAuthenticationRequestSchema,
@@ -16,6 +20,10 @@ import { SafeHttpError } from "../../http-error.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
 import { privacyHash } from "../../security/crypto.js";
 import { requirePermission } from "../authorization.js";
+import {
+  AdministratorRecoveryError,
+  type AdministratorRecoveryReplacementResult,
+} from "../administrator-recovery-service.js";
 import { sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "../session-service.js";
 import {
@@ -114,7 +122,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       | "permission_denied"
       | "rate_limited"
       | "upstream_unavailable",
-    operation: "bootstrap" | "pairing" | "sign_in" = "sign_in",
+    operation: "administrator_replacement" | "bootstrap" | "pairing" | "sign_in" = "sign_in",
   ) => {
     if (recordedRequests.has(request)) return;
     recordedRequests.add(request);
@@ -135,11 +143,13 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         )
         .run(
           randomUUID(),
-          operation === "pairing"
-            ? "auth.jellyfin.identity.pairing_attempt"
-            : operation === "bootstrap"
-              ? "auth.admin.bootstrap_attempt"
-              : "auth.jellyfin.sign_in",
+          operation === "administrator_replacement"
+            ? "auth.administrator.replacement_attempt"
+            : operation === "pairing"
+              ? "auth.jellyfin.identity.pairing_attempt"
+              : operation === "bootstrap"
+                ? "auth.admin.bootstrap_attempt"
+                : "auth.jellyfin.sign_in",
           request.id,
           JSON.stringify({ reason }),
           privacyHash("ip_address", request.ip, app.appConfig.encryptionKey),
@@ -158,7 +168,7 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
     request: FastifyRequest,
     reply: FastifyReply,
     message: string,
-    operation: "bootstrap" | "pairing" | "sign_in" = "sign_in",
+    operation: "administrator_replacement" | "bootstrap" | "pairing" | "sign_in" = "sign_in",
   ) => {
     const result = await limiter(request);
     if (result.isAllowed || !result.isExceeded) return;
@@ -169,6 +179,34 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
       message,
       statusCode: 429,
     });
+  };
+
+  const sendAdministratorReplacement = (
+    reply: FastifyReply,
+    result: AdministratorRecoveryReplacementResult,
+  ) => {
+    if (result.status === "denied") {
+      return reply
+        .status(403)
+        .send(administratorRecoveryReplacementResponseSchema.parse({ status: "denied" }));
+    }
+    if (result.status === "unavailable") {
+      return reply
+        .status(409)
+        .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+    }
+    const response = administratorRecoveryReplacementResponseSchema.parse({
+      csrfToken: result.session.csrfToken,
+      revokedSessions: result.revokedSessions,
+      status: "replaced",
+    });
+    writeSessionCookie(
+      reply,
+      app.appConfig,
+      result.session.sessionToken,
+      result.session.absoluteExpiresAt,
+    );
+    return response;
   };
 
   app.post(
@@ -1283,6 +1321,255 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         result.session.absoluteExpiresAt,
       );
       return response;
+    },
+  );
+
+  app.post(
+    "/v1/auth/recovery/administrator-replacement/jellyfin/password",
+    {
+      bodyLimit: 4_096,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.administrator.replace",
+      );
+      await enforceRateLimit(
+        clientCredentialRateLimit,
+        request,
+        reply,
+        "Too many administrator recovery attempts were received.",
+        "administrator_replacement",
+      );
+      await enforceRateLimit(
+        globalCredentialRateLimit,
+        request,
+        reply,
+        "Administrator recovery is temporarily rate limited.",
+        "administrator_replacement",
+      );
+      const parsed = administratorRecoveryJellyfinPasswordRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        recordFailure(request, "invalid_request", "administrator_replacement");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator recovery request is invalid.",
+          statusCode: 400,
+        });
+      }
+      try {
+        const result = await signIn.replaceAdministratorWithPassword({
+          ...parsed.data,
+          ...requestContext(request),
+          validatedSession: request.validatedSession,
+        });
+        recordedRequests.add(request);
+        return sendAdministratorReplacement(reply, result);
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Administrator recovery is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (
+          error instanceof JellyfinSignInServiceError ||
+          error instanceof AdministratorRecoveryError
+        ) {
+          recordFailure(request, "upstream_unavailable", "administrator_replacement");
+          return reply
+            .status(503)
+            .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect",
+    {
+      bodyLimit: 512,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.administrator.replace",
+      );
+      await enforceRateLimit(
+        clientQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Too many administrator recovery attempts were started.",
+        "administrator_replacement",
+      );
+      await enforceRateLimit(
+        globalQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Administrator recovery is temporarily rate limited.",
+        "administrator_replacement",
+      );
+      const parsed = administratorRecoveryConfirmationRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator recovery request is invalid.",
+          statusCode: 400,
+        });
+      }
+      try {
+        const started = await quickConnect.startAdministratorReplacement({
+          ...parsed.data,
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          validatedSession: request.validatedSession,
+        });
+        recordedRequests.add(request);
+        writeJellyfinQuickConnectBrowserBindingCookie(
+          reply,
+          app.appConfig,
+          started.browserBindingToken,
+          started.expiresAt,
+        );
+        return jellyfinQuickConnectInitiationResponseSchema.parse({
+          code: started.code,
+          expiresAt: started.expiresAt.toISOString(),
+          pollAfterMs: started.pollAfterMs,
+          transactionId: started.transactionId,
+        });
+      } catch (error) {
+        if (
+          error instanceof JellyfinQuickConnectServiceError &&
+          error.reason === "recovery_session_required"
+        ) {
+          recordedRequests.add(request);
+          return reply
+            .status(409)
+            .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          recordFailure(request, "upstream_unavailable", "administrator_replacement");
+          return reply
+            .status(503)
+            .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { transactionId: string } }>(
+    "/v1/auth/recovery/administrator-replacement/jellyfin/quick-connect/:transactionId/poll",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 90, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      requirePermission(
+        app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "recovery.administrator.replace",
+      );
+      await enforceRateLimit(
+        globalQuickConnectPollRateLimit,
+        request,
+        reply,
+        "Administrator recovery polling is temporarily rate limited.",
+        "administrator_replacement",
+      );
+      if (
+        !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||
+        !jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success
+      ) {
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator recovery poll request is invalid.",
+          statusCode: 400,
+        });
+      }
+      try {
+        const result = await quickConnect.pollAdministratorReplacement({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          ...requestContext(request),
+          transactionId: request.params.transactionId,
+          validatedSession: request.validatedSession,
+        });
+        recordedRequests.add(request);
+        if (result.status === "expired") {
+          return administratorRecoveryQuickConnectPollResponseSchema.parse({ status: "expired" });
+        }
+        if (result.status === "pending") {
+          return administratorRecoveryQuickConnectPollResponseSchema.parse({
+            expiresAt: result.expiresAt.toISOString(),
+            pollAfterMs: result.pollAfterMs,
+            status: "pending",
+          });
+        }
+        return sendAdministratorReplacement(reply, result);
+      } catch (error) {
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Administrator recovery is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          if (error.reason === "invalid_transaction") {
+            throw new SafeHttpError({
+              code: "authentication_attempt_invalid",
+              message: "The administrator recovery attempt is invalid or has expired.",
+              statusCode: 400,
+            });
+          }
+          if (error.reason === "recovery_session_required") {
+            return reply
+              .status(409)
+              .send(
+                administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }),
+              );
+          }
+          return reply
+            .status(503)
+            .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+        }
+        if (error instanceof AdministratorRecoveryError) {
+          return reply
+            .status(503)
+            .send(administratorRecoveryReplacementResponseSchema.parse({ status: "unavailable" }));
+        }
+        throw error;
+      }
     },
   );
 };

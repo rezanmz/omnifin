@@ -225,6 +225,27 @@
       "when": 1786108934670,
       "tag": "0031_playback_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1786195334670,
+      "tag": "0032_database_key_verifier",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1786195334671,
+      "tag": "0033_living_risque",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1786195334672,
+      "tag": "0034_external_mutation_journal",
+      "breakpoints": true
     }
   ]
 }

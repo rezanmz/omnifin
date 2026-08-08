@@ -42,6 +42,11 @@ function expectNoStore(response: APIResponse) {
   expect(response.headers()["cache-control"]).toBe("no-store");
 }
 
+function configuredWebOrigin(baseURL: string | undefined) {
+  if (!baseURL) throw new Error("The OIDC rewrite harness requires a configured web origin.");
+  return new URL(baseURL).origin;
+}
+
 async function reserveLoopbackPort() {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -159,7 +164,11 @@ test("keeps private gateway limit buckets isolated across edge clients", async (
   });
 });
 
-test("streams gateway responses before the upstream body completes", async ({ request }) => {
+test("streams gateway responses before the upstream body completes", async ({
+  baseURL,
+  request,
+}) => {
+  const webOrigin = configuredWebOrigin(baseURL);
   const streamedBody = await new Promise<string>((resolve, reject) => {
     let body = "";
     let releaseRequested = false;
@@ -168,33 +177,30 @@ test("streams gateway responses before the upstream body completes", async ({ re
       streamRequest.destroy();
       reject(error);
     };
-    const streamRequest = httpGet(
-      "http://127.0.0.1:3000/api/auth/proxy-canary/stream",
-      (response) => {
-        response.setEncoding("utf8");
-        response.on("data", (chunk: string) => {
-          body += chunk;
-          if (releaseRequested) return;
-          releaseRequested = true;
-          void request
-            .post("/api/auth/proxy-canary/release-stream", {
-              data: {},
-              headers: { origin: "http://127.0.0.1:3000" },
-            })
-            .then((releaseResponse) => {
-              expect(releaseResponse.status()).toBe(200);
-            })
-            .catch((error: unknown) =>
-              fail(error instanceof Error ? error : new Error("The stream release failed.")),
-            );
-        });
-        response.once("end", () => {
-          clearTimeout(timeout);
-          resolve(body);
-        });
-        response.once("error", fail);
-      },
-    );
+    const streamRequest = httpGet(`${webOrigin}/api/auth/proxy-canary/stream`, (response) => {
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        body += chunk;
+        if (releaseRequested) return;
+        releaseRequested = true;
+        void request
+          .post("/api/auth/proxy-canary/release-stream", {
+            data: {},
+            headers: { origin: webOrigin },
+          })
+          .then((releaseResponse) => {
+            expect(releaseResponse.status()).toBe(200);
+          })
+          .catch((error: unknown) =>
+            fail(error instanceof Error ? error : new Error("The stream release failed.")),
+          );
+      });
+      response.once("end", () => {
+        clearTimeout(timeout);
+        resolve(body);
+      });
+      response.once("error", fail);
+    });
     streamRequest.once("error", fail);
     const timeout = setTimeout(() => fail(new Error("The proxied stream stalled.")), 5_000);
   });
@@ -203,8 +209,10 @@ test("streams gateway responses before the upstream body completes", async ({ re
 });
 
 test("preserves redirects and multiple cookies across the complete OIDC proxy flow", async ({
+  baseURL,
   request,
 }) => {
+  const webOrigin = configuredWebOrigin(baseURL);
   const initialProviders = await request.get("/api/auth/providers", { maxRedirects: 0 });
   expect(initialProviders.status()).toBe(200);
   expectNoStore(initialProviders);
@@ -250,7 +258,7 @@ test("preserves redirects and multiple cookies across the complete OIDC proxy fl
   expect(authorizationUrl.searchParams.get("response_type")).toBe("code");
   expect(authorizationUrl.searchParams.get("response_mode")).toBe("query");
   expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
-    `http://127.0.0.1:3000/api/auth/oidc/callback/${providerId}`,
+    `${webOrigin}/api/auth/oidc/callback/${providerId}`,
   );
   expect(authorizationUrl.searchParams.get("code_challenge_method")).toBe("S256");
   const state = authorizationUrl.searchParams.get("state");

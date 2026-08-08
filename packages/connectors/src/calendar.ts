@@ -6,7 +6,7 @@ import type {
 import type { AcquisitionService } from "@omnifin/contracts/acquisition";
 import { z } from "zod";
 
-export const ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS = 200;
+export const ACQUISITION_CALENDAR_SOURCE_MAX_RECORDS = 5_000;
 
 export const acquisitionCalendarReadRequestSchema = z
   .strictObject({

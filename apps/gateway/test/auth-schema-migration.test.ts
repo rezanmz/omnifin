@@ -1079,6 +1079,228 @@ describe("authentication schema upgrades", () => {
   });
 });
 
+describe("external mutation foundation upgrade", () => {
+  it("backfills connector generations and classifies legacy operation evidence conservatively", () => {
+    const database = new Database(":memory:");
+    try {
+      for (const migration of migrationFilenames.filter((filename) => filename < "0034_")) {
+        applyMigration(database, migration);
+      }
+      database.exec(`
+        insert into users (id, display_name, role, role_source, status, created_at, updated_at)
+        values ('user-phase1', 'Phase One', 'operator', 'manual', 'active', 1000, 1000);
+
+        insert into connector_configs (
+          id, type, display_name, base_url, encrypted_credentials, created_at, updated_at
+        ) values
+          ('jellyfin-phase1', 'jellyfin', 'Jellyfin', 'https://jellyfin.example.test',
+           'v1.fixture-jellyfin', 1000, 1700),
+          ('seerr-phase1', 'seerr', 'Seerr', 'https://seerr.example.test',
+           'v1.fixture-seerr', 1000, 1800);
+
+        insert into service_identity_links (
+          id, user_id, service, connector_id, external_server_id, external_user_id,
+          external_username, external_display_name, device_id, health_state, revision,
+          created_at, updated_at
+        ) values (
+          'link-phase1', 'user-phase1', 'jellyfin', 'jellyfin-phase1', 'server-phase1',
+          'external-user-phase1', 'phase1', 'Phase One', 'device-phase1',
+          'relink_required', 0, 1000, 1000
+        );
+
+        insert into media_references (
+          id, user_id, service_identity_link_id, link_revision, item_digest,
+          encrypted_payload, last_used_at, expires_at, created_at, updated_at
+        ) values (
+          'media_${"m".repeat(22)}', 'user-phase1', 'link-phase1', 0,
+          '${"i".repeat(22)}', 'v1.fixture-media', 1200, 5000, 1000, 1200
+        );
+
+        insert into media_request_profile_preferences (
+          connector_id, kind, is_4k, destination_id, profile_id,
+          updated_by_user_id, created_at, updated_at
+        ) values ('seerr-phase1', 'movie', 0, 1, 1, 'user-phase1', 1000, 1000);
+
+        insert into discovery_artwork_references (
+          id, user_id, connector_id, item_digest, encrypted_payload,
+          last_used_at, expires_at, created_at, updated_at
+        ) values (
+          'discovery_art_${"a".repeat(22)}', 'user-phase1', 'jellyfin-phase1',
+          '${"d".repeat(22)}', 'v1.fixture-art', 1200, 5000, 1000, 1200
+        );
+
+        insert into external_issue_references (
+          id, connector_id, upstream_id_digest, encrypted_upstream_id,
+          last_used_at, expires_at, created_at, updated_at
+        ) values (
+          'issue_${"x".repeat(22)}', 'seerr-phase1', '${"u".repeat(22)}',
+          'v1.fixture-upstream', 1200, 5000, 1000, 1200
+        );
+
+        insert into subtitle_searches (
+          id, user_id, service_identity_link_id, link_revision, media_reference_id,
+          connector_id, encrypted_payload, expires_at, created_at, updated_at
+        ) values (
+          'subtitle_search_${"s".repeat(22)}', 'user-phase1', 'link-phase1', 0,
+          'media_${"m".repeat(22)}', 'seerr-phase1', 'v1.fixture-search',
+          5000, 1000, 1000
+        );
+
+        insert into jellyfin_quick_connect_transactions (
+          id, connector_id, connector_type, purpose, browser_binding_hash,
+          encrypted_payload, expires_at, next_poll_at, created_at
+        ) values (
+          'quick-phase1', 'jellyfin-phase1', 'jellyfin', 'sign_in',
+          '${"b".repeat(43)}', 'v1.fixture-quick', 5000, 1200, 1000
+        );
+
+        insert into media_request_operations (
+          id, user_id, idempotency_key_hash, fingerprint_hash, state,
+          response_json, completed_at, created_at, updated_at
+        ) values
+          ('request-pending', 'user-phase1', '${"a".repeat(43)}', '${"b".repeat(43)}',
+           'pending', null, null, 1000, 1100),
+          ('request-succeeded', 'user-phase1', '${"c".repeat(43)}', '${"d".repeat(43)}',
+           'succeeded', '{}', 1200, 1000, 1200);
+
+        insert into acquisition_search_operations (
+          id, user_id, idempotency_key_hash, fingerprint_hash, state,
+          response_json, completed_at, created_at, updated_at
+        ) values
+          ('search-pending', 'user-phase1', '${"o".repeat(43)}', '${"p".repeat(43)}',
+           'pending', null, null, 1000, 1100),
+          ('search-succeeded', 'user-phase1', '${"q".repeat(43)}', '${"r".repeat(43)}',
+           'succeeded', '{}', 1200, 1000, 1200);
+
+        insert into download_queue_removal_operations (
+          id, user_id, connector_id, item_id, idempotency_key_hash, fingerprint_hash,
+          state, item_snapshot_json, mutation_started_at, created_at, updated_at
+        ) values
+          ('download_removal_${"p".repeat(22)}', 'user-phase1', 'jellyfin-phase1',
+           'download_${"p".repeat(22)}', '${"e".repeat(43)}', '${"f".repeat(43)}',
+           'pending', null, null, 1000, 1100),
+          ('download_removal_${"q".repeat(22)}', 'user-phase1', 'jellyfin-phase1',
+           'download_${"q".repeat(22)}', '${"g".repeat(43)}', '${"h".repeat(43)}',
+           'pending', '{}', 1400, 1000, 1500);
+
+        insert into download_queue_bulk_operations (
+          id, user_id, idempotency_key_hash, fingerprint_hash, state,
+          request_json, results_json, created_at, updated_at
+        ) values (
+          'download_bulk_${"k".repeat(22)}', 'user-phase1', '${"i".repeat(43)}',
+          '${"j".repeat(43)}', 'pending', '{}', '[]', 1000, 1200
+        );
+
+        insert into media_issue_operations (
+          id, user_id, issue_id, source, desired_status, idempotency_key_hash,
+          fingerprint_hash, state, created_at, updated_at
+        ) values
+          ('issue_operation_${"l".repeat(22)}', 'user-phase1', 'issue_${"l".repeat(22)}',
+           'omnifin', 'resolved', '${"k".repeat(43)}', '${"l".repeat(43)}',
+           'pending', 1000, 1100),
+          ('issue_operation_${"n".repeat(22)}', 'user-phase1', 'issue_${"n".repeat(22)}',
+           'seerr', 'resolved', '${"m".repeat(43)}', '${"n".repeat(43)}',
+           'pending', 1000, 1100);
+      `);
+
+      applyMigration(database, "0034_external_mutation_journal.sql");
+
+      expect(
+        database
+          .prepare(
+            `select id, instance_generation as instanceGeneration,
+                    config_generation as configGeneration,
+                    instance_identity_hash as instanceIdentityHash
+             from connector_configs order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          configGeneration: 1700,
+          id: "jellyfin-phase1",
+          instanceGeneration: 0,
+          instanceIdentityHash: null,
+        },
+        {
+          configGeneration: 1800,
+          id: "seerr-phase1",
+          instanceGeneration: 0,
+          instanceIdentityHash: null,
+        },
+      ]);
+      for (const table of [
+        "service_identity_links",
+        "media_request_profile_preferences",
+        "discovery_artwork_references",
+        "external_issue_references",
+        "subtitle_searches",
+        "jellyfin_quick_connect_transactions",
+      ]) {
+        expect(
+          database
+            .prepare(`select distinct connector_instance_generation as generation from ${table}`)
+            .all(),
+        ).toEqual([{ generation: 0 }]);
+      }
+      expect(
+        database
+          .prepare(
+            `select id, state, failure_code as failureCode
+             from download_queue_removal_operations order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          failureCode: "legacy_pending_reconcile",
+          id: `download_removal_${"p".repeat(22)}`,
+          state: "reconcile_required",
+        },
+        {
+          failureCode: "legacy_post_boundary_uncertain",
+          id: `download_removal_${"q".repeat(22)}`,
+          state: "uncertain",
+        },
+      ]);
+      expect(
+        database.prepare("select id, state from media_request_operations order by id").all(),
+      ).toEqual([
+        { id: "request-pending", state: "reconcile_required" },
+        { id: "request-succeeded", state: "succeeded" },
+      ]);
+      expect(
+        database
+          .prepare(
+            `select id, state, failure_code as failureCode
+             from acquisition_search_operations order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          failureCode: "legacy_pending_reconcile",
+          id: "search-pending",
+          state: "reconcile_required",
+        },
+        { failureCode: null, id: "search-succeeded", state: "succeeded" },
+      ]);
+      expect(database.prepare("select state from download_queue_bulk_operations").get()).toEqual({
+        state: "quarantined",
+      });
+      expect(
+        database.prepare("select source, state from media_issue_operations order by source").all(),
+      ).toEqual([
+        { source: "omnifin", state: "pending" },
+        { source: "seerr", state: "reconcile_required" },
+      ]);
+      expect(
+        database.prepare("select count(*) as count from external_mutation_dispatches").get(),
+      ).toEqual({ count: 0 });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+});
+
 describe("authentication schema invariants", () => {
   it("loads the schema idempotently with connector-scoped links and logout replay receipts", () => {
     expect(authenticationSchema.connectorConfigs).toBeDefined();
@@ -1087,9 +1309,13 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.oidcLogoutReceipts).toBeDefined();
     expect(authenticationSchema.mediaReferences).toBeDefined();
     expect(authenticationSchema.externalIssueReferences).toBeDefined();
+    expect(authenticationSchema.externalMutationDispatches).toBeDefined();
+    expect(authenticationSchema.externalMutationTargetLocks).toBeDefined();
+    expect(authenticationSchema.downloadQueueItemOperations).toBeDefined();
     expect(authenticationSchema.mediaIssueOperations).toBeDefined();
     expect(authenticationSchema.playbackAssetHandles).toBeDefined();
     expect(authenticationSchema.playbackPreferences).toBeDefined();
+    expect(authenticationSchema.playbackProgressOperations).toBeDefined();
     expect(authenticationSchema.playbackSessions).toBeDefined();
     expect(authenticationSchema.libraryArtworkSearches).toBeDefined();
     expect(authenticationSchema.libraryMutationOperations).toBeDefined();
@@ -1106,7 +1332,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe("0031_playback_preferences.sql");
+      expect(migrationFilenames.at(-1)).toBe("0034_external_mutation_journal.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
@@ -1118,9 +1344,13 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("oidc_logout_receipts");
       expect(names).toContain("media_references");
       expect(names).toContain("external_issue_references");
+      expect(names).toContain("external_mutation_dispatches");
+      expect(names).toContain("external_mutation_target_locks");
+      expect(names).toContain("download_queue_item_operations");
       expect(names).toContain("media_issue_operations");
       expect(names).toContain("playback_asset_handles");
       expect(names).toContain("playback_preferences");
+      expect(names).toContain("playback_progress_operations");
       expect(names).toContain("playback_sessions");
       expect(names).toContain("library_artwork_searches");
       expect(names).toContain("library_mutation_operations");
@@ -1148,7 +1378,14 @@ describe("authentication schema invariants", () => {
             name: string;
           }[]
         ).map(({ name }) => name),
-      ).toContain("public_ui_url");
+      ).toEqual(
+        expect.arrayContaining([
+          "config_generation",
+          "instance_generation",
+          "instance_identity_hash",
+          "public_ui_url",
+        ]),
+      );
       expect(
         (
           database.sqlite.pragma("table_info(users)") as {

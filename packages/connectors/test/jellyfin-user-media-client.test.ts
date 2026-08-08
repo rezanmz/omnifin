@@ -55,6 +55,125 @@ const series = {
 };
 
 describe("JellyfinUserMediaClient", () => {
+  it("checks exact user-scoped TMDB ownership with a bounded kind-specific query", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Items: [
+          {
+            Id: "movie-upstream-1",
+            Name: "Ignored display title",
+            ProviderIds: { Tmdb: "550" },
+            Type: "Movie",
+          },
+        ],
+        StartIndex: 0,
+        TotalRecordCount: 1,
+      }),
+    ]);
+
+    await expect(
+      client.readExactOwnership({ kind: "movie", tmdbId: 550, userId: "paired-user-id" }),
+    ).resolves.toEqual({ itemId: "movie-upstream-1", owned: true });
+    expect(requests[0]?.url.pathname).toBe("/base/Users/paired-user-id/Items");
+    expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
+      AnyProviderIdEquals: "Tmdb.550",
+      EnableImages: "false",
+      EnableTotalRecordCount: "true",
+      EnableUserData: "false",
+      Fields: "ProviderIds",
+      IncludeItemTypes: "Movie",
+      IsMissing: "false",
+      IsVirtualItem: "false",
+      Limit: "2",
+      Recursive: "true",
+      StartIndex: "0",
+    });
+    expect(requests[0]?.url.searchParams.has("SearchTerm")).toBe(false);
+  });
+
+  it("reports exact absence without falling back to title or year matching", async () => {
+    const { client } = clientWithResponses([
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+    ]);
+
+    await expect(
+      client.readExactOwnership({ kind: "series", tmdbId: 1399, userId: "paired-user-id" }),
+    ).resolves.toEqual({ itemId: null, owned: false });
+  });
+
+  it.each([
+    {
+      label: "malformed provider id",
+      response: {
+        Items: [{ Id: "movie-1", ProviderIds: { Tmdb: "0550" }, Type: "Movie" }],
+        TotalRecordCount: 1,
+      },
+    },
+    {
+      label: "duplicate matches",
+      response: {
+        Items: [
+          { Id: "movie-1", ProviderIds: { Tmdb: "550" }, Type: "Movie" },
+          { Id: "movie-2", ProviderIds: { Tmdb: "550" }, Type: "Movie" },
+        ],
+        TotalRecordCount: 2,
+      },
+    },
+    {
+      label: "wrong media kind",
+      response: {
+        Items: [{ Id: "series-1", ProviderIds: { Tmdb: "550" }, Type: "Series" }],
+        TotalRecordCount: 1,
+      },
+    },
+  ])("fails closed on $label in an exact ownership response", async ({ response }) => {
+    const { client } = clientWithResponses([jsonResponse(response)]);
+
+    await expect(
+      client.readExactOwnership({ kind: "movie", tmdbId: 550, userId: "paired-user-id" }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.ownership" });
+  });
+
+  it("enforces ownership input and response limits and honors cancellation", async () => {
+    const invalid = clientWithResponses([]);
+    await expect(
+      invalid.client.readExactOwnership({
+        kind: "movie",
+        tmdbId: 2_147_483_648,
+        userId: "paired-user-id",
+      }),
+    ).rejects.toBeDefined();
+    expect(invalid.requests).toHaveLength(0);
+
+    const oversized = clientWithResponses([
+      jsonResponse({
+        Items: Array.from({ length: 3 }, (_, index) => ({
+          Id: `movie-${index}`,
+          ProviderIds: { Tmdb: "550" },
+          Type: "Movie",
+        })),
+        TotalRecordCount: 3,
+      }),
+    ]);
+    await expect(
+      oversized.client.readExactOwnership({
+        kind: "movie",
+        tmdbId: 550,
+        userId: "paired-user-id",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid", operation: "media.ownership" });
+
+    const cancelled = clientWithResponses([jsonResponse({ Items: [] })]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      cancelled.client.readExactOwnership(
+        { kind: "movie", tmdbId: 550, userId: "paired-user-id" },
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("deletes one exact item through the paired user's authenticated endpoint", async () => {
     const { client, requests } = clientWithResponses([new Response(null, { status: 204 })]);
 
@@ -82,6 +201,14 @@ describe("JellyfinUserMediaClient", () => {
       code: "response_invalid",
       operation: "library.removal.file_delete",
     });
+  });
+
+  it("reads exact library-item presence and treats only a 404 as absence", async () => {
+    const present = clientWithResponses([jsonResponse({ Id: "movie-upstream-1" })]);
+    await expect(present.client.readLibraryItemPresence("movie-upstream-1")).resolves.toBe(true);
+
+    const absent = clientWithResponses([new Response("missing", { status: 404 })]);
+    await expect(absent.client.readLibraryItemPresence("movie-upstream-1")).resolves.toBe(false);
   });
 
   it("reads the inferred user's modern resume feed and normalizes movies", async () => {
@@ -1880,6 +2007,21 @@ describe("JellyfinUserMediaClient", () => {
     expect(requests[1]?.url.searchParams.get("EnableUserData")).toBe("true");
     expect(requests[1]?.url.searchParams.get("UserId")).toBe("paired-user-id");
     expect(requests.every(({ url }) => !url.searchParams.has("api_key"))).toBe(true);
+  });
+
+  it("exposes exact paired-user playback readback without mutating it", async () => {
+    const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Id: "movie-upstream-1",
+        RunTimeTicks: 7_200_000_000,
+        Type: "Movie",
+        UserData: { Played: false, PlaybackPositionTicks: 1_800_000_000 },
+      }),
+    ]);
+    await expect(
+      client.readPlaybackState({ itemId: "movie-upstream-1", userId: "paired-user-id" }),
+    ).resolves.toEqual({ durationSeconds: 720, played: false, positionSeconds: 180 });
+    expect(requests[0]?.init.method).toBe("GET");
   });
 
   it("keeps mark-unwatched distinct from resetting only the resume position", async () => {

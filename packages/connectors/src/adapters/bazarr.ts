@@ -76,6 +76,10 @@ const bazarrSubtitleResultSchema = z.object({
 const bazarrSubtitleResponseSchema = z.object({
   data: z.array(bazarrSubtitleResultSchema).max(500),
 });
+const mutationOperationIdSchema = z
+  .string()
+  .length(40)
+  .regex(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u);
 
 export type BazarrSubtitleTarget =
   { kind: "movie"; radarrId: number } | { episodeId: number; kind: "episode"; seriesId: number };
@@ -199,9 +203,12 @@ export class BazarrAdapter extends ProbeOnlyAdapter {
     target: BazarrSubtitleTarget,
     candidate: BazarrSubtitleCandidate,
     signal?: AbortSignal,
+    operationId?: string,
   ): Promise<void> {
     const validatedTarget = this.#validatedTarget(target);
     const validatedCandidate = this.#validatedCandidate(candidate);
+    const normalizedOperationId =
+      operationId === undefined ? undefined : mutationOperationIdSchema.parse(operationId);
     const body = new URLSearchParams({
       forced: String(validatedCandidate.forced),
       hi: String(validatedCandidate.hearingImpaired),
@@ -222,6 +229,9 @@ export class BazarrAdapter extends ProbeOnlyAdapter {
       headers: {
         ...this.#headers(),
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        ...(normalizedOperationId === undefined
+          ? {}
+          : { "X-Omnifin-Operation-Id": normalizedOperationId }),
       },
       method: "POST",
       operation: "subtitle.download",

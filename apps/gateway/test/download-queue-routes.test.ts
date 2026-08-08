@@ -15,6 +15,7 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import { DownloadQueueError, DownloadQueueService } from "../src/downloads/queue-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -453,6 +454,7 @@ describe("download queue routes", () => {
       const csrfDenied = await app.inject({
         headers: {
           cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "direct-action-route-fixture",
           origin: baseUrl,
         },
         method: "POST",
@@ -519,6 +521,7 @@ describe("download queue routes", () => {
       const updated = await app.inject({
         headers: {
           cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "direct-action-route-fixture",
           origin: baseUrl,
           "x-omnifin-csrf": operator.csrfToken,
         },
@@ -538,8 +541,30 @@ describe("download queue routes", () => {
         expect.any(AbortSignal),
       );
       expect(updated.headers["cache-control"]).toBe("no-store");
+      expect(updated.headers["idempotency-replayed"]).toBe("false");
+      expect(updated.headers["x-omnifin-operation-id"]).toMatch(
+        /^download_item_operation_[A-Za-z0-9_-]{22}$/u,
+      );
       expect(updated.body).not.toContain(privateUpstreamId);
       expect(updated.body).not.toContain(privatePassword);
+
+      const replayed = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          "idempotency-key": "direct-action-route-fixture",
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        payload: body,
+        url: "/v1/downloads/queue/actions",
+      });
+      expect(replayed.statusCode, replayed.body).toBe(200);
+      expect(replayed.headers["idempotency-replayed"]).toBe("true");
+      expect(replayed.headers["x-omnifin-operation-id"]).toBe(
+        updated.headers["x-omnifin-operation-id"],
+      );
+      expect(updateDownloadQueueItem).toHaveBeenCalledOnce();
     } finally {
       await app.close();
     }
@@ -738,6 +763,9 @@ describe("download queue routes", () => {
         summary: { failed: 0, requested: 1, succeeded: 1 },
       });
       expect(completed.headers["idempotency-replayed"]).toBe("false");
+      expect(completed.headers["x-omnifin-operation-id"]).toBe(
+        downloadQueueBulkActionResponseSchema.parse(completed.json()).operationId,
+      );
       expect(completed.headers["cache-control"]).toBe("no-store");
       expect(completed.body).not.toContain(privateUpstreamId);
       expect(completed.body).not.toContain(privatePassword);
@@ -840,6 +868,9 @@ describe("download queue routes", () => {
         expect.any(AbortSignal),
       );
       expect(promoted.headers["cache-control"]).toBe("no-store");
+      expect(promoted.headers["x-omnifin-operation-id"]).toMatch(
+        /^download_item_operation_[A-Za-z0-9_-]{22}$/u,
+      );
       expect(promoted.body).not.toContain(privateUpstreamId);
       expect(promoted.body).not.toContain(privatePassword);
 
@@ -949,6 +980,9 @@ describe("download queue routes", () => {
         expect.any(AbortSignal),
       );
       expect(removed.headers["idempotency-replayed"]).toBe("false");
+      expect(removed.headers["x-omnifin-operation-id"]).toBe(
+        downloadQueueRemovalResponseSchema.parse(removed.json()).operationId,
+      );
       expect(removed.headers["cache-control"]).toBe("no-store");
       expect(removed.body).not.toContain(privateUpstreamId);
       expect(removed.body).not.toContain(privatePassword);
@@ -1022,6 +1056,184 @@ describe("download queue routes", () => {
       expect(readDownloadQueue).not.toHaveBeenCalled();
       expect(removeDownloadQueueItem).not.toHaveBeenCalled();
     } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["identity_required", 403, "download_queue_identity_required"],
+    ["target_not_found", 404, "download_queue_item_not_found"],
+    ["stale_state", 409, "download_queue_state_changed"],
+    ["idempotency_conflict", 409, "idempotency_key_conflict"],
+    ["idempotency_in_progress", 409, "download_queue_operation_in_progress"],
+    ["operation_failed", 409, "download_queue_operation_failed"],
+    ["operation_uncertain", 409, "download_queue_outcome_uncertain"],
+    ["operation_limit_reached", 429, "download_queue_operation_limit_reached"],
+    ["queue_order_unavailable", 409, "download_queue_order_unavailable"],
+    ["reconciliation_required", 409, "download_queue_reconciliation_required"],
+    ["target_locked", 409, "download_queue_target_locked"],
+    ["generation_mismatch", 409, "download_queue_connector_generation_changed"],
+    ["response_invalid", 502, "download_queue_action_unconfirmed"],
+    ["connector_unavailable", 503, "download_queue_configuration_unavailable"],
+    ["storage_failure", 503, "download_queue_configuration_unavailable"],
+  ] as const)("maps download queue service failure %s", async (reason, status, code) => {
+    const { app, operator } = await harness();
+    const readQueue = vi
+      .spyOn(DownloadQueueService.prototype, "read")
+      .mockRejectedValue(new DownloadQueueError(reason));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+    } finally {
+      readQueue.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["rate_limited", 429, "download_queue_action_rate_limited"],
+    ["response_invalid", 502, "download_queue_action_unconfirmed"],
+    ["unsupported_version", 502, "download_queue_action_unconfirmed"],
+    ["timeout", 503, "download_queue_action_unavailable"],
+  ] as const)("maps additional download adapter failure %s", async (reason, status, code) => {
+    const { app, operator } = await harness();
+    try {
+      const queueResponse = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+      const update = vi.spyOn(DownloadQueueService.prototype, "update").mockRejectedValue(
+        new SafeConnectorError({
+          code: reason,
+          message: "Private adapter failure",
+          operation: "download.queue.action",
+          retryable: reason === "rate_limited" || reason === "timeout",
+          service: "qbittorrent",
+        }),
+      );
+      try {
+        const response = await app.inject({
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+            origin: baseUrl,
+            "x-omnifin-csrf": operator.csrfToken,
+          },
+          method: "POST",
+          payload: {
+            action: "pause",
+            connectorId: item.connectorId,
+            expectedState: item.state,
+            itemId: item.id,
+          },
+          url: "/v1/downloads/queue/actions",
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+        expect(response.body).not.toContain("Private adapter failure");
+        expect(response.headers["x-omnifin-operation-id"]).toBeUndefined();
+        if (reason === "rate_limited") expect(response.headers["retry-after"]).toBeUndefined();
+      } finally {
+        update.mockRestore();
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    { method: "bulkUpdate", url: "/v1/downloads/queue/bulk-actions" },
+    { method: "update", url: "/v1/downloads/queue/actions" },
+    { method: "remove", url: "/v1/downloads/queue/removals" },
+    { method: "promote", url: "/v1/downloads/queue/promotions" },
+  ] as const)(
+    "fails closed for the $method download mutation route error family",
+    async (route) => {
+      const servicePrototype = DownloadQueueService.prototype as unknown as Record<
+        string,
+        (...arguments_: never[]) => unknown
+      >;
+      const errors = [
+        new DownloadQueueError("storage_failure"),
+        new SafeConnectorError({
+          code: "timeout",
+          message: "Private download connector failure",
+          operation: "download.queue.mutate",
+          retryable: true,
+          service: "qbittorrent",
+        }),
+        new Error("Private unexpected download failure"),
+      ];
+      const { app, operator } = await harness();
+      try {
+        const queueResponse = await app.inject({
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+          method: "GET",
+          url: "/v1/downloads/queue",
+        });
+        const item = downloadQueueResponseSchema.parse(queueResponse.json()).items[0]!;
+        const target = {
+          connectorId: item.connectorId,
+          expectedState: item.state,
+          itemId: item.id,
+        };
+        for (const error of errors) {
+          const operation = vi.spyOn(servicePrototype, route.method).mockRejectedValue(error);
+          try {
+            const response = await app.inject({
+              headers: {
+                cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+                "idempotency-key": `download-route-${route.method}`,
+                origin: baseUrl,
+                "x-omnifin-csrf": operator.csrfToken,
+              },
+              method: "POST",
+              payload:
+                route.method === "bulkUpdate"
+                  ? { action: "pause", targets: [target] }
+                  : route.method === "update"
+                    ? { action: "pause", ...target }
+                    : target,
+              url: route.url,
+            });
+            const expectedStatus =
+              error instanceof DownloadQueueError || error instanceof SafeConnectorError
+                ? 503
+                : 500;
+            expect(response.statusCode, `${route.method}: ${response.body}`).toBe(expectedStatus);
+            expect(response.body).not.toContain("Private");
+          } finally {
+            operation.mockRestore();
+          }
+        }
+      } finally {
+        await app.close();
+      }
+    },
+    10_000,
+  );
+
+  it("does not expose an unexpected queue read failure", async () => {
+    const { app, operator } = await harness();
+    const readQueue = vi
+      .spyOn(DownloadQueueService.prototype, "read")
+      .mockRejectedValue(new Error("Private unexpected queue read failure"));
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue",
+      });
+      expect(response.statusCode, response.body).toBe(500);
+      expect(response.body).not.toContain("Private unexpected queue read failure");
+    } finally {
+      readQueue.mockRestore();
       await app.close();
     }
   });

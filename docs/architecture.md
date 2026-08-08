@@ -86,6 +86,13 @@ A viewer-accessible
 acquisition calendar combines bounded Radarr and Sonarr timing through opaque identifiers and remains
 read-only. Jellyfin playback, progress, and Continue Watching use the
 paired user's permissions through server-held tokens and normalized, opaque media targets.
+Playback progress is serialized per local session and reserved in the external-mutation journal
+before dispatch. Because Jellyfin supplies neither an idempotency key nor an exact progress
+readback, a timeout or interruption after dispatch is terminally uncertain and is never retried
+automatically. The local session still advances, records privacy-safe uncertainty evidence, and
+releases its session target lock so a later ordered revision (including stop) can proceed; replaying
+the same revision does not contact Jellyfin again. Connector instance and configuration generations
+are captured at reservation and checked immediately before dispatch.
 Per-user playback profiles remain in the gateway's SQLite boundary and retain only semantic
 language, accessibility, and quality intent. The theater resolves that intent against each fresh,
 validated Jellyfin track list; title-specific stream indexes never become durable profile data.
@@ -95,7 +102,8 @@ from crossing into a card, while malformed aesthetic metadata degrades to the lo
 hiding playable media. The
 gateway also exposes role-gated player issue reporting, Bazarr subtitle operations, and Jellyfin
 scan, unmatched-item, artwork, and metadata maintenance without exposing upstream identifiers or
-filesystem paths to the browser.
+filesystem paths to the browser. The shared reservation, dispatch, reconciliation, and target-lock
+rules are documented in [external mutation safety](mutation-safety.md).
 
 ## Target system shape
 

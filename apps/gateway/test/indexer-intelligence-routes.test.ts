@@ -12,6 +12,10 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
 import type { AppConfig } from "../src/config.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
+import {
+  IndexerIntelligenceError,
+  IndexerIntelligenceService,
+} from "../src/indexers/intelligence-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const baseUrl = "https://omnifin.example";
@@ -355,6 +359,114 @@ describe("indexer intelligence routes", () => {
       expect(limited.body).not.toContain("Private upstream rate-limit details");
     } finally {
       await app.close();
+    }
+  });
+
+  it.each([
+    ["identity_required", 403, "indexer_test_identity_required"],
+    ["connector_unconfigured", 503, "indexer_intelligence_not_configured"],
+    ["connector_ambiguous", 503, "indexer_intelligence_configuration_unavailable"],
+    ["connector_integrity_failure", 503, "indexer_intelligence_configuration_unavailable"],
+    ["storage_failure", 503, "indexer_intelligence_configuration_unavailable"],
+  ] as const)("maps indexer test service failure %s", async (reason, status, code) => {
+    const { app, operator } = await harness();
+    const testIndexer = vi
+      .spyOn(IndexerIntelligenceService.prototype, "testIndexer")
+      .mockRejectedValue(new IndexerIntelligenceError(reason));
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        url: "/v1/indexers/4/tests",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+    } finally {
+      testIndexer.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["rate_limited", 429, "indexer_intelligence_rate_limited"],
+    ["response_invalid", 502, "indexer_intelligence_response_invalid"],
+    ["unsupported_version", 502, "indexer_intelligence_response_invalid"],
+    ["configuration_invalid", 503, "indexer_intelligence_configuration_unavailable"],
+    ["destination_blocked", 503, "indexer_intelligence_configuration_unavailable"],
+    ["invalid_credentials", 503, "indexer_intelligence_configuration_unavailable"],
+    ["timeout", 503, "indexer_intelligence_temporarily_unavailable"],
+  ] as const)("maps indexer test connector failure %s", async (reason, status, code) => {
+    const { app, operator } = await harness();
+    const testIndexer = vi
+      .spyOn(IndexerIntelligenceService.prototype, "testIndexer")
+      .mockRejectedValue(
+        new SafeConnectorError({
+          code: reason,
+          message: "Private indexer diagnostic",
+          operation: "indexer.test",
+          retryable: reason === "rate_limited" || reason === "timeout",
+          service: "prowlarr",
+        }),
+      );
+    try {
+      const response = await app.inject({
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+          origin: baseUrl,
+          "x-omnifin-csrf": operator.csrfToken,
+        },
+        method: "POST",
+        url: "/v1/indexers/4/tests",
+      });
+      expect(response.statusCode, response.body).toBe(status);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(code);
+      expect(response.body).not.toContain("Private indexer diagnostic");
+    } finally {
+      testIndexer.mockRestore();
+      await app.close();
+    }
+  });
+
+  it.each([
+    ["readIndexers", "/v1/indexers/intelligence"],
+    ["readApplications", "/v1/indexer-applications"],
+    ["readFailures", "/v1/indexer-failures"],
+  ] as const)("maps every %s route failure without leaking details", async (method, url) => {
+    const errorCases = [
+      { error: new IndexerIntelligenceError("storage_failure"), status: 503 },
+      {
+        error: new SafeConnectorError({
+          code: "timeout",
+          message: "Private route connector failure",
+          operation: "indexer.read",
+          retryable: true,
+          service: "prowlarr",
+        }),
+        status: 503,
+      },
+      { error: new Error("Private unexpected route failure"), status: 500 },
+    ];
+    for (const errorCase of errorCases) {
+      const { app, operator } = await harness();
+      const operation = vi
+        .spyOn(IndexerIntelligenceService.prototype, method)
+        .mockRejectedValue(errorCase.error);
+      try {
+        const response = await app.inject({
+          headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+          method: "GET",
+          url,
+        });
+        expect(response.statusCode, response.body).toBe(errorCase.status);
+        expect(response.body).not.toContain("Private");
+      } finally {
+        operation.mockRestore();
+        await app.close();
+      }
     }
   });
 });

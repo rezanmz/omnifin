@@ -151,7 +151,15 @@ function harness() {
   const listAttentionItems = vi.fn(async () => attentionResult());
   const scanLibrary = vi.fn(async () => undefined);
   const refreshItem = vi.fn(async () => undefined);
-  const updateMetadata = vi.fn(async () => undefined);
+  let metadataState = {
+    overview: null as string | null,
+    title: "Ember Coast",
+    year: 2026 as number | null,
+  };
+  const readMetadata = vi.fn(async () => metadataState);
+  const updateMetadata = vi.fn(async (_itemId: string, patch: Partial<typeof metadataState>) => {
+    metadataState = { ...metadataState, ...patch };
+  });
   const searchRemoteArtwork = vi.fn(async () => [
     {
       communityRating: 8.4,
@@ -172,6 +180,7 @@ function harness() {
   const client: LibraryOperationClient = {
     applyRemoteArtwork,
     listAttentionItems,
+    readMetadata,
     readRemoteArtwork,
     refreshItem,
     scanLibrary,
@@ -181,13 +190,14 @@ function harness() {
   const referenceTokens = ["m".repeat(22), "n".repeat(22), "p".repeat(22)];
   const operationTokens = ["o".repeat(22), "q".repeat(22), "w".repeat(22), "x".repeat(22)];
   let auditId = 0;
+  const createClient = vi.fn((input) => {
+    expect(input.accessToken).toBe(privateAccessToken);
+    return client;
+  });
   const service = new LibraryOperationService(database, appConfig, {
     clock: () => new Date(now),
     createAuditId: () => `library-audit-${++auditId}`,
-    createClient: vi.fn((input) => {
-      expect(input.accessToken).toBe(privateAccessToken);
-      return client;
-    }),
+    createClient,
     createOperationToken: () => operationTokens.shift() ?? "z".repeat(22),
     createResultToken: () => "r".repeat(22),
     createSearchToken: () => "s".repeat(22),
@@ -201,8 +211,10 @@ function harness() {
       now += milliseconds;
     },
     applyRemoteArtwork,
+    createClient,
     database,
     listAttentionItems,
+    readMetadata,
     readRemoteArtwork,
     refreshItem,
     scanLibrary,
@@ -393,7 +405,7 @@ describe("LibraryOperationService", () => {
     }
   });
 
-  it("denies viewers locally and persists a safe upstream permission outcome", async () => {
+  it("denies viewers locally and never redispatches an unconfirmed scan", async () => {
     const test = harness();
     try {
       await expect(
@@ -412,10 +424,10 @@ describe("LibraryOperationService", () => {
         }),
       );
       await expect(test.service.scan("library-denied-scan-0001", context())).rejects.toMatchObject({
-        reason: "permission_denied",
+        reason: "outcome_unknown",
       });
       await expect(test.service.scan("library-denied-scan-0001", context())).rejects.toMatchObject({
-        reason: "permission_denied",
+        reason: "outcome_unknown",
       });
       expect(test.scanLibrary).toHaveBeenCalledTimes(1);
       const operation = test.database.sqlite
@@ -423,7 +435,10 @@ describe("LibraryOperationService", () => {
           "select failure_code as failureCode, response_json as responseJson from library_mutation_operations",
         )
         .get() as { failureCode: string; responseJson: string | null };
-      expect(operation).toEqual({ failureCode: "permission_denied", responseJson: null });
+      expect(operation).toEqual({ failureCode: "outcome_unknown", responseJson: null });
+      expect(
+        test.database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "uncertain" });
     } finally {
       test.database.close();
     }
@@ -444,6 +459,118 @@ describe("LibraryOperationService", () => {
         test.service.previewArtwork(search.searchId, search.results[0]!.id, context()),
       ).rejects.toBeInstanceOf(LibraryOperationError);
       expect(test.readRemoteArtwork).not.toHaveBeenCalled();
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("fails closed when metadata readback shows an intervening change", async () => {
+    const test = harness();
+    try {
+      const referenceId = (await test.service.attention({ limit: 30 }, context())).items[0]!
+        .referenceId;
+      test.updateMetadata.mockRejectedValueOnce(new Error("connection ended after dispatch"));
+      await expect(
+        test.service.updateMetadata(
+          referenceId,
+          { title: "Ember Coast: Restored" },
+          "library-metadata-reconcile-0001",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "reconciliation_required" });
+
+      await expect(
+        test.service.updateMetadata(
+          referenceId,
+          { title: "Ember Coast: Restored" },
+          "library-metadata-reconcile-0001",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "reconciliation_required" });
+      expect(test.updateMetadata).toHaveBeenCalledOnce();
+      expect(test.readMetadata).toHaveBeenCalledOnce();
+      expect(
+        test.database.sqlite
+          .prepare(
+            "select state, dispatch_attempt_count as attempts from external_mutation_dispatches",
+          )
+          .get(),
+      ).toEqual({ attempts: 1, state: "reconcile_required" });
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("proves a lost metadata response by readback without a second setter call", async () => {
+    const test = harness();
+    try {
+      const referenceId = (await test.service.attention({ limit: 30 }, context())).items[0]!
+        .referenceId;
+      test.updateMetadata.mockRejectedValueOnce(new Error("connection ended after dispatch"));
+      test.readMetadata.mockResolvedValueOnce({
+        overview: null,
+        title: "Ember Coast: Restored",
+        year: 2026,
+      });
+
+      await expect(
+        test.service.updateMetadata(
+          referenceId,
+          { title: "Ember Coast: Restored" },
+          "library-metadata-lost-response-0001",
+          context(),
+        ),
+      ).rejects.toMatchObject({ reason: "reconciliation_required" });
+      await expect(
+        test.service.updateMetadata(
+          referenceId,
+          { title: "Ember Coast: Restored" },
+          "library-metadata-lost-response-0001",
+          context(),
+        ),
+      ).resolves.toMatchObject({ receipt: { state: "accepted" }, replayed: true });
+
+      expect(test.updateMetadata).toHaveBeenCalledOnce();
+      expect(test.readMetadata).toHaveBeenCalledOnce();
+      expect(
+        test.database.sqlite
+          .prepare(
+            "select state, dispatch_attempt_count as attempts from external_mutation_dispatches",
+          )
+          .get(),
+      ).toEqual({ attempts: 1, state: "succeeded" });
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("fails a generation mismatch before the Jellyfin mutation adapter is called", async () => {
+    const test = harness();
+    try {
+      test.createClient.mockImplementationOnce(() => {
+        test.database.sqlite
+          .prepare(
+            "update connector_configs set config_generation = config_generation + 1 where id = 'jellyfin-main'",
+          )
+          .run();
+        return {
+          applyRemoteArtwork: test.applyRemoteArtwork,
+          listAttentionItems: test.listAttentionItems,
+          readMetadata: test.readMetadata,
+          readRemoteArtwork: test.readRemoteArtwork,
+          refreshItem: test.refreshItem,
+          scanLibrary: test.scanLibrary,
+          searchRemoteArtwork: test.searchRemoteArtwork,
+          updateMetadata: test.updateMetadata,
+        };
+      });
+      await expect(
+        test.service.scan("library-generation-mismatch-0001", context()),
+      ).rejects.toMatchObject({ reason: "configuration_unavailable" });
+      expect(test.scanLibrary).not.toHaveBeenCalled();
+      expect(
+        test.database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "failed" });
     } finally {
       test.database.close();
     }

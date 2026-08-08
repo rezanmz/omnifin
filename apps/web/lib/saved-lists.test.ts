@@ -252,22 +252,96 @@ describe("savedListsClient", () => {
     expect(createUrl).toBe("/api/saved/lists");
     expect(String(createUrl)).not.toContain(csrfToken);
     expect(createInit.headers).toMatchObject({
+      accept: "application/json",
+      "content-type": "application/json",
       "idempotency-key": "saved-create-weekend-0001",
       "x-omnifin-csrf": csrfToken,
     });
     const [targetUrl, targetInit] = fetch.mock.calls[1]!;
     expect(targetUrl).toBe(`/api/saved/targets/library/${mediaId}`);
     expect(targetInit).toMatchObject({ body: "{}", method: "POST" });
+    expect(targetInit.headers["content-type"]).toBe("application/json");
     const [discoveryTargetUrl, discoveryTargetInit] = fetch.mock.calls[2]!;
     expect(discoveryTargetUrl).toBe("/api/saved/targets/discovery");
     expect(discoveryTargetInit).toMatchObject({
       body: JSON.stringify({ kind: "movie", language: "en-CA", tmdbId: 603 }),
       method: "POST",
     });
+    expect(discoveryTargetInit.headers["content-type"]).toBe("application/json");
     expect(fetch.mock.calls[3]?.[1].headers).toMatchObject({
+      "content-type": "application/json",
       "idempotency-key": "saved-favorite-0001",
       "x-omnifin-csrf": csrfToken,
     });
+  });
+
+  it("sends both DELETE mutations without a body or content type", async () => {
+    const listDeletion = {
+      deletedAt: now,
+      listId: customListId,
+      revision: 1,
+      undoExpiresAt: "2026-08-04T11:00:30.000Z",
+    };
+    const membershipDeletion = {
+      catalogReferenceId: catalogId,
+      listId,
+      removed: true,
+      revision: 2,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(response(listDeletion, 200, { etag }))
+      .mockResolvedValueOnce(response(membershipDeletion, 200, { etag }));
+    vi.stubGlobal("fetch", fetch);
+    const deleteListSignal = new AbortController().signal;
+    const removeItemSignal = new AbortController().signal;
+
+    await expect(
+      savedListsClient.deleteList(customListId, {
+        csrfToken,
+        etag,
+        signal: deleteListSignal,
+      }),
+    ).resolves.toEqual({ data: listDeletion, etag });
+    await expect(
+      savedListsClient.removeItem(listId, catalogId, {
+        csrfToken,
+        etag,
+        signal: removeItemSignal,
+      }),
+    ).resolves.toEqual({ data: membershipDeletion, etag });
+
+    const [deleteListUrl, deleteListInit] = fetch.mock.calls[0]!;
+    expect(deleteListUrl).toBe(`/api/saved/lists/${customListId}`);
+    expect(deleteListInit).toMatchObject({
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        accept: "application/json",
+        "if-match": etag,
+        "x-omnifin-csrf": csrfToken,
+      },
+      method: "DELETE",
+      signal: deleteListSignal,
+    });
+    expect(deleteListInit).not.toHaveProperty("body");
+    expect(deleteListInit.headers).not.toHaveProperty("content-type");
+
+    const [removeItemUrl, removeItemInit] = fetch.mock.calls[1]!;
+    expect(removeItemUrl).toBe(`/api/saved/lists/${listId}/items/${catalogId}`);
+    expect(removeItemInit).toMatchObject({
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        accept: "application/json",
+        "if-match": etag,
+        "x-omnifin-csrf": csrfToken,
+      },
+      method: "DELETE",
+      signal: removeItemSignal,
+    });
+    expect(removeItemInit).not.toHaveProperty("body");
+    expect(removeItemInit.headers).not.toHaveProperty("content-type");
   });
 
   it("requires local retry and concurrency proofs before a mutation is sent", async () => {

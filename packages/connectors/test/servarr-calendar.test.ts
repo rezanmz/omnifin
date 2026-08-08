@@ -173,6 +173,28 @@ describe("Servarr acquisition calendars", () => {
     });
   });
 
+  it("returns every valid event when a source contains more than 200 records", async () => {
+    const records = Array.from({ length: 201 }, (_, index) => ({
+      airDateUtc: new Date(Date.parse(range.startAt) + index * 60_000).toISOString(),
+      episodeNumber: index + 1,
+      hasFile: false,
+      id: index + 1,
+      monitored: true,
+      seasonNumber: 1,
+      series: { title: "Signal" },
+      title: `Episode ${index + 1}`,
+    }));
+    const { adapter } = sonarrWithResponses([jsonResponse(records)]);
+
+    const result = await adapter.readAcquisitionCalendar(range);
+
+    expect(result.events).toHaveLength(201);
+    expect(result.truncated).toBe(false);
+    expect(result.events.map((event) => event.externalId)).toEqual(
+      records.map((record) => `episode:${record.id}`),
+    );
+  });
+
   it("fails closed on an invalid range or malformed upstream response", async () => {
     const invalidRange = radarrWithResponses([]);
     await expect(
@@ -198,6 +220,20 @@ describe("Servarr acquisition calendars", () => {
       ]),
     ]);
     await expect(malformed.adapter.readAcquisitionCalendar(range)).rejects.toMatchObject({
+      code: "response_invalid",
+      operation: "acquisition.calendar",
+    });
+
+    const overLimit = radarrWithResponses([
+      jsonResponse(
+        Array.from({ length: 5_001 }, (_, index) => ({
+          id: index + 1,
+          monitored: true,
+          title: `Movie ${index + 1}`,
+        })),
+      ),
+    ]);
+    await expect(overLimit.adapter.readAcquisitionCalendar(range)).rejects.toMatchObject({
       code: "response_invalid",
       operation: "acquisition.calendar",
     });

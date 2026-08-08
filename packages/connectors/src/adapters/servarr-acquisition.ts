@@ -28,7 +28,7 @@ import type { ConnectorCapability, PartialFailure } from "@omnifin/contracts/con
 import { z } from "zod";
 
 import {
-  ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
+  ACQUISITION_CALENDAR_SOURCE_MAX_RECORDS,
   acquisitionCalendarReadRequestSchema,
   type AcquisitionCalendarReadRequest,
   type AcquisitionCalendarSourceEvent,
@@ -53,6 +53,10 @@ const internalReleaseReferenceSchema = z.strictObject({
   guid: z.string().trim().min(1).max(2_048),
   indexerId: safeIdentifierSchema,
 });
+const mutationOperationIdSchema = z
+  .string()
+  .length(40)
+  .regex(/^mutation_dispatch_[A-Za-z0-9_-]{22}$/u);
 
 const diskSpaceResponseSchema = z
   .array(
@@ -220,8 +224,12 @@ const sonarrCalendarRecordSchema = z.object({
   }),
   title: calendarTextSchema,
 });
-const radarrCalendarResponseSchema = z.array(radarrCalendarRecordSchema).max(5_000);
-const sonarrCalendarResponseSchema = z.array(sonarrCalendarRecordSchema).max(5_000);
+const radarrCalendarResponseSchema = z
+  .array(radarrCalendarRecordSchema)
+  .max(ACQUISITION_CALENDAR_SOURCE_MAX_RECORDS);
+const sonarrCalendarResponseSchema = z
+  .array(sonarrCalendarRecordSchema)
+  .max(ACQUISITION_CALENDAR_SOURCE_MAX_RECORDS);
 
 type HistoryRecord = z.infer<typeof historyRecordSchema>;
 type QueueRecord = z.infer<typeof queueRecordSchema>;
@@ -767,10 +775,7 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
           const byTime = Date.parse(left.eventAt) - Date.parse(right.eventAt);
           return byTime === 0 ? left.externalId.localeCompare(right.externalId) : byTime;
         });
-      return {
-        events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
-        truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
-      };
+      return { events, truncated: false };
     }
     const records = await this.client.requestJson("api/v3/calendar", radarrCalendarResponseSchema, {
       headers: { "X-Api-Key": this.apiKey },
@@ -786,10 +791,7 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
         const byTime = Date.parse(left.eventAt) - Date.parse(right.eventAt);
         return byTime === 0 ? left.externalId.localeCompare(right.externalId) : byTime;
       });
-    return {
-      events: events.slice(0, ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS),
-      truncated: events.length > ACQUISITION_CALENDAR_SOURCE_MAX_EVENTS,
-    };
+    return { events, truncated: false };
   }
 
   async readStorageCapacity(signal?: AbortSignal): Promise<readonly ConnectorStorageCapacity[]> {
@@ -850,11 +852,23 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
     };
   }
 
-  async grabManualRelease(reference: ManualReleaseReference, signal?: AbortSignal): Promise<void> {
+  async grabManualRelease(
+    reference: ManualReleaseReference,
+    signal?: AbortSignal,
+    operationId?: string,
+  ): Promise<void> {
     const release = internalReleaseReferenceSchema.parse(reference);
+    const normalizedOperationId =
+      operationId === undefined ? undefined : mutationOperationIdSchema.parse(operationId);
     const response = await this.client.requestJson("api/v3/release", manualGrabResponseSchema, {
       body: JSON.stringify(release),
-      headers: { "Content-Type": "application/json", "X-Api-Key": this.apiKey },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": this.apiKey,
+        ...(normalizedOperationId === undefined
+          ? {}
+          : { "X-Omnifin-Operation-Id": normalizedOperationId }),
+      },
       method: "POST",
       operation: "acquisition.release.grab",
       ...(signal ? { signal } : {}),
@@ -873,8 +887,11 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
   async queueAcquisitionSearch(
     input: AcquisitionSearchInput,
     signal?: AbortSignal,
+    operationId?: string,
   ): Promise<AcquisitionSearchResponse> {
     const target = acquisitionSearchInputSchema.parse(input);
+    const normalizedOperationId =
+      operationId === undefined ? undefined : mutationOperationIdSchema.parse(operationId);
     if (target.service !== this.service) {
       throw new SafeConnectorError({
         code: "configuration_invalid",
@@ -896,7 +913,13 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
             };
     const command = await this.client.requestJson("api/v3/command", commandResponseSchema, {
       body: JSON.stringify(body),
-      headers: { "Content-Type": "application/json", "X-Api-Key": this.apiKey },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": this.apiKey,
+        ...(normalizedOperationId === undefined
+          ? {}
+          : { "X-Omnifin-Operation-Id": normalizedOperationId }),
+      },
       method: "POST",
       operation: "acquisition.search",
       ...(signal ? { signal } : {}),
@@ -946,11 +969,19 @@ export abstract class ServarrAcquisitionAdapter extends ServarrAdapter {
   async removeAndBlocklistAcquisitionQueueItem(
     externalId: number,
     signal?: AbortSignal,
+    operationId?: string,
   ): Promise<void> {
     const id = safeIdentifierSchema.parse(externalId);
+    const normalizedOperationId =
+      operationId === undefined ? undefined : mutationOperationIdSchema.parse(operationId);
     await this.client.requestText(`api/v3/queue/${id}`, {
       acceptedStatuses: [200, 202, 204],
-      headers: { "X-Api-Key": this.apiKey },
+      headers: {
+        "X-Api-Key": this.apiKey,
+        ...(normalizedOperationId === undefined
+          ? {}
+          : { "X-Omnifin-Operation-Id": normalizedOperationId }),
+      },
       method: "DELETE",
       operation: "acquisition.queue.remove_and_blocklist",
       query: {

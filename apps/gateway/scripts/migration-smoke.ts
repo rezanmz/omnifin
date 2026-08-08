@@ -19,11 +19,15 @@ const requiredTables = [
   "audit_events",
   "auth_transactions",
   "connector_configs",
+  "database_key_verifiers",
   "discovery_artwork_references",
   "download_queue_bulk_operations",
+  "download_queue_item_operations",
   "download_queue_removal_operations",
   "external_issue_references",
   "external_identities",
+  "external_mutation_dispatches",
+  "external_mutation_target_locks",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
@@ -40,6 +44,7 @@ const requiredTables = [
   "operational_failures",
   "playback_asset_handles",
   "playback_preferences",
+  "playback_progress_operations",
   "playback_sessions",
   "role_mappings",
   "saved_catalog_items",
@@ -100,7 +105,13 @@ const requiredColumns = {
   ],
   audit_events: ["actor_auth_method", "actor_session_id", "request_id"],
   auth_transactions: ["browser_binding_hash", "redirect_uri"],
-  connector_configs: ["public_ui_url"],
+  connector_configs: [
+    "config_generation",
+    "instance_generation",
+    "instance_identity_hash",
+    "public_ui_url",
+  ],
+  database_key_verifiers: ["format_version", "id", "verifier"],
   download_queue_bulk_operations: [
     "completed_at",
     "fingerprint_hash",
@@ -108,6 +119,20 @@ const requiredColumns = {
     "request_json",
     "response_json",
     "results_json",
+    "state",
+    "user_id",
+  ],
+  download_queue_item_operations: [
+    "bulk_operation_id",
+    "completed_at",
+    "connector_config_generation",
+    "connector_id",
+    "connector_instance_generation",
+    "failure_code",
+    "fingerprint_hash",
+    "idempotency_key_hash",
+    "item_digest",
+    "kind",
     "state",
     "user_id",
   ],
@@ -126,6 +151,7 @@ const requiredColumns = {
   ],
   discovery_artwork_references: [
     "connector_id",
+    "connector_instance_generation",
     "encrypted_payload",
     "expires_at",
     "item_digest",
@@ -134,14 +160,41 @@ const requiredColumns = {
   ],
   external_issue_references: [
     "connector_id",
+    "connector_instance_generation",
     "encrypted_upstream_id",
     "expires_at",
     "last_used_at",
     "upstream_id_digest",
   ],
+  external_mutation_dispatches: [
+    "completed_at",
+    "connector_config_generation",
+    "connector_id",
+    "connector_instance_generation",
+    "dispatch_attempt_count",
+    "dispatched_at",
+    "encrypted_normalized_request",
+    "failure_code",
+    "kind",
+    "lease_expires_at",
+    "lease_owner",
+    "parent_operation_id",
+    "parent_operation_type",
+    "reconcile_required_at",
+    "state",
+    "uncertain_at",
+    "user_id",
+  ],
+  external_mutation_target_locks: [
+    "acquired_at",
+    "owner_dispatch_id",
+    "target_digest",
+    "target_scope",
+  ],
   jellyfin_quick_connect_transactions: [
     "browser_binding_hash",
     "connector_id",
+    "connector_instance_generation",
     "connector_type",
     "consumed_at",
     "encrypted_payload",
@@ -259,6 +312,7 @@ const requiredColumns = {
   ],
   media_request_profile_preferences: [
     "connector_id",
+    "connector_instance_generation",
     "created_at",
     "destination_id",
     "is_4k",
@@ -280,6 +334,18 @@ const requiredColumns = {
     "revision",
     "schema_version",
     "updated_at",
+    "user_id",
+  ],
+  playback_progress_operations: [
+    "completed_at",
+    "connector_config_generation",
+    "connector_id",
+    "connector_instance_generation",
+    "failure_code",
+    "playback_session_id",
+    "position_seconds",
+    "session_revision",
+    "state",
     "user_id",
   ],
   playback_sessions: [
@@ -344,6 +410,7 @@ const requiredColumns = {
   ],
   service_identity_links: [
     "connector_id",
+    "connector_instance_generation",
     "device_id",
     "encrypted_access_token",
     "external_display_name",
@@ -380,6 +447,7 @@ const requiredColumns = {
   ],
   subtitle_searches: [
     "connector_id",
+    "connector_instance_generation",
     "encrypted_payload",
     "expires_at",
     "link_revision",
@@ -416,7 +484,10 @@ const requiredIndexes = {
   audit_budget_entries: ["audit_budget_entries_bucket_unique"],
   audit_budget_scopes: ["audit_budget_scopes_scope_generation_unique"],
   audit_events: ["audit_events_actor_session_idx", "audit_events_request_idx"],
-  connector_configs: ["connector_configs_id_type_unique"],
+  connector_configs: [
+    "connector_configs_id_instance_generation_unique",
+    "connector_configs_id_type_unique",
+  ],
   discovery_artwork_references: [
     "discovery_artwork_references_expiry_idx",
     "discovery_artwork_references_user_item_unique",
@@ -425,6 +496,11 @@ const requiredIndexes = {
   download_queue_bulk_operations: [
     "download_queue_bulk_operations_state_created_idx",
     "download_queue_bulk_operations_user_key_unique",
+  ],
+  download_queue_item_operations: [
+    "download_queue_item_operations_bulk_target_unique",
+    "download_queue_item_operations_state_created_idx",
+    "download_queue_item_operations_user_key_unique",
   ],
   download_queue_removal_operations: [
     "download_queue_removal_operations_item_idx",
@@ -435,6 +511,13 @@ const requiredIndexes = {
     "external_issue_references_connector_digest_unique",
     "external_issue_references_expiry_idx",
   ],
+  external_mutation_dispatches: [
+    "external_mutation_dispatches_connector_generation_idx",
+    "external_mutation_dispatches_parent_kind_unique",
+    "external_mutation_dispatches_state_lease_idx",
+    "external_mutation_dispatches_user_created_idx",
+  ],
+  external_mutation_target_locks: ["external_mutation_target_locks_owner_idx"],
   jellyfin_quick_connect_transactions: [
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
@@ -494,6 +577,11 @@ const requiredIndexes = {
   playback_asset_handles: [
     "playback_asset_handles_expiry_idx",
     "playback_asset_handles_session_target_idx",
+  ],
+  playback_progress_operations: [
+    "playback_progress_operations_session_revision_unique",
+    "playback_progress_operations_state_created_idx",
+    "playback_progress_operations_user_created_idx",
   ],
   playback_sessions: ["playback_sessions_expiry_idx", "playback_sessions_user_updated_idx"],
   saved_catalog_items: [
@@ -556,7 +644,19 @@ const requiredTriggers = [
   "audit_budget_entries_update_immutable",
   "audit_budget_scopes_delete_protected",
   "audit_budget_scopes_update_guarded",
+  "connector_configs_generation_insert_guard",
+  "connector_configs_generation_update_guard",
+  "discovery_artwork_references_connector_generation_insert_guard",
+  "discovery_artwork_references_connector_generation_update_guard",
+  "external_issue_references_connector_generation_insert_guard",
+  "external_issue_references_connector_generation_update_guard",
+  "jellyfin_quick_connect_transactions_connector_generation_insert_guard",
+  "jellyfin_quick_connect_transactions_connector_generation_update_guard",
+  "media_request_profile_preferences_connector_generation_insert_guard",
+  "media_request_profile_preferences_connector_generation_update_guard",
   "saved_catalog_media_reference_before_delete",
+  "service_identity_links_connector_generation_insert_guard",
+  "service_identity_links_connector_generation_update_guard",
   "session_rotation_aliases_update_immutable",
   "session_secret_reservations_delete_immutable",
   "session_secret_reservations_update_immutable",
@@ -564,6 +664,8 @@ const requiredTriggers = [
   "sessions_secret_reservations_bearer_update",
   "sessions_secret_reservations_csrf_update",
   "sessions_secret_reservations_insert",
+  "subtitle_searches_connector_generation_insert_guard",
+  "subtitle_searches_connector_generation_update_guard",
 ] as const;
 
 interface MigrationJournalEntry {
@@ -603,14 +705,16 @@ function writeHistoricalMigrationFixture() {
     readFileSync(path.join(currentMigrationDirectory, "meta/_journal.json"), "utf8"),
   ) as MigrationJournal;
   const expectedTail = [
-    [27, "0027_connector_public_ui_urls"],
     [28, "0028_library_removal_operations"],
     [29, "0029_theme_preferences"],
     [30, "0030_saved_lists"],
     [31, "0031_playback_preferences"],
+    [32, "0032_database_key_verifier"],
+    [33, "0033_living_risque"],
+    [34, "0034_external_mutation_journal"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-5).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-7).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -641,6 +745,28 @@ function writeHistoricalMigrationFixture() {
       "saved_targets",
     ].every((table) => Object.hasOwn(snapshots[3]!.tables, table)),
     "Snapshot 0030 must include all parent and saved-list tables.",
+  );
+  const playbackSnapshot = JSON.parse(
+    readFileSync(path.join(currentMigrationDirectory, "meta/0031_snapshot.json"), "utf8"),
+  ) as MigrationSnapshot;
+  const keyVerifierSnapshot = JSON.parse(
+    readFileSync(path.join(currentMigrationDirectory, "meta/0032_snapshot.json"), "utf8"),
+  ) as MigrationSnapshot;
+  const bulkQuarantineSnapshot = JSON.parse(
+    readFileSync(path.join(currentMigrationDirectory, "meta/0033_snapshot.json"), "utf8"),
+  ) as MigrationSnapshot;
+  const externalMutationSnapshot = JSON.parse(
+    readFileSync(path.join(currentMigrationDirectory, "meta/0034_snapshot.json"), "utf8"),
+  ) as MigrationSnapshot;
+  assertCondition(
+    keyVerifierSnapshot.prevId === playbackSnapshot.id &&
+      Object.hasOwn(keyVerifierSnapshot.tables, "database_key_verifiers") &&
+      bulkQuarantineSnapshot.prevId === keyVerifierSnapshot.id &&
+      Object.hasOwn(bulkQuarantineSnapshot.tables, "download_queue_bulk_operations") &&
+      externalMutationSnapshot.prevId === bulkQuarantineSnapshot.id &&
+      Object.hasOwn(externalMutationSnapshot.tables, "external_mutation_dispatches") &&
+      Object.hasOwn(externalMutationSnapshot.tables, "external_mutation_target_locks"),
+    "Snapshots 0032 through 0034 must preserve verifier, quarantine, and mutation-journal ancestry.",
   );
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
@@ -732,8 +858,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0031_playback_preferences",
-  "Current migration journal must end at migration 0031_playback_preferences.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0034_external_mutation_journal",
+  "Current migration journal must end at migration 0034_external_mutation_journal.",
 );
 
 try {
@@ -1222,7 +1349,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0031.",
+      "Production migration did not advance the historical fixture exactly through migration 0034.",
     );
     const reservations = upgradeDatabase.sqlite
       .prepare(
@@ -1387,7 +1514,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0031, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0034, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

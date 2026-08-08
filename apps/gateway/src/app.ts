@@ -54,7 +54,13 @@ import {
   type UserAccessAdminRoutesOptions,
 } from "./auth/user-access-admin-routes.js";
 import { type AppConfig, loadConfig } from "./config.js";
-import { type DatabaseHandle, openDatabase } from "./db/client.js";
+import {
+  assertDatabasePostMigrationChecks,
+  initializeDatabase,
+  initializeDatabaseKeyVerifier,
+  type DatabaseHandle,
+  openDatabase,
+} from "./db/client.js";
 import {
   connectorAdminRoutes,
   type ConnectorAdminRoutesOptions,
@@ -254,7 +260,18 @@ function oidcBackchannelRequest(request: FastifyRequest) {
 
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
-  const database = options.database ?? openDatabase(config.databaseUrl);
+  const startupPrepared = options.database === undefined && options.migrate !== false;
+  const database =
+    options.database ??
+    (startupPrepared
+      ? await initializeDatabase({
+          backupDirectory: config.backupDirectory ?? "/backups",
+          backupRetentionCount: config.backupRetentionCount ?? 14,
+          databaseUrl: config.databaseUrl,
+          ...(config.imageReference ? { imageReference: config.imageReference } : {}),
+          rootKey: config.encryptionKey,
+        })
+      : openDatabase(config.databaseUrl));
   let databaseClosed = false;
   const closeDatabase = () => {
     if (databaseClosed) return;
@@ -265,9 +282,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
   try {
     const runtimeIdentity = options.runtimeIdentity ?? loadRuntimeIdentity();
-    if (options.migrate !== false) {
+    if (options.migrate !== false && !startupPrepared) {
       try {
         database.migrate();
+        initializeDatabaseKeyVerifier(database.sqlite, config.encryptionKey);
+        assertDatabasePostMigrationChecks(database.sqlite, config.encryptionKey);
       } catch (error) {
         throw asStartupError(error, "database_migration_failed");
       }

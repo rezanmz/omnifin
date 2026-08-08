@@ -1,6 +1,14 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { oidcAdministratorBootstrapStartResponseSchema } from "@omnifin/contracts/auth";
+import {
+  administratorRecoveryConfirmationRequestSchema,
+  oidcAdministratorBootstrapStartResponseSchema,
+  oidcAdministratorReplacementStartResponseSchema,
+} from "@omnifin/contracts/auth";
 import { requirePermission } from "../authorization.js";
+import {
+  AdministratorRecoveryError,
+  AdministratorRecoveryService,
+} from "../administrator-recovery-service.js";
 import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "../session-cookie.js";
 import { SessionIssuanceLimitError } from "../session-service.js";
 import { SafeHttpError } from "../../http-error.js";
@@ -230,6 +238,10 @@ function failureLocation(error: OidcBrowserError) {
   return `/login?authError=${error}`;
 }
 
+function administratorReplacementLocation(status: "denied" | "replaced" | "unavailable") {
+  return `/recovery?administratorReplacement=${status}`;
+}
+
 function isRateLimitFailure(error: unknown) {
   if (typeof error !== "object" || error === null) return false;
   try {
@@ -327,7 +339,20 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     ...dependencies.identity,
     providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(app.database, app.appConfig),
   });
-  const signIn = new OidcSignInService(app.database, identity, app.sessionService);
+  const administratorRecovery = new AdministratorRecoveryService(
+    app.database,
+    app.sessionService,
+    app.appConfig,
+    dependencies.authorizationTransaction?.clock === undefined
+      ? {}
+      : { clock: dependencies.authorizationTransaction.clock },
+  );
+  const signIn = new OidcSignInService(
+    app.database,
+    identity,
+    app.sessionService,
+    administratorRecovery,
+  );
   const failureAudit = new OidcFailureAuditService(
     app.database,
     app.appConfig,
@@ -692,6 +717,123 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     },
   );
 
+  app.post<{
+    Params: { providerId: string };
+  }>(
+    "/v1/auth/recovery/administrator-replacement/oidc/:providerId/start",
+    {
+      bodyLimit: 512,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      const principal = app.sessionService.resolveValidatedSessionPrincipal(
+        request.validatedSession,
+      );
+      requirePermission(principal, "recovery.administrator.replace");
+      const parsed = administratorRecoveryConfirmationRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The administrator recovery request is invalid.",
+          statusCode: 400,
+        });
+      }
+      const recovery = administratorRecovery.beginValidatedReplacement(
+        request.validatedSession,
+        parsed.data,
+      );
+      if (!recovery) {
+        throw new SafeHttpError({
+          code: "administrator_replacement_unavailable",
+          message: "Administrator replacement is not available.",
+          statusCode: 409,
+        });
+      }
+      const providerId = request.params.providerId;
+      if (!PROVIDER_ID_PATTERN.test(providerId)) throw new OidcBrowserRouteError();
+      await enforceRateLimit(
+        startClientRateLimit,
+        request,
+        reply,
+        "Too many administrator recovery attempts were started.",
+      );
+      await enforceRateLimit(
+        globalStartRateLimit,
+        request,
+        reply,
+        "Administrator recovery is temporarily rate limited.",
+      );
+      try {
+        const runtime = await providerRegistry.discover(providerId);
+        const providerRuntimeBinding = oidcProviderRuntimeBinding(runtime);
+        protocol.assertAuthorizationRequestViable(runtime, {
+          providerId,
+          redirectUri: canonicalOidcCallbackUri(app.appConfig.baseUrl, providerId),
+        });
+        const transaction = await transactions.create({
+          ...parsed.data,
+          browserBindingToken:
+            request.cookies[oidcBrowserBindingCookieName(app.appConfig)] ?? createBrowserBinding(),
+          providerId,
+          providerRuntimeBinding,
+          purpose: "administrator_replacement",
+          recoverySessionId: recovery.sessionId,
+          returnPath: "/settings",
+        });
+        try {
+          const redirect = protocol.buildAuthorizationRequest(runtime, transaction);
+          writeOidcBrowserBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          writeOidcTransactionBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.state,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          return oidcAdministratorReplacementStartResponseSchema.parse({
+            authorizationUrl: redirect.authorizationUrl,
+            expiresAt: transaction.expiresAt.toISOString(),
+          });
+        } catch (error) {
+          transactions.cancel({
+            browserBindingToken: transaction.browserBindingToken,
+            providerId: transaction.providerId,
+            state: transaction.state,
+          });
+          throw error;
+        }
+      } catch (error) {
+        if (error instanceof SafeHttpError) throw error;
+        const failure = startFailure(error);
+        await recordStartFailure(request, failure.auditReason);
+        throw new SafeHttpError({
+          code:
+            failure.browserError === "invalid_request"
+              ? "invalid_request"
+              : "oidc_provider_unavailable",
+          message:
+            failure.browserError === "invalid_request"
+              ? "The administrator recovery request is invalid."
+              : "The identity provider is temporarily unavailable.",
+          statusCode: failure.browserError === "invalid_request" ? 400 : 503,
+        });
+      }
+    },
+  );
+
   app.get<{
     Params: { providerId: string };
     Querystring: { returnPath?: string };
@@ -842,11 +984,21 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
         const response = callbackResponse(parsedRequest, transaction.redirectUri);
         if (response.kind === "authorization_denied") {
           recordFailure(request, "authorization_denied", "denied");
-          return reply.redirect(failureLocation("authorization_denied"), 303);
+          return reply.redirect(
+            transaction.purpose === "administrator_replacement"
+              ? administratorReplacementLocation("denied")
+              : failureLocation("authorization_denied"),
+            303,
+          );
         }
         if (response.kind === "provider_error") {
           recordFailure(request, "callback_validation_failed");
-          return reply.redirect(failureLocation("authentication_failed"), 303);
+          return reply.redirect(
+            transaction.purpose === "administrator_replacement"
+              ? administratorReplacementLocation("unavailable")
+              : failureLocation("authentication_failed"),
+            303,
+          );
         }
 
         const runtime = await providerRegistry.discover(providerId);
@@ -864,6 +1016,38 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
             ? {}
             : { userAgent: request.headers["user-agent"] }),
         };
+        if (transaction.purpose === "administrator_replacement") {
+          if (
+            !transaction.recoverySessionId ||
+            !transaction.administratorId ||
+            !transaction.confirmation ||
+            !transaction.expectedUpdatedAt
+          ) {
+            throw new OidcBrowserRouteError();
+          }
+          const replacement = signIn.replaceAdministrator({
+            administratorId: transaction.administratorId,
+            confirmation: transaction.confirmation,
+            currentRecoverySessionToken: signInInput.currentSessionToken,
+            expectedUpdatedAt: transaction.expectedUpdatedAt,
+            grant,
+            ipAddress: signInInput.ipAddress,
+            recoverySessionId: transaction.recoverySessionId,
+            requestId: signInInput.requestId,
+            ...(signInInput.userAgent === undefined ? {} : { userAgent: signInInput.userAgent }),
+          });
+          if (replacement.status !== "replaced") {
+            recordFailure(request, "identity_rejected", "denied", "invalid_request");
+            return reply.redirect(administratorReplacementLocation(replacement.status), 303);
+          }
+          writeSessionCookie(
+            reply,
+            app.appConfig,
+            replacement.session.sessionToken,
+            replacement.session.absoluteExpiresAt,
+          );
+          return reply.redirect(administratorReplacementLocation("replaced"), 303);
+        }
         const result =
           transaction.purpose === "administrator_bootstrap" && transaction.recoverySessionId
             ? signIn.bootstrapAdministrator({
@@ -891,6 +1075,10 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
         );
       } catch (error) {
         if (error instanceof SafeHttpError) throw error;
+        if (error instanceof AdministratorRecoveryError) {
+          recordFailure(request, "internal_failure");
+          return reply.redirect(administratorReplacementLocation("unavailable"), 303);
+        }
         const failure = callbackFailure(error);
         recordFailure(request, failure.auditReason, failure.outcome);
         return reply.redirect(failureLocation(failure.browserError), 303);

@@ -2,18 +2,21 @@
 
 Omnifin is designed to handle identity assertions, session state, media history, and
 credentials that may carry administrative access to several services. The current
-pre-release code exposes OIDC authentication, local sessions, recovery access, and
-authentication audit records; Jellyfin pairing, connector administration, and media
-operations remain in development. The gateway, storage, identity, connector, and
-release boundaries are security-sensitive. Please report suspected vulnerabilities
-privately and avoid testing against systems or data you do not own.
+pre-release code exposes OIDC authentication, local sessions, recovery access,
+Jellyfin pairing, connector administration, media operations, and authentication audit
+records. These surfaces remain pre-v1 and unsupported as stable. The gateway, storage,
+identity, connector, and release boundaries are security-sensitive. Please report
+suspected vulnerabilities privately and avoid testing against systems or data you do
+not own.
 
 ## Supported versions
 
-There is no supported stable release yet. During pre-release development, security
+There is no supported stable release yet. All `v0.x` releases are pre-v1 previews and
+are not supported as stable release lines. During pre-release development, security
 fixes are made on the default branch and may be included in the next tagged preview.
-Once stable releases exist, this section will list supported release lines and the
-end of security support for each.
+V1 support remains pending the scope, security review, and exact-candidate evidence in
+the [v1 stability gate](docs/v1-stability.md). Once a stable release passes that gate,
+this section will list its supported release line and end of security support.
 
 ## Report a vulnerability
 

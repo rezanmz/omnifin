@@ -1,0 +1,14 @@
+{
+  "artifactSha256": "1356247a3d289aefe0e31be82d48f74e8dc431b06bdf5cc63462939c7349a17c",
+  "fixtureEncryptionKeyBase64": "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+  "generationMode": "source",
+  "generator": "apps/gateway/scripts/generate-v012-fixture.ts",
+  "generatorVersion": 2,
+  "migrationCount": 32,
+  "provisional": true,
+  "schemaVersion": 2,
+  "sourceCommit": "b85488b9517680d59ef87dfdb90ad6ec04da5251",
+  "sourceTag": "v0.12.0",
+  "sqliteVersion": "3.53.4",
+  "sqliteSourceId": "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc"
+}

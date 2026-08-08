@@ -120,6 +120,7 @@ export const permissionSchema = z.enum([
   "sessions.self.revoke",
   "recovery.oidc.manage",
   "recovery.jellyfin.manage",
+  "recovery.administrator.replace",
   "recovery.sessions.revoke",
 ]);
 export type Permission = z.infer<typeof permissionSchema>;
@@ -150,8 +151,13 @@ export const PENDING_BOOTSTRAP_ADMIN_PERMISSIONS = [
 export const RECOVERY_PERMISSIONS = [
   "recovery.oidc.manage",
   "recovery.jellyfin.manage",
+  "recovery.administrator.replace",
   "recovery.sessions.revoke",
 ] as const satisfies readonly Permission[];
+
+const NORMAL_ADMIN_PERMISSIONS = permissionSchema.options.filter(
+  (permission) => permission !== "recovery.administrator.replace",
+) as Exclude<Permission, "recovery.administrator.replace">[];
 
 export const ROLE_PERMISSIONS = {
   viewer: [
@@ -188,7 +194,7 @@ export const ROLE_PERMISSIONS = {
     "library.manage",
     "issue.manage",
   ],
-  admin: permissionSchema.options,
+  admin: NORMAL_ADMIN_PERMISSIONS,
 } as const satisfies Record<Role, readonly Permission[]>;
 
 const oidcAuthProviderSchema = z.object({
@@ -420,7 +426,11 @@ export const sessionPrincipalSchema = z
         message: "Session permissions cannot contain duplicates.",
       });
     }
-    const allowedPermissions = new Set<Permission>(ROLE_PERMISSIONS[principal.role]);
+    const allowedPermissions = new Set<Permission>(
+      principal.accountState === "recovery"
+        ? RECOVERY_PERMISSIONS
+        : ROLE_PERMISSIONS[principal.role],
+    );
     for (const permission of principal.permissions) {
       if (!allowedPermissions.has(permission)) {
         context.addIssue({
@@ -679,6 +689,132 @@ export const userAccessMutationResponseSchema = z.strictObject({
   user: userAccessSummarySchema,
 });
 export type UserAccessMutationResponse = z.infer<typeof userAccessMutationResponseSchema>;
+
+export const ADMINISTRATOR_RECOVERY_CONFIRMATION = "REPLACE ADMINISTRATOR" as const;
+
+export const administratorRecoveryPreviewRequestSchema = z.strictObject({});
+export type AdministratorRecoveryPreviewRequest = z.infer<
+  typeof administratorRecoveryPreviewRequestSchema
+>;
+
+export const administratorRecoveryTargetSchema = z.strictObject({
+  administratorId: identifierSchema,
+  expectedUpdatedAt: z.iso.datetime({ offset: true }),
+});
+export type AdministratorRecoveryTarget = z.infer<typeof administratorRecoveryTargetSchema>;
+
+export const administratorRecoveryConfirmationRequestSchema = z.strictObject({
+  administratorId: identifierSchema,
+  confirmation: z.literal(ADMINISTRATOR_RECOVERY_CONFIRMATION),
+  expectedUpdatedAt: z.iso.datetime({ offset: true }),
+});
+export type AdministratorRecoveryConfirmationRequest = z.infer<
+  typeof administratorRecoveryConfirmationRequestSchema
+>;
+
+const administratorRecoveryAuthenticationMethodSchema = z.enum(["jellyfin", "oidc"]);
+
+export const administratorRecoveryPreviewAdministratorSchema = z
+  .strictObject({
+    activeSessions: z.int().min(0).max(2_147_483_647),
+    authenticationMethods: z.array(administratorRecoveryAuthenticationMethodSchema).max(2),
+    displayName: displayNameSchema,
+    id: identifierSchema,
+    updatedAt: z.iso.datetime({ offset: true }),
+  })
+  .superRefine((administrator, context) => {
+    if (
+      new Set(administrator.authenticationMethods).size !==
+      administrator.authenticationMethods.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Administrator authentication methods cannot contain duplicates.",
+        path: ["authenticationMethods"],
+      });
+    }
+  });
+export type AdministratorRecoveryPreviewAdministrator = z.infer<
+  typeof administratorRecoveryPreviewAdministratorSchema
+>;
+
+export const administratorRecoveryPreviewResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    administrator: administratorRecoveryPreviewAdministratorSchema,
+    status: z.literal("available"),
+  }),
+  z.strictObject({ status: z.literal("unavailable") }),
+  z.strictObject({ status: z.literal("denied") }),
+]);
+export type AdministratorRecoveryPreviewResponse = z.infer<
+  typeof administratorRecoveryPreviewResponseSchema
+>;
+
+export const administratorRecoveryJellyfinPasswordRequestSchema = z.strictObject({
+  administratorId: identifierSchema,
+  confirmation: z.literal(ADMINISTRATOR_RECOVERY_CONFIRMATION),
+  expectedUpdatedAt: z.iso.datetime({ offset: true }),
+  password: z.string().min(1).max(1_024),
+  username: z.string().trim().min(1).max(160),
+});
+export type AdministratorRecoveryJellyfinPasswordRequest = z.infer<
+  typeof administratorRecoveryJellyfinPasswordRequestSchema
+>;
+
+const administratorRecoveryRevokedSessionsSchema = z.strictObject({
+  recovery: z.int().min(0).max(2_147_483_647),
+  replacement: z.int().min(0).max(2_147_483_647),
+  target: z.int().min(0).max(2_147_483_647),
+});
+
+const administratorRecoveryCsrfTokenSchema = z
+  .string()
+  .min(43)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/, "CSRF tokens must use unpadded base64url characters");
+
+export const administratorRecoveryReplacementResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    csrfToken: administratorRecoveryCsrfTokenSchema,
+    revokedSessions: administratorRecoveryRevokedSessionsSchema,
+    status: z.literal("replaced"),
+  }),
+  z.strictObject({ status: z.literal("unavailable") }),
+  z.strictObject({ status: z.literal("denied") }),
+]);
+export type AdministratorRecoveryReplacementResponse = z.infer<
+  typeof administratorRecoveryReplacementResponseSchema
+>;
+
+export const administratorRecoveryQuickConnectPollResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    expiresAt: z.iso.datetime({ offset: true }),
+    pollAfterMs: z.int().min(1_000).max(30_000),
+    status: z.literal("pending"),
+  }),
+  z.strictObject({ status: z.literal("expired") }),
+  ...administratorRecoveryReplacementResponseSchema.options,
+]);
+export type AdministratorRecoveryQuickConnectPollResponse = z.infer<
+  typeof administratorRecoveryQuickConnectPollResponseSchema
+>;
+
+export const oidcAdministratorReplacementStartResponseSchema = z.strictObject({
+  authorizationUrl: z.url().max(16_384),
+  expiresAt: z.iso.datetime({ offset: true }),
+});
+export type OidcAdministratorReplacementStartResponse = z.infer<
+  typeof oidcAdministratorReplacementStartResponseSchema
+>;
+
+// Descriptive aliases retained for callers that name the ceremony rather than the recovery actor.
+export const administratorReplacementTargetSchema = administratorRecoveryTargetSchema;
+export const administratorReplacementConfirmationRequestSchema =
+  administratorRecoveryConfirmationRequestSchema;
+export const administratorReplacementPreviewResponseSchema =
+  administratorRecoveryPreviewResponseSchema;
+export const administratorReplacementResponseSchema =
+  administratorRecoveryReplacementResponseSchema;
 
 const claimScalarSchema = z.union([z.string().min(1).max(512), z.number().finite(), z.boolean()]);
 const blockedClaimPathSegments = new Set(["__proto__", "constructor", "prototype"]);

@@ -12,7 +12,7 @@ import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.
 import {
   MediaRequestService,
   type MediaRequestAdapter,
-  type MediaRequestFailureCode,
+  type MediaRequestDependencies,
 } from "../src/requests/media-request-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
@@ -179,6 +179,7 @@ function harness(
     createMediaRequest?: MediaRequestAdapter["createMediaRequest"];
     listRequestRouting?: MediaRequestAdapter["listRequestRouting"];
     resolveUser?: MediaRequestAdapter["resolveUser"];
+    verifyOwnership?: NonNullable<MediaRequestDependencies["verifyOwnership"]>;
   } = {},
 ) {
   const config = testConfig();
@@ -216,13 +217,32 @@ function harness(
       is4k,
       kind,
     }));
+  const verifyOwnership = vi.fn(
+    options.verifyOwnership ??
+      (async (_input, currentPrincipal) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state: "not_owned" as const,
+        userId: currentPrincipal.userId!,
+        userRevision: now.getTime(),
+      })),
+  );
   let id = 0;
   const service = new MediaRequestService(database, config, {
     clock: options.clock ?? (() => now),
     createAdapter: vi.fn(() => ({ createMediaRequest, listRequestRouting, resolveUser })),
     createId: () => `media-request-id-${String(++id).padStart(2, "0")}`,
+    verifyOwnership,
   });
-  return { createMediaRequest, database, listRequestRouting, resolveUser, service };
+  return {
+    createMediaRequest,
+    database,
+    listRequestRouting,
+    resolveUser,
+    service,
+    verifyOwnership,
+  };
 }
 
 const context = () => ({
@@ -749,7 +769,7 @@ describe("media request service", () => {
   });
 
   it("delegates to the exact Jellyfin-linked Seerr user and durably replays success", async () => {
-    const { createMediaRequest, database, resolveUser, service } = harness();
+    const { createMediaRequest, database, resolveUser, service, verifyOwnership } = harness();
     try {
       const first = await service.create(
         { is4k: false, kind: "series", seasons: [3, 1], tmdbId: 1399 },
@@ -764,6 +784,15 @@ describe("media request service", () => {
 
       expect(first).toEqual({ replayed: false, request: createdRequest });
       expect(replay).toEqual({ replayed: true, request: createdRequest });
+      expect(verifyOwnership).toHaveBeenCalledOnce();
+      expect(verifyOwnership).toHaveBeenCalledWith(
+        { kind: "series", tmdbId: 1399 },
+        context().principal,
+        undefined,
+      );
+      expect(verifyOwnership.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(resolveUser).mock.invocationCallOrder[0]!,
+      );
       expect(resolveUser).toHaveBeenCalledTimes(1);
       expect(resolveUser).toHaveBeenCalledWith(
         { jellyfinUserId: "jellyfin-user-1", jellyfinUsername: "viewer" },
@@ -807,6 +836,58 @@ describe("media request service", () => {
       database.close();
     }
   });
+
+  it.each([
+    ["owned", "title_already_owned"],
+    ["stale", "availability_unverified"],
+    ["unavailable", "availability_unverified"],
+  ] as const)(
+    "runs a fresh pre-reservation check and fails before Seerr for %s ownership evidence",
+    async (state, failureCode) => {
+      const verifyOwnership = vi.fn<NonNullable<MediaRequestDependencies["verifyOwnership"]>>(
+        async () =>
+          state === "unavailable"
+            ? {
+                connectorRevision: null,
+                linkId: null,
+                linkRevision: null,
+                state,
+                userId: "viewer-user",
+                userRevision: null,
+              }
+            : {
+                connectorRevision: now.getTime(),
+                linkId: "viewer-link",
+                linkRevision: 3,
+                state,
+                userId: "viewer-user",
+                userRevision: now.getTime(),
+              },
+      );
+      const { createMediaRequest, database, listRequestRouting, resolveUser, service } = harness({
+        verifyOwnership,
+      });
+      try {
+        const create = () =>
+          service.create(
+            { is4k: false, kind: "movie", tmdbId: 550 },
+            `request-key-ownership-${state}`,
+            context(),
+          );
+        await expect(create()).rejects.toMatchObject({ reason: failureCode });
+        await expect(create()).rejects.toMatchObject({ reason: failureCode });
+        expect(verifyOwnership).toHaveBeenCalledTimes(2);
+        expect(resolveUser).not.toHaveBeenCalled();
+        expect(listRequestRouting).not.toHaveBeenCalled();
+        expect(createMediaRequest).not.toHaveBeenCalled();
+        expect(
+          database.sqlite.prepare("select count(*) as count from media_request_operations").get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("replays a success persisted before profile labels were recorded", async () => {
     const { createMediaRequest, database, service } = harness();
@@ -867,12 +948,8 @@ describe("media request service", () => {
       ).rejects.toMatchObject({ reason: "routing_unavailable" });
       expect(createMediaRequest).not.toHaveBeenCalled();
       expect(
-        database.sqlite
-          .prepare(
-            "select failure_code as failureCode, state from media_request_operations where idempotency_key_hash is not null",
-          )
-          .get(),
-      ).toEqual({ failureCode: "routing_unavailable", state: "failed" });
+        database.sqlite.prepare("select count(*) as count from media_request_operations").get(),
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }
@@ -899,7 +976,7 @@ describe("media request service", () => {
     }
   });
 
-  it("persists and replays a sanitized upstream failure without retrying the mutation", async () => {
+  it("makes a post-dispatch lost outcome terminal and never retries the same key", async () => {
     const privateMessage = "private upstream failure";
     const failure = new Error(privateMessage);
     const createMediaRequest = vi.fn<MediaRequestAdapter["createMediaRequest"]>(async () =>
@@ -914,9 +991,7 @@ describe("media request service", () => {
             "request-key-0003",
             context(),
           ),
-        ).rejects.toMatchObject({
-          reason: "temporarily_unavailable" satisfies MediaRequestFailureCode,
-        });
+        ).rejects.toMatchObject({ reason: "request_outcome_uncertain" });
       }
       expect(resolveUser).toHaveBeenCalledTimes(1);
       expect(createMediaRequest).toHaveBeenCalledTimes(1);
@@ -926,9 +1001,9 @@ describe("media request service", () => {
         )
         .get();
       expect(operation).toEqual({
-        failureCode: "temporarily_unavailable",
+        failureCode: "request_outcome_uncertain",
         responseJson: null,
-        state: "failed",
+        state: "uncertain",
       });
       const serializedAudit = JSON.stringify(
         database.sqlite
@@ -937,10 +1012,41 @@ describe("media request service", () => {
           )
           .get(),
       );
-      expect(serializedAudit).toContain("temporarily_unavailable");
+      expect(serializedAudit).toContain("request_outcome_uncertain");
       expect(serializedAudit).not.toContain(privateMessage);
     } finally {
       database.close();
+    }
+  });
+
+  it("makes a local completion-write failure terminal after a successful dispatch", async () => {
+    const failpoint: { database?: DatabaseHandle } = {};
+    const createMediaRequest = vi.fn<MediaRequestAdapter["createMediaRequest"]>(async () => {
+      failpoint.database!.sqlite.exec(`
+        create trigger fail_media_request_success
+        before update on media_request_operations
+        when new.state = 'succeeded'
+        begin select raise(abort, 'local completion failed'); end;
+      `);
+      return createdRequest;
+    });
+    const fixture = harness({ createMediaRequest });
+    failpoint.database = fixture.database;
+    try {
+      const create = () =>
+        fixture.service.create(
+          { is4k: false, kind: "movie", tmdbId: 550 },
+          "request-key-local-commit-failure",
+          context(),
+        );
+      await expect(create()).rejects.toMatchObject({ reason: "request_outcome_uncertain" });
+      await expect(create()).rejects.toMatchObject({ reason: "request_outcome_uncertain" });
+      expect(createMediaRequest).toHaveBeenCalledOnce();
+      expect(
+        fixture.database.sqlite.prepare("select state from external_mutation_dispatches").get(),
+      ).toEqual({ state: "uncertain" });
+    } finally {
+      fixture.database.close();
     }
   });
 
@@ -992,10 +1098,8 @@ describe("media request service", () => {
       expect(resolveUser).not.toHaveBeenCalled();
       expect(createMediaRequest).not.toHaveBeenCalled();
       expect(
-        database.sqlite
-          .prepare("select state, failure_code as failureCode from media_request_operations")
-          .get(),
-      ).toEqual({ failureCode: "configuration_unavailable", state: "failed" });
+        database.sqlite.prepare("select count(*) as count from media_request_operations").get(),
+      ).toEqual({ count: 0 });
     } finally {
       database.close();
     }

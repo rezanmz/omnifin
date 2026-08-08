@@ -95,17 +95,23 @@ profile, tag, download, blocklist entry, monitoring change, or arbitrary command
 
 The route requires an active user with `acquisition.manage`, same-origin validation,
 a session-bound CSRF token, and a bounded `Idempotency-Key`. Recovery and pending-link
-sessions cannot use it. The gateway reserves a per-user hash of the idempotency key
-and a canonical target fingerprint before any upstream call. Replays return the stored
-normalized receipt, different input under the same key is rejected, and an unresolved
-pending operation fails closed rather than issuing a second command.
+sessions cannot use it. The gateway reserves a per-user hash of the idempotency key,
+a canonical target fingerprint, and a mechanical external-mutation journal entry before any
+upstream call. The entry locks the target and stores the connector instance/configuration
+generations with an encrypted normalized command. Immediately before POSTing the command the
+gateway marks the entry dispatched and sends its opaque identifier as
+`X-Omnifin-Operation-Id`. Replays return the stored normalized receipt, different input under the
+same key is rejected, and an unresolved operation fails closed rather than issuing a second
+command.
 
 Search success or failure and its sanitized audit event commit together. Audit data
 contains the service, media identifier, optional season, normalized outcome, and a
 privacy-preserving IP hash. It never contains the raw key, API credential, upstream
-body, storage path, username, or private error. Because a connection can fail after an
-upstream server receives a command, the interface preserves the current key and tells
-the operator to verify history before explicitly creating a fresh attempt.
+body, storage path, username, or private error. Servarr has no reliable exact-command discovery
+after a response is lost. A timeout or disconnect after dispatch is therefore terminal
+uncertainty: the target remains locked and neither the original nor a fresh key can automatically
+issue a duplicate command. Only an expired reservation that never crossed dispatch may be
+reclaimed.
 
 `POST /v1/acquisitions/queue-recoveries` is deliberately separate. The browser can submit only
 the opaque reference shown on a stalled queue event. The reference is authenticated encryption
@@ -123,12 +129,20 @@ manual search remains a separate action.
 
 The mutation requires an active user with `acquisition.manage`, same-origin and CSRF validation,
 a bounded per-user idempotency key, a currently healthy connector advertising
-`acquisition.queue.mutate`, and a durable pre-mutation snapshot. Known success is replayed without
-another delete. Stale references, changed items, duplicate queue evidence, uncertain outcomes,
-and abandoned post-mutation leases fail closed and require a fresh timeline. Stored operations and
-audits contain only the opaque event identifier, normalized state, service, and safe outcome; raw
+`acquisition.queue.mutate`, and a durable pre-mutation snapshot. The journal binds the exact queue
+identifier and event fingerprint to the connector generations. Recovery always reads first: an
+absent item proves success, an identical item permits at most one proof-based retry, and a changed
+or recreated identifier is quarantined as uncertain. Lease expiry alone never authorizes a retry.
+Known success is replayed without another delete. Stale references, duplicate queue evidence, and
+uncertain outcomes fail closed and require a fresh timeline. Stored operations and audits contain
+only the opaque event identifier, normalized state, service, and safe outcome; raw
 queue identifiers, release titles, hashes, paths, credentials, references, and download-client
 responses are excluded.
+
+Manual release grabs use the same dispatch boundary. The encrypted normalized request contains the
+private release receipt while the API exposes only an opaque cached identifier. Dispatch consumes
+that cache entry. A lost response leaves the release target locked, so a new idempotency key or a
+new search cannot automatically duplicate the grab.
 
 ## Signal-history drawer
 

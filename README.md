@@ -11,7 +11,9 @@ focused experience of a premium streaming product.
 > [!IMPORTANT]
 > Omnifin is pre-release software under active development. There is no stable
 > production release yet, and configuration, storage, and API contracts may change.
-> Follow the [roadmap](docs/roadmap.md) for verified milestone status.
+> All `v0.x` releases are pre-v1 previews and are not supported as stable releases.
+> V1 support remains pending the [v1 stability evidence gate](docs/v1-stability.md).
+> Follow the [roadmap](docs/roadmap.md) for delivery status.
 
 The verified public-project boundary and its required evidence are documented in
 [foundation verification](docs/foundation-verification.md).
@@ -220,6 +222,8 @@ or the [deployment guide](docs/deployment.md) for the intended production model.
 - [Design quality](docs/design-quality.md) — the visual, interaction, accessibility,
   and performance bar
 - [Compatibility](docs/compatibility.md) — service targets and verification policy
+- [V1 stability](docs/v1-stability.md) — authoritative stable scope, evidence tiers,
+  and go/no-go gate
 - [Deployment](docs/deployment.md) — secrets, TLS, backups, upgrades, and rollback
 - [Reverse proxy](docs/operations/reverse-proxy.md) — loopback-only Caddy and Nginx TLS patterns,
   trusted hops, live events, and public verification

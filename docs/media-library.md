@@ -56,13 +56,16 @@ The gateway always supplies the paired Jellyfin user ID itself; the browser cann
 account. Marking a title unwatched follows Jellyfin's native semantics, while resetting progress
 sets the saved playback position to zero without changing the watched flag.
 
-Each accepted operation is durably reserved before connector I/O. Reusing a key with the same
-request returns the stored normalized response, while reusing it with different input fails with a
-conflict. A timed-out mutation is reconciled by reading current Jellyfin state before it is reported
-as failed, so retries converge on the requested state. Successful and failed mutations create an
-atomic audit record containing only the action, outcome, actor/session, request correlation, and a
-privacy-preserving IP digest. The audit record deliberately excludes media references, titles,
-upstream item IDs, positions, and other viewing-history data.
+Each accepted operation and its connector-generation snapshot are durably reserved before connector
+I/O. Reusing a key with the same request returns the stored normalized response, while reusing it
+with different input fails with a conflict. The dispatch boundary is committed before the Jellyfin
+setter is called. A timed-out mutation is reconciled through exact paired-user playback readback;
+an already-matching state succeeds, while a proven opposite state permits one state-set retry. An
+unreadable or still-unconfirmed state remains reconciliation-required and is never blindly
+redispatched. Successful and failed mutations create an atomic audit record containing only the
+action, outcome, actor/session, request correlation, and a privacy-preserving IP digest. The audit
+record deliberately excludes media references, titles, upstream item IDs, positions, and other
+viewing-history data.
 
 ## Private viewing history
 
@@ -106,6 +109,19 @@ liquid-material hierarchy.
 
 Administrative scan, match, metadata, and artwork work remains separate at
 `/operations/library`, so viewer navigation does not expose operator controls by accident.
+
+Administrative Jellyfin writes use the same encrypted external-mutation journal and exact connector
+generation snapshot. Scan, item refresh, and artwork apply have no exact immediate postcondition, so
+an ambiguous failure after dispatch is terminally `uncertain` and the same operation is not sent
+again. Metadata updates use exact field readback: a matching requested patch succeeds, and a proven
+mismatch permits one setter retry before remaining reconciliation-required.
+
+Guarded removal retains its encrypted reviewed preview and stage repair data. One opaque target lock
+serializes the parent title while monitoring, organized-file, and manager-record writes each receive
+their own dispatch record. Recovery proves the exact stage postcondition (unmonitored, exact file
+absent, manager record absent, or Jellyfin item absent) before repairing the visible operation. It
+never repeats a destructive stage whose outcome is not proven; unresolved operations continue to
+surface `reconcile_required` with `outcome_unknown` and retain their lock and encrypted repair data.
 
 The disposable Jellyfin compatibility runner imports the generated copyright-free media fixture
 and exercises this production catalogue client with the exact paired user on both targeted
