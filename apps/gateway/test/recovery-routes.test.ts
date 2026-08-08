@@ -269,76 +269,61 @@ describe("recovery access route", () => {
     }
   });
 
-  it("makes missing configuration, wrong credentials, and malformed bodies indistinguishable", async () => {
-    const cases: {
-      body: Record<string, unknown>;
-      configured: boolean;
-      reason: "credential_mismatch" | "invalid_request";
-    }[] = [
-      { body: { secret: recoverySecret }, configured: false, reason: "credential_mismatch" },
-      { body: { secret: wrongRecoverySecret }, configured: true, reason: "credential_mismatch" },
-      { body: { secret: "not canonical base64" }, configured: true, reason: "invalid_request" },
-      { body: {}, configured: true, reason: "invalid_request" },
-      {
-        body: { secret: recoverySecret, unexpected: true },
-        configured: true,
-        reason: "invalid_request",
-      },
-    ];
-    const denials: { code: string; message: string; status: number }[] = [];
-
-    for (const testCase of cases) {
-      const database = openDatabase(":memory:");
-      const app = await createApp({
-        config: testConfig({ recoveryConfigured: testCase.configured }),
-        database,
+  it.each([
+    { body: { secret: recoverySecret }, configured: false, reason: "credential_mismatch" },
+    { body: { secret: wrongRecoverySecret }, configured: true, reason: "credential_mismatch" },
+    { body: { secret: "not canonical base64" }, configured: true, reason: "invalid_request" },
+    { body: {}, configured: true, reason: "invalid_request" },
+    {
+      body: { secret: recoverySecret, unexpected: true },
+      configured: true,
+      reason: "invalid_request",
+    },
+  ] as const)("makes recovery denial case %# indistinguishable", async (testCase) => {
+    const database = openDatabase(":memory:");
+    const app = await createApp({
+      config: testConfig({ recoveryConfigured: testCase.configured }),
+      database,
+    });
+    try {
+      const response = await app.inject(recoveryRequest(testCase.body));
+      const error = apiErrorSchema.parse(response.json()).error;
+      expect({ code: error.code, message: error.message, status: response.statusCode }).toEqual({
+        code: "recovery_access_denied",
+        message: "Recovery access was denied.",
+        status: 401,
       });
-      try {
-        const response = await app.inject(recoveryRequest(testCase.body));
-        const error = apiErrorSchema.parse(response.json()).error;
-        denials.push({ code: error.code, message: error.message, status: response.statusCode });
-        expect(response.headers["set-cookie"]).toBeUndefined();
-        expect(response.headers["cache-control"]).toBe("no-store");
-        expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
-          count: 0,
-        });
-        const audit = database.sqlite
-          .prepare(
-            `select outcome, metadata_json as metadataJson
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 0,
+      });
+      const audit = database.sqlite
+        .prepare(
+          `select outcome, metadata_json as metadataJson
              from audit_events
              where event_type = 'auth.recovery_access.attempt'`,
-          )
-          .get() as { metadataJson: string; outcome: string };
-        expect(audit).toEqual({
-          metadataJson: JSON.stringify({
-            reason: testCase.reason,
-            userAgentHash: privacyHash(
-              "user_agent",
-              "recovery-route-test-agent",
-              testConfig().encryptionKey,
-            ),
-          }),
-          outcome: "denied",
-        });
-        expect(database.sqlite.serialize().toString("utf8")).not.toContain(
-          typeof (testCase.body as { secret?: unknown })?.secret === "string"
-            ? ((testCase.body as { secret: string }).secret ?? "unreachable")
-            : recoverySecret,
-        );
-      } finally {
-        await app.close();
-      }
-    }
-
-    expect(new Set(denials.map((denial) => JSON.stringify(denial)))).toEqual(
-      new Set([
-        JSON.stringify({
-          code: "recovery_access_denied",
-          message: "Recovery access was denied.",
-          status: 401,
+        )
+        .get() as { metadataJson: string; outcome: string };
+      expect(audit).toEqual({
+        metadataJson: JSON.stringify({
+          reason: testCase.reason,
+          userAgentHash: privacyHash(
+            "user_agent",
+            "recovery-route-test-agent",
+            testConfig().encryptionKey,
+          ),
         }),
-      ]),
-    );
+        outcome: "denied",
+      });
+      expect(database.sqlite.serialize().toString("utf8")).not.toContain(
+        typeof (testCase.body as { secret?: unknown })?.secret === "string"
+          ? ((testCase.body as { secret: string }).secret ?? "unreachable")
+          : recoverySecret,
+      );
+    } finally {
+      await app.close();
+    }
   });
 
   it("requires the exact public origin and audits policy denials without invoking recovery", async () => {

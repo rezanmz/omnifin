@@ -879,52 +879,60 @@ describe("discovery search routes", () => {
     }
   });
 
-  it("maps feed and artwork error families without exposing internals", async () => {
+  it("maps feed error families without exposing internals", async () => {
     const feedCases = [
       new DiscoverySearchError("storage_failure"),
       new Error("Private feed error"),
     ];
-    for (const error of feedCases) {
-      const { app, session } = await harness();
-      const feed = vi.spyOn(DiscoverySearchService.prototype, "feed").mockRejectedValue(error);
-      try {
-        const response = await app.inject({
-          headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
-          method: "GET",
-          url: "/v1/discovery/feed",
-        });
-        expect(response.statusCode, response.body).toBe(
-          error instanceof DiscoverySearchError ? 503 : 500,
-        );
-        expect(response.body).not.toContain("Private feed error");
-      } finally {
-        feed.mockRestore();
-        await app.close();
+    const { app, session } = await harness();
+    try {
+      for (const error of feedCases) {
+        const feed = vi.spyOn(DiscoverySearchService.prototype, "feed").mockRejectedValue(error);
+        try {
+          const response = await app.inject({
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+            method: "GET",
+            url: "/v1/discovery/feed",
+          });
+          expect(response.statusCode, response.body).toBe(
+            error instanceof DiscoverySearchError ? 503 : 500,
+          );
+          expect(response.body).not.toContain("Private feed error");
+        } finally {
+          feed.mockRestore();
+        }
       }
+    } finally {
+      await app.close();
     }
+  });
 
+  it("maps artwork error families without exposing internals", async () => {
     const artworkCases = [
       { error: new DiscoveryArtworkError("unavailable"), status: 503 },
       { error: new DiscoverySearchError("storage_failure"), status: 503 },
       { error: new Error("Private artwork error"), status: 500 },
     ];
-    for (const errorCase of artworkCases) {
-      const { app, session } = await harness();
-      const artwork = vi
-        .spyOn(DiscoverySearchService.prototype, "readArtwork")
-        .mockRejectedValue(errorCase.error);
-      try {
-        const response = await app.inject({
-          headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
-          method: "GET",
-          url: `/v1/discovery/artwork/discovery_art_${"a".repeat(22)}`,
-        });
-        expect(response.statusCode, response.body).toBe(errorCase.status);
-        expect(response.body).not.toContain("Private artwork error");
-      } finally {
-        artwork.mockRestore();
-        await app.close();
+    const { app, session } = await harness();
+    try {
+      for (const errorCase of artworkCases) {
+        const artwork = vi
+          .spyOn(DiscoverySearchService.prototype, "readArtwork")
+          .mockRejectedValue(errorCase.error);
+        try {
+          const response = await app.inject({
+            headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+            method: "GET",
+            url: `/v1/discovery/artwork/discovery_art_${"a".repeat(22)}`,
+          });
+          expect(response.statusCode, response.body).toBe(errorCase.status);
+          expect(response.body).not.toContain("Private artwork error");
+        } finally {
+          artwork.mockRestore();
+        }
       }
+    } finally {
+      await app.close();
     }
   });
 });
