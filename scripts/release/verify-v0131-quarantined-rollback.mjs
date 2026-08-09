@@ -9,6 +9,42 @@ const DATABASE_PATH = "/backups/rollback.sqlite";
 const PROVIDER_ID = "oidc-upgrade-rehearsal";
 const SUCCESS_OUTPUT = '{"operation":"rollback_quarantine_raw_verify","status":"ok"}';
 const CIPHERTEXT_MAX_LENGTH = 8_192;
+const TIMESTAMP_MAX = 8_640_000_000_000_000;
+const FAILURE_FINGERPRINT_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+
+function isValidTimestamp(value) {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= TIMESTAMP_MAX &&
+    new Date(value).getTime() === value
+  );
+}
+
+function isValidFailureCapabilities(value) {
+  if (typeof value !== "string") return false;
+  let capabilities;
+  try {
+    capabilities = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (
+    capabilities === null ||
+    typeof capabilities !== "object" ||
+    Array.isArray(capabilities) ||
+    Object.getPrototypeOf(capabilities) !== Object.prototype ||
+    Object.keys(capabilities).sort().join(",") !== "configurationFingerprint,schemaVersion"
+  ) {
+    return false;
+  }
+  return (
+    capabilities.schemaVersion === 1 &&
+    typeof capabilities.configurationFingerprint === "string" &&
+    FAILURE_FINGERPRINT_PATTERN.test(capabilities.configurationFingerprint)
+  );
+}
 
 export function verifyQuarantinedRollback(databasePath = DATABASE_PATH) {
   const database = new DatabaseSync(databasePath, { readOnly: true });
@@ -26,6 +62,7 @@ export function verifyQuarantinedRollback(databasePath = DATABASE_PATH) {
            discovery_state as discoveryState,
            discovery_capabilities_json as discoveryCapabilitiesJson,
            discovery_checked_at as discoveryCheckedAt,
+           created_at as createdAt,
            allow_jit_provisioning as allowJitProvisioning,
            enabled
          from oidc_providers`,
@@ -42,9 +79,11 @@ export function verifyQuarantinedRollback(databasePath = DATABASE_PATH) {
       provider.encryptedClientSecret.length < 1 ||
       provider.encryptedClientSecret.length > CIPHERTEXT_MAX_LENGTH ||
       provider.approvedEndpointOriginsJson !== "[]" ||
-      provider.discoveryState !== "unchecked" ||
-      provider.discoveryCapabilitiesJson !== "{}" ||
-      provider.discoveryCheckedAt !== null ||
+      provider.discoveryState !== "failed" ||
+      !isValidFailureCapabilities(provider.discoveryCapabilitiesJson) ||
+      !isValidTimestamp(provider.createdAt) ||
+      !isValidTimestamp(provider.discoveryCheckedAt) ||
+      provider.discoveryCheckedAt < provider.createdAt ||
       provider.allowJitProvisioning !== 0 ||
       provider.enabled !== 1
     ) {

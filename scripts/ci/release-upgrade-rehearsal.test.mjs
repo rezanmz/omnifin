@@ -39,6 +39,9 @@ const ROLLBACK_PROBE_SOURCE = readFileSync(
 );
 const V0131_DIGEST = "sha256:deae382a5c09560322eb5146764393bd0155c314087768426b757ca0c6fbff11";
 const ROLLBACK_PROBE_SUCCESS = '{"operation":"rollback_quarantine_raw_verify","status":"ok"}\n';
+const ROLLBACK_PROVIDER_CREATED_AT = 1_700_000_000_000;
+const ROLLBACK_PROVIDER_CHECKED_AT = ROLLBACK_PROVIDER_CREATED_AT + 1;
+const ROLLBACK_FAILURE_FINGERPRINT = "A".repeat(43);
 const ROLLBACK_PROVIDER = Object.freeze({
   id: "oidc-upgrade-rehearsal",
   slug: "upgrade-rehearsal",
@@ -46,9 +49,14 @@ const ROLLBACK_PROVIDER = Object.freeze({
   tokenEndpointAuthMethod: "client_secret_basic",
   encryptedClientSecret: "encrypted-client-secret",
   approvedEndpointOriginsJson: "[]",
-  discoveryState: "unchecked",
-  discoveryCapabilitiesJson: "{}",
-  discoveryCheckedAt: null,
+  discoveryState: "failed",
+  discoveryCapabilitiesJson: JSON.stringify({
+    configurationFingerprint: ROLLBACK_FAILURE_FINGERPRINT,
+    schemaVersion: 1,
+  }),
+  discoveryCheckedAt: ROLLBACK_PROVIDER_CHECKED_AT,
+  createdAt: ROLLBACK_PROVIDER_CREATED_AT,
+  updatedAt: ROLLBACK_PROVIDER_CHECKED_AT,
   allowJitProvisioning: 0,
   enabled: 1,
 });
@@ -67,7 +75,9 @@ function createRollbackProbeFixture({ providers = [ROLLBACK_PROVIDER], transacti
       approved_endpoint_origins_json text,
       discovery_state text,
       discovery_capabilities_json text,
-      discovery_checked_at text,
+      discovery_checked_at integer,
+      created_at integer,
+      updated_at integer,
       allow_jit_provisioning integer,
       enabled integer
     );
@@ -84,9 +94,11 @@ function createRollbackProbeFixture({ providers = [ROLLBACK_PROVIDER], transacti
       discovery_state,
       discovery_capabilities_json,
       discovery_checked_at,
+      created_at,
+      updated_at,
       allow_jit_provisioning,
       enabled
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const provider of providers) {
     insertProvider.run(
@@ -99,6 +111,8 @@ function createRollbackProbeFixture({ providers = [ROLLBACK_PROVIDER], transacti
       provider.discoveryState,
       provider.discoveryCapabilitiesJson,
       provider.discoveryCheckedAt,
+      provider.createdAt,
+      provider.updatedAt,
       provider.allowJitProvisioning,
       provider.enabled,
     );
@@ -134,8 +148,31 @@ test("verifies the quarantined rollback fixture without mocking SQLite", () => {
     ["tokenEndpointAuthMethod", "client_secret_post"],
     ["approvedEndpointOriginsJson", '["https://unexpected.example"]'],
     ["discoveryState", "ready"],
+    ["discoveryState", "unchecked"],
+    ["discoveryCapabilitiesJson", "{}"],
     ["discoveryCapabilitiesJson", '{"authorization_endpoint":"unexpected"}'],
-    ["discoveryCheckedAt", "2026-01-01T00:00:00.000Z"],
+    [
+      "discoveryCapabilitiesJson",
+      JSON.stringify({
+        configurationFingerprint: ROLLBACK_FAILURE_FINGERPRINT,
+        schemaVersion: 1,
+        unexpected: true,
+      }),
+    ],
+    [
+      "discoveryCapabilitiesJson",
+      JSON.stringify({
+        configurationFingerprint: ROLLBACK_FAILURE_FINGERPRINT,
+        schemaVersion: 2,
+      }),
+    ],
+    [
+      "discoveryCapabilitiesJson",
+      JSON.stringify({ configurationFingerprint: "invalid", schemaVersion: 1 }),
+    ],
+    ["discoveryCheckedAt", null],
+    ["discoveryCheckedAt", "not-a-timestamp"],
+    ["discoveryCheckedAt", ROLLBACK_PROVIDER_CREATED_AT - 1],
     ["allowJitProvisioning", 1],
     ["enabled", 0],
   ];
@@ -155,6 +192,10 @@ test("verifies the quarantined rollback fixture without mocking SQLite", () => {
     ["extra provider", { providers: [ROLLBACK_PROVIDER, { ...ROLLBACK_PROVIDER, id: "extra" }] }],
     ["absent ciphertext", { providers: [{ ...ROLLBACK_PROVIDER, encryptedClientSecret: null }] }],
     ["empty ciphertext", { providers: [{ ...ROLLBACK_PROVIDER, encryptedClientSecret: "" }] }],
+    [
+      "oversized ciphertext",
+      { providers: [{ ...ROLLBACK_PROVIDER, encryptedClientSecret: "x".repeat(8_193) }] },
+    ],
     ["retained transaction", { transaction: true }],
   ]) {
     assert.equal(
