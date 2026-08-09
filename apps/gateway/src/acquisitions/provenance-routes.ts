@@ -501,23 +501,18 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         );
       }
       const principal = requirePermission(session?.principal, "acquisition.manage");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return acquisitionProvenanceResponseSchema.parse(
           await provenance.read(
             acquisitionTargetInputSchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw configurationError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -563,6 +558,9 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         closed = true;
         clearInterval(heartbeat);
         clearTimeout(lifetime);
+        request.raw.off("aborted", close);
+        reply.raw.off("close", close);
+        app.runtimeDrain.signal.removeEventListener("abort", close);
         if (subscription.accepted) subscription.unsubscribe();
         if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
       };
@@ -604,6 +602,8 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       lifetime.unref();
       request.raw.once("aborted", close);
       reply.raw.once("close", close);
+      app.runtimeDrain.signal.addEventListener("abort", close, { once: true });
+      if (app.runtimeDrain.signal.aborted) close();
     },
   );
 
@@ -630,23 +630,18 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         );
       }
       const principal = requirePermission(session?.principal, "acquisition.manage");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return acquisitionMonitoringStateSchema.parse(
           await provenance.readMonitoring(
             acquisitionMonitoringTargetInputSchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw monitoringError(error);
         if (error instanceof SafeConnectorError) throw monitoringUpstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -670,23 +665,18 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         app.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
         "acquisition.manage",
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return acquisitionMonitoringStateSchema.parse(
           await provenance.updateMonitoring(
             acquisitionMonitoringUpdateInputSchema.parse(request.body),
             { ipAddress: request.ip, principal, requestId: request.id },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw monitoringError(error);
         if (error instanceof SafeConnectorError) throw monitoringUpstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -717,15 +707,12 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       const idempotencyKey = acquisitionSearchIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await provenance.queueSearch(
           input,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
@@ -733,8 +720,6 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw searchError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -765,15 +750,12 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       const idempotencyKey = acquisitionQueueRecoveryIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await provenance.recoverQueueItem(
           input,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
@@ -781,8 +763,6 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       } catch (error) {
         if (error instanceof AcquisitionProvenanceError) throw recoveryError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

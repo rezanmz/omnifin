@@ -54,8 +54,8 @@ async function harness(eventDependencies?: {
   reconnectDelayMs?: number;
 }) {
   const config = testConfig();
-  const readSystemHealth = vi.fn(async () => []);
-  const readStorageCapacity = vi.fn(async () => [
+  const readSystemHealth = vi.fn(async (_signal?: AbortSignal) => []);
+  const readStorageCapacity = vi.fn(async (_signal?: AbortSignal) => [
     {
       externalId: "/private/media",
       freeBytes: 500_000_000_000,
@@ -218,6 +218,24 @@ describe("system status routes", () => {
     }
   });
 
+  it("does not retain or hijack a status stream after runtime drain", async () => {
+    const fixture = await harness();
+    try {
+      fixture.app.runtimeDrain.beginDrain("test drain");
+      const response = await fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/system/status/events",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(fixture.readSystemHealth).not.toHaveBeenCalled();
+      expect(fixture.readStorageCapacity).not.toHaveBeenCalled();
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
   it("rejects an untrusted resume cursor before contacting a connector", async () => {
     const fixture = await harness();
     try {
@@ -289,6 +307,43 @@ describe("system status routes", () => {
       expect(JSON.stringify(body)).not.toMatch(/private\/media|private-radarr-key|radarr-main/u);
       expect(fixture.readSystemHealth).toHaveBeenCalledOnce();
       expect(fixture.readStorageCapacity).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it("forwards the canonical operation signal to ordinary status reads", async () => {
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let observedSignal!: AbortSignal;
+    const fixture = await harness();
+    fixture.readSystemHealth.mockImplementation(async (signal?: AbortSignal): Promise<never> => {
+      observedSignal = signal!;
+      entered();
+      return new Promise<never>((_resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    try {
+      const responsePromise = fixture.app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${fixture.operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/system/status",
+      });
+      await enteredPromise;
+      fixture.app.runtimeDrain.beginDrain("test drain");
+      await responsePromise;
+
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      expect(observedSignal.aborted).toBe(true);
+      expect(observedSignal.reason).toBe(fixture.app.runtimeDrain.reason);
+      expect(fixture.readStorageCapacity).toHaveBeenCalledWith(observedSignal);
     } finally {
       await fixture.app.close();
     }

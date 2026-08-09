@@ -21,6 +21,7 @@ interface DownloadQueueEventReader {
 export interface DownloadQueueEventBrokerDependencies {
   clock?: () => number;
   createCursor?: () => string;
+  drainSignal?: AbortSignal;
   maxConnections?: number;
   maxConnectionsPerSession?: number;
   onFailure?: (error: unknown) => void;
@@ -37,7 +38,7 @@ export interface DownloadQueueEventSubscriber {
 }
 
 export type DownloadQueueEventSubscription =
-  | { accepted: false; reason: "global_limit" | "session_limit" }
+  | { accepted: false; reason: "closed" | "global_limit" | "session_limit" }
   | { accepted: true; unsubscribe(): void };
 
 interface RetainedSubscriber extends DownloadQueueEventSubscriber {
@@ -71,6 +72,7 @@ function boundedPositiveInteger(value: number | undefined, fallback: number) {
 export class DownloadQueueEventBroker {
   readonly #clock: () => number;
   readonly #createCursor: () => string;
+  readonly #drainSignal: AbortSignal | undefined;
   readonly #maxConnections: number;
   readonly #maxConnectionsPerSession: number;
   readonly #onFailure: (error: unknown) => void;
@@ -83,6 +85,8 @@ export class DownloadQueueEventBroker {
   #latest: DownloadQueueSnapshotEvent | undefined;
   #latestAt = 0;
   #nextSubscriberId = 0;
+  #closed: boolean;
+  readonly #onDrain = () => this.close();
 
   public constructor(
     reader: DownloadQueueEventReader,
@@ -91,6 +95,7 @@ export class DownloadQueueEventBroker {
     this.#reader = reader;
     this.#clock = dependencies.clock ?? (() => performance.now());
     this.#createCursor = dependencies.createCursor ?? (() => `download_event_${randomToken(16)}`);
+    this.#drainSignal = dependencies.drainSignal;
     this.#maxConnections = boundedPositiveInteger(
       dependencies.maxConnections,
       DEFAULT_MAX_CONNECTIONS,
@@ -109,9 +114,14 @@ export class DownloadQueueEventBroker {
       DEFAULT_REPLAY_WINDOW_MS,
     );
     this.#wait = dependencies.wait ?? defaultWait;
+    this.#closed = this.#drainSignal?.aborted ?? false;
+    if (!this.#closed) {
+      this.#drainSignal?.addEventListener("abort", this.#onDrain, { once: true });
+    }
   }
 
   public subscribe(subscriber: DownloadQueueEventSubscriber): DownloadQueueEventSubscription {
+    if (this.#closed) return { accepted: false, reason: "closed" };
     if (this.#subscribers.size >= this.#maxConnections) {
       return { accepted: false, reason: "global_limit" };
     }
@@ -150,6 +160,9 @@ export class DownloadQueueEventBroker {
   }
 
   public close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#drainSignal?.removeEventListener("abort", this.#onDrain);
     const subscribers = [...this.#subscribers.values()];
     this.#subscribers.clear();
     this.#controller?.abort();
@@ -222,7 +235,7 @@ export class DownloadQueueEventBroker {
   }
 
   #start() {
-    if (this.#controller) return;
+    if (this.#closed || this.#drainSignal?.aborted || this.#controller) return;
     const controller = new AbortController();
     this.#controller = controller;
     void this.#run(controller);

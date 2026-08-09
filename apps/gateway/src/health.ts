@@ -283,19 +283,25 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
-    async (_request, reply) => {
-      try {
-        await checkDatabaseReadiness();
-        return { checks: { database: "ok" as const }, status: "ready" as const };
-      } catch (error) {
-        app.log.error({ err: error, operation: "readiness.database" }, "Readiness check failed");
-        return reply.status(503).send(
+    async (request, reply) => {
+      const isDraining = () => app.runtimeDrain.state === "draining";
+      const unavailable = () =>
+        reply.status(503).send(
           createApiError({
             code: "service_unavailable",
             message: "The gateway is not ready.",
-            requestId: _request.id,
+            requestId: request.id,
           }),
         );
+
+      if (isDraining()) return unavailable();
+      try {
+        await checkDatabaseReadiness();
+        if (isDraining()) return unavailable();
+        return { checks: { database: "ok" as const }, status: "ready" as const };
+      } catch (error) {
+        app.log.error({ err: error, operation: "readiness.database" }, "Readiness check failed");
+        return unavailable();
       }
     },
   );

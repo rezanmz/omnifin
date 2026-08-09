@@ -334,12 +334,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return continueWatchingResponseSchema.parse(
-          await service.read({ principal }, controller.signal),
+          await service.read({ principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof ContinueWatchingError) {
@@ -351,8 +348,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -381,12 +376,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const query = libraryBrowseQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return libraryBrowseResponseSchema.parse(
-          await service.browse(query, { principal }, controller.signal),
+          await service.browse(query, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError && error.reason === "cursor_invalid") {
@@ -406,8 +398,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -436,12 +426,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "playback.history.self.manage");
       const query = viewingHistoryQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return viewingHistoryResponseSchema.parse(
-          await service.readViewingHistory(query, { principal }, controller.signal),
+          await service.readViewingHistory(query, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof ViewingHistoryError && error.reason === "cursor_invalid") {
@@ -461,8 +448,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -491,15 +476,12 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "library.delete");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return libraryRemovalPreviewSchema.parse(
           await service.previewLibraryRemoval(
             referenceId,
             { ipAddress: request.ip, principal, requestId: request.id },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
@@ -522,8 +504,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -556,16 +536,13 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await service.commitLibraryRemoval(
           referenceId,
           body,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.code(result.replayed ? 200 : 201);
@@ -573,8 +550,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       } catch (error) {
         if (error instanceof LibraryRemovalError) throw libraryRemovalError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -638,12 +613,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return playbackContextResponseSchema.parse(
-          await service.readPlaybackContext(referenceId, { principal }, controller.signal),
+          await service.readPlaybackContext(referenceId, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof MediaPlaybackContextError) {
@@ -661,8 +633,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -691,12 +661,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return libraryTitleDetailResponseSchema.parse(
-          await service.readLibraryTitle(referenceId, { principal }, controller.signal),
+          await service.readLibraryTitle(referenceId, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -714,8 +681,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -744,13 +709,9 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "acquisition.manage");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
-      reply.raw.once("close", abort);
       try {
         return libraryConnectedActionsResponseSchema.parse(
-          await service.readConnectedActions(referenceId, { principal }, controller.signal),
+          await service.readConnectedActions(referenceId, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof LibraryConnectedActionError) {
@@ -768,9 +729,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
-        reply.raw.off("close", abort);
       }
     },
   );
@@ -798,16 +756,12 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       const { referenceId, service: connectedService } = libraryConnectedActionParamsSchema.parse(
         request.params,
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
-      reply.raw.once("close", abort);
       try {
         const destination = await service.openConnectedAction(
           referenceId,
           connectedService,
           { principal },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("referrer-policy", "no-referrer");
         return reply.redirect(destination.href, 303);
@@ -827,9 +781,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
-        reply.raw.off("close", abort);
       }
     },
   );
@@ -858,12 +809,13 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return libraryPersonProfileLinkResponseSchema.parse(
-          await service.readLibraryPersonProfile(referenceId, { principal }, controller.signal),
+          await service.readLibraryPersonProfile(
+            referenceId,
+            { principal },
+            request.operationSignal,
+          ),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -881,8 +833,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -913,12 +863,14 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId } = libraryTitleParamsSchema.parse(request.params);
       const query = libraryExtrasQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return libraryExtrasResponseSchema.parse(
-          await service.readLibraryExtras(referenceId, query, { principal }, controller.signal),
+          await service.readLibraryExtras(
+            referenceId,
+            query,
+            { principal },
+            request.operationSignal,
+          ),
         );
       } catch (error) {
         if (error instanceof MediaLibraryError) {
@@ -940,8 +892,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -972,9 +922,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId, seasonNumber } = librarySeasonParamsSchema.parse(request.params);
       const query = librarySeasonEpisodesQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return librarySeasonEpisodesResponseSchema.parse(
           await service.readLibrarySeasonEpisodes(
@@ -982,7 +929,7 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
             seasonNumber,
             query,
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
@@ -1005,8 +952,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -1036,24 +981,19 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await service.updatePlaybackState(
           referenceId,
           body,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         return libraryPlaybackStateMutationResponseSchema.parse(result.response);
       } catch (error) {
         if (error instanceof MediaPlaybackStateError) throw playbackStateError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -1078,15 +1018,12 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const params = personArtworkParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const artwork = await service.readPersonArtwork(
           { principal },
           params.referenceId,
           params.token,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
         reply.header("content-disposition", "inline");
@@ -1120,8 +1057,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -1146,15 +1081,12 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
       }
       const principal = requirePermission(session?.principal, "media.view");
       const params = artworkParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const artwork = await service.readArtwork(
           { principal },
           params.referenceId,
           params.kind,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
         reply.header("content-disposition", "inline");
@@ -1188,8 +1120,6 @@ export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOp
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

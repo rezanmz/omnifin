@@ -582,6 +582,34 @@ describe("acquisition provenance routes", () => {
     }
   });
 
+  it("closes an active provenance stream and stops its broker poll on drain", async () => {
+    const { app, implementation, operator } = await harness(undefined, {
+      eventDependencies: {
+        connectionLifetimeMs: 60_000,
+        heartbeatIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    try {
+      const stream = app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+      await vi.waitFor(() => expect(implementation).toHaveBeenCalledOnce());
+      app.runtimeDrain.beginDrain("test drain");
+
+      const response = await stream;
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain("retry: 3000\n\n");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(implementation).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects an untrusted resume cursor before contacting the connector", async () => {
     const { app, implementation, operator } = await harness();
     try {

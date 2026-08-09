@@ -84,9 +84,14 @@ async function noStore(_request: FastifyRequest, reply: FastifyReply, payload: u
   return payload;
 }
 
-async function* streamChunks(stream: ReadableStream<Uint8Array>) {
+async function* streamChunks(stream: ReadableStream<Uint8Array>, signal: AbortSignal) {
   const reader = stream.getReader();
   let completed = false;
+  const cancel = () => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
   try {
     while (true) {
       const result = await reader.read();
@@ -97,6 +102,7 @@ async function* streamChunks(stream: ReadableStream<Uint8Array>) {
       yield result.value;
     }
   } finally {
+    signal.removeEventListener("abort", cancel);
     if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
@@ -178,23 +184,18 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       );
       const params = negotiationParamsSchema.parse(request.params);
       const input = playbackNegotiationRequestSchema.parse(request.body);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const response = await playback.negotiate(
           { principal },
           params.referenceId,
           input,
-          controller.signal,
+          request.operationSignal,
         );
         reply.status(201);
         return playbackNegotiationResponseSchema.parse(response);
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -220,18 +221,13 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       );
       const params = progressParamsSchema.parse(request.params);
       const input = playbackProgressRequestSchema.parse(request.body);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return playbackProgressResponseSchema.parse(
-          await playback.report({ principal }, params.sessionId, input, controller.signal),
+          await playback.report({ principal }, params.sessionId, input, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -246,15 +242,12 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       const principal = readPrincipal(request, reply);
       const params = progressParamsSchema.parse(request.params);
       const range = request.headers.range;
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const stream = await playback.readDirect(
           { principal },
           params.sessionId,
           range,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("accept-ranges", "bytes");
         reply.header("cache-control", "private, no-store");
@@ -265,8 +258,6 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -280,15 +271,12 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
     async (request, reply) => {
       const principal = readPrincipal(request, reply);
       const params = subtitleParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const subtitle = await playback.readSubtitle(
           { principal },
           params.sessionId,
           params.subtitleIndex,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, no-store");
         reply.header("content-disposition", "inline");
@@ -300,8 +288,6 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -315,14 +301,11 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
     async (request, reply) => {
       const principal = readPrincipal(request, reply);
       const params = progressParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const manifest = await playback.readManifest(
           { principal },
           params.sessionId,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, no-store");
         reply.header("content-disposition", "inline");
@@ -331,8 +314,6 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -346,15 +327,12 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
     async (request, reply) => {
       const principal = readPrincipal(request, reply);
       const params = assetParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const asset = await playback.readAsset(
           { principal },
           params.sessionId,
           params.assetToken,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, no-store");
         reply.header("content-disposition", "inline");
@@ -364,12 +342,14 @@ export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (
           : reply
               .status(asset.status)
               .type(asset.contentType)
-              .send(Readable.from(streamChunks(asset.body), { objectMode: false }));
+              .send(
+                Readable.from(streamChunks(asset.body, request.operationSignal), {
+                  objectMode: false,
+                }),
+              );
       } catch (error) {
         if (error instanceof PlaybackSessionError) throw playbackError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

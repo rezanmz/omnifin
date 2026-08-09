@@ -152,18 +152,13 @@ export const issueWorkbenchRoutes: FastifyPluginAsync<IssueWorkbenchRoutesOption
       }
       const principal = requirePermission(session?.principal, "issue.manage");
       const query = workbenchWireQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return mediaIssueWorkbenchPageSchema.parse(
-          await workbench.list(query, { principal }, controller.signal),
+          await workbench.list(query, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof IssueWorkbenchServiceError) throw workbenchError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -198,24 +193,19 @@ export const issueWorkbenchRoutes: FastifyPluginAsync<IssueWorkbenchRoutesOption
       const { issueId } = issueParamsSchema.parse(request.params);
       const input = mediaIssueStatusUpdateSchema.parse(request.body);
       const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await workbench.updateStatus(
           issueId,
           input,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         return mediaIssueWorkbenchItemSchema.parse(result.issue);
       } catch (error) {
         if (error instanceof IssueWorkbenchServiceError) throw workbenchError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

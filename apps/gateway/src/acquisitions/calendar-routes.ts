@@ -72,18 +72,13 @@ export const acquisitionCalendarRoutes: FastifyPluginAsync<
       }
       const principal = requirePermission(session?.principal, "media.view");
       const query = acquisitionCalendarQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return acquisitionCalendarResponseSchema.parse(
-          await calendar.read(query, { principal }, controller.signal),
+          await calendar.read(query, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof AcquisitionCalendarError) throw serviceError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

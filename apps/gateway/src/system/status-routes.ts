@@ -50,20 +50,6 @@ function boundedEventTiming(value: number | undefined, fallback: number) {
   return Number.isInteger(value) && value !== undefined && value > 0 ? value : fallback;
 }
 
-async function withAbort<T>(
-  request: FastifyRequest,
-  operation: (signal: AbortSignal) => Promise<T>,
-) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  request.raw.once("aborted", abort);
-  try {
-    return await operation(controller.signal);
-  } finally {
-    request.raw.off("aborted", abort);
-  }
-}
-
 export interface SystemStatusRoutesOptions {
   dependencies?: SystemStatusDependencies;
   eventDependencies?: SystemStatusEventBrokerDependencies & {
@@ -80,6 +66,7 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
   const status = new SystemStatusService(app.database, app.appConfig, options.dependencies);
   const eventBroker = new SystemStatusEventBroker(status, {
     ...options.eventDependencies,
+    drainSignal: app.runtimeDrain.signal,
     onFailure: (error) => {
       app.log.warn(
         {
@@ -130,15 +117,26 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
       }
 
       let closed = false;
+      let hijacked = false;
+      const state: {
+        heartbeat?: ReturnType<typeof setInterval>;
+        lifetime?: ReturnType<typeof setTimeout>;
+        subscription?: SystemStatusEventSubscription;
+      } = {};
+      const operationAborted = () =>
+        request.operationSignal.aborted || app.runtimeDrain.signal.aborted;
       const close = () => {
         if (closed) return;
         closed = true;
-        clearInterval(heartbeat);
-        clearTimeout(lifetime);
-        if (subscription.accepted) subscription.unsubscribe();
-        if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+        if (state.heartbeat !== undefined) clearInterval(state.heartbeat);
+        if (state.lifetime !== undefined) clearTimeout(state.lifetime);
+        request.raw.off("aborted", close);
+        reply.raw.off("close", close);
+        if (state.subscription?.accepted) state.subscription.unsubscribe();
+        if (hijacked && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
       };
-      const subscription: SystemStatusEventSubscription = eventBroker.subscribe({
+      if (operationAborted()) return;
+      state.subscription = eventBroker.subscribe({
         ...(lastEventId === undefined ? {} : { lastEventId }),
         onClose: close,
         onEvent: (event) => {
@@ -147,7 +145,8 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
         },
         principal,
       });
-      if (!subscription.accepted) {
+      if (!state.subscription.accepted) {
+        if (operationAborted() || state.subscription.reason === "closed") return;
         reply.header("retry-after", Math.ceil(eventReconnectMs / 1_000));
         throw new SafeHttpError({
           code: "system_status_event_capacity_reached",
@@ -156,7 +155,16 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
         });
       }
 
+      if (operationAborted()) {
+        close();
+        return;
+      }
       reply.hijack();
+      hijacked = true;
+      if (operationAborted()) {
+        close();
+        return;
+      }
       for (const [name, value] of Object.entries(reply.getHeaders())) {
         if (value !== undefined) reply.raw.setHeader(name, value);
       }
@@ -167,14 +175,14 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
       reply.raw.setHeader("x-accel-buffering", "no");
       reply.raw.writeHead(200);
       reply.raw.write(`retry: ${eventReconnectMs}\n\n`);
-      const heartbeat = setInterval(() => {
+      state.heartbeat = setInterval(() => {
         if (!closed && !reply.raw.destroyed && !reply.raw.writableEnded) {
           reply.raw.write(": keep-alive\n\n");
         }
       }, eventHeartbeatMs);
-      heartbeat.unref();
-      const lifetime = setTimeout(close, eventLifetimeMs);
-      lifetime.unref();
+      state.heartbeat.unref();
+      state.lifetime = setTimeout(close, eventLifetimeMs);
+      state.lifetime.unref();
       request.raw.once("aborted", close);
       reply.raw.once("close", close);
     },
@@ -191,7 +199,7 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
       const principal = readPrincipal(request, reply);
       try {
         return systemStatusResponseSchema.parse(
-          await withAbort(request, (signal) => status.read({ principal }, signal)),
+          await status.read({ principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof SystemStatusError) {

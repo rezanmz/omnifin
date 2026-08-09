@@ -235,14 +235,11 @@ export const subtitleOperationRoutes: FastifyPluginAsync<SubtitleOperationRoutes
       );
       subtitleSearchRequestSchema.parse(request.body);
       const params = searchParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await subtitles.search(
           params.referenceId,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.status(201);
         return subtitleSearchResponseSchema.parse(result);
@@ -250,8 +247,6 @@ export const subtitleOperationRoutes: FastifyPluginAsync<SubtitleOperationRoutes
         if (error instanceof SubtitleOperationError) throw operationError(error, reply);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -284,16 +279,13 @@ export const subtitleOperationRoutes: FastifyPluginAsync<SubtitleOperationRoutes
       const idempotencyKey = subtitleDownloadIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await subtitles.download(
           params.searchId,
           params.resultId,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
@@ -301,8 +293,6 @@ export const subtitleOperationRoutes: FastifyPluginAsync<SubtitleOperationRoutes
       } catch (error) {
         if (error instanceof SubtitleOperationError) throw operationError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

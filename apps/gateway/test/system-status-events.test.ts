@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { SystemStatusEventBroker } from "../src/system/status-events.js";
+import { RuntimeDrainCoordinator } from "../src/runtime/drain.js";
 
 const now = "2026-07-31T11:00:00.000Z";
 const status: SystemStatusResponse = {
@@ -199,6 +200,56 @@ describe("system status event broker", () => {
     expect(onFailure).toHaveBeenCalledWith(failure);
 
     if (subscription.accepted) subscription.unsubscribe();
+    broker.close();
+  });
+
+  it("closes subscribers and aborts the shared poll when runtime drain starts", async () => {
+    const drain = new RuntimeDrainCoordinator();
+    const onClose = vi.fn();
+    const read = vi.fn(
+      (_context: unknown, signal?: AbortSignal) =>
+        new Promise<SystemStatusResponse>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(status), { once: true });
+        }),
+    );
+    const broker = new SystemStatusEventBroker(
+      { read },
+      { drainSignal: drain.signal, wait: waitUntilAbort },
+    );
+
+    const subscription = broker.subscribe({
+      onClose,
+      onEvent: vi.fn(),
+      principal: principal(),
+    });
+    expect(subscription.accepted).toBe(true);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+
+    drain.beginDrain("test shutdown");
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(read.mock.calls[0]?.[1]?.aborted).toBe(true);
+    broker.close();
+  });
+
+  it("rejects late subscribers after runtime drain without starting another poll", () => {
+    const drain = new RuntimeDrainCoordinator();
+    const read = vi.fn(async () => status);
+    const broker = new SystemStatusEventBroker(
+      { read },
+      { drainSignal: drain.signal, wait: waitUntilAbort },
+    );
+
+    drain.beginDrain("test shutdown");
+
+    expect(
+      broker.subscribe({
+        onClose: vi.fn(),
+        onEvent: vi.fn(),
+        principal: principal(),
+      }),
+    ).toEqual({ accepted: false, reason: "closed" });
+    expect(read).not.toHaveBeenCalled();
     broker.close();
   });
 });
